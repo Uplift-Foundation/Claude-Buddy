@@ -37,18 +37,58 @@ namespace ClaudeBuddy
     //       absent (or present and false). Start immediately.
     //
     //   Locked — the dictionary is there and the key is present and true. The
-    //       window server is *telling* us the screen is locked, so this is not
-    //       an inference that could be wrong in the direction the cap defends
-    //       against; starting here is a guaranteed -6661. So this one waits
-    //       with no cap at all.
+    //       window server is *telling* us the screen is locked, so starting
+    //       here is a guaranteed -6661. This one waits far longer than the
+    //       unknowable state does — but it is still capped, and CapFor's
+    //       comment has the argument for why the uncapped version this change
+    //       first shipped was wrong.
     //
-    // Waiting without a cap is the change, and it is safe for a reason that
-    // predates it: ServePump. Everything Buddy does before the UI is up — the
-    // relay, PeerSessions, OpenClawSessions, ClaudeCloudSessions — is already
-    // started ahead of this wait (CB-24, CB-130) and already covered for the
-    // no-dispatcher window by ServePump's off-thread tick, so a machine parked
-    // here indefinitely still serves its sessions. The only thing that does
-    // not happen is drawing a menu-bar icon onto a screen nobody can see.
+    // This state is not a hypothesis. It was confirmed from the unified log
+    // for the 2026-09-22 crash: `_powerMonitor.screenLocked yes` alongside
+    // `DisplayOn: 0`, `isClamshelled 1` and `isDarkWake 1`, 1.3 seconds before
+    // the throw. And it was the *key* arm rather than the null one, which
+    // matters because the two are not interchangeable — Buddy is a LaunchAgent
+    // with no LimitLoadToSessionType, so it loads into the Aqua session where
+    // the session dictionary is non-null (verified by a read-only probe:
+    // dictionary present, CGSSessionScreenIsLocked absent,
+    // kCGSSessionOnConsoleKey 1, while unlocked). A non-null dictionary plus
+    // an OS-reported lock is the key being true. Had it been the null arm
+    // instead, the wake would have found a short cap already expired and
+    // crashed exactly as before.
+    //
+    // Waiting far longer on a reported lock is the change, and what makes it
+    // survivable is that everything Buddy does without a display is started
+    // ahead of this wait and keeps running with no dispatcher. `Startup.Run`
+    // calls `serveOnLaunch` before `waitForUnlock`, and that body is three
+    // calls, each of which was put there for exactly this case (CB-24,
+    // CB-130):
+    //
+    //   PeerSessions.Start()         — two plain System.Threading.Timers,
+    //                                  chosen over DispatcherTimers precisely
+    //                                  so they keep firing on a machine whose
+    //                                  screen never unlocks. See its own
+    //                                  comment at the _connecting/_pumping
+    //                                  pair, which says so.
+    //   OpenClawSessions.Restart()   — a Task.Run supervisor loop.
+    //   ClaudeCloudSessions.Restart()— a Task.Run poll loop.
+    //
+    // All three touch Dispatcher.UIThread.Post only to push results at the UI,
+    // and those posts queue harmlessly until there is a dispatcher to drain
+    // them. So a machine parked here for hours still serves its peers, its
+    // gateway and its cloud sessions. The only thing that does not happen is
+    // drawing a menu-bar icon onto a screen nobody can see.
+    //
+    // **Deliberately not citing ServePump for this, though it looks like the
+    // obvious candidate and an earlier draft of this comment did.**
+    // `RemoteControlSessions._servePump` is declared and read but never
+    // assigned: every `new ServePump` in the tree is in a test project, so the
+    // pump does not run in production at all. The relay it was written to
+    // cover is gone too — `RemoteControlSessions` says outright that "the
+    // bridge itself is gone and this is the shell it lived in", and
+    // `serveOnLaunch` has two blank lines where its start call used to be.
+    // Both of those are pre-existing on develop and neither is touched here;
+    // they are named so the next person does not rebuild an argument on them,
+    // which is what happened while this change was being written.
     //
     // Rejected: returning from Main instead of waiting. The launch agent is
     // KeepAlive{SuccessfulExit:false}, so a clean exit(0) is precisely the
@@ -87,9 +127,9 @@ namespace ClaudeBuddy
         // state where we cannot tell.
         WaitUpToCap,
 
-        // Wait for as long as it takes. For the state where the window server
-        // has told us starting would fail.
-        WaitWithoutCap
+        // Wait far longer, but still not forever. For the state where the
+        // window server has told us starting would fail.
+        WaitUpToLockedCap
     }
 
     internal static class ScreenLockWait
@@ -99,18 +139,56 @@ namespace ClaudeBuddy
         {
             ScreenLockState.Unlocked => ScreenLockWaitPolicy.StartNow,
             ScreenLockState.NoWindowServerSession => ScreenLockWaitPolicy.WaitUpToCap,
-            ScreenLockState.Locked => ScreenLockWaitPolicy.WaitWithoutCap,
+            ScreenLockState.Locked => ScreenLockWaitPolicy.WaitUpToLockedCap,
             _ => throw new ArgumentOutOfRangeException(nameof(state), state, null)
         };
+
+        // How long this policy is willing to wait before starting anyway.
+        //
+        // Two caps rather than one, because the two waiting states are waiting
+        // on different things. `WaitUpToCap` is the unknowable state and its
+        // cap is short, because a misread lock must not keep Buddy off the
+        // menu bar for a session. `WaitUpToLockedCap` is the window server's
+        // own answer, so its cap is long enough that it will not fire in any
+        // real lock — but it exists, and that is the whole argument below.
+        internal static TimeSpan CapFor(
+            ScreenLockWaitPolicy policy, TimeSpan cap, TimeSpan lockedCap) =>
+            policy switch
+            {
+                ScreenLockWaitPolicy.StartNow => TimeSpan.Zero,
+                ScreenLockWaitPolicy.WaitUpToCap => cap,
+                ScreenLockWaitPolicy.WaitUpToLockedCap => lockedCap,
+                _ => throw new ArgumentOutOfRangeException(nameof(policy), policy, null)
+            };
 
         // The policy with the caller's clock folded in: may startup build a
         // compositor right now?
         //
-        // `capExpired` is deliberately ignored for WaitWithoutCap. That is not
-        // an oversight to tidy up later — it is the fix. A cap that can expire
-        // into a start is only defensible while the lock reading might be
-        // wrong, and the state that maps here is the window server's own
-        // answer.
+        // Both waiting arms read `capExpired` the same way, because CapFor has
+        // already chosen *which* cap that is. The difference between them is
+        // the length, not the rule.
+        //
+        // **A reported lock is capped too, and that is a deliberate reversal
+        // of this change's first draft.** That draft waited on a reported lock
+        // forever, on the reasoning that the window server's own answer cannot
+        // be wrong in the direction a cap defends against. The reasoning is
+        // sound and the conclusion still was not: it has no answer for the key
+        // being stuck true after a real unlock, where the failure is Buddy
+        // invisibly absent with no recovery but for someone noticing a process
+        // and killing it. Capped, that same case starts the UI; and if the
+        // screen really is locked, the -6661 crash is restarted by
+        // KeepAlive{SuccessfulExit:false}, re-probes and waits again —
+        // self-healing, one log line per twelve hours of continuous lock, and
+        // nobody is looking at a locked screen while it happens. This
+        // repository rates silent absence worse than a crash, and this is
+        // exactly that trade.
+        //
+        // The cap is long enough that it should never fire. The 2026-09-22
+        // lock was confirmed from the unified log — `_powerMonitor.screenLocked
+        // yes` with `DisplayOn: 0` and `isClamshelled 1`, 1.3 seconds before
+        // the crash — so the state this arm handles is real, and a machine
+        // genuinely locked for twelve hours is not one anybody is waiting to
+        // see a menu bar on.
         //
         // Takes the policy rather than the state, with the state overload
         // below composing the two, so that every arm — including the
@@ -123,7 +201,7 @@ namespace ClaudeBuddy
             {
                 ScreenLockWaitPolicy.StartNow => true,
                 ScreenLockWaitPolicy.WaitUpToCap => capExpired,
-                ScreenLockWaitPolicy.WaitWithoutCap => false,
+                ScreenLockWaitPolicy.WaitUpToLockedCap => capExpired,
                 _ => throw new ArgumentOutOfRangeException(nameof(policy), policy, null)
             };
 
@@ -142,27 +220,40 @@ namespace ClaudeBuddy
         //
         // The probe runs before the first sleep, so an unlocked machine — the
         // overwhelmingly common case — pays one CoreGraphics call and no delay
-        // at all. The deadline is computed once from the caller's clock rather
+        // at all.
+        //
+        // Elapsed time is measured from a single `start` taken once, rather
         // than accumulated across iterations, which matters more than it looks:
         // Thread.Sleep is not scheduled during deep sleep, so a machine that
         // slept through its own cap notices only on the next wake and finds the
         // deadline already in the past. That is exactly the 2026-09-22 crash,
-        // which landed 1.5 seconds into a DarkWake (corroborated against
-        // `pmset -g log`). Under this loop that wake re-probes first: an
-        // already-expired deadline starts the UI only if the state still says
-        // the answer is unknowable, never if the screen is reported locked.
+        // which landed 1.5 seconds into a DarkWake (confirmed from the unified
+        // log, not only from `pmset -g log`). Under this loop that wake
+        // re-probes first, and the cap it is measured against is chosen from
+        // what the *fresh* probe says: a wake into a still-locked screen gets
+        // the long cap, so an already-expired two-hour deadline cannot start
+        // the UI into a -6661 the way it did.
+        //
+        // That the cap is selected per iteration rather than once is the whole
+        // reason this survives a state change across a sleep. Latching a
+        // deadline at entry would pin the machine to whatever it happened to
+        // report before it slept.
         internal static void Wait(
             Func<ScreenLockState> probe,
             Func<DateTime> now,
             Action<TimeSpan> sleep,
             TimeSpan cap,
+            TimeSpan lockedCap,
             TimeSpan interval)
         {
-            var deadline = now() + cap;
+            var start = now();
 
             while (true)
             {
-                if (ShouldStartNow(probe(), now() >= deadline)) return;
+                var policy = PolicyFor(probe());
+                var expired = now() - start >= CapFor(policy, cap, lockedCap);
+
+                if (ShouldStartNow(policy, expired)) return;
                 sleep(interval);
             }
         }

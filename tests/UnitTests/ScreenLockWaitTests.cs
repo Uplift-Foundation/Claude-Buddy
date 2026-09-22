@@ -34,7 +34,7 @@ public class ScreenLockWaitTests
             ScreenLockWait.PolicyFor(ScreenLockState.Unlocked));
         Assert.Equal(ScreenLockWaitPolicy.WaitUpToCap,
             ScreenLockWait.PolicyFor(ScreenLockState.NoWindowServerSession));
-        Assert.Equal(ScreenLockWaitPolicy.WaitWithoutCap,
+        Assert.Equal(ScreenLockWaitPolicy.WaitUpToLockedCap,
             ScreenLockWait.PolicyFor(ScreenLockState.Locked));
     }
 
@@ -71,19 +71,65 @@ public class ScreenLockWaitTests
         Assert.True(
             ScreenLockWait.ShouldStartNow(ScreenLockState.NoWindowServerSession, true));
 
-        // Locked: the window server's own answer, so an expired cap changes
-        // nothing. The second of these is the crash — it used to start.
+        // Locked: the window server's own answer, and governed by its own
+        // much longer cap. `capExpired` here means *that* cap, which CapFor
+        // has already selected — so the rule reads the same as the row above
+        // and the difference between them is the length, not the logic.
         Assert.False(ScreenLockWait.ShouldStartNow(ScreenLockState.Locked, false));
-        Assert.False(ScreenLockWait.ShouldStartNow(ScreenLockState.Locked, true));
+        Assert.True(ScreenLockWait.ShouldStartNow(ScreenLockState.Locked, true));
     }
 
     [Fact]
-    public void Never_starts_on_a_reported_lock_however_long_it_has_been()
+    public void Picks_a_different_cap_for_each_waiting_state()
     {
-        // Stated on its own, away from the table, because it is the whole
-        // point of the change rather than one row of six. A cap that expires
-        // into a start is only defensible while the reading might be wrong.
-        Assert.False(ScreenLockWait.ShouldStartNow(ScreenLockState.Locked, capExpired: true));
+        // The half of the rule that carries the whole change, stated on its
+        // own: the two waiting states wait for different lengths, and it is
+        // CapFor rather than ShouldStartNow that knows which.
+        var cap = TimeSpan.FromHours(2);
+        var lockedCap = TimeSpan.FromHours(12);
+
+        Assert.Equal(TimeSpan.Zero,
+            ScreenLockWait.CapFor(ScreenLockWaitPolicy.StartNow, cap, lockedCap));
+        Assert.Equal(cap,
+            ScreenLockWait.CapFor(ScreenLockWaitPolicy.WaitUpToCap, cap, lockedCap));
+        Assert.Equal(lockedCap,
+            ScreenLockWait.CapFor(ScreenLockWaitPolicy.WaitUpToLockedCap, cap, lockedCap));
+    }
+
+    [Fact]
+    public void Refuses_a_policy_CapFor_does_not_know()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => ScreenLockWait.CapFor(
+                (ScreenLockWaitPolicy)99, TimeSpan.FromHours(2), TimeSpan.FromHours(12)));
+    }
+
+    [Fact]
+    public void Starts_on_a_reported_lock_only_once_the_long_cap_expires()
+    {
+        // The recovery path, and the reason the locked arm is capped at all
+        // rather than waiting forever. If CGSSessionScreenIsLocked were ever
+        // stuck true after a real unlock, an uncapped wait would leave Buddy
+        // invisibly absent with no way back. Here the screen is reported
+        // locked for ever and the loop still starts — but only after the long
+        // cap, never after the short one.
+        var clock = new DateTime(2026, 9, 22, 0, 0, 0, DateTimeKind.Utc);
+        var probes = 0;
+
+        ScreenLockWait.Wait(
+            probe: () => { probes++; return ScreenLockState.Locked; },
+            now: () => clock,
+            sleep: slept => clock += slept,
+            cap: TimeSpan.FromHours(2),
+            lockedCap: TimeSpan.FromHours(12),
+            interval: TimeSpan.FromHours(1));
+
+        // Twelve one-hour sleeps, so the thirteenth probe is the first at or
+        // past the long cap. Crucially not the third, which is where the
+        // two-hour cap would have started it — and starting there is the
+        // 2026-09-22 crash.
+        Assert.Equal(13, probes);
+        Assert.Equal(new DateTime(2026, 9, 22, 12, 0, 0, DateTimeKind.Utc), clock);
     }
 
     [Fact]
@@ -100,6 +146,7 @@ public class ScreenLockWaitTests
             now: () => new DateTime(2026, 9, 22, 2, 46, 5, DateTimeKind.Utc),
             sleep: _ => sleeps++,
             cap: TimeSpan.FromHours(2),
+            lockedCap: TimeSpan.FromHours(12),
             interval: TimeSpan.FromSeconds(2));
 
         Assert.Equal(1, probes);
@@ -121,6 +168,7 @@ public class ScreenLockWaitTests
             now: () => new DateTime(2026, 9, 22, 2, 46, 5, DateTimeKind.Utc),
             sleep: sleeps.Add,
             cap: TimeSpan.FromHours(2),
+            lockedCap: TimeSpan.FromHours(12),
             interval: TimeSpan.FromSeconds(2));
 
         Assert.Empty(states);
@@ -131,10 +179,11 @@ public class ScreenLockWaitTests
     [Fact]
     public void Keeps_polling_a_locked_screen_long_past_the_cap()
     {
-        // The regression test for the crash. The clock runs far beyond the cap
-        // while the probe keeps answering Locked, and the loop must not have
-        // returned — because returning is what hands a locked screen to
-        // AppBuilder.Setup().
+        // The regression test for the crash. The clock runs far beyond the
+        // *short* cap while the probe keeps answering Locked, and the loop
+        // must not have returned — because returning is what hands a locked
+        // screen to AppBuilder.Setup(). The long cap is what it is measured
+        // against instead, and nine hours is inside it.
         var clock = new DateTime(2026, 9, 22, 0, 0, 0, DateTimeKind.Utc);
         var probes = 0;
 
@@ -142,14 +191,16 @@ public class ScreenLockWaitTests
             probe: () =>
             {
                 probes++;
-                // Nine hours of locked screen — four and a half caps — and only
-                // then an unlock. Before this change the wait returned at two
-                // hours and startup crashed.
+                // Nine hours of locked screen — four and a half *short* caps,
+                // and still inside the twelve-hour one — then an unlock.
+                // Before this change the wait returned at two hours and
+                // startup crashed.
                 return probes <= 9 ? ScreenLockState.Locked : ScreenLockState.Unlocked;
             },
             now: () => clock,
             sleep: slept => clock += slept,
             cap: TimeSpan.FromHours(2),
+            lockedCap: TimeSpan.FromHours(12),
             interval: TimeSpan.FromHours(1));
 
         Assert.Equal(10, probes);
@@ -172,6 +223,7 @@ public class ScreenLockWaitTests
             now: () => clock,
             sleep: slept => clock += slept,
             cap: TimeSpan.FromHours(2),
+            lockedCap: TimeSpan.FromHours(12),
             interval: TimeSpan.FromMinutes(30));
 
         // Probes at 0:00, 0:30, 1:00, 1:30 and 2:00; the fifth is the first at
@@ -200,6 +252,7 @@ public class ScreenLockWaitTests
                 : new DateTime(2026, 9, 22, 8, 0, 0, DateTimeKind.Utc),
             sleep: _ => Assert.Fail("must not sleep once the deadline is already past"),
             cap: TimeSpan.FromHours(2),
+            lockedCap: TimeSpan.FromHours(12),
             interval: TimeSpan.FromSeconds(2));
 
         Assert.Equal(1, probes);
@@ -225,6 +278,7 @@ public class ScreenLockWaitTests
             now: () => clock,
             sleep: slept => clock += slept,
             cap: TimeSpan.Zero,
+            lockedCap: TimeSpan.FromHours(12),
             interval: TimeSpan.FromSeconds(2));
 
         Assert.Equal(2, probes);
@@ -234,14 +288,15 @@ public class ScreenLockWaitTests
     public void Lets_the_state_change_between_polls_rather_than_latching_the_first_answer()
     {
         // A screen can be locked, then the session can go away, then come
-        // back. The policy is re-derived from each probe rather than decided
-        // once at entry, so a transition into the uncapped state is respected
-        // even though the first reading was the capped one.
+        // back. The policy — and with it the cap being measured against — is
+        // re-derived from each probe rather than decided once at entry, so a
+        // transition into the long-capped state is respected even though the
+        // first reading was the short-capped one.
         var clock = new DateTime(2026, 9, 22, 0, 0, 0, DateTimeKind.Utc);
         var states = new Queue<ScreenLockState>(new[]
         {
-            ScreenLockState.NoWindowServerSession,  // capped, cap not yet expired
-            ScreenLockState.Locked,                 // now uncapped, and past the cap
+            ScreenLockState.NoWindowServerSession,  // short cap, not yet expired
+            ScreenLockState.Locked,                 // long cap, though past the short one
             ScreenLockState.Locked,
             ScreenLockState.Unlocked
         });
@@ -251,6 +306,7 @@ public class ScreenLockWaitTests
             now: () => clock,
             sleep: slept => clock += slept,
             cap: TimeSpan.FromMinutes(1),
+            lockedCap: TimeSpan.FromHours(12),
             interval: TimeSpan.FromHours(1));
 
         // All four consumed: had the first reading latched the capped policy,

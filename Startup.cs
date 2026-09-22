@@ -66,11 +66,13 @@ namespace ClaudeBuddy
         // Buddy starts before the UI is up can. Writing crashes down comes
         // before even that, because the first thing worth recording is a failure
         // in the startup below it — the two crashes that prompted all of this
-        // happened inside `startUi` and left nothing behind (CB-44). `serveOnLaunch` brings up a
-        // relay whose continuations land on the pool; `waitForUnlock` then holds
-        // this thread for as long as the screen stays locked, which is all the
-        // time those continuations need and then some. Starting the UI last is the shape that already
-        // existed and is what makes the first three worth ordering at all.
+        // happened inside `startUi` and left nothing behind (CB-44).
+        // `serveOnLaunch` brings up the peer link and the gateway and cloud
+        // pollers, whose continuations land on the pool; `waitForUnlock` then
+        // holds this thread for as long as the screen stays locked, which is
+        // all the time those continuations need and then some. Starting the UI
+        // last is the shape that already existed and is what makes the first
+        // three worth ordering at all.
         //
         // `claimSingleInstance` sits between `installCrashLog` and
         // `claimUiThread`, and both sides of that placement matter (CB-178).

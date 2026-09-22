@@ -19,13 +19,29 @@ namespace ClaudeBuddy
         // machine after a while, short enough that an unknowable state can't
         // keep the app off the menu bar for a whole session.
         //
-        // It no longer caps a wait on a screen the window server has *told*
-        // us is locked. It used to, and starting when it expired was the
-        // 2026-09-22 -6661 crash: the cap is only defensible while the
-        // reading might be wrong, and an authoritative lock is not. See
-        // ScreenLockWait for the three states and why only one of them is
-        // capped.
+        // This is no longer the cap on a screen the window server has *told*
+        // us is locked — that one is LockedWait below, and starting when this
+        // shorter one expired is what the 2026-09-22 -6661 crash was.
         private static readonly TimeSpan LockWait = TimeSpan.FromHours(2);
+
+        // How long to wait when the window server reports the screen locked.
+        //
+        // Six times LockWait, because the two are answers to different
+        // questions. LockWait is short because an unknowable state might be
+        // wrong and a wrong answer must not cost a session. This one is long
+        // because the reading is the window server's own and starting against
+        // it is a guaranteed -6661 — so the cap should not fire in any real
+        // lock, and twelve hours of continuous lock is not a machine anybody
+        // is waiting to see a menu bar on.
+        //
+        // It is capped at all, rather than waiting forever, because a key
+        // stuck true after a real unlock would otherwise leave Buddy
+        // invisibly absent with no recovery. Capped, that case starts; and if
+        // the screen really is locked, the crash is restarted by
+        // KeepAlive{SuccessfulExit:false} and waits again. ScreenLockWait's
+        // CapFor has the full argument.
+        private static readonly TimeSpan LockedWait = TimeSpan.FromHours(12);
+
         private static readonly TimeSpan LockPoll = TimeSpan.FromSeconds(2);
 
         // Held for the process's lifetime once we own it, so it is not
@@ -147,7 +163,8 @@ namespace ClaudeBuddy
                 // locked, which is exactly the -6661 above. It returns void
                 // now and the decision lives in ScreenLockWait, one arm per
                 // state, so there is nothing here left to discard.
-                waitForUnlock: () => MacOSScreenLock.WaitForUnlock(LockWait, LockPoll),
+                waitForUnlock: () =>
+                    MacOSScreenLock.WaitForUnlock(LockWait, LockedWait, LockPoll),
 
                 startUi: () => BuildAvaloniaApp().StartWithClassicDesktopLifetime(args));
         }

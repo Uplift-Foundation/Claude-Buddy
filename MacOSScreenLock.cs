@@ -80,8 +80,9 @@ namespace ClaudeBuddy
         //
         // A throw still answers Unlocked rather than Locked, unchanged from
         // before: never let a probe be the reason the app doesn't start. The
-        // new indefinite wait makes that choice matter more, not less — a
-        // probe that threw every time would otherwise park startup forever.
+        // much longer wait on a reported lock makes that choice matter more,
+        // not less — a probe that threw every time would otherwise park
+        // startup for half a day before it got anywhere.
         public static ScreenLockState ProbeState()
         {
             if (!OperatingSystem.IsMacOS()) return ScreenLockState.Unlocked;
@@ -119,17 +120,23 @@ namespace ClaudeBuddy
         // Block until there's a display worth drawing on, then let startup carry
         // on. Waiting is the right behaviour rather than a compromise: nobody
         // can see a menu-bar icon on a locked screen, so there is nothing to
-        // lose by being late, and everything Buddy does without a display is
-        // already started ahead of this point and already ticked by ServePump.
+        // lose by being late, and everything Buddy does without a display —
+        // PeerSessions' plain Timers, OpenClawSessions' and
+        // ClaudeCloudSessions' Task.Run loops — is already started ahead of
+        // this point by serveOnLaunch and keeps running with no dispatcher.
+        // ScreenLockWait's header has the full list and says why ServePump is
+        // not on it.
         //
         // Returns void, and that is the fix as much as the tri-state is. It
         // used to return "the cap expired while still locked", which
         // Program.cs wired into Startup.Run's `Action waitForUnlock` — so the
         // answer was discarded by the signature, silently, with nothing at the
         // call site to suggest a value existed. Under ScreenLockWait's rule
-        // there is no longer any answer to return: the only state that starts
-        // on an expired cap is the one where the lock reading is unknowable,
-        // and a reported lock waits it out. A void return cannot be dropped.
+        // there is no longer any answer to return: every arm ends in "start",
+        // whether because the screen unlocked or because the cap for whatever
+        // state it is in has run out. The old bool existed only to say "I gave
+        // up, start anyway", and a caller was always going to start anyway.
+        // A void return cannot be dropped.
         //
         // Deliberately *not* a Func<bool> short-circuit in the shape CB-178
         // gave claimSingleInstance. That fits a duplicate instance, where
@@ -138,12 +145,13 @@ namespace ClaudeBuddy
         // is exactly what stops Buddy coming back, and a `false` arm would sit
         // in the code as a route to being silently absent. There is no such
         // answer to model, so the type does not offer one.
-        public static void WaitForUnlock(TimeSpan cap, TimeSpan interval) =>
+        public static void WaitForUnlock(TimeSpan cap, TimeSpan lockedCap, TimeSpan interval) =>
             ScreenLockWait.Wait(
                 probe: ProbeState,
                 now: () => DateTime.UtcNow,
                 sleep: Thread.Sleep,
                 cap: cap,
+                lockedCap: lockedCap,
                 interval: interval);
     }
 }
