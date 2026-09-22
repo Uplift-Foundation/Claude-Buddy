@@ -5,6 +5,29 @@ namespace ClaudeBuddy.Tests;
 
 // The local workspace is a seam with another process: this covers the same
 // agents.list shape the gateway publishes, plus the files it points us at.
+//
+// [Collection("Settings")] because this class writes process-wide state —
+// OpenClawSessions.SetIdentitiesForTests — and, in its finally, clears it to an
+// empty dictionary. Uncollected, xUnit ran it in parallel with everything else,
+// including PeerMirrorEndToEndTests, which reads that same map back.
+//
+// That is not hypothetical: it turned up as a CI failure in
+// APairedHostRoutesOnlySamePinnedKnownAgentVoicesToTheReceiver, where the
+// routed row arrived correctly and the read-back one line later returned null —
+// `Expected: VoiceOption { ... af_bella ... } / Actual: null`. The clear landed
+// in the gap. Every feature of that failure follows from this: correct in
+// flight, null on read back, intermittent, and green locally where the
+// scheduling differs.
+//
+// The reader already saved and restored the fingerprint pin in a finally, which
+// protects against *sequential* reuse and does nothing whatsoever against a
+// parallel writer — the protection that looks like it covers this and doesn't.
+//
+// Same answer SettingsCollection.cs gives for the same reason; read its comment
+// before removing this attribute. A class that calls a method named
+// SetIdentitiesForTests on shared state does not get to run alongside its
+// readers.
+[Collection("Settings")]
 public class OpenClawWorkspaceIdentityIntegrationTests : IDisposable
 {
     private readonly string _workspace = Path.Combine(Path.GetTempPath(), "cb-workspace-identity-integration-" + Guid.NewGuid());
