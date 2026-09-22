@@ -298,6 +298,16 @@ namespace ClaudeBuddy
                 using var proc = new Process { StartInfo = startInfo };
                 if (!proc.Start()) return null;
 
+                // Before the first byte goes in, because the hook that writes
+                // this child's status file fires on its own schedule and the
+                // scan runs on a timer: claiming the pid after the round trip
+                // would leave a window in which an orb is drawn for it. Released
+                // in the finally below rather than here, so it covers the
+                // timeout and throw paths as well as the ordinary one.
+                InternalSessions.Remember(proc.Id);
+
+                try
+                {
                 await proc.StandardInput.WriteAsync(Prompt(reply)).ConfigureAwait(false);
                 proc.StandardInput.Close();
 
@@ -317,6 +327,11 @@ namespace ClaudeBuddy
                 if (proc.ExitCode != 0) return null;
 
                 return Clean(await stdout.ConfigureAwait(false));
+                }
+                finally
+                {
+                    InternalSessions.Forget(proc.Id);
+                }
             }
             // The same two arms UsagePoller keeps, and for the same reason: a
             // summariser that throws into the UI thread would take the panel

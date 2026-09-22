@@ -403,6 +403,15 @@ namespace ClaudeBuddy
                 using var process = Process.Start(psi);
                 if (process is null) return null;
 
+                // This app's own poll, not a conversation — claimed so the scan
+                // does not draw it an orb. Same reasoning as the summariser's;
+                // see InternalSessions. Whether this one's hook ever fires was
+                // not established either way, so the claim is cheap insurance
+                // rather than a fix for an observed orb.
+                InternalSessions.Remember(process.Id);
+                try
+                {
+
                 // Both pipes drained before waiting, and stdin closed so the CLI
                 // knows no further requests are coming and exits. A blocking
                 // ReadToEnd here would make the timeout below unreachable, and an
@@ -424,6 +433,11 @@ namespace ClaudeBuddy
                 errTask.GetAwaiter().GetResult();
 
                 return process.ExitCode == 0 ? stdout : null;
+                }
+                finally
+                {
+                    InternalSessions.Forget(process.Id);
+                }
             }
             catch
             {
