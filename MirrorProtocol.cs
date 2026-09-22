@@ -502,7 +502,35 @@ namespace ClaudeBuddy
             // the two are different claims, and a session offered as
             // undeliverable when the far machine simply never answered would
             // be a live-view session that quietly cannot be reached.
-            [property: JsonPropertyName("deliver")] bool? CanDeliver = null);
+            [property: JsonPropertyName("deliver")] bool? CanDeliver = null,
+
+            // A stable server-side address, deliberately distinct from Name.
+            // Titles are presentation and can collide; route is what fetch,
+            // watch and input must send back. Optional for peers predating it.
+            [property: JsonPropertyName("route")] string? Route = null,
+
+            // A persona is resolved by the Buddy that owns the session and is
+            // deliberately data, not a path. A remote session's cwd is a path
+            // on the other machine; opening a matching-looking path here would
+            // put this machine's CLAUDE.md on somebody else's conversation.
+            //
+            // Optional keeps an older peer useful: it still gets an orb, just
+            // its ordinary title and glyph rather than a persona it never sent.
+            [property: JsonPropertyName("persona")] PeerPersona? Persona = null);
+
+        // The portable part of LocalPersona.Persona. Avatar is the already
+        // bounded image bytes, never AvatarPath: the latter has meaning only
+        // on the machine that resolved it. System.Text.Json writes byte arrays
+        // as base64, and the roster's existing gzip/chunk transfer carries it
+        // with the same integrity checks as every other roster field.
+        public sealed record PeerPersona(
+            [property: JsonPropertyName("name")] string? Name = null,
+            [property: JsonPropertyName("voice")] string? Voice = null,
+            [property: JsonPropertyName("rate")] double? Rate = null,
+            [property: JsonPropertyName("avatar")] byte[]? Avatar = null)
+        {
+            public bool IsEmpty => Name is null && Voice is null && Rate is null && Avatar is null;
+        }
 
         public const string CliClaudeCode = "claude";
         public const string CliCodex = "codex";

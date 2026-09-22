@@ -84,6 +84,11 @@ namespace ClaudeBuddy
         [JsonIgnore]
         public SessionSource Source { get; set; } = SessionSource.ClaudeCode;
 
+        // The CLI behind a remote-control session. Source remains RemoteControl
+        // so no local terminal or persona path is accidentally enabled.
+        [JsonIgnore]
+        public string RemoteCli { get; set; } = "";
+
         // Whether this session is a CLI running in a terminal on this machine.
         //
         // Most of the rules in this file that name ClaudeCode mean this and not
@@ -177,12 +182,54 @@ namespace ClaudeBuddy
         [JsonPropertyName("session_pid")]
         public int SessionPid { get; set; }
 
+        // The filename is the session id, not a hook payload property. Kept on
+        // the in-memory status so a pane operation can verify that the Claude
+        // process it found is still this conversation before it focuses or
+        // types. Never serialize it back into a hook-owned status file.
+        [JsonIgnore]
+        public string SessionId { get; set; } = "";
+
         // Absolute path to the session's JSONL transcript file. The hooks
         // receive it from Claude Code's hook payload and pass it through so
         // the app can read conversation content (e.g. to speak the latest
         // turn aloud). Empty from hooks older than this field.
         [JsonPropertyName("transcript_path")]
         public string TranscriptPath { get; set; } = "";
+
+        // Where this session lives when it does not live on this machine: a
+        // https://claude.ai/code/session_… address for a cloud session, empty
+        // for everything else. [JsonIgnore] for the reason Source and Kind are
+        // — it is the scan's conclusion rather than a hook's, and
+        // ResetSessionToIdle writes this object back over a hook-owned file.
+        //
+        // Carried rather than rebuilt at the click, because the address is made
+        // out of the session id and the orb is the only thing that still holds
+        // it by then. See ClaudeCloudSessions.Session.Url.
+        [JsonIgnore]
+        public string Url { get; set; } = "";
+
+        // How full this session's context window is, as a percentage, when
+        // whatever lists the session says so. Null is "nobody said", which is
+        // not the same as zero and must not draw an empty ring — see
+        // OrbWindow.ApplyContextRing.
+        //
+        // Deliberately not folded into State. State is what the session is
+        // doing; this is how much room it has left to keep doing it, which is
+        // the one fact about a session you cannot see by looking at it and
+        // cannot find out without opening it.
+        [JsonIgnore]
+        public int? ContextPercent { get; set; }
+
+        // Two lines of hover text for a session whose roster says more than its
+        // state does: what it is doing in its own words, and the last thing it
+        // was seen to do. Null where nothing was said, and the tooltip simply
+        // omits the line rather than printing a placeholder — an orb claiming
+        // "unknown" is worse than an orb claiming nothing.
+        [JsonIgnore]
+        public string? StatusDetail { get; set; }
+
+        [JsonIgnore]
+        public string? RecentAction { get; set; }
     }
 
     // What produced a session. ClaudeCode, Codex and Grok are local processes
@@ -207,7 +254,19 @@ namespace ClaudeBuddy
         // RemoteControlBridge). Its own CLI is Claude Code, but it is not local
         // and there is no terminal here to focus, which is the distinction
         // IsLocalCli draws and the only one the rest of the app cares about.
-        RemoteControl
+        RemoteControl,
+
+        // A Claude Code session running in Anthropic's cloud, listed by the
+        // account API rather than by a hook (see ClaudeCloudSessions). Closest
+        // to OpenClaw of anything here: no process, no terminal and no
+        // transcript file on this disk, so the local-against-the-rest split is
+        // again the one that matters.
+        //
+        // Deliberately not RemoteControl, which models a session on another
+        // machine *of yours* reached through a relay that can type into it.
+        // There is no machine of yours behind this one and nothing here can
+        // type into it, so a click opens the session in a browser instead.
+        ClaudeCloud
     }
 
     // Watches %TEMP%\claude_buddy\<session_id>.txt (one per running Claude
@@ -331,7 +390,8 @@ namespace ClaudeBuddy
             Func<Dictionary<string, string>?>? jobListing,
             Func<HashSet<string>?>? attachClients = null,
             Func<string, string?>? transcriptHunt = null,
-            Func<IReadOnlyList<string>>? userConfigDirs = null)
+            Func<IReadOnlyList<string>>? userConfigDirs = null,
+            Func<int, SessionDependents.Verdict>? dependents = null)
         {
             _statusDir = statusDir;
             _jobListing = jobListing ?? BackgroundJobs.SnapshotForScan;
@@ -349,9 +409,20 @@ namespace ClaudeBuddy
             // that the scan never passes, and an optional parameter stops a
             // method group converting to a zero-argument Func.
             _userConfigDirs = userConfigDirs ?? (() => LocalPersona.UserConfigDirs());
+            _dependents = dependents ?? SessionDependents.Of;
         }
 
         private readonly Func<Dictionary<string, string>?> _jobListing;
+
+        // What is running underneath a session's pid, for the one irreversible
+        // action in the app — a seam for exactly the reason _attachClients is
+        // one, and more sharply. The real implementation walks this machine's
+        // process table, and the machine this suite runs on has the user's own
+        // daemon and their own background jobs on it: a test that asked the real
+        // one would be asserting about whatever happened to be running beside
+        // it, and would answer differently on a CI runner and on a developer's
+        // Mac. Handed over instead, so every arm of the refusal has a case.
+        private readonly Func<int, SessionDependents.Verdict> _dependents;
 
         // How a transcript that is not where the status file says is re-found —
         // TranscriptReader.FindTranscriptFor, behind a seam because the real one
@@ -471,7 +542,9 @@ namespace ClaudeBuddy
 
             StartWatching();
 
-            _pollTimer.Tick += (_, _) => ScanAndUpdate();
+            // CB-106: goes through ScheduleScan, not ScanAndUpdate directly, so
+            // the file reads it triggers every two seconds run off this thread.
+            _pollTimer.Tick += (_, _) => _ = ScheduleScan();
 
             // Piggybacks the scan tick rather than adding a timer of its own.
             // AccountOrbs decides whether there is anything to do — it holds the
@@ -519,10 +592,10 @@ namespace ClaudeBuddy
             _debounce.Tick += (_, _) =>
             {
                 _debounce.Stop();
-                ScanAndUpdate();
+                _ = ScheduleScan();
             };
 
-            ScanAndUpdate();
+            _ = ScheduleScan();
         }
 
         // Excluded from coverage: creates a FileSystemWatcher on the status
@@ -860,6 +933,50 @@ namespace ClaudeBuddy
             }
         }
 
+        // Reconcile a pane claim with the session id in that pane's current
+        // Claude process. This is deliberately narrower than a liveness rule:
+        // it says only that a particular coordinate is no longer this status's
+        // coordinate. We remove the stale claimant only when the verified owner
+        // is another status in the same scan, so a failed or partial hook pass
+        // never makes a live conversation disappear.
+        internal static HashSet<string> ReconcileTmuxPaneClaims(
+            List<ScanEntry> found, Func<ScanEntry, string?> paneOwner)
+        {
+            var stale = new HashSet<string>(StringComparer.Ordinal);
+
+            foreach (var claim in found.Where(entry =>
+                entry.Status.Source == SessionSource.ClaudeCode
+                && !string.IsNullOrEmpty(entry.Status.TmuxPane)))
+            {
+                var owner = paneOwner(claim);
+                if (string.IsNullOrEmpty(owner)
+                    || string.Equals(owner, claim.SessionId, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var recipients = found.Where(entry =>
+                    string.Equals(entry.SessionId, owner, StringComparison.OrdinalIgnoreCase)).ToList();
+                if (recipients.Count != 1) continue;
+
+                var recipient = recipients[0];
+                if (!KnowsATerminal(recipient.Status))
+                {
+                    recipient.Status.TermProgram = claim.Status.TermProgram;
+                    recipient.Status.TermId = claim.Status.TermId;
+                    recipient.Status.TermPid = claim.Status.TermPid;
+                    recipient.Status.TmuxSocket = claim.Status.TmuxSocket;
+                    recipient.Status.TmuxPane = claim.Status.TmuxPane;
+                    recipient.Status.TmuxBin = claim.Status.TmuxBin;
+                    if (string.IsNullOrEmpty(recipient.Status.Tty)) recipient.Status.Tty = claim.Status.Tty;
+                }
+
+                stale.Add(claim.SessionId);
+            }
+
+            return stale;
+        }
+
         // Ids whose file shares its (pid, source) with another file in this scan.
         //
         // The domain InheritTerminalInfo donates within, and the situation
@@ -984,14 +1101,18 @@ namespace ClaudeBuddy
             // away. Pruning it would hide the orb exactly when it matters
             // most. Use "Reset this session to idle" to clear a genuinely
             // abandoned one manually.
-            // "generating" is exempt for gateway sessions for the same
-            // reason "waiting" is exempt for local ones: it is the state
+            // "generating" is exempt for gateway and cloud sessions for the
+            // same reason "waiting" is exempt for local ones: it is the state
             // where hiding the orb is worst. A local session can't be caught
             // by this because its file is being rewritten as it works, which
-            // a gateway session has no equivalent of.
+            // neither a gateway nor a cloud session has an equivalent of —
+            // both are a roster read on a timer, so "still working" and
+            // "nothing has been heard for a while" look identical from here.
             if (staleAfter is not null
                 && status.State != "waiting"
-                && !(status.Source == SessionSource.OpenClaw && status.State == "generating")
+                && !((status.Source == SessionSource.OpenClaw
+                        || status.Source == SessionSource.ClaudeCloud)
+                    && status.State == "generating")
                 && now - written > staleAfter)
             {
                 return ScanVerdict.Expired;
@@ -1077,6 +1198,13 @@ namespace ClaudeBuddy
                 if (!EnabledFor(status.Source)) continue;
                 if (MachineNames.LooksLikeALeftoverRelay(status.Cwd)) continue;
 
+                // And here too, so a peer asking this machine what it is running
+                // is told the same thing the screen shows. A summariser
+                // advertised over the mirror would draw its orb on somebody
+                // else's desk instead of this one, which is the same defect
+                // wearing a different machine.
+                if (InternalSessions.IsInternal(status.SessionPid)) continue;
+
                 found.Add(new ScanEntry(
                     Path.GetFileNameWithoutExtension(file), status, written));
             }
@@ -1135,7 +1263,7 @@ namespace ClaudeBuddy
                 Func<bool> handedToBackground = () =>
                     SessionPresence.CouldBeABackgroundedHusk(status, phase)
                     && (SessionPark.IsParked(status.SessionPid, entry.SessionId)
-                        || TranscriptHandoff.EndsBackgrounded(status.TranscriptPath));
+                        || TranscriptHandoff.EndsBackgrounded(status.TranscriptPath, entry.SessionId));
 
                 // **Orb lifetime is a display preference and does not belong in
                 // an answer to another machine.** Its own definition says "how
@@ -1576,25 +1704,97 @@ namespace ClaudeBuddy
         // the whole of the scan, and calling it from anywhere but the timer, the
         // watcher's debounce or Start would mean two passes racing over the same
         // dictionaries on the same thread's re-entrancy.
+        //
+        // Split into ReadStatusFiles (the disk-bound half) and ScanAndUpdateCore
+        // (the reconciliation half) for CB-106: ScheduleScan below runs the
+        // former on a background thread so the Avalonia dispatcher is never the
+        // thread waiting on a file open. This wrapper still does both, inline
+        // and synchronous, on whichever thread calls it — which is what the
+        // many tests that scan a scratch directory and assert in the same line
+        // rely on, and is fine for them since a test's own status directory
+        // never sees the ambient disk contention CB-106 was about.
         internal void ScanAndUpdate()
         {
             SyncAutoColorMarker();
-
-            var seen = new HashSet<string>();
             var now = DateTime.UtcNow;
-            bool setChanged = false;
+            ScanAndUpdateCore(ReadStatusFiles(now), now);
+        }
 
-            // Which files a persona could be written in, per working directory,
-            // for the length of this one pass. Local rather than a field on
-            // purpose: building the list is pure string work over a path walk —
-            // cheap enough to redo every couple of seconds — where a field
-            // keyed by directory would accumulate an entry for every directory
-            // any session has ever run in, for the life of the process, to save
-            // nothing measurable. Several sessions in one repo is the common
-            // case and is what this actually saves.
-            var candidatesByCwd =
-                new Dictionary<(string Cwd, SessionSource Source, string Agent), IReadOnlyList<string>>();
+        // Guards ScheduleScan against a tick landing while the previous scan's
+        // background read is still in flight.
+        private bool _scanInFlight;
 
+        // The production entry point: Start() wires the poll timer and the
+        // file-watcher debounce to this instead of to ScanAndUpdate directly.
+        //
+        // CB-106: a live sample caught the main thread pinned for 8-11 seconds
+        // inside a raw sync() syscall, reached from Avalonia's native macOS
+        // run-loop signaller straight through to unsymbolized managed frames —
+        // i.e. from managed code the dispatcher was running. ScanAndUpdate's
+        // file-reading half (Directory.EnumerateFiles, File.GetLastWriteTimeUtc,
+        // FileStream opens, and the transcript-repair hunt, which reads more
+        // files still) was, until this change, the one thing this app ran
+        // unconditionally on that thread every two seconds, forever, uncached —
+        // and it was the only candidate that needed no specific user action to
+        // land inside the disk-pressure window the ticket described (heavy
+        // concurrent dotnet build/swiftc activity from unrelated processes on
+        // the same machine): it runs on every tick, not just the rare one where
+        // someone happens to flip a settings toggle or click "reset to idle".
+        // An ordinary small read can block for seconds waiting on kernel
+        // writeback under that kind of system-wide contention regardless of
+        // which syscall a stack sample happens to land on, which is why this
+        // fix does not chase the literal symbol sync() into Avalonia's native
+        // (and unsymbolized) macOS backend — nothing in this repository calls
+        // it directly, and moving *our* blocking I/O off the UI thread is the
+        // part actually within reach here.
+        //
+        // Guarded rather than queued: a tick that lands mid-scan means the
+        // previous scan is still waiting on the very contention this exists to
+        // survive, and starting a second read on top of it would only add to
+        // it. Skipping it is safe — nothing here is lost, only deferred to the
+        // next tick two seconds later.
+        //
+        // async/await rather than a manual ContinueWith: called from the
+        // Avalonia UI thread, `await` resumes on the SynchronizationContext it
+        // captured — Avalonia's own — so ScanAndUpdateCore below still runs on
+        // the UI thread it always has, with the only change being that the
+        // thread is free to pump other work while Task.Run's file reads are
+        // in flight instead of blocked inside them.
+        internal async Task ScheduleScan()
+        {
+            if (_scanInFlight) return;
+            _scanInFlight = true;
+            try
+            {
+                var now = DateTime.UtcNow;
+                var found = await Task.Run(() =>
+                {
+                    SyncAutoColorMarker();
+                    return ReadStatusFiles(now);
+                }).ConfigureAwait(true);
+
+                ScanAndUpdateCore(found, now);
+            }
+            finally
+            {
+                _scanInFlight = false;
+            }
+        }
+
+        // The disk-bound half of a scan: opens and parses every status file,
+        // repairs a missing transcript path and reads an identity off it when
+        // one is needed. Pure aside from the small per-session caches
+        // (_transcriptHunts, _personas) it reads and writes, which only this
+        // method and its caller's single-threaded continuation touch — see
+        // ScheduleScan's guard for why two of these never run concurrently.
+        //
+        // `now` is a parameter rather than DateTime.UtcNow read here, so a
+        // background read and the reconciliation pass that follows it agree on
+        // one instant — ScanAndUpdate's callers already expected that when this
+        // was one method, and JudgeLiveness/SweepDeadFiles downstream compare
+        // against it too.
+        private List<ScanEntry> ReadStatusFiles(DateTime now)
+        {
             IEnumerable<string> files;
             try
             {
@@ -1628,6 +1828,7 @@ namespace ClaudeBuddy
                 var sessionId = Path.GetFileNameWithoutExtension(file);
 
                 status.Source = SourceOf(status);
+                status.SessionId = sessionId;
 
                 // A transcript that is not where the hook said gets re-found by
                 // session id, before anything reads the path: the identity read
@@ -1679,8 +1880,47 @@ namespace ClaudeBuddy
                 // and not the live tag, and why the cwd rather than argv.
                 if (MachineNames.LooksLikeALeftoverRelay(status.Cwd)) continue;
 
+                // A CLI this app started for its own purposes — the throwaway
+                // `claude -p` that writes a spoken summary, and the usage poll.
+                // Same argument as the relay directly above: it is plumbing
+                // wearing a session's clothes, its hook fires like anyone's, and
+                // nothing before this branch told it apart.
+                //
+                // Dropped here for the same reason too. Suppressing the orb
+                // further down would leave a session the pid grouping, the team
+                // links, the tray and the right-click menu could all still be
+                // pointed at, which is a worse shape than not seeing it at all.
+                if (InternalSessions.IsInternal(status.SessionPid)) continue;
+
                 found.Add(new ScanEntry(sessionId, status, written));
             }
+
+            return found;
+        }
+
+        // The reconciliation half of a scan: joins the gateway's and the
+        // remote-control bridge's sessions onto the file-derived list ReadStatusFiles
+        // produced, then decides what deserves an orb and reconciles the
+        // windows, the arrows and the tray with the answer. Everything from
+        // here on touches Avalonia windows and the tray, so — unlike
+        // ReadStatusFiles — this stays on whichever thread calls it:
+        // ScanAndUpdate above calls it inline; ScheduleScan calls it after
+        // hopping back onto the UI thread its await resumed on.
+        private void ScanAndUpdateCore(List<ScanEntry> found, DateTime now)
+        {
+            var seen = new HashSet<string>();
+            bool setChanged = false;
+
+            // Which files a persona could be written in, per working directory,
+            // for the length of this one pass. Local rather than a field on
+            // purpose: building the list is pure string work over a path walk —
+            // cheap enough to redo every couple of seconds — where a field
+            // keyed by directory would accumulate an entry for every directory
+            // any session has ever run in, for the life of the process, to save
+            // nothing measurable. Several sessions in one repo is the common
+            // case and is what this actually saves.
+            var candidatesByCwd =
+                new Dictionary<(string Cwd, SessionSource Source, string Agent), IReadOnlyList<string>>();
 
             // The gateway's sessions join the same list the status files
             // produced, so everything downstream — ordering, stacking, pinning,
@@ -1817,11 +2057,16 @@ namespace ClaudeBuddy
             // only thing being invented is the namespaced id.
             foreach (var remote in RemoteControlSessions.Snapshot())
             {
+                // Received data only. A remote cwd is intentionally absent
+                // from this ScanEntry, so ApplyPersona below returns before any
+                // local candidate path can be constructed for it.
+                PeerPersonas.Set(remote.Key, remote.Persona);
                 found.Add(new ScanEntry(
                     remote.Key,
                     new SessionStatus
                     {
                         Source = SessionSource.RemoteControl,
+                        RemoteCli = remote.Cli ?? MirrorProtocol.CliClaudeCode,
 
                         // The peer list's own word, translated into the two
                         // states an orb draws. Anything that isn't recognisably
@@ -1854,6 +2099,68 @@ namespace ClaudeBuddy
                     remote.Seen));
             }
 
+            // Claude Code sessions running in Anthropic's cloud. Empty and free
+            // unless claudeCloudEnabled is on — ClaudeCloudSessions.Snapshot
+            // holds that gate itself, so this block needs no second one.
+            //
+            // Simpler than either branch above, and for the same reason the
+            // remote-control one is: a cloud session is one conversation in one
+            // place. There are no rooms, no leads, and no local anything.
+            foreach (var session in ClaudeCloudSessions.Snapshot())
+            {
+                found.Add(new ScanEntry(
+                    "cloud:" + session.Id,
+                    new SessionStatus
+                    {
+                        Source = SessionSource.ClaudeCloud,
+                        Kind = SessionKind.Cloud,
+                        State = session.State,
+                        Title = session.Title,
+
+                        // Deliberately absent, exactly as the remote-control
+                        // block above leaves it: ApplyPersona returns early on
+                        // an empty cwd, so no local candidate path is ever
+                        // constructed for a session that has no directory on
+                        // this machine — or on any machine the user owns.
+                        Cwd = "",
+
+                        // Hashed from the session id, so the orb wears the same
+                        // colour next launch with nothing stored. A cloud
+                        // session has no /color to read and no cwd to
+                        // auto-colour from, so this is the only stable answer
+                        // available — the same reasoning, and the same
+                        // function, the remote-control fallback uses.
+                        Color = OpenClawSessions.ColourForAgent(session.Id),
+
+                        Url = session.Url,
+                        ContextPercent = session.ContextPercent,
+                        StatusDetail = session.StatusDetail,
+                        RecentAction = session.RecentAction,
+
+                        // The roster's "this one wants you" flag, spent on the
+                        // channel that already means it. NeedsInput dims the orb
+                        // as well as marking it, which reads oddly at first for
+                        // something asking for attention — but it is the same
+                        // treatment a local background job holding a question
+                        // gets, the "?" is the loud half of that pair, and a
+                        // second presence value meaning almost this one is how
+                        // two orbs end up saying the same thing differently.
+                        Presence = session.NeedsAction
+                            ? OrbPresence.NeedsInput
+                            : OrbPresence.Present,
+                    },
+
+                    // The session's own last activity, never `now`. The account
+                    // API lists every cloud session the account has ever had —
+                    // 578 rows on the machine this was measured against — so
+                    // stamping the time of the read would give all of them a
+                    // permanent orb. Stamping real activity lets the user's own
+                    // "Keep orbs for" setting do the filtering, which is the
+                    // same argument the gateway block above makes at length and
+                    // the same trap it was written to avoid.
+                    session.LastActivity));
+            }
+
             // Before InheritTerminalInfo, so this describes the files as the
             // hooks wrote them. It happens to be immune to the donation — pid and
             // source are not among the fields moved — but this ordering is the one
@@ -1866,6 +2173,16 @@ namespace ClaudeBuddy
             // three shapes are in SessionPresence.WorthAskingTheDaemon.
             var worthAsking = found.Any(e => SessionPresence.WorthAskingTheDaemon(
                 e.Status, KnowsATerminal(e.Status), sharingAPid.Contains(e.SessionId)));
+
+            // A tmux pane is reusable infrastructure, not a session identity.
+            // Before ordinary same-pid inheritance can spread a recorded pane,
+            // ask the pane's live Claude child which session it is actually
+            // running. A positive mismatch is enough to remove the obsolete
+            // claimant when this scan also has the current owner; an absent or
+            // ambiguous answer changes nothing.
+            var stalePaneClaims = ReconcileTmuxPaneClaims(found, entry =>
+                TerminalFocuser.TmuxPaneOwner(entry.Status));
+            found.RemoveAll(entry => stalePaneClaims.Contains(entry.SessionId));
 
             InheritTerminalInfo(found);
 
@@ -1999,6 +2316,25 @@ namespace ClaudeBuddy
                 // keeps the fork itself, listed by the daemon as a live job,
                 // from reading its own inherited marker).
                 //
+                // CB-22: read that gate for what it actually admits, not for
+                // "husks". NotAJob or Unknown passes it, and on a machine with
+                // nothing background-ish running — no `worthAsking` case above
+                // — every ClaudeCode session reads Unknown, so every live
+                // session with a transcript path pays this stat every scan,
+                // ordinary terminal sessions included, not only a genuine
+                // husk. That is CB-20's own doing (the gate used to require a
+                // daemon-confirmed job), reasoned at the time to be
+                // sub-millisecond and left unmeasured. HuskScanCostTests now
+                // measures it: 15 live sessions with transcripts named, one of
+                // them mid-generation so its cached answer can never be
+                // reused, scanned 300 times on the Mac this was written on —
+                // 1.1664-1.1665ms/scan against 1.0211-1.0236ms/scan for the
+                // same fifteen with no transcript path at all, so roughly
+                // 0.14-0.15ms/scan is this check, comfortably inside the
+                // two-second poll interval. Left ungated rather than
+                // restricted to a narrower status-file state, on the strength
+                // of that number rather than the original estimate.
+                //
                 // Two sources, asked cheapest-and-surest first. SessionPark
                 // reads Claude Code's own session record, which names the job
                 // that took the conversation and is cleared when the window
@@ -2012,7 +2348,7 @@ namespace ClaudeBuddy
                 Func<bool> handedToBackground = () =>
                     SessionPresence.CouldBeABackgroundedHusk(status, phase)
                     && (SessionPark.IsParked(status.SessionPid, sessionId)
-                        || TranscriptHandoff.EndsBackgrounded(status.TranscriptPath));
+                        || TranscriptHandoff.EndsBackgrounded(status.TranscriptPath, sessionId));
 
                 // Two verdicts rather than one, with the viewer hunt sitting
                 // between them, because the order is load-bearing in both
@@ -2152,6 +2488,12 @@ namespace ClaudeBuddy
                 // if the position turns out to be unusable. Before the reflow
                 // below, which steps over whatever this pins.
                 if (isNew) RestoreOrbPosition(window, status);
+
+                // After RestoreOrbPosition, which is what fills in
+                // window.PositionKey — the same key a pinned panel's saved
+                // spot is filed under, for the same reason ChatPanelSizes
+                // shares it with OrbPositions.
+                if (isNew) RestorePinnedChatPanel(window, window!.PositionKey);
             }
 
             var gone = _windows.Keys.Where(id => !seen.Contains(id)).ToList();
@@ -2174,6 +2516,7 @@ namespace ClaudeBuddy
                 // small; the picture behind it is not, and Forget drops both.
                 _personas.Remove(id);
                 LocalPersonas.Forget(id);
+                PeerPersonas.Forget(id);
             }
 
             // After the removal pass, so an orb has already gone before its file
@@ -2422,6 +2765,47 @@ namespace ClaudeBuddy
                 return remote;
             }
 
+            // A session in Anthropic's cloud. Cached for the reason the
+            // remote-control branch above gives and then some: there is no file
+            // on this machine to rebuild it from *and* re-reading costs a
+            // network round trip against a rate-limited endpoint, so a rebuilt
+            // panel would be slower as well as emptier.
+            if (status.Source == SessionSource.ClaudeCloud)
+            {
+                // The roster row, which is what the session is constructed from
+                // — it carries the title and the id in the shape the events
+                // endpoint wants. Matched on the same "cloud:" key the scan
+                // minted rather than by slicing the prefix off, so the two
+                // cannot drift apart.
+                var row = ClaudeCloudSessions.Snapshot()
+                    .FirstOrDefault(s => "cloud:" + s.Id == sessionId);
+
+                if (_cloudChats.TryGetValue(sessionId, out var existingCloud))
+                {
+                    // Re-read on every open. Reconciliation is by uuid, so this
+                    // is the refresh path rather than a second way in: a turn
+                    // that grew while the panel was shut updates in place, and
+                    // nothing is duplicated.
+                    //
+                    // **A panel left open does not refresh itself**, and that is
+                    // a real gap rather than an oversight being hidden. The only
+                    // ticker available here is the two-second scan, and pointing
+                    // a rate-limited events endpoint at it would spend the
+                    // account's budget on a window nobody is looking at.
+                    StartCloudLoad(existingCloud);
+                    return existingCloud;
+                }
+
+                // No row and no cached session means the roster has dropped it —
+                // the orb is on its way out, and there is nothing to read.
+                if (row is null) return null;
+
+                var cloud = new ClaudeCloudChatSession(row, CloudChatApi, CloudChatCredentials);
+                _cloudChats[sessionId] = cloud;
+                StartCloudLoad(cloud);
+                return cloud;
+            }
+
             // Both local CLIs from here down. Which transcript format to read
             // and which pair of settings governs it is the whole of the
             // difference, and it lives in CliChatFormat.
@@ -2454,6 +2838,73 @@ namespace ClaudeBuddy
         // but what was said should still be there when it comes back.
         private readonly Dictionary<string, RemoteControlChatSession> _remoteChats =
             new(StringComparer.Ordinal);
+
+        // Cloud chat sessions, kept for the same reason the remote ones above
+        // are: the transcript came over the network and there is nothing on this
+        // disk to read it back from.
+        private readonly Dictionary<string, ClaudeCloudChatSession> _cloudChats =
+            new(StringComparer.Ordinal);
+
+        // One HTTP client and one credential source for every cloud panel, not
+        // one each. HttpCloudApi owns an HttpClient, which .NET wants reused, and
+        // on macOS the credential source is a Keychain read — a second one per
+        // panel would be a second consent surface for the same item.
+        //
+        // Built on first use rather than in the constructor, so a Buddy with the
+        // feature switched off never constructs either. Excluded from coverage
+        // for what they are rather than what they decide: an HttpClient and, on
+        // this platform, a Keychain query. Which of the two credential sources
+        // SourceFor returns is covered where it lives.
+        [ExcludeFromCodeCoverage]
+        private ICloudApi CloudChatApi => _cloudChatApi ??= new HttpCloudApi();
+
+        [ExcludeFromCodeCoverage]
+        private ICloudCredentialSource CloudChatCredentials =>
+            _cloudChatCredentials ??= ClaudeCliCredentials.SourceFor(
+                OperatingSystem.IsMacOS(),
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+
+        private ICloudApi? _cloudChatApi;
+        private ICloudCredentialSource? _cloudChatCredentials;
+
+        // The only way into RemoteChatFor's ClaudeCloud arm from a test.
+        //
+        // Both properties above build the real thing on first use: an HttpClient
+        // pointed at claude.ai, and — on this platform — a Keychain query that
+        // puts a consent dialog in front of whoever is running the suite. Neither
+        // is something a headless run may do, so the arm that constructs a cloud
+        // session was unreachable and therefore uncovered, which is what this
+        // seam is for. It sets the same two fields the properties memoise into,
+        // so production still builds each of them exactly once and nothing about
+        // the app's behaviour changes when nobody calls this.
+        internal void UseCloudChatDependenciesForTests(
+            ICloudApi api, ICloudCredentialSource credentials)
+        {
+            _cloudChatApi = api;
+            _cloudChatCredentials = credentials;
+        }
+
+        // Kick off the read and walk away.
+        //
+        // Not awaited, because RemoteChatFor is what a click calls and a click
+        // must not block on a network round trip. The session publishes its own
+        // state to the panel — Connecting until this finishes, then Connected or
+        // Error — so there is nothing for a caller to do with the answer that the
+        // panel is not already told.
+        //
+        // A false return means nothing could be read, and it is deliberately not
+        // turned into an empty transcript: the session leaves itself in Error, and
+        // the panel says so. An unreadable conversation and an empty one look
+        // identical on screen, and only one of them is worth explaining.
+        //
+        // Excluded from coverage: its body is a fire-and-forget Task over a real
+        // HTTP call. What it would exercise — LoadAsync's own arms — is covered
+        // directly against a fake ICloudApi.
+        [ExcludeFromCodeCoverage]
+        private static void StartCloudLoad(ClaudeCloudChatSession session)
+        {
+            _ = Task.Run(() => session.LoadAsync(CancellationToken.None));
+        }
 
         // Namespaced away from both Claude Code's UUIDs and the gateway's own
         // keys, because it is neither: nothing on the gateway answers to it.
@@ -2726,28 +3177,34 @@ namespace ClaudeBuddy
         }
 
         // A new orb appeared or an old one vanished while the shape is active.
-        // Re-fit the whole shape and glide everything into it.
+        // An arrival still re-fits the whole shape and glides everything into
+        // it; a departure just drops that one orb and leaves everyone else
+        // exactly where they were. CB-161 is why the two are no longer the
+        // same branch — read the rest of this comment as the record of both
+        // decisions, since the first is still in force and the second reverses
+        // what used to be here.
         //
-        // The opposite of what this did until now, and the reversal is
-        // deliberate rather than a regression, so the old reasoning is worth
-        // keeping. Only the newcomer used to move, because re-fitting means an
-        // orb that was sitting still moves for a reason that has nothing to do
-        // with it — measured against the real geometry, an orb already on
-        // screen shifts 33px on average when a sixth joins a circle, 111px in a
-        // heart and up to 161px in a grid. The judgement was that a display
-        // which rearranges itself because something unrelated started is a
-        // display you stop trusting.
+        // Only the newcomer used to move, because re-fitting means an orb that
+        // was sitting still moves for a reason that has nothing to do with it —
+        // measured against the real geometry, an orb already on screen shifts
+        // 33px on average when a sixth joins a circle, 111px in a heart and up
+        // to 161px in a grid. The judgement was that a display which
+        // rearranges itself because something unrelated started is a display
+        // you stop trusting.
         //
-        // Living with it says otherwise. A shape that absorbs arrivals where
-        // they happen to fit stops being the shape after a handful of them, and
-        // one orb hanging off the edge of a heart is read as something wrong —
-        // it draws the eye every time, where six orbs sliding a few dozen pixels
-        // is over in half a second and leaves a heart. Stillness was the wrong
-        // thing to optimise for; the shape is the point of the shape.
-        //
-        // Removals re-fit too, on the same reasoning. A gap in a ring is the
-        // same wrongness as a stray orb beside it, and "the gap is the honest
-        // picture of what is running" was true and not worth the look of it.
+        // Then "living with it" said the opposite, and extended that reversal
+        // to a departure as well — "a gap in a ring is the same wrongness as a
+        // stray orb beside it". CB-161 is a user filing exactly the complaint
+        // the first paragraph predicted, for the departure half of that: an
+        // orb ending relocated every survivor, which reads as the whole
+        // display being unreliable rather than as one gap in a ring. Ending a
+        // session is not a drag, and OrbArrangement.Layout.Center's own
+        // doc comment already promised a shape does not recentre "every time
+        // an orb joins or leaves" — a promise the removal path was not
+        // keeping. So departures go back to leaving everyone else alone;
+        // arrivals keep re-fitting, because that half of the reversal was
+        // never the complaint and a shape that never absorbs a newcomer has
+        // the opposite problem.
         private void AbsorbIntoArrangement()
         {
             // Orbs gone since the pattern was drawn — drop their saved state.
@@ -2784,7 +3241,25 @@ namespace ClaudeBuddy
 
             if (allOrbs.Count < 1) return;
 
+            // Every remaining orb was already placed by the shape currently on
+            // screen, and none of them is new — this scan's only change was
+            // one or more orbs disappearing. Nothing here needs to move: the
+            // gap left behind is the honest picture of who is still running,
+            // and re-fitting around it is exactly the relocation CB-161
+            // reported. Just forget the id that left and leave the rest be.
+            if (allOrbs.All(o => _arrangedIds.Contains(o.SessionId)))
+            {
+                _arrangedIds.IntersectWith(allOrbs.Select(o => o.SessionId));
+                TeamLinks.Refresh();
+                return;
+            }
+
             var positioned = ComputeClusteredPositions(allOrbs);
+
+            // Whoever is in this set now has a position the current shape
+            // actually assigned, whichever branch below runs — settled or
+            // animated, an arrival is "arranged" the moment it has a target.
+            _arrangedIds.UnionWith(allOrbs.Select(o => o.SessionId));
 
             // Nothing to do if every orb is already where the new shape wants
             // it. Worth the check: this runs on every scan that changes the set
@@ -2977,6 +3452,40 @@ namespace ClaudeBuddy
             if (screen is null) return;
 
             window.PinAt(ClampIntoWork(point, screen.WorkingArea, (int)(56 * screen.Scaling)));
+        }
+
+        // CB-111: bring back a chat panel that was pinned before the app last
+        // quit. Same key, same "does it still land on a screen" guard, and
+        // the same sibling rule as RestoreOrbPosition just above — only here
+        // the sibling question is answered by ChatPanel.IsPinnedFor rather
+        // than by reading _windows, since two orbs sharing a key would each
+        // try to reopen the one saved panel and the panel, not the orb, is
+        // the thing that must not be duplicated.
+        //
+        // Deliberately no directory-only fallback the way RestoreOrbPosition
+        // has for an orb position saved before names were part of the key:
+        // PinnedChatPanels is a CB-111 key from day one, so there is no older
+        // shape of it to fall back to.
+        private void RestorePinnedChatPanel(OrbWindow window, string key)
+        {
+            if (string.IsNullOrEmpty(key)) return;
+            if (ChatPanel.IsPinnedFor(key)) return;
+
+            var saved = ClaudeBuddySettings.PinnedChatPanelPositionFor(key);
+            if (saved is null) return;
+
+            var point = new PixelPoint(saved.X, saved.Y);
+            if (window.Screens.ScreenFromPoint(point) is null) return;
+
+            // Nothing to bind the panel to if this session doesn't resolve to
+            // a live conversation (a room member removed between runs, a
+            // gateway id the daemon no longer recognises). Silently skipped,
+            // the same as RestoreOrbPosition silently skips an orb whose
+            // saved monitor is gone — a missing prerequisite, not an error.
+            var chat = RemoteChatFor(window.SessionId);
+            if (chat is null) return;
+
+            ChatPanel.RestorePinned(window, chat, point);
         }
 
         // An orb's top-left corner, pulled back until the whole orb is inside
@@ -3181,13 +3690,43 @@ namespace ClaudeBuddy
         // Requires a known session rather than falling back on the id, unlike
         // Dismiss above: the guard needs a pid, and the only place a pid is is in
         // the status this scan read.
+        //
+        // And refuses outright for one shape, which is CB-26. A session whose
+        // pid is the ancestor of a live `claude daemon run` is not an ordinary
+        // session: it is the husk a backgrounded turn left behind, it is the
+        // window the user is reading that job's conversation in, and on Windows
+        // the tree kill would take the daemon and every other job on the machine
+        // with it. The orb presents itself as stale, so the gesture looks free
+        // and is not.
+        //
+        // Refused rather than warned-and-proceeded, and the difference is what
+        // the app can actually say. There is no dialog vocabulary anywhere in it
+        // — OrbWindow.axaml's own comment says so, and says that is a decision
+        // rather than an omission — so "warn" here could only mean acting first
+        // and explaining afterwards, on the one action that cannot be undone.
+        // The explanation instead goes where the user is already looking: the
+        // menu row is disabled and re-worded with the count of jobs at stake,
+        // the same shape ResetIdleItem already uses for a session it cannot
+        // serve. This guard is what makes that row's promise true, because a
+        // menu can be read from a snapshot taken a moment before the click.
         public void EndSession(string sessionId)
         {
             if (!_statuses.TryGetValue(sessionId, out var status)) return;
             if (!SessionPresence.CanEndSession(status)) return;
 
-            SessionTerminator.Terminate(status.SessionPid);
+            var dependents = _dependents(status.SessionPid);
+            if (SessionDependents.BlocksTermination(dependents)) return;
+
+            SessionTerminator.Terminate(status.SessionPid, dependents);
         }
+
+        // What the orb's menu asks before it draws "End this session", so the
+        // row and this method's refusal come from one reading of the machine
+        // rather than two. See OrbWindow.SessionMenu_Opening.
+        internal SessionDependents.Verdict DependentsOf(string sessionId) =>
+            _statuses.TryGetValue(sessionId, out var status) && SessionPresence.CanEndSession(status)
+                ? _dependents(status.SessionPid)
+                : SessionDependents.Nothing;
 
         public void ResetAllSessionsToIdle()
         {
@@ -3204,6 +3743,16 @@ namespace ClaudeBuddy
 
         private readonly Dictionary<string, (PixelPoint Position, bool Pinned)> _preArrangeState = new();
         private bool _isArranged;
+
+        // Session ids the current shape has actually placed an orb for — not
+        // the same job as _preArrangeState, which is keyed the same way but
+        // remembers where an orb was *before* arranging, for RestoreFromPattern
+        // to put it back. This one exists only for AbsorbIntoArrangement to
+        // tell a pure departure (every remaining id already in here) from a
+        // real arrival (an id that is not), which is the distinction CB-161
+        // needed: an orb ending must not move anyone else, but an orb joining
+        // still re-fits the whole shape around it, as before.
+        private readonly HashSet<string> _arrangedIds = new();
 
         public bool IsArranged => _isArranged;
 
@@ -3251,6 +3800,8 @@ namespace ClaudeBuddy
                 _arrangeAnimTargets[orb.SessionId] = (orb.Position, target);
 
             _isArranged = true;
+            _arrangedIds.Clear();
+            foreach (var orb in allOrbs) _arrangedIds.Add(orb.SessionId);
             AnimateArrangement(PinEveryOrbAtItsTarget);
 
             foreach (var w in _windows.Values)
@@ -3367,6 +3918,7 @@ namespace ClaudeBuddy
 
             _arrangeAnimTargets = targets;
             _isArranged = false;
+            _arrangedIds.Clear();
 
             AnimateArrangement(() =>
             {

@@ -94,16 +94,18 @@ public class OrbWindowUpdateFromTests
     }
 
     [AvaloniaFact]
-    public void RemoteSessionsCarryNoCliMark()
+    public void RemoteSessionsCarryTheMarkForTheirActualCli()
     {
         var remote = PlainStatus();
         remote.Source = SessionSource.RemoteControl;
+        remote.RemoteCli = MirrorProtocol.CliGrok;
 
         var remoteOrb = new OrbWindow(Guid.NewGuid().ToString());
         remoteOrb.UpdateFrom(remote);
 
-        Assert.False(remoteOrb.CliMarkVisible);
-        Assert.Null(remoteOrb.CliMarkName);
+        Assert.True(remoteOrb.CliMarkVisible);
+        Assert.Equal("grok", remoteOrb.CliMarkName);
+        Assert.False(remote.IsLocalCli);
     }
 
     [AvaloniaFact]
@@ -195,6 +197,103 @@ public class OrbWindowUpdateFromTests
 
         Assert.Equal("cron", orb.KindLabel);
         Assert.Equal("⏱", orb.KindGlyphText);
+    }
+
+    // CB-171. The cloud is the one kind that does not wear a character.
+    //
+    // Not because U+2601 is missing — it is reachable on both platforms
+    // through font fallback, which is the half of this question a corrupted
+    // Windows screenshot could not settle and the font manager answered
+    // directly. It is that the faces that supply it do not draw a cloud at
+    // 13px: a white lump on macOS, and on Windows a colour-emoji glyph that
+    // brings its own size and its own colours into a badge built for one
+    // white mark on near-black.
+    //
+    // Asserted on the controls rather than on KindGlyphText, because the
+    // point is precisely that the two diverge now: the chat panel header
+    // still says the character, where it sits beside the words "in the
+    // cloud" and has room to be imperfect.
+    [AvaloniaFact]
+    public void CloudKindDrawsItsBadgeRatherThanTypingIt()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        var status = PlainStatus();
+        status.Kind = SessionKind.Cloud;
+
+        orb.UpdateFrom(status);
+
+        Assert.Equal("in the cloud", orb.KindLabel);
+        Assert.True(orb.FindControl<Border>("KindBadge")!.IsVisible);
+
+        var mark = orb.FindControl<Avalonia.Controls.Shapes.Path>("KindMark")!;
+        var glyph = orb.FindControl<TextBlock>("KindGlyph")!;
+
+        Assert.True(mark.IsVisible);
+        Assert.NotNull(mark.Data);
+        Assert.False(glyph.IsVisible);
+        Assert.True(string.IsNullOrEmpty(glyph.Text));
+    }
+
+    // The other half of the same contract, and the one that would break
+    // quietly: a kind with no drawn mark must still type its character, and
+    // an orb that was a cloud a moment ago must stop drawing one. Kinds are
+    // applied in place on a live orb, so the two halves of ApplyKind have to
+    // undo each other.
+    [AvaloniaFact]
+    public void AKindWithNoDrawnMarkTypesItsCharacterAndClearsAnyMark()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        var status = PlainStatus();
+
+        status.Kind = SessionKind.Cloud;
+        orb.UpdateFrom(status);
+
+        status.Kind = SessionKind.Channel;
+        orb.UpdateFrom(status);
+
+        var mark = orb.FindControl<Avalonia.Controls.Shapes.Path>("KindMark")!;
+        var glyph = orb.FindControl<TextBlock>("KindGlyph")!;
+
+        Assert.False(mark.IsVisible);
+        Assert.True(glyph.IsVisible);
+        Assert.Equal("#", glyph.Text);
+    }
+
+    // Parsed here rather than only at the point of use, and here rather than
+    // in the unit suite because StreamGeometry.Parse needs a platform render
+    // interface. A typo in path data does not fail to compile and does not
+    // fail to lay out — it throws when an orb of that kind first appears,
+    // which for this one is a session running in Anthropic's cloud and may be
+    // nowhere near a developer.
+    //
+    // The bounds check is the other half: the mark is stretched uniformly into
+    // a 13px square, so a stray point outside the 16x16 box it is drawn in
+    // shrinks everything else to fit it. That reads as "the badge looks
+    // slightly off", not as a failure, which is exactly the kind of thing
+    // nobody files.
+    [AvaloniaFact]
+    public void EveryDrawnKindMarkParsesAndStaysInsideItsBox()
+    {
+        var drawn = 0;
+
+        foreach (SessionKind kind in Enum.GetValues<SessionKind>())
+        {
+            var mark = OrbWindow.KindMarkFor(kind);
+
+            if (mark is null) continue;
+
+            drawn++;
+
+            var bounds = Avalonia.Media.StreamGeometry.Parse(mark).Bounds;
+
+            Assert.True(bounds.Width > 0 && bounds.Height > 0);
+            Assert.InRange(bounds.Left, 0, 16);
+            Assert.InRange(bounds.Top, 0, 16);
+            Assert.InRange(bounds.Right, 0, 16);
+            Assert.InRange(bounds.Bottom, 0, 16);
+        }
+
+        Assert.True(drawn > 0);
     }
 
     // --- the heartbeat heart ---------------------------------------------

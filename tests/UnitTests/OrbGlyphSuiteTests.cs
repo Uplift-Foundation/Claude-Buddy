@@ -27,6 +27,9 @@ namespace ClaudeBuddy.Tests
         public static IEnumerable<object?[]> SpeakerRows()
             => GlyphSuite.Speakers.Select(c => new object?[] { c.Why, c.Identity, c.Title, c.Previous, c.Want });
 
+        public static IEnumerable<object[]> FallbackRows()
+            => GlyphSuite.Fallbacks.Select(c => new object[] { c.Why, c.IsRoom, c.Want });
+
         [Theory]
         [MemberData(nameof(GlyphRows))]
         public void OrbWearsTheRightLetters(string group, string input, bool twoLetter, string want)
@@ -50,6 +53,18 @@ namespace ClaudeBuddy.Tests
         {
             var failure = GlyphSuite.CheckSpeaker(
                 new GlyphSuite.SpeakerCase(why, identity, title, previous, want));
+            Assert.Null(failure);
+        }
+
+        // CB-36: whether an unattributed assistant turn's chip may borrow the
+        // sole speaker's name — false only for a room, where an unattributed
+        // turn means several agents talk here and none could be named, not
+        // that the one agent said it.
+        [Theory]
+        [MemberData(nameof(FallbackRows))]
+        public void UnattributedTurnFallsBackOnlyOutsideARoom(string why, bool isRoom, bool want)
+        {
+            var failure = GlyphSuite.CheckFallback(new GlyphSuite.FallbackCase(why, isRoom, want));
             Assert.Null(failure);
         }
 

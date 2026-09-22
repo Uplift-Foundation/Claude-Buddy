@@ -80,10 +80,13 @@ namespace ClaudeBuddy
             "speakVoice", "neuralVoiceEnabled", "neuralVoice",
             "speakCommand", "speakCommandArgs",
             "speakVoicesCommand", "speakVoicesCommandArgs", "speakCommandVoice", "speakEngine",
+            "speakScope",
             "orbColors", "claudeCodeProfileDirs", "codexHomes", "grokHomes", "profiles", "orbPositions",
-            "chatPanelSizes", "arrangeAnchor", "chatTextScale",
+            "collapsedSettingsSections",
+            "chatPanelSizes", "pinnedChatPanels", "arrangeAnchor", "chatTextScale",
             "openclawEnabled", "openclawHost", "openclawPort", "openclawFingerprint",
             "openclawReplyEnabled", "openclawActiveWithinMinutes",
+            "claudeCloudEnabled",
             // Still written, though nothing reads it into the model any more —
             // see OpenClawHeartbeatMode. Listed here so it does not also
             // round-trip through _unknownKeys, which Save would reject as a
@@ -249,6 +252,11 @@ namespace ClaudeBuddy
             // VoiceInputEnabled and the mic permission prompt.
             public bool OpenClawEnabled { get; set; }
 
+            // Off by default, and it must stay that way: switching it on is what
+            // asks the OS for the Claude Code login, and nobody should meet a
+            // Keychain prompt they did not ask for.
+            public bool ClaudeCloudEnabled { get; set; }
+
             // Where the gateway lives. An address rather than a name on purpose:
             // the certificate it serves is self-signed with no subjectAltName,
             // so a hostname buys nothing and pinning does the identity work.
@@ -403,6 +411,16 @@ namespace ClaudeBuddy
             // point of it.
             public bool PeerLinkEnabled { get; set; }
 
+            // Overrides HotkeyRegistry.Default(ToggleOrbsVisible) — e.g.
+            // "Ctrl+Shift+H". Null (the default) means "use the built-in
+            // binding"; a value that fails HotkeyRegistry.TryParse is treated
+            // the same way rather than leaving the hotkey unregistered, since
+            // a typo in a hand-edited settings.json shouldn't cost the whole
+            // feature. No settings-window control for this yet — CB-155 didn't
+            // confirm a remapping UI was wanted, only that the value be
+            // overridable, and settings.json already is.
+            public string? ToggleOrbsHotkey { get; set; }
+
             // Which port to listen on. Zero means "let the operating system
             // choose", which is the sensible default because discovery
             // announces whatever was chosen — a fixed port only matters to
@@ -508,6 +526,13 @@ namespace ClaudeBuddy
             // lets all three sit in one list.
             public string? SpeakEngine { get; set; }
 
+            // What the speaker reads: the whole reply, or two or three
+            // sentences of it. A string rather than a bool because "full" and
+            // "summary" are named modes a settings file should say out loud,
+            // and because a third is easy to imagine and a bool would have to
+            // be replaced rather than extended.
+            public string? SpeakScope { get; set; }
+
             // Which of those names is selected. A fourth voice key rather than
             // reusing SpeakVoice or NeuralVoice for the same reason those two are
             // separate: the name spaces have nothing in common, and a value left
@@ -550,6 +575,21 @@ namespace ClaudeBuddy
             public Dictionary<string, PanelSize> ChatPanelSizes { get; init; } =
                 new(StringComparer.OrdinalIgnoreCase);
 
+            // CB-111: which chat panels were pinned when the app last quit,
+            // and where each one was — the two things CB-110 deliberately did
+            // not persist, because a pin then died with the process. Presence
+            // in this dictionary *is* "pinned"; there is no separate bool,
+            // the same way a size is only ever recorded for a panel that was
+            // actually resized. Keyed by PositionKey rather than session id
+            // for the identical reason ChatPanelSizes is — see its own
+            // comment — and stored as an OrbPlacement rather than a new
+            // record because a pinned panel's saved spot is exactly the same
+            // shape of value an orb's is: physical pixels on the virtual
+            // desktop, clamped back onto a real screen by whoever restores
+            // it rather than by this file.
+            public Dictionary<string, OrbPlacement> PinnedChatPanels { get; init; } =
+                new(StringComparer.OrdinalIgnoreCase);
+
             // Distinct from Profiles above (Claude Desktop, the Electron app):
             // these are Claude Code *CLI* config directory names — e.g.
             // ".claude-work" for a CLAUDE_CONFIG_DIR=~/.claude-work alias
@@ -561,6 +601,13 @@ namespace ClaudeBuddy
             // means in practice: a repair/reinstall re-reads whatever's saved
             // here rather than needing its own separate wizard UI for it.
             public List<string> ClaudeCodeProfileDirs { get; init; } = new();
+
+            // Section ids the user has folded shut, keyed the same way Group()
+            // keys _sections in SettingsWindow — a stable id, not the heading
+            // text, so renaming a section's prose can't reset its fold state.
+            // Absent or empty means every section is open, which is also the
+            // default a fresh install has nothing to migrate away from.
+            public List<string> CollapsedSettingsSections { get; init; } = new();
 
             // The Codex analogue: directory names under $HOME that a second
             // account is run out of via CODEX_HOME. Separate from the list
@@ -696,6 +743,30 @@ namespace ClaudeBuddy
             set { Load(); lock (Gate) _model.SpeakEngine = value; Save(); }
         }
 
+        // Defaults to the whole reply, which is what this app has always spoken.
+        // An unrecognised value reads as Full for the same reason: a settings
+        // file written by a newer build, or edited by hand, should degrade to
+        // the behaviour nobody had to ask for rather than to silence.
+        public static SpeakScope SpeakScope
+        {
+            get
+            {
+                Load();
+                lock (Gate)
+                {
+                    return string.Equals(_model.SpeakScope, "summary", StringComparison.OrdinalIgnoreCase)
+                        ? ClaudeBuddy.SpeakScope.Summary
+                        : ClaudeBuddy.SpeakScope.Full;
+                }
+            }
+            set
+            {
+                Load();
+                lock (Gate) _model.SpeakScope = value == ClaudeBuddy.SpeakScope.Summary ? "summary" : "full";
+                Save();
+            }
+        }
+
         // Turning this on or off takes effect immediately rather than at the
         // next launch: SessionManager asks OpenClawSessions for a snapshot every
         // scan, and that returns nothing at all while this is false.
@@ -703,6 +774,12 @@ namespace ClaudeBuddy
         {
             get { Load(); lock (Gate) return _model.OpenClawEnabled; }
             set { Load(); lock (Gate) _model.OpenClawEnabled = value; Save(); }
+        }
+
+        public static bool ClaudeCloudEnabled
+        {
+            get { Load(); lock (Gate) return _model.ClaudeCloudEnabled; }
+            set { Load(); lock (Gate) _model.ClaudeCloudEnabled = value; Save(); }
         }
 
         public static string OpenClawHost
@@ -849,6 +926,12 @@ namespace ClaudeBuddy
         {
             get { Load(); lock (Gate) return _model.PeerLinkEnabled; }
             set { Load(); lock (Gate) _model.PeerLinkEnabled = value; Save(); }
+        }
+
+        public static string? ToggleOrbsHotkey
+        {
+            get { Load(); lock (Gate) return _model.ToggleOrbsHotkey; }
+            set { Load(); lock (Gate) _model.ToggleOrbsHotkey = value; Save(); }
         }
 
         // The port to listen on, with 0 meaning "the one everybody expects".
@@ -1154,6 +1237,62 @@ namespace ClaudeBuddy
             Save();
         }
 
+        // ---- pinned chat panels (CB-111) -------------------------------------
+
+        // Null means "not pinned, or pinned with nothing saved yet" — the same
+        // reading OrbPositionFor gives, and for the same reason: this is not a
+        // setting anyone edits, it is a record of the one thing pinning is
+        // asked to remember.
+        public static OrbPlacement? PinnedChatPanelPositionFor(string key)
+        {
+            if (string.IsNullOrEmpty(key)) return null;
+
+            Load();
+            lock (Gate) return _model.PinnedChatPanels.GetValueOrDefault(key);
+        }
+
+        // Called once when a panel is pinned (its position at that instant is
+        // worth remembering even though it hasn't moved) and again on every
+        // drag of an already-pinned panel — ChatPanel only calls this while
+        // _pinned is true, so an unpinned panel being dragged around (there is
+        // no such gesture today, but if one existed) would never reach here.
+        public static void SetPinnedChatPanelPosition(string key, int x, int y)
+        {
+            // No key means no stable identity to save under, same guard as
+            // SetChatPanelSize and for the same reason: a local CLI session
+            // with no cwd has nowhere to be found again next run.
+            if (string.IsNullOrEmpty(key)) return;
+
+            Load();
+            lock (Gate)
+            {
+                var existing = _model.PinnedChatPanels.GetValueOrDefault(key);
+                if (existing is not null && existing.X == x && existing.Y == y) return;
+                _model.PinnedChatPanels[key] = new OrbPlacement(x, y);
+            }
+
+            Save();
+        }
+
+        // Unpinning is the only thing that clears this — not the panel
+        // closing, not the session ending, not the app quitting. Those three
+        // all reach the same Window.Closed path (ChatPanel.Dissolve via
+        // CloseFor, or the desktop lifetime's own Shutdown() closing every
+        // window), and a save that could not tell "the app is quitting" apart
+        // from "this conversation is over" would erase every pin on every
+        // restart — which is the one thing this ticket exists to stop. See
+        // ReturnOrbToStack's identical choice for OrbPositions.
+        public static void ClearPinnedChatPanelPosition(string key)
+        {
+            Load();
+            lock (Gate)
+            {
+                if (!_model.PinnedChatPanels.Remove(key)) return;
+            }
+
+            Save();
+        }
+
         // ---- extra Claude Code (CLI) profile directories ---------------------
 
         // A copy, so callers can't mutate the store without going through
@@ -1181,6 +1320,50 @@ namespace ClaudeBuddy
             Load();
             lock (Gate) { _model.ClaudeCodeProfileDirs.Remove(dirName); }
             Save();
+        }
+
+        // ---- settings-window section fold state -------------------------------
+
+        // View state that persists: whether a section id is currently folded.
+        // Called from the disclosure header's click handler only — never from
+        // SettingsSection.IsOpen's setter, which is the one contract CB-166's
+        // two halves share. See the comment on IsOpen in SettingsWindow.cs for
+        // why: the filter force-expands a folded section to show a match, and
+        // if that setter wrote here too, the first search would silently
+        // persist all thirteen sections as open.
+        public static bool IsSettingsSectionCollapsed(string id)
+        {
+            Load();
+            lock (Gate) return _model.CollapsedSettingsSections.Contains(id, StringComparer.Ordinal);
+        }
+
+        public static void SetSettingsSectionCollapsed(string id, bool collapsed)
+        {
+            Load();
+            bool changed;
+            lock (Gate)
+            {
+                var already = _model.CollapsedSettingsSections.Contains(id, StringComparer.Ordinal);
+                if (collapsed && !already)
+                {
+                    _model.CollapsedSettingsSections.Add(id);
+                    changed = true;
+                }
+                else if (!collapsed && already)
+                {
+                    _model.CollapsedSettingsSections.Remove(id);
+                    changed = true;
+                }
+                else
+                {
+                    // Already in the state being asked for — a triangle emits one
+                    // event per click, and rebuilding the page (via a Rebuild()
+                    // triggered elsewhere) must never cost a disk write on its own.
+                    changed = false;
+                }
+            }
+
+            if (changed) Save();
         }
 
         public static IReadOnlyList<string> CodexHomes
@@ -1328,6 +1511,7 @@ namespace ClaudeBuddy
                             root["orbLifetimeMinutes"]?.GetValue<int>() ?? DefaultOrbLifetimeMinutes,
                         VoiceInputEnabled = root["voiceInputEnabled"]?.GetValue<bool>() ?? false,
                         OpenClawEnabled = root["openclawEnabled"]?.GetValue<bool>() ?? false,
+                        ClaudeCloudEnabled = root["claudeCloudEnabled"]?.GetValue<bool>() ?? false,
                         OpenClawHost = Text(root["openclawHost"]),
                         OpenClawPort = root["openclawPort"]?.GetValue<int>() ?? DefaultOpenClawPort,
                         OpenClawFingerprint = Text(root["openclawFingerprint"]),
@@ -1349,6 +1533,7 @@ namespace ClaudeBuddy
                             root["remoteControlServeOnLaunch"]?.GetValue<bool>() ?? false,
                         PeerLinkEnabled = root["peerLinkEnabled"]?.GetValue<bool>() ?? false,
                         PeerLinkPort = root["peerLinkPort"]?.GetValue<int>() ?? 0,
+                        ToggleOrbsHotkey = Text(root["toggleOrbsHotkey"]),
                         ClaudeCodeChatEnabled = root["claudeCodeChatEnabled"]?.GetValue<bool>() ?? true,
                         ClaudeCodeReplyEnabled = root["claudeCodeReplyEnabled"]?.GetValue<bool>() ?? false,
                         CodexChatEnabled = root["codexChatEnabled"]?.GetValue<bool>() ?? true,
@@ -1391,7 +1576,8 @@ namespace ClaudeBuddy
                         SpeakCommand = Text(root["speakCommand"]),
                         SpeakVoicesCommand = Text(root["speakVoicesCommand"]),
                         SpeakCommandVoice = Text(root["speakCommandVoice"]),
-                        SpeakEngine = Text(root["speakEngine"])
+                        SpeakEngine = Text(root["speakEngine"]),
+                        SpeakScope = Text(root["speakScope"])
                     };
 
                     // Same shape as claudeCodeProfileDirs below: read as an array
@@ -1429,6 +1615,26 @@ namespace ClaudeBuddy
                             if (node?.GetValue<string>() is { Length: > 0 } dirName)
                             {
                                 model.ClaudeCodeProfileDirs.Add(dirName);
+                            }
+                        }
+                    }
+
+                    if (root["collapsedSettingsSections"] is JsonArray collapsedSections)
+                    {
+                        foreach (var node in collapsedSections)
+                        {
+                            // Per entry, not per array: a hand-edited settings.json
+                            // with one garbage id — a number, an object — must cost
+                            // only that id, not the other twelve, or the catch below
+                            // turns one bad line into a full reset of everything
+                            // this file holds. JsonValue.TryGetValue returns false
+                            // instead of throwing for a non-string scalar, and a
+                            // JsonObject/JsonArray entry never matches the pattern
+                            // at all, so nothing here needs its own try/catch.
+                            if (node is JsonValue value && value.TryGetValue<string>(out var id) &&
+                                id.Length > 0)
+                            {
+                                model.CollapsedSettingsSections.Add(id);
                             }
                         }
                     }
@@ -1518,6 +1724,30 @@ namespace ClaudeBuddy
                             // intact if that build is run again, rather than
                             // being permanently truncated by an older one.
                             model.ChatPanelSizes[key] = new PanelSize(w.Value, h.Value);
+                        }
+                    }
+
+                    if (root["pinnedChatPanels"] is JsonObject pinned)
+                    {
+                        // Number(), not GetValue<int>() the way orbPositions
+                        // above still does — this dictionary is new with
+                        // CB-111 rather than a retrofit of a live block (see
+                        // Number's own comment on why that distinction
+                        // matters), so there is no reason for it to start out
+                        // with the same hole: a hand-edited `"x": "wide"`
+                        // would otherwise throw out of this loop and be
+                        // caught by Load's one catch-all, resetting every
+                        // other setting in the file rather than costing only
+                        // this one pin.
+                        foreach (var (key, node) in pinned)
+                        {
+                            if (node is not JsonObject entry) continue;
+
+                            var x = Number(entry["x"]);
+                            var y = Number(entry["y"]);
+                            if (x is null || y is null) continue;
+
+                            model.PinnedChatPanels[key] = new OrbPlacement((int)x.Value, (int)y.Value);
                         }
                     }
 
@@ -1693,12 +1923,25 @@ namespace ClaudeBuddy
                         };
                     }
 
+                    var pinnedChatPanels = new JsonObject();
+                    foreach (var (key, placement) in _model.PinnedChatPanels)
+                    {
+                        pinnedChatPanels[key] = new JsonObject
+                        {
+                            ["x"] = placement.X,
+                            ["y"] = placement.Y
+                        };
+                    }
+
                     var arrangeAnchor = _model.ArrangeAnchor is { } anchor
                         ? new JsonObject { ["x"] = anchor.X, ["y"] = anchor.Y }
                         : null;
 
                     var profileDirs = new JsonArray();
                     foreach (var dirName in _model.ClaudeCodeProfileDirs) profileDirs.Add(dirName);
+
+                    var collapsedSections = new JsonArray();
+                    foreach (var id in _model.CollapsedSettingsSections) collapsedSections.Add(id);
 
                     var codexHomeDirs = new JsonArray();
                     foreach (var dirName in _model.CodexHomes) codexHomeDirs.Add(dirName);
@@ -1725,6 +1968,7 @@ namespace ClaudeBuddy
                         ["orbLifetimeMinutes"] = _model.OrbLifetimeMinutes,
                         ["voiceInputEnabled"] = _model.VoiceInputEnabled,
                         ["openclawEnabled"] = _model.OpenClawEnabled,
+                        ["claudeCloudEnabled"] = _model.ClaudeCloudEnabled,
                         ["openclawHost"] = _model.OpenClawHost,
                         ["openclawPort"] = _model.OpenClawPort,
                         ["openclawFingerprint"] = _model.OpenClawFingerprint,
@@ -1747,6 +1991,7 @@ namespace ClaudeBuddy
                         ["remoteControlEnabled"] = _model.RemoteControlEnabled,
                         ["peerLinkEnabled"] = _model.PeerLinkEnabled,
                         ["peerLinkPort"] = _model.PeerLinkPort,
+                        ["toggleOrbsHotkey"] = _model.ToggleOrbsHotkey,
                         // Null when never chosen rather than a copy of the
                         // current default, the same as speakVoice below — so
                         // changing which profile ships as the default still
@@ -1789,6 +2034,7 @@ namespace ClaudeBuddy
                         ["speakVoicesCommandArgs"] = voicesArgs,
                         ["speakCommandVoice"] = _model.SpeakCommandVoice,
                         ["speakEngine"] = _model.SpeakEngine,
+                        ["speakScope"] = _model.SpeakScope,
                         // Grouped rather than three top-level keys: it reads as
                         // one setting in the file the way it reads as one card in
                         // the window. A null entry — which is what a colour left
@@ -1801,11 +2047,13 @@ namespace ClaudeBuddy
                             ["waiting"] = _model.WaitingColor
                         },
                         ["claudeCodeProfileDirs"] = profileDirs,
+                        ["collapsedSettingsSections"] = collapsedSections,
                         ["codexHomes"] = codexHomeDirs,
                         ["grokHomes"] = grokHomeDirs,
                         ["profiles"] = profiles,
                         ["orbPositions"] = positions,
                         ["chatPanelSizes"] = panelSizes,
+                        ["pinnedChatPanels"] = pinnedChatPanels,
                         ["arrangeAnchor"] = arrangeAnchor
                     };
 

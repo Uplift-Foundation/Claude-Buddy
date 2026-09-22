@@ -23,11 +23,12 @@ public class ChatPanelScreenshots : IDisposable
     // I looking at" inside the one artifact reviewers actually open, and the
     // fake's name costs nothing to set.
     private FakeChatSession NewFake(
-        IEnumerable<ChatTurn>? history = null, string displayName = "Fake Session")
+        IEnumerable<ChatTurn>? history = null, string displayName = "Fake Session",
+        bool isRoom = false)
     {
         var id = "screenshot-" + Guid.NewGuid();
         _sessionIdsToClean.Add(id);
-        return new FakeChatSession(history) { SessionId = id, DisplayName = displayName };
+        return new FakeChatSession(history) { SessionId = id, DisplayName = displayName, IsRoom = isRoom };
     }
 
     // Deliberately never closed — same reason as tests/UiTests's ChatPanelTests:
@@ -275,17 +276,19 @@ public class ChatPanelScreenshots : IDisposable
     //     improvement in every test and like the app asserting something false
     //     on screen.
     //
-    //     It wears the room's own name on its chip — "#lobby" — which looks
-    //     wrong and is what a real room genuinely draws. Verified against one
-    //     rather than assumed: the panel falls back to the session's sole
-    //     speaker for an unattributed assistant turn, and for a room that
-    //     resolves to the title, because a room has no agent identity behind
-    //     its session key. ChatSpeaker's own comment already admits the title is
-    //     "the wrong one for a room". It predates this branch — ChatSpeaker.cs
-    //     and ChatPanel.axaml.cs are untouched here — and this branch makes it
-    //     rarer rather than worse, since the turns it now attributes properly
-    //     are ones that used to land in exactly this bucket. Captured as it is,
-    //     rather than staged to look better than the app does.
+    //     It wears no chip and no name at all (CB-36). Before that fix this
+    //     bubble wore the room's own initials — "#L" for "#lobby" — because an
+    //     unattributed assistant turn fell back to the panel's sole-speaker
+    //     name, and for a room that name is the title, since a room has no
+    //     agent identity behind its session key. ChatSpeaker's own comment
+    //     already conceded the title was "the wrong one for a room"; what it
+    //     did not yet say was that this bubble was where that wrongness
+    //     actually reached the screen. IRemoteChatRoom.IsRoom (set true on
+    //     this scenario's fake below) is what tells TurnView the fallback does
+    //     not apply here, so the bubble now draws exactly what
+    //     OpenClawRoomChatSession.Rebuild's own comment always meant it to:
+    //     left, neutral, no name — a bare bubble, not a chip asserting a
+    //     speaker nobody named.
     //   * A failure note, which is what a send with nowhere to go now leaves
     //     behind instead of silence.
     [AvaloniaFact]
@@ -328,7 +331,7 @@ public class ChatPanelScreenshots : IDisposable
                      + "a delivery address.",
                 IsComplete = true
             },
-        }, displayName: "#lobby");
+        }, displayName: "#lobby", isRoom: true);
 
         ChatPanel.OpenFor(NewOrb(), fake);
         ScreenshotHelper.Flush();
@@ -630,7 +633,14 @@ public class ChatPanelScreenshots : IDisposable
                     var shot = new RenderTargetBitmap(
                         new PixelSize((int)panel.Width, (int)panel.Height));
                     shots.Add(shot);
-                    shot.Render(panel);
+
+                    // Through the shared path rather than shot.Render(panel):
+                    // this is the only capture in the suite that builds its own
+                    // bitmaps, and rendering them here directly would leave it
+                    // the one picture still drawn with LCD text on Windows and
+                    // the one never checked for legibility. See
+                    // ScreenshotHelper.RenderChecked.
+                    ScreenshotHelper.Render(panel, shot);
 
                     ctx.DrawImage(shot, new Rect(
                         panel.Position.X - minX + Margin,
@@ -641,6 +651,14 @@ public class ChatPanelScreenshots : IDisposable
             }
 
             target.Save(Path.Combine(ScreenshotHelper.OutputDir, fileName));
+
+            // Checked per panel after the composite is on disk, for the same
+            // reason ScreenshotHelper.Save checks after writing: the run that
+            // catches a corrupt capture should still leave the picture of it.
+            foreach (var (panel, shot) in panels.Zip(shots))
+            {
+                ScreenshotHelper.Check(panel, shot, fileName);
+            }
         }
         finally
         {

@@ -68,6 +68,28 @@ namespace ClaudeBuddy
 
     public enum RemoteChatState { Disconnected, Connecting, Connected, Error }
 
+    // CB-35: what SendAsync (and SendWithImagesAsync beside it) actually
+    // managed, so the one caller that matters — ChatPanel.Send — can decide
+    // whether the composer is done with the text or still needs to hold it.
+    //
+    // Not a bool, even though every implementation below only ever needs the
+    // two states: a result type says at the call site what a bool would make
+    // the reader go and check the method for.
+    //
+    // The line between the two states is drawn the same way in every
+    // implementation, and is worth writing down once here rather than four
+    // times: **Sent** means the message is the transport's problem now — it
+    // was handed to a gateway, typed into a terminal, or queued on a socket,
+    // and whatever the transcript shows about it afterwards (a reconciled
+    // turn, a "handed to X" note, even a later delivery failure reported
+    // asynchronously) is a fact about that attempt, not about whether the
+    // composer should keep a copy. **Failed** means the attempt never
+    // happened — replying is switched off, there is nobody to address, there
+    // is no pane and nowhere to deliver to — and in every one of those cases
+    // nothing was queued anywhere, so the only copy of what was typed is the
+    // one still sitting in the box.
+    public enum ChatSendOutcome { Sent, Failed }
+
     // Mutable on purpose: a streaming reply updates Text in place and raises
     // TurnUpdated, so the list never recreates the item. Recreating it would
     // re-template the row, which is the one thing that could steal focus from
@@ -273,7 +295,7 @@ namespace ClaudeBuddy
         event Action<ChatTurn>? TurnUpdated;
         event Action<RemoteChatState>? StateChanged;
 
-        Task SendAsync(string text);
+        Task<ChatSendOutcome> SendAsync(string text);
 
         // Stops the reply in flight. Separate from dismissing the panel: closing
         // a window should never cancel work someone asked for.
@@ -330,6 +352,44 @@ namespace ClaudeBuddy
         string ComposerHint { get; }
     }
 
+    // A session that can be read and not written to *at all*.
+    //
+    // **The panel hides the composer entirely for one of these**, rather than
+    // showing a disabled box or the discouraging watermark IRemoteChatComposer
+    // above argues for. That reads as a contradiction of the paragraph directly
+    // overhead and is not one: that reasoning turns on typing being *pointless*,
+    // where SendAsync can still explain itself in the transcript afterwards.
+    // This is the case where there is nowhere for the text to go on any address
+    // — a cloud session's `/input`, `/messages`, `/turns` and `/conversation`
+    // are all 404, measured, not assumed. A box that accepts a paragraph and
+    // only then admits the transport never had a delivery route has already lost
+    // the paragraph, and the person who typed it has no copy.
+    //
+    // ComposerHint is still read for one of these, and shown where the box was.
+    // Hiding the box and explaining nothing leaves a panel that looks truncated;
+    // the hint says where the session *can* be replied to, which is the useful
+    // half of the refusal.
+    public interface IRemoteChatReadOnly
+    {
+        // A property rather than a bare marker interface, for the same reason
+        // IRemoteChatRoom.IsRoom is one: a fake has to be able to flip it per
+        // instance, so one test class can drive both sides of the panel's
+        // decision.
+        bool IsReadOnly { get; }
+
+        // Where this conversation *can* be replied to, as something a browser
+        // will open. Null when there is nowhere, and the panel then says only
+        // that it cannot be replied to here.
+        //
+        // A link rather than an address printed into the hint. Telling somebody
+        // the reply lives at claude.ai/code and leaving them to find the session
+        // is a worse answer than the one this app gives everywhere else — an orb
+        // click goes *to* the session, and the panel should too. The address is
+        // also per-session and long, so as prose it is either truncated or it
+        // swamps the sentence beside it.
+        string? ReplyUrl { get; }
+    }
+
     // A session that cannot be typed into where it is, but can be *opened*
     // somewhere it can be dealt with.
     //
@@ -357,6 +417,29 @@ namespace ClaudeBuddy
         // One verb, one place: a panel that sent you somewhere else from where
         // the orb sends you would be two answers to "where is this session".
         void OpenElsewhere();
+    }
+
+    // A conversation several agents (or people) can be talking in at once.
+    //
+    // CB-36: what an unattributed assistant turn's chip needs to know before
+    // it borrows the panel's sole-speaker name for itself. A one-to-one
+    // session — a terminal, or a single gateway agent — has exactly one
+    // speaker, so an assistant turn with no Speaker of its own genuinely is
+    // that one speaker, and TurnView.SpeakerName is right to fall back to
+    // it. A room is not one-to-one: OpenClawRoomChatSession.Rebuild stamps
+    // every turn it can attribute and deliberately leaves the rest with no
+    // Speaker, meaning "we do not know who said this" — and falling back to
+    // the sole-speaker name there would answer with the panel's title, the
+    // room itself, asserting a speaker the app does not know.
+    //
+    // A property rather than a bare marker so a fake can flip it per
+    // instance in a test, the same way IRemoteChatMachine's MachineName is a
+    // property rather than a second interface for "has a machine". A room
+    // implementation always answers true; nothing here needs it to vary
+    // after construction, so there is no change event to raise.
+    public interface IRemoteChatRoom
+    {
+        bool IsRoom { get; }
     }
 
     // A conversation that is somewhere else, and can say where.
@@ -429,7 +512,7 @@ namespace ClaudeBuddy
         // instead of SendAsync exactly when the panel is holding at least
         // one pasted picture; a message with none still goes through
         // SendAsync alone.
-        Task SendWithImagesAsync(string text, IReadOnlyList<string> imagePaths);
+        Task<ChatSendOutcome> SendWithImagesAsync(string text, IReadOnlyList<string> imagePaths);
     }
 
     // One option in a dialog the session is blocked on. Key is what gets sent —

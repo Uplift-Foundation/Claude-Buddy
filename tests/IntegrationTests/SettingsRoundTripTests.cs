@@ -556,4 +556,189 @@ public class SettingsRoundTripTests
         Assert.Equal(500, a!.Width);
         Assert.Equal(600, a.Height);
     }
+
+    // CB-111: one pinned position per agent, keyed and reloaded independently
+    // — the same shape ChatPanelSizes_RoundTripPerAgentThroughDisk already
+    // proves for sizes, checked here for the sibling dictionary the pin
+    // feature added.
+    [Fact]
+    public void PinnedChatPanels_RoundTripPerAgentThroughDisk()
+    {
+        var dir = NewSettingsDir();
+        PointSettingsAt(dir);
+
+        ClaudeBuddySettings.SetPinnedChatPanelPosition("agent-a", 100, 200);
+        ClaudeBuddySettings.SetPinnedChatPanelPosition("agent-b", -40, 900);
+
+        var root = JsonNode.Parse(File.ReadAllText(Path.Combine(dir, "settings.json"))) as JsonObject;
+        var pinned = root!["pinnedChatPanels"] as JsonObject;
+        Assert.NotNull(pinned);
+        Assert.Equal(-40, pinned!["agent-b"]!["x"]!.GetValue<int>());
+        Assert.Equal(900, pinned["agent-b"]!["y"]!.GetValue<int>());
+
+        // Read back from disk rather than from the model that just wrote it —
+        // the parse side is its own code path in Load, and it is exactly the
+        // step a new setting can be added everywhere else and forgotten here.
+        PointSettingsAt(dir);
+
+        var a = ClaudeBuddySettings.PinnedChatPanelPositionFor("agent-a");
+        Assert.NotNull(a);
+        Assert.Equal(100, a!.X);
+        Assert.Equal(200, a.Y);
+
+        Assert.Equal(-40, ClaudeBuddySettings.PinnedChatPanelPositionFor("agent-b")!.X);
+
+        // Never pinned means null — there is no "pinned" bool to default
+        // false, presence in the dictionary is the whole of what pinned means.
+        Assert.Null(ClaudeBuddySettings.PinnedChatPanelPositionFor("agent-never-pinned"));
+
+        // No stable identity, nothing to save under — same guard SetChatPanelSize
+        // has for the identical reason (a local CLI orb with no cwd).
+        ClaudeBuddySettings.SetPinnedChatPanelPosition("", 1, 1);
+        Assert.Null(ClaudeBuddySettings.PinnedChatPanelPositionFor(""));
+    }
+
+    // ClearPinnedChatPanelPosition is the only thing CB-111 lets forget a
+    // pin — see ChatPanel.Unpin's own comment on why the panel closing or the
+    // app quitting must not reach this. Proven here at the settings layer,
+    // independent of ChatPanel: the entry really leaves the dictionary and
+    // really leaves the file, not just the in-memory model.
+    [Fact]
+    public void ClearingAPinnedChatPanelPosition_RemovesItFromDiskToo()
+    {
+        var dir = NewSettingsDir();
+        PointSettingsAt(dir);
+
+        ClaudeBuddySettings.SetPinnedChatPanelPosition("agent-a", 10, 20);
+        Assert.NotNull(ClaudeBuddySettings.PinnedChatPanelPositionFor("agent-a"));
+
+        ClaudeBuddySettings.ClearPinnedChatPanelPosition("agent-a");
+        Assert.Null(ClaudeBuddySettings.PinnedChatPanelPositionFor("agent-a"));
+
+        var root = JsonNode.Parse(
+            File.ReadAllText(Path.Combine(dir, "settings.json"))) as JsonObject;
+        var pinned = root!["pinnedChatPanels"] as JsonObject;
+        Assert.NotNull(pinned);
+        Assert.False(pinned!.ContainsKey("agent-a"));
+
+        // Clearing a key that was never there is a no-op, not an error — the
+        // same shape ClearOrbPosition already has, checked here so the two
+        // don't drift apart.
+        ClaudeBuddySettings.ClearPinnedChatPanelPosition("agent-never-there");
+    }
+
+    // Same hazard SettingAChatPanelSizeToTheValueItAlreadyHas_WritesNothing
+    // guards against, for the dictionary a drag now writes into on every
+    // PositionChanged event rather than only once per gesture (ChatPanel has
+    // no equivalent of OnResizePointerReleased for a native move drag — see
+    // the comment on ChatPanel's PositionChanged handler) — so the guard here
+    // is what keeps a drag from being a file write per pixel once the pointer
+    // stops moving and the platform's last few events repeat the same point.
+    [Fact]
+    public void SettingAPinnedChatPanelPositionToTheValueItAlreadyHas_WritesNothing()
+    {
+        var dir = NewSettingsDir();
+        PointSettingsAt(dir);
+        var settingsPath = Path.Combine(dir, "settings.json");
+
+        ClaudeBuddySettings.SetPinnedChatPanelPosition("agent-a", 100, 200);
+        Assert.True(File.Exists(settingsPath));
+
+        File.Delete(settingsPath);
+
+        ClaudeBuddySettings.SetPinnedChatPanelPosition("agent-a", 100, 200);
+        Assert.False(
+            File.Exists(settingsPath),
+            "an unchanged position should return before Save(), so nothing recreates the deleted file");
+
+        ClaudeBuddySettings.SetPinnedChatPanelPosition("agent-a", 101, 200);
+        Assert.True(File.Exists(settingsPath));
+    }
+
+    // A malformed entry costs only itself, the same guarantee
+    // AMalformedChatPanelSize_CostsOnlyThatEntry proves for sizes — Load()
+    // sits inside one catch that replaces the *whole* model with defaults on
+    // an unhandled exception, so a bad pinned-panel entry must be dropped by
+    // the per-entry null checks rather than ever reaching that catch.
+    [Fact]
+    public void AMalformedPinnedChatPanelEntry_CostsOnlyThatEntry()
+    {
+        var dir = NewSettingsDir();
+        var settingsPath = Path.Combine(dir, "settings.json");
+
+        File.WriteAllText(settingsPath, """
+        {
+          "twoLetterGlyphs": true,
+          "orbPositions": { "/some/repo": { "x": 12, "y": 34 } },
+          "pinnedChatPanels": {
+            "agent-string-x": { "x": "wide", "y": 400 },
+            "agent-missing-y": { "x": 500 },
+            "agent-not-an-object": 7,
+            "agent-fine": { "x": 480, "y": 500 }
+          }
+        }
+        """);
+
+        PointSettingsAt(dir);
+
+        var fine = ClaudeBuddySettings.PinnedChatPanelPositionFor("agent-fine");
+        Assert.NotNull(fine);
+        Assert.Equal(480, fine!.X);
+
+        Assert.Null(ClaudeBuddySettings.PinnedChatPanelPositionFor("agent-string-x"));
+        Assert.Null(ClaudeBuddySettings.PinnedChatPanelPositionFor("agent-missing-y"));
+        Assert.Null(ClaudeBuddySettings.PinnedChatPanelPositionFor("agent-not-an-object"));
+
+        Assert.True(ClaudeBuddySettings.TwoLetterGlyphs);
+        var position = ClaudeBuddySettings.OrbPositionFor("/some/repo");
+        Assert.NotNull(position);
+        Assert.Equal(12, position!.X);
+    }
+
+    // Unknown-key preservation, pinned (no pun intended) for this key
+    // specifically — the same reason ChatPanelSizes_SurviveASaveByABuildThatOnlyKnowsOtherKeys
+    // exists beside the generic unknown-keys test elsewhere in this file: a
+    // key this build understands has to survive a save that only touches
+    // other settings, which is a different failure mode than an old build
+    // never having heard of the key at all.
+    [Fact]
+    public void PinnedChatPanels_SurviveASaveByABuildThatOnlyKnowsOtherKeys()
+    {
+        var dir = NewSettingsDir();
+        PointSettingsAt(dir);
+
+        ClaudeBuddySettings.SetPinnedChatPanelPosition("agent-a", 100, 200);
+        ClaudeBuddySettings.TwoLetterGlyphs = true;
+        ClaudeBuddySettings.IdleColor = "green";
+        ClaudeBuddySettings.FlushPendingSave();
+
+        PointSettingsAt(dir);
+
+        var a = ClaudeBuddySettings.PinnedChatPanelPositionFor("agent-a");
+        Assert.NotNull(a);
+        Assert.Equal(100, a!.X);
+        Assert.Equal(200, a.Y);
+    }
+
+    // CB-155: HotkeyRegistry.Resolve is what actually falls back to the
+    // built-in default for a null/invalid override — this only has to prove
+    // the string itself survives a save and a reload, the same round trip
+    // every other setting here is checked against.
+    [Fact]
+    public void ToggleOrbsHotkey_DefaultsToNullAndRoundTripsAnOverride()
+    {
+        var dir = NewSettingsDir();
+        PointSettingsAt(dir);
+
+        Assert.Null(ClaudeBuddySettings.ToggleOrbsHotkey);
+
+        ClaudeBuddySettings.ToggleOrbsHotkey = "Ctrl+Shift+H";
+
+        var settingsPath = Path.Combine(dir, "settings.json");
+        var root = JsonNode.Parse(File.ReadAllText(settingsPath)) as JsonObject;
+        Assert.Equal("Ctrl+Shift+H", root!["toggleOrbsHotkey"]!.GetValue<string>());
+
+        PointSettingsAt(dir);
+        Assert.Equal("Ctrl+Shift+H", ClaudeBuddySettings.ToggleOrbsHotkey);
+    }
 }

@@ -91,6 +91,17 @@ public class ChatPanelRoomAttributionTests : IDisposable
     private static System.Collections.Generic.IEnumerable<string?> TextsIn(Control row) =>
         row.GetVisualDescendants().OfType<TextBlock>().Select(t => t.Text);
 
+    // CB-36: the avatar/initials/name row is one StackPanel bound
+    // IsVisible="{Binding HasSpeaker}" (see ChatPanel.axaml), matched by
+    // shape rather than by name since the template gives it none — the same
+    // helper as tests/UiTests/ChatPanelTests.cs's HasVisibleSpeakerChip. A
+    // control bound false keeps its place in the visual tree
+    // GetVisualDescendants walks, so IsVisible has to be read directly
+    // rather than inferred from Bounds.
+    private static bool HasVisibleSpeakerChip(Control row) =>
+        row.GetVisualDescendants().OfType<StackPanel>().Any(sp =>
+            sp.Orientation == Orientation.Horizontal && sp.Spacing == 5 && sp.IsVisible);
+
     // --- your own message ---------------------------------------------------
 
     // The whole point of the ticket, on screen: a message you sent to a channel
@@ -157,6 +168,47 @@ public class ChatPanelRoomAttributionTests : IDisposable
 
         Assert.Equal(HorizontalAlignment.Left, Bubble(row).HorizontalAlignment);
         Assert.Contains("Thistle", TextsIn(row));
+
+        // CB-36's other half: a room turn the gateway *did* attribute must
+        // keep its chip. The bug this ticket fixes only ever concerned the
+        // turn Rebuild built with no Speaker at all — this one is not that.
+        Assert.True(HasVisibleSpeakerChip(row));
+    }
+
+    // --- nobody said who -----------------------------------------------------
+
+    // CB-36 itself, on screen: a message the gateway attributed to nobody —
+    // not you, not a member's own transcript, not a named relay — is what
+    // OpenClawRoomChatSession.Rebuild's own comment calls "left, neutral, no
+    // name". Before this fix it wore a chip anyway, with the room's own
+    // initials on it ("#L" for "#lobby"), because the panel's fallback for an
+    // unattributed assistant turn is the session's sole speaker, and for a
+    // room with no agent identity of its own that resolves to the title —
+    // the channel — asserting the channel itself had spoken.
+    [AvaloniaFact]
+    public void UnattributedRoomTurnCarriesNoSpeakerChip()
+    {
+        var quill = Member("quill");
+        Give(quill, (ChatRole.User, "no idea who typed this", 1, false, null));
+
+        var room = Room("#lobby", (quill, "Quill", "#7f7"));
+        _toClean.Add(room.SessionId);
+
+        ChatPanel.OpenFor(NewOrb(), room);
+        FlushRender();
+
+        var row = RenderedRows(ChatPanelTestAccess.Instance!)[0];
+
+        Assert.Equal(HorizontalAlignment.Left, Bubble(row).HorizontalAlignment);
+        Assert.Contains("no idea who typed this", TextsIn(row));
+        Assert.False(HasVisibleSpeakerChip(row));
+
+        // The room's own name/initials must not appear anywhere on this row —
+        // not as a chip label, and not as fallen-back text either. This is
+        // the assertion that would have failed before the fix: SpeakerName
+        // resolved to "#lobby" and OrbGlyph.Initials("#lobby") drew "#L".
+        Assert.DoesNotContain("#lobby", TextsIn(row));
+        Assert.DoesNotContain("#L", TextsIn(row));
     }
 
     // Both sides of one conversation, in one panel, which is the reading this
@@ -181,6 +233,95 @@ public class ChatPanelRoomAttributionTests : IDisposable
         Assert.Equal(HorizontalAlignment.Right, Bubble(rows[0]).HorizontalAlignment);
         Assert.Equal(HorizontalAlignment.Left, Bubble(rows[1]).HorizontalAlignment);
         Assert.Contains("Quill", TextsIn(rows[1]));
+    }
+
+    // --- the same words twice -----------------------------------------------
+
+    // CB-32 on screen. Saying "ok" and then "ok" again is two rows, and the
+    // panel drew one — which is the shape of this bug that a person actually
+    // meets: not a wrong name on a bubble, a bubble that is not there.
+    [AvaloniaFact]
+    public void SayingTheSameThingTwiceDrawsTwoBubbles()
+    {
+        var quill = Member("quill");
+        Give(quill,
+            (ChatRole.User, "ok", 1, true, null),
+            (ChatRole.User, "ok", 2, true, null));
+
+        var room = Room("#lobby", (quill, "Quill", "#7f7"));
+        _toClean.Add(room.SessionId);
+
+        ChatPanel.OpenFor(NewOrb(), room);
+        FlushRender();
+
+        var rows = RenderedRows(ChatPanelTestAccess.Instance!);
+
+        Assert.Equal(2, rows.Count);
+        Assert.All(rows, row =>
+            Assert.Equal(HorizontalAlignment.Right, Bubble(row).HorizontalAlignment));
+    }
+
+    // ...and the same message reaching two agents is still one row, which is
+    // what the dedupe was for and is the half that had to survive the fix.
+    [AvaloniaFact]
+    public void OneMessageInTwoTranscriptsIsStillOneBubble()
+    {
+        var quill = Member("quill");
+        var aster = Member("aster");
+
+        Give(quill, (ChatRole.User, "ok", 1, true, null));
+        Give(aster, (ChatRole.User, "ok", 2, true, null));
+
+        // SetHistory turns HasMore back on — a page arriving is a reason to
+        // think there may be more — so it goes off again after the transcripts
+        // are loaded rather than before. Members whose pages reach back to
+        // different minutes otherwise draw the trust window across this fixture,
+        // and a test about the dedupe would be measuring the trim.
+        quill.HasMore = false;
+        aster.HasMore = false;
+
+        var room = Room("#lobby", (quill, "Quill", "#7f7"), (aster, "Aster", "#77f"));
+        _toClean.Add(room.SessionId);
+
+        ChatPanel.OpenFor(NewOrb(), room);
+        FlushRender();
+
+        Assert.Single(RenderedRows(ChatPanelTestAccess.Instance!));
+    }
+
+    // CB-33 on screen, with the ticket's own failing input. Quoting an agent and
+    // adding a question drew nothing at all for the person: the prefix match
+    // classified the whole message as that agent's echo, so the row the person
+    // was waiting for never existed.
+    [AvaloniaFact]
+    public void QuotingAnAgentStillDrawsTheWholeMessage()
+    {
+        var quill = Member("quill");
+        var aster = Member("aster");
+
+        Give(quill, (ChatRole.Assistant, "Build is green on both legs.", 1, false, null));
+        Give(aster,
+            (ChatRole.User, "Build is green on both legs. Are we sure about the arm64 one?",
+             2, false, "Thistle"));
+
+        // See the sibling above: HasMore comes back on with every SetHistory, and
+        // the trust window would cut Quill's answer for sitting before the oldest
+        // message Aster's page reaches.
+        quill.HasMore = false;
+        aster.HasMore = false;
+
+        var room = Room("#lobby", (quill, "Quill", "#7f7"), (aster, "Aster", "#77f"));
+        _toClean.Add(room.SessionId);
+
+        ChatPanel.OpenFor(NewOrb(), room);
+        FlushRender();
+
+        var rows = RenderedRows(ChatPanelTestAccess.Instance!);
+
+        Assert.Equal(2, rows.Count);
+        Assert.Contains("Build is green on both legs. Are we sure about the arm64 one?",
+                        TextsIn(rows[1]));
+        Assert.Contains("Thistle", TextsIn(rows[1]));
     }
 
     // --- a send that cannot happen ------------------------------------------

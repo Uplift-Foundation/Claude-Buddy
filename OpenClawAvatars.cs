@@ -98,6 +98,36 @@ namespace ClaudeBuddy
             lock (Gate) Cache.Remove(agentId);
         }
 
+        // Re-attempts a decode for an agent that has never been cached, or
+        // whose last attempt came back null, and leaves an agent already
+        // showing a picture untouched. LoadAgentNamesAsync calls this on
+        // every reconnect instead of For, because a reconnect is the only
+        // moment fresh bytes for this agent are back in hand — see CB-148.
+        //
+        // Before this existed, a decode that failed for any transient
+        // reason — a truncated read of the multi-megabyte agents.list
+        // response under the gateway's own request timeout, most plausibly
+        // — was cached as a permanent null by Store below, and nothing ever
+        // called Forget for a gateway agent to undo it. The result was
+        // indistinguishable from a real defect in that one agent's picture:
+        // the emoji fallback, forever, for an agent whose avatarUrl was
+        // provably healthy every time it was checked afterwards, because by
+        // then the only thing broken was the cache entry, not the data.
+        //
+        // Deliberately not folded into For itself. An orb asks For on every
+        // poll and that call has to stay a cache hit; retrying inside it
+        // would mean re-running Skia's decode of every already-working
+        // avatar many times a minute for no reason at all.
+        public static void RefreshIfFailed(string agentId, byte[]? bytes)
+        {
+            lock (Gate)
+            {
+                if (Cache.TryGetValue(agentId, out var cached) && cached is not null) return;
+            }
+
+            Store(agentId, bytes);
+        }
+
         // One picture cut from several, for an orb that stands for a
         // conversation rather than for an agent.
         //

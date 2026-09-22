@@ -19,10 +19,36 @@ name: Publish screenshots
 #
 # (GitHub strips data: URIs from <img src> in both job summaries and PR
 # comments — confirmed by trying it, not assumed — so an actually-visible
-# screenshot needs a real HTTPS URL. raw.githubusercontent.com pointed at a
-# dedicated "screenshots" branch is the established, dependency-free way to
-# get one; real projects use exactly this pattern, e.g. a screenshot-history
-# blog workflow and a "screenshots" branch in openpilot's own UI test PRs.)
+# screenshot needs a real HTTPS URL. A dedicated "screenshots" branch is
+# still the established, dependency-free place to put the PNGs; real
+# projects use exactly this pattern, e.g. a screenshot-history blog workflow
+# and a "screenshots" branch in openpilot's own UI test PRs.)
+#
+# CB-118: the image URL itself has to be a github.com one, not
+# raw.githubusercontent.com. That second domain doesn't see the viewer's
+# github.com session cookie at all — it's a separate origin — so for a
+# private repo it 404s for every human reading the PR in a browser, even
+# one with full read access, while an authenticated `curl`/`gh api` call
+# still succeeds (this is exactly what made the bug invisible to an agent
+# testing it, and what CB-118's repro caught with plain curl). github.com's
+# own `/<owner>/<repo>/raw/<branch>/<path>` endpoint is the fix: it's
+# same-origin with the PR comment page, so the browser's session cookie is
+# sent, and GitHub 302s it to a raw.githubusercontent.com URL carrying a
+# short-lived signed `?token=` — freshly minted on every load, which is
+# exactly why this works from a persistent PR-comment link where a
+# hand-copied `?token=` URL would eventually expire. Confirmed locally
+# (this repo happens to be public again at the time of this fix, so this
+# was the reachable half of the test): an unauthenticated `curl -L` against
+# `github.com/.../raw/refs/heads/screenshots/win-x64/<file>.png` returns
+# 200, redirecting through exactly that signed raw.githubusercontent.com
+# URL. The private-repo half — that the same request 404s without a
+# session and 200s with one — was not re-verified against a real private
+# instance of this repo (flipping visibility to test would affect every
+# other agent and PR using it); it rests on GitHub's own documented
+# behavior of serving that endpoint's redirect off the request's session,
+# which is also how "View raw" from the private-repo blob UI has always
+# worked. If this repo goes private again and a comment image still 404s,
+# start here rather than re-deriving it.
 on:
   workflow_run:
     workflows: [CI]
@@ -149,7 +175,7 @@ jobs:
             for file in "$dir"*.png; do
               [ -e "$file" ] || continue
               name="$(basename "$file" .png)"
-              raw_url="https://raw.githubusercontent.com/${repo}/${branch}/${rid}/$(basename "$file")"
+              raw_url="https://github.com/${repo}/raw/refs/heads/${branch}/${rid}/$(basename "$file")"
               body+="**${name} (${rid})**"$'\n\n'
               body+="![${name}](${raw_url})"$'\n\n'
             done
@@ -164,26 +190,56 @@ jobs:
           # Relying on it alone would mean this comment step silently never
           # fires for the one case it exists for. Fall back to searching by
           # head branch + fork owner, both of which ARE present on the
-          # workflow_run event regardless of fork origin. (This is the one
-          # part of the whole pipeline not yet confirmed by a real run: the
-          # three workflow_run firings so far were all plain pushes to main/
-          # develop, which correctly skip this block entirely — see the
-          # `event == 'pull_request'` guard below. First real PR after this
-          # file landed on main is what exercises it.) A manual
-          # workflow_dispatch run skips all of that and just uses whatever
-          # PR number was passed in, if any.
+          # workflow_run event regardless of fork origin.
+          #
+          # That fallback used to be a REST `pulls?head=owner:branch` call,
+          # and it never matched a single fork PR (CB-117): reproduced by
+          # hand against the live API on PRs #163-165, any `head` value
+          # containing a colon comes back empty, and the colon is mandatory
+          # to scope the match to one owner. `state=all` and percent-encoding
+          # the colon didn't help either — this is the REST endpoint simply
+          # not resolving a fork owner, not a formatting mistake. `gh pr
+          # list`, which goes through GraphQL, resolves the same fork heads
+          # correctly (verified live: matched #164 for
+          # wtvamp:bugfix/usage-orb-inherits-config-dir and #163 for
+          # wtvamp:feature/agent-notes-read-code-from-a-pinned-ref, and
+          # returned nothing for the same branch under a wrong owner — see
+          # CB-117 for the full table). `gh pr list --head` only matches on
+          # branch name, so the owner is re-applied with a `select` on
+          # `headRepositoryOwner.login`; dropping it would let two forks
+          # that happen to push the same branch name collide on `[0]`.
+          #
+          # A manual workflow_dispatch run skips all of that and just uses
+          # whatever PR number was passed in, if any.
           pr_number="${{ github.event.inputs.pr_number }}"
           if [ -z "$pr_number" ]; then
             pr_number="${{ github.event.workflow_run.pull_requests[0].number }}"
           fi
+          head_owner="${{ github.event.workflow_run.head_repository.owner.login }}"
+          head_branch="${{ github.event.workflow_run.head_branch }}"
           if [ -z "$pr_number" ] && [ "${{ github.event.workflow_run.event }}" = "pull_request" ]; then
-            head_owner="${{ github.event.workflow_run.head_repository.owner.login }}"
-            head_branch="${{ github.event.workflow_run.head_branch }}"
             if [ -n "$head_owner" ] && [ -n "$head_branch" ]; then
-              pr_number="$(gh api "repos/${repo}/pulls?head=${head_owner}:${head_branch}&state=open" --jq '.[0].number // empty')"
+              pr_number="$(gh pr list --repo "$repo" --head "$head_branch" --state open \
+                --json number,headRepositoryOwner \
+                --jq "[.[] | select(.headRepositoryOwner.login==\"$head_owner\")][0].number // empty")"
             fi
           fi
 
+          # A no-match used to be indistinguishable from a successful
+          # comment — this is the whole reason CB-117 went unnoticed across
+          # three PRs. Log the resolution unconditionally, and when a
+          # pull_request run genuinely expected a PR and didn't find one,
+          # say so in the step summary rather than exiting quietly: a run
+          # that published images and told nobody should not look like one
+          # that commented. A workflow_run from a push to main/develop
+          # legitimately has no PR, so only the pull_request case is worth
+          # flagging as a miss.
+          echo "resolved pr_number='${pr_number}' (event=${{ github.event.workflow_run.event }}, head=${head_owner}:${head_branch})"
+
           if [ -n "$pr_number" ]; then
             echo "$body" | gh pr comment "$pr_number" --repo "$repo" --body-file -
+          elif [ "${{ github.event.workflow_run.event }}" = "pull_request" ]; then
+            {
+              echo "_Screenshots published to the branch, but no open PR was found for ${head_owner}:${head_branch} — the comment was not posted._"
+            } >> "$GITHUB_STEP_SUMMARY"
           fi

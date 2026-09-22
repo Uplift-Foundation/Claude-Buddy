@@ -59,6 +59,36 @@ public class SettingsWindowCoverageTests
     public void ShouldCloseOnKeyDownMatchesEscapeAndCmdW(Key key, KeyModifiers modifiers, bool expected) =>
         Assert.Equal(expected, SettingsWindow.ShouldCloseOnKeyDown(key, modifiers));
 
+    // The wider decision ShouldCloseOnKeyDown above is a projection of, now
+    // that there's a filter box with its own two things a key press can mean.
+    // Read the two theories together: every row above is reproduced here with
+    // query null and the verdict narrowed back down to Close/not-Close, plus
+    // the filter-specific rows neither this window nor its predecessor had
+    // anything to say about before CB-166.
+    // SettingsKeyVerdict is internal, and a public [Theory] method can't take
+    // one directly as a parameter (CS0051: InternalsVisibleTo makes the type
+    // usable from this assembly, but doesn't relax the accessibility check on
+    // a public member's own signature) — so the expected verdict travels as
+    // its name and is parsed back inside the method, where it's just a local.
+    [AvaloniaTheory]
+    [InlineData(Key.Escape, KeyModifiers.None, null, "Close")]
+    [InlineData(Key.Escape, KeyModifiers.None, "voice", "ClearFilter")]
+    [InlineData(Key.Escape, KeyModifiers.Shift, "voice", "Close")]
+    [InlineData(Key.W, KeyModifiers.Meta, null, "Close")]
+    [InlineData(Key.W, KeyModifiers.Meta, "voice", "Close")]
+    [InlineData(Key.W, KeyModifiers.None, null, "Ignore")]
+    [InlineData(Key.F, KeyModifiers.Meta, null, "FocusFilter")]
+    [InlineData(Key.F, KeyModifiers.Control, null, "FocusFilter")]
+    [InlineData(Key.F, KeyModifiers.None, null, "Ignore")]
+    [InlineData(Key.A, KeyModifiers.None, null, "Ignore")]
+    [InlineData(Key.A, KeyModifiers.Meta, null, "Ignore")]
+    public void VerdictForCoversTheFilterAndTheCloseGesturesTogether(
+        Key key, KeyModifiers modifiers, string? query, string expected)
+    {
+        var verdict = SettingsWindow.VerdictFor(key, modifiers, query);
+        Assert.Equal(Enum.Parse<SettingsKeyVerdict>(expected), verdict);
+    }
+
     // --- the "Orbs" rows, previously inline in Body() -----------------------
 
     [AvaloniaFact]
@@ -514,10 +544,11 @@ public class SettingsWindowCoverageTests
             var window = NewWindow();
             var rows = window.VoiceRows();
 
-            // High-quality voice switch, speak-voice picker, download-voices
-            // link, voice-input switch. No status rows, since neither model
-            // status field is set without a download having been kicked off.
-            Assert.Equal(4, rows.Length);
+            // High-quality voice switch, speak-voice picker, speak-scope
+            // picker, download-voices link, voice-input switch. No status rows,
+            // since neither model status field is set without a download having
+            // been kicked off.
+            Assert.Equal(5, rows.Length);
         }
         finally
         {

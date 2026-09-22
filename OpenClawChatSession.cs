@@ -84,7 +84,41 @@ namespace ClaudeBuddy
         // text. Defaults High so an arm with no opinion — an inline image
         // block, a turn built outside this parser — keeps today's behaviour:
         // a failure explains itself unless something here says not to.
-        MediaConfidence Confidence = MediaConfidence.High);
+        MediaConfidence Confidence = MediaConfidence.High,
+
+        // CB-98's cross-arm case, second instance: which of TurnsFromHistory's
+        // picture-drawing arms produced this turn. The named-path arm already
+        // has its own collapse against a delivery-mirror, keyed on the two
+        // arms resolving to the identical *path* -- see the merge at the end
+        // of TurnsFromHistory. An inline image block carries no path at all
+        // (CB-91: bare base64, no filename anywhere in the block), so it has
+        // nothing to key that merge on, and stayed unmerged.
+        //
+        // What the two arms *can* share, once both are fetched, is identical
+        // bytes -- but bytes alone proved to be the wrong signal the first
+        // time this ticket was worked: two genuinely separate mirror
+        // deliveries of the same file are just as byte-identical as one
+        // delivery seen twice, and collapsing on bytes alone would silently
+        // eat the second, real one (see TwoMirrorsOfOneFileStayTwoTurns).
+        // Arm is what tells them apart -- pairing bytes only across two
+        // *different* arms is safe precisely because a mirror is never
+        // compared against another mirror.
+        //
+        // Set here, at parse time, by the two arms that can produce a
+        // cross-arm duplicate; left at the default for every other turn. Read
+        // later by OpenClawSessions.CrossArmDuplicateMirrorIndices, once the
+        // mirror side's bytes exist to compare -- see that method's header
+        // for why the comparison cannot happen inside this pure parser.
+        MediaSourceArm Arm = MediaSourceArm.None);
+
+    // See HistoryTurn.Arm. Internal and small on purpose: this exists only to
+    // let the post-parse dedup pass in OpenClawSessions tell an inline image
+    // block from a delivery-mirror record apart, not to describe every way a
+    // turn can carry a picture -- the named-path arm does not need a value
+    // here, because its own collapse already keys on the resolved path rather
+    // than on bytes, and giving it one anyway would be a distinction nothing
+    // reads.
+    internal enum MediaSourceArm { None, Inline, Mirror }
 
     // One OpenClaw session, as something the chat panel can talk to.
     //
@@ -127,6 +161,65 @@ namespace ClaudeBuddy
         // keep session ids in one namespace.
         public string GatewayKey { get; }
 
+        // How many panels are bound to this conversation right now, and when
+        // the last one let go — CB-92. A count rather than a flag because a
+        // pinned panel and the transient can both be on the same session for a
+        // moment while one is being rebound to the other, and a flag would have
+        // the second close claim nobody is looking when somebody is.
+        private int _panels;
+
+        // Seeded at construction rather than left default so a session nobody
+        // ever opens — the orb's speak button makes one, and so does a room
+        // merging its members — ages on the same clock as one whose panel
+        // closed. The alternative, treating "never had a panel" as never idle,
+        // is precisely the case that accumulated silently.
+        internal DateTime IdleSince { get; private set; } = DateTime.UtcNow;
+
+        internal bool HasOpenPanel => _panels > 0;
+
+        internal void PanelOpened() => _panels++;
+
+        internal void PanelClosed()
+        {
+            if (_panels > 0) _panels--;
+            if (_panels == 0) IdleSince = DateTime.UtcNow;
+        }
+
+        // What this transcript's decoded pictures are costing.
+        internal long ResidentImageBytes => OpenClawChatMemory.ResidentBytes(_history);
+
+        // Give the pictures back, keep the words. Returns what was freed, which
+        // is what makes "this actually released memory" something a test can
+        // assert rather than something a comment claims.
+        //
+        // Safe to do behind a closed panel because the gateway is the source of
+        // truth for a transcript: opening this conversation again runs
+        // LoadHistoryAsync, which replaces the history wholesale through
+        // SetHistory, pictures and all. Nothing here is the only copy of
+        // anything — which is exactly why the bytes were worth holding onto
+        // until now and not a moment longer.
+        internal long ReleaseImages()
+        {
+            long freed = 0;
+
+            foreach (var turn in _history)
+            {
+                if (turn.ImageBytes is not { Length: > 0 } bytes) continue;
+
+                freed += bytes.Length;
+
+                // Through the property, so the setter's change notification
+                // fires. Inert for anything on screen — TurnView only listens
+                // for bytes *arriving* late (see its PropertyChanged handler),
+                // and a turn whose picture is already decoded keeps the Bitmap
+                // it drew — and this only ever runs for a session with no panel
+                // bound anyway.
+                turn.ImageBytes = null;
+            }
+
+            return freed;
+        }
+
         // Settable, because the name can improve after the session was created:
         // agents.list arrives moments after the connection does, so a panel
         // opened in that window would otherwise keep the raw id ("main") in its
@@ -146,18 +239,8 @@ namespace ClaudeBuddy
         public event Action<ChatTurn>? TurnUpdated;
         public event Action<RemoteChatState>? StateChanged;
 
-        public async Task SendAsync(string text)
+        public async Task<ChatSendOutcome> SendAsync(string text)
         {
-            if (!ClaudeBuddySettings.OpenClawReplyEnabled)
-            {
-                // A System turn rather than an exception: the person has just
-                // typed a sentence, and losing it behind a dialog would be a
-                // poor answer to "why didn't that send".
-                Note("Replying is off. Turn on \"Allow replying to agents\" in Settings — "
-                   + "it asks the gateway for permission to write, which you approve there.");
-                return;
-            }
-
             // The user's own turn is added here rather than by the panel, so one
             // thing owns the transcript and a send that fails leaves a message
             // on screen with an explanation under it rather than a ghost.
@@ -165,14 +248,43 @@ namespace ClaudeBuddy
             // app whose author is not in doubt, and marking it keeps it matching
             // the copy that comes back from the gateway a moment later — which
             // is what lets a room dedupe the two instead of drawing both.
+            //
+            // CB-35: added before the replying-off check below, not after. It
+            // used to be after — reachable only once replying was already
+            // known to be on — so a session with replying off showed nothing
+            // at all for a send: no message, no note, just a cleared
+            // composer, which was indistinguishable from the app silently
+            // eating a keystroke. OpenClawRoomChatSession's no-address path
+            // always added the message first, and the two disagreeing about
+            // something neither transport actually decides — where the
+            // user's own words go — was the shape CB-35 asks to fix. Now both
+            // read the same: your message is on screen, and the note under it
+            // says why nothing happened, exactly like a room whose channel
+            // has nobody to carry a message to.
             var mine = new ChatTurn
             {
                 Role = ChatRole.User, Text = text, IsComplete = true, Mine = true
             };
             Add(mine);
 
+            if (!ClaudeBuddySettings.OpenClawReplyEnabled)
+            {
+                // A System turn rather than an exception: the person has just
+                // typed a sentence, and losing it behind a dialog would be a
+                // poor answer to "why didn't that send".
+                Note("Replying is off. Turn on \"Allow replying to agents\" in Settings — "
+                   + "it asks the gateway for permission to write, which you approve there.");
+                return ChatSendOutcome.Failed;
+            }
+
             var failure = await SendOrFailureAsync(text);
-            if (failure is not null) Note("Couldn't send: " + failure);
+            if (failure is not null)
+            {
+                Note("Couldn't send: " + failure);
+                return ChatSendOutcome.Failed;
+            }
+
+            return ChatSendOutcome.Sent;
         }
 
         // The request, and the catch around it, moved behind a method that
@@ -231,6 +343,127 @@ namespace ClaudeBuddy
                 case "task" when Str(payload, "action") == "upserted":
                     Complete();
                     break;
+
+                // CB-95: what the gateway calls a *delivery* rather than a
+                // stream — a picture or a plain text message someone else
+                // sent into this conversation, recorded as a chat.history row
+                // (a "delivery-mirror" for media, an ordinary message for
+                // text) rather than as an "agent" stream event. Neither event
+                // name's payload is trusted for its own fields here: the
+                // gateway's documented shape has already been wrong for other
+                // events (see docs/openclaw-findings.md), and chat.history is
+                // the one read this app has actually confirmed against a live
+                // gateway. So this treats the event as a doorbell — something
+                // landed, go and look — and re-reads the newest page the same
+                // way TryResolveLiveImage already does below for pictures.
+                //
+                // AppendNewTail rather than SetHistory: a wholesale replace
+                // while the user is mid-scrollback would throw them back to
+                // the bottom for a delivery they may not even be reading yet
+                // — the objection CB-95 itself raises against "re-read
+                // history on a delivery signal". Appending only the turns the
+                // fetched page adds past what this transcript already has
+                // keeps a read position exactly where it was.
+                case "chat":
+                case "session.message":
+                    RefreshTailAsync();
+                    break;
+            }
+        }
+
+        // Fire-and-forget from OnAgentEvent, which is synchronous — events
+        // arrive through OpenClawSessions.OnEvent's Dispatcher.Post and
+        // nothing there awaits this. No explicit try/catch: FetchPageAsync
+        // already swallows a gateway that will not answer and returns null,
+        // the same contract TryResolveLiveImage already trusts without one of
+        // its own. A delivery that could not be confirmed is not a reason to
+        // disrupt the conversation already on screen — the next successful
+        // delivery, or a reopened panel, catches up regardless.
+        [ExcludeFromCodeCoverage]
+        private async void RefreshTailAsync()
+        {
+            var page = await OpenClawSessions.FetchPageAsync(this, 0, CancellationToken.None);
+            if (page is null) return;
+
+            AppendNewTail(page.Value.Turns);
+        }
+
+        // The actual live-update fix, and the half of it that is pure enough
+        // to test without a gateway: given the newest page of chat.history,
+        // work out which of its turns this transcript does not have yet and
+        // add only those.
+        //
+        // A delivered message lands at the very end of the conversation, so
+        // the freshly-fetched page's own tail either matches this
+        // transcript's tail exactly (nothing new — most calls, since the
+        // "chat"/"session.message" doorbell fires for reasons other than a
+        // delivery too) or extends past it (a real delivery). The anchor is
+        // this transcript's own last turn: its most recent matching
+        // occurrence in the fetched page marks where "already known" ends and
+        // "new" begins. Matching on role and text rather than on an id,
+        // because chat.history hands back the same role/content shape
+        // SetHistory and PrependHistory already build ChatTurns from —
+        // nothing here carries a message id to match on instead.
+        //
+        // An empty transcript takes everything the page has; a transcript
+        // whose anchor cannot be found on the page at all — more turns
+        // arrived than one page holds, or a page boundary moved the anchor
+        // off it — appends nothing rather than guessing, which costs exactly
+        // the staleness this ticket already describes rather than risking a
+        // duplicated or reordered transcript.
+        internal void AppendNewTail(IReadOnlyList<HistoryTurn> freshTurns)
+        {
+            if (freshTurns.Count == 0) return;
+
+            int startIndex;
+
+            if (_history.Count == 0)
+            {
+                startIndex = 0;
+            }
+            else
+            {
+                var anchor = _history[^1];
+                var anchorIndex = -1;
+
+                for (var i = freshTurns.Count - 1; i >= 0; i--)
+                {
+                    if (freshTurns[i].Role != anchor.Role) continue;
+                    if (!string.Equals(freshTurns[i].Text, anchor.Text, StringComparison.Ordinal)) continue;
+
+                    anchorIndex = i;
+                    break;
+                }
+
+                if (anchorIndex < 0) return;
+
+                startIndex = anchorIndex + 1;
+            }
+
+            for (var i = startIndex; i < freshTurns.Count; i++)
+            {
+                var turn = freshTurns[i];
+
+                // Add() rather than a batch insert: it is the one place that
+                // both fires TurnAdded — what makes the panel actually draw
+                // the new bubble without being reopened — and enforces the
+                // 500-turn cap, so a burst of deliveries behaves exactly like
+                // a burst of streamed replies would.
+                Add(new ChatTurn
+                {
+                    Role = turn.Role,
+                    Text = turn.Text,
+                    ImageSourcePath = turn.ImageSourcePath,
+                    Confidence = turn.Confidence,
+                    ImageUrl = turn.ImageUrl,
+                    ImageBytes = turn.ImageBytes,
+                    ImageAlt = turn.ImageAlt,
+                    At = turn.At,
+                    Speaker = turn.Speaker,
+                    SpeakerColor = turn.SpeakerColor,
+                    Mine = turn.Mine,
+                    IsComplete = true
+                });
             }
         }
 

@@ -19,13 +19,21 @@ namespace ClaudeBuddy
         private static readonly TimeSpan LockWait = TimeSpan.FromHours(2);
         private static readonly TimeSpan LockPoll = TimeSpan.FromSeconds(2);
 
+        // Held for the process's lifetime once we own it, so it is not
+        // finalized out from under us — a local variable would be eligible
+        // for GC (and, with it, the finalizer that releases the mutex) the
+        // moment Main stops referencing it, which is right away since
+        // everything after this point runs through Startup.Run's delegates.
+        private static Mutex? _singleInstanceMutex;
+
         [STAThread]
         public static void Main(string[] args)
         {
-            // The order these four run in is Startup.Run's, and the first of
-            // them is the fix for CB-28 — see Startup.ClaimUiThread for why
-            // reading one static property earns a step of its own. What each
-            // step is *for* is here, next to the thing it calls.
+            // The order these five run in is Startup.Run's, and the first two
+            // are the fixes for CB-44 and CB-178 respectively — see
+            // Startup.Run's own comment for why claimSingleInstance sits where
+            // it does. What each step is *for* is here, next to the thing it
+            // calls.
             Startup.Run(
                 // Write an unhandled exception down before anything can throw
                 // one. Buddy aborted twice on the mini on 28 Aug with nothing on
@@ -33,6 +41,25 @@ namespace ClaudeBuddy
                 // exception; CrashLog exists so the next one costs a `cat`
                 // rather than a probe (CB-44).
                 installCrashLog: CrashLog.Install,
+
+                // Whether this is the one Buddy that gets to run. See
+                // SingleInstance.cs for the enum and the reasoning; this is
+                // just the glue that keeps the acquired mutex alive for the
+                // rest of the process and disposes it immediately when we
+                // are the duplicate, since we are about to return without
+                // using it for anything.
+                claimSingleInstance: () =>
+                {
+                    var (claim, mutex) = SingleInstance.Claim(SingleInstance.MutexName);
+                    if (SingleInstance.ShouldProceed(claim))
+                    {
+                        _singleInstanceMutex = mutex;
+                        return true;
+                    }
+
+                    mutex.Dispose();
+                    return false;
+                },
 
                 // Claim Avalonia's UI thread for this thread while it is
                 // certain to be free, which is the only moment it is:
@@ -79,6 +106,16 @@ namespace ClaudeBuddy
                     // belongs here for the identical reason (CB-130). Does
                     // nothing unless openclawEnabled is on.
                     OpenClawSessions.Restart();
+
+                    // And Claude Code's own cloud sessions, here for the
+                    // identical reason and with the identical shape: an HTTPS
+                    // poll and nothing that touches a window. The headless
+                    // machine CB-130 was about is exactly the one likeliest to
+                    // be watching cloud sessions rather than local ones, so
+                    // this is the last place it should be parked behind a
+                    // screen-lock wait. Does nothing unless claudeCloudEnabled
+                    // is on.
+                    ClaudeCloudSessions.Restart();
                 },
 
                 // Avalonia's macOS render timer is a CVDisplayLink, and

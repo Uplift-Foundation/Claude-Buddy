@@ -51,6 +51,20 @@ namespace ClaudeBuddy
         internal static string ShellQuote(string value) =>
             "'" + value.Replace("'", "'\\''") + "'";
 
+        // `command`, prefixed with a `cd` guard when a directory was recorded —
+        // as one line rather than a multi-line script, because the callers below
+        // hand this straight into an AppleScript string literal rather than a
+        // file on disk.
+        //
+        // Same rule as TmuxAttachScript's own cd guard, stated once rather than
+        // three times: skipped with no cwd, because `cd ''` fails and `|| exit 1`
+        // would take the whole command down with it. `command` is trusted as-is
+        // — every caller either already built it with ShellQuote (ClaudeCommand)
+        // or is TmuxAttachCommand's own output, which begins "unset TMUX; exec
+        // …" and must not be wrapped in a second `exec` of its own.
+        internal static string ShellCommandLine(string? cwd, string command) =>
+            string.IsNullOrEmpty(cwd) ? command : "cd " + ShellQuote(cwd) + " || exit 1; " + command;
+
         // One tmux client, as `list-clients` describes it.
         internal readonly record struct TmuxClient(
             string Tty, string Session, string Activity, bool ControlMode);
@@ -107,6 +121,57 @@ namespace ClaudeBuddy
             return MostRecentClient(elsewhere) is { } there
                 ? new ClientChoice(there, NeedsSwitch: true)
                 : null;
+        }
+
+        // Whether the target session has a client attached at all, even one
+        // ChooseClient had to pass over because its tty came back empty.
+        //
+        // CB-158: a click on an orb whose session had a client attached the
+        // whole time still opened a brand new iTerm tab, every time. ChooseClient
+        // returning null already covers two different facts under one answer —
+        // "nobody is attached to this session" and "somebody is attached, but
+        // list-clients reported no tty for them" — and FocusTmux treated both as
+        // the first: paneAliveButDetached, the flag that sends the click straight
+        // into AttachSocket's `open -a`, which stops for neither reason nor for
+        // an existing window. The second fact was silently making the exact
+        // mistake this file's own comment already names for a different guard —
+        // "Nobody wants the same chat in two windows next to each other!!" — just
+        // reached through the client's tty instead of the pane's title.
+        //
+        // A client with an empty tty is real, not a parsing artifact:
+        // MostRecentClient's own comment already says list-clients can produce
+        // one, which is why it is skipped there in the first place — skipped
+        // because nothing downstream can aim a window-selection script at it,
+        // not because it means the session is unattended. This function asks the
+        // second question separately, so FocusTmux can tell "truly nobody here,
+        // open a terminal" apart from "someone is here and a new terminal would
+        // duplicate them, so do nothing further" — the same shape of caution
+        // ClickFallback.None already uses for a coordinate that could not be
+        // resolved.
+        //
+        // Pure and separate from ChooseClient rather than folded into its return
+        // value, for the same reason paneAliveButDetached is threaded out of
+        // FocusCore as a second answer instead of a richer bool: it is not a
+        // kind of choice, it is a fact about what was seen on the way to making
+        // one, and the caller needs it exactly once, after the choice has
+        // already come back empty.
+        internal static bool AttachedWithNoUsableTty(
+            IReadOnlyList<TmuxClient> clients, string targetSession)
+        {
+            var onTargetSession = false;
+
+            foreach (var client in clients)
+            {
+                if (!string.Equals(client.Session, targetSession, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                onTargetSession = true;
+                if (!string.IsNullOrEmpty(client.Tty)) return false; // ChooseClient will have found this one
+            }
+
+            return onTargetSession;
         }
 
         // The client a person is most likely sitting at: the one touched last.
@@ -426,6 +491,63 @@ namespace ClaudeBuddy
         // them.
         internal static string EscapeForAppleScript(string text) =>
             text.Replace("\\", "\\\\").Replace("\"", "\\\"");
+
+        // Which of AgentTeamViewer's three "open a terminal window of its own"
+        // call sites goes through AppleScript's own "run this" verb, and which
+        // still writes a script file for `open -a` to launch.
+        //
+        // CB-80: `open -a <app> <script>` hands iTerm2 an *executable file to
+        // open*, which is exactly what its Automation gate exists to ask about
+        // — and it asked on every single click rather than once, because the
+        // file this app writes has a fresh mtime each time even when its name
+        // doesn't change. `create window with default profile command "…"` asks
+        // iTerm2 to *run a command* instead, which is a different verb the gate
+        // does not cover — confirmed by CB-79's probes, which this rule exists
+        // to carry into code. Terminal.app's equivalent is `do script`.
+        //
+        // Ghostty and WezTerm have no comparable scripting surface and neither
+        // warns today, so they fall back to the script-file mechanism this
+        // exists to avoid for the two apps that have a better one — the null
+        // here is what tells AgentTeamViewer's launcher to take that path.
+        internal static string? RunScriptFor(string appBundlePath, string? cwd, string command)
+        {
+            var line = ShellCommandLine(cwd, command);
+
+            return Path.GetFileName(appBundlePath) switch
+            {
+                "iTerm.app" => ITermRunScript(line),
+                "Terminal.app" => TerminalRunScript(line),
+                _ => null
+            };
+        }
+
+        // `create window with default profile command` is iTerm2's "run this",
+        // not "open this file" — the verb switch CB-80 exists for. Returns the
+        // new session's tty on stdout, so the caller has real confirmation a
+        // window was actually created rather than only that osascript launched
+        // (the same distinction RunOsaScript's own comment draws for the
+        // fire-and-forget focus path).
+        internal static string ITermRunScript(string line) => $$"""
+            tell application "iTerm"
+                set w to (create window with default profile command "{{EscapeForAppleScript(line)}}")
+                tell current session of w
+                    return tty
+                end tell
+            end tell
+            """;
+
+        // `do script` without an "in" clause opens a brand-new window and runs
+        // `line` in it, the same arrival `open -a Terminal.app <script>` gave —
+        // but as a command Terminal.app is asked to run rather than a file it is
+        // asked to open, which is the distinction that avoids iTerm2's gate and,
+        // as far as CB-79's probes went, Terminal.app never raised the dialog
+        // either way.
+        internal static string TerminalRunScript(string line) => $$"""
+            tell application "Terminal"
+                set t to do script "{{EscapeForAppleScript(line)}}"
+                return tty of t
+            end tell
+            """;
 
         // property is "id" (a session UUID recorded by the hook) or "tty" (the
         // live tty of an attached tmux client). Both are iTerm2 session

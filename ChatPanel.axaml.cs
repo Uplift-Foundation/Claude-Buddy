@@ -63,6 +63,15 @@ namespace ClaudeBuddy
         // means.
         private bool _pinned;
 
+        // Bumped by every call to ScrollToEndAfterLayout, and read back by
+        // whichever settle loop that call started. This panel is reused
+        // across sessions (the class comment says why), so a settle loop
+        // still watching layout from the *previous* bind must not go on
+        // fighting the offset once a new one has started its own — the
+        // generation check is what lets an in-flight loop notice it is stale
+        // and unsubscribe rather than assuming it is still the only one.
+        private int _scrollSettleGeneration;
+
         // The panel that dismiss-on-deactivate still applies to, if there is
         // one. Every caller that used to say "the panel" and mean the singleton
         // means this: an orb about to move under it, an arrangement animation,
@@ -102,7 +111,21 @@ namespace ClaudeBuddy
         // and the chips never appeared; boxed, filling it in later fills in the
         // rows that were waiting for it. Same one-shot-read mistake the header
         // made two commits ago, in a second place.
-        private sealed class Speaker { public string? Name; }
+        //
+        // IsRoom (CB-36) is what tells TurnView.SpeakerName whether Name is
+        // safe to fall back to. ChatSpeaker.Resolve's own comment already
+        // concedes that Name is the panel's title for a room — the channel,
+        // not a speaker — because a room is not an agent and has no identity
+        // to prefer instead. That answer is exactly right for what
+        // ChatSpeaker was written for (the header, and a terminal session's
+        // one-agent fallback) and exactly wrong for an unattributed turn in a
+        // room, which OpenClawRoomChatSession.Rebuild deliberately built with
+        // no Speaker to mean "we do not know who said this" — not "the
+        // channel said this". TurnView reads this flag rather than asking the
+        // session's type itself, so the one place a turn decides whether it
+        // may borrow the sole speaker's name is a plain field next to the
+        // name it would borrow.
+        private sealed class Speaker { public string? Name; public bool IsRoom; }
 
         private readonly Speaker _soleSpeaker = new();
 
@@ -179,6 +202,16 @@ namespace ClaudeBuddy
 
             Turns.ItemsSource = _turns;
             Attachments.ItemsSource = _pendingImages;
+
+            // Wired once here rather than per bind: the handler reads
+            // _readOnlyUrl, which ApplyComposerAffordances sets, so the
+            // subscription never needs to change. Hover underline the same way
+            // SettingsWindow's links do it — one link look for the app.
+            ReadOnlyLink.PointerPressed += OnReadOnlyLinkPressed;
+            ReadOnlyLink.PointerEntered += (_, _) =>
+                ReadOnlyLink.TextDecorations = TextDecorations.Underline;
+            ReadOnlyLink.PointerExited += (_, _) =>
+                ReadOnlyLink.TextDecorations = null;
 
             // Bubbles size themselves off Scroll's actual width (see
             // TurnView.MaxBubbleWidth) rather than a fixed pixel cap, since
@@ -348,6 +381,25 @@ namespace ClaudeBuddy
             PointerMoved += OnResizePointerMoved;
             PointerReleased += OnResizePointerReleased;
 
+            // CB-111: a pinned panel's place is worth remembering across a
+            // restart, and BeginMoveDrag (the header's drag gesture — see
+            // HeaderRow.PointerPressed above) hands the whole gesture to the
+            // platform rather than raising anything this class could hook at
+            // the end of a drag the way OnResizePointerReleased does for a
+            // resize. PositionChanged is what the platform gives back instead,
+            // and it fires for every kind of move — Reposition() included — so
+            // the guard is what keeps this from writing a save for a panel
+            // that only followed its orb. ClaudeBuddySettings.
+            // SetPinnedChatPanelPosition already no-ops when the position
+            // hasn't actually changed, so a native drag's stream of identical
+            // in-between events costs nothing once it settles.
+            PositionChanged += (_, _) =>
+            {
+                if (!_pinned || _owner is not { PositionKey.Length: > 0 } owner) return;
+
+                ClaudeBuddySettings.SetPinnedChatPanelPosition(owner.PositionKey, Position.X, Position.Y);
+            };
+
             // See NwSeCursor/NeSwCursor: no StandardCursorType member draws
             // as an actual diagonal on this platform, so these two corner
             // pairs get a cursor bitmap built by hand instead.
@@ -443,6 +495,53 @@ namespace ClaudeBuddy
             if (!ReferenceEquals(panel._owner, orb)) return;
 
             panel.Reposition();
+        }
+
+        // CB-111: whether some panel is already the pinned one for this
+        // PositionKey. SessionManager's own RestoreOrbPosition guards its
+        // sibling case the same way — two orbs sharing one key, which only
+        // happens for two titled sessions in the same directory with the same
+        // title, since PositionKeyFor gives every untitled session its own —
+        // and this is the same guard for a pinned panel: whichever orb gets
+        // there first in a scan wins the one saved spot, rather than both
+        // popping a copy of it.
+        internal static bool IsPinnedFor(string positionKey) =>
+            Panels.Any(p => p._pinned && p._owner?.PositionKey == positionKey);
+
+        // CB-111's startup path: bring back a panel that was pinned before the
+        // app last quit, at the place SessionManager read out of settings.
+        // Builds and binds a fresh window exactly the way a click on the orb
+        // would (OpenFor's transient-reuse rule does not apply here — a
+        // restored panel is pinned from the moment it exists, never the
+        // shared unpinned one), but without taking focus: see Bind's activate
+        // parameter for why a restart must not steal it.
+        //
+        // Position is set, then Pin() records it, rather than the other order
+        // — Bind() already ran its own Reposition() to put the window near
+        // the orb, and pinning before moving would save that transient spot
+        // instead of the one actually being restored.
+        internal static void RestorePinned(OrbWindow orb, IRemoteChatSession session, PixelPoint position)
+        {
+            if (PanelFor(session.SessionId) is not null) return;
+
+            var panel = new ChatPanel();
+            panel.Bind(orb, session, activate: false);
+
+            // Clamped to this panel's own size via ChatPanelPlacement, which
+            // already owns this maths for a freshly placed panel — see
+            // ClampSavedPosition's own comment on why a panel needs its own
+            // width and height here rather than an orb's fixed footprint.
+            if (panel.Screens.ScreenFromPoint(position) is { } screen)
+            {
+                var scale = screen.Scaling;
+                var size = new PixelSize(
+                    (int)(panel.Width * scale), (int)(panel.Height * scale));
+
+                position = ChatPanelPlacement.ClampSavedPosition(position, size, screen.WorkingArea);
+            }
+
+            panel.Position = position;
+            panel.Pin();
         }
 
         // Speech is global rather than per-orb, so the panel is told about it
@@ -565,9 +664,25 @@ namespace ClaudeBuddy
             // Wrong is worse than absent here: the chip is there to say who is
             // talking.
             _soleSpeaker.Name = null;
+            _soleSpeaker.IsRoom = false;
+
+            // An OpenClaw conversation is now allowed to be let go of — CB-92.
+            // Nothing here disposes anything: this says that no window is
+            // showing this transcript any more, which is what starts the clock
+            // on giving its decoded pictures, and eventually the transcript
+            // itself, back. Last, so everything above still runs against a
+            // session this panel is provably finished with.
+            OpenClawSessions.PanelClosed(_session);
         }
 
-        private void Bind(OrbWindow orb, IRemoteChatSession session)
+        // activate is false only for CB-111's startup restore: a panel that
+        // was pinned before the app last quit is shown again where it was
+        // left, but taking keyboard focus for it would mean every restart
+        // stealing focus into an old conversation, one steal per restored
+        // panel, ending on whichever happened to bind last. An ordinary open
+        // — a click on an orb — always wants the focus, which is what every
+        // other caller still gets by leaving this at its default.
+        private void Bind(OrbWindow orb, IRemoteChatSession session, bool activate = true)
         {
             Unbind();
 
@@ -579,6 +694,27 @@ namespace ClaudeBuddy
 
             _owner = orb;
             _session = session;
+
+            // Somebody is looking at this conversation, so it is not a
+            // candidate for release while the window is up — and binding is
+            // also the moment the set of open conversations changed, which is
+            // when the sweep for the others is worth running (CB-92).
+            OpenClawSessions.PanelOpened(session);
+
+            // Set before RefreshSoleSpeaker/turn construction below, so every
+            // TurnView built for this session — including the ones the
+            // History loop is about to build — sees the right answer from its
+            // first read rather than a stale one from whatever was bound
+            // before it. See the Speaker.IsRoom comment for what this gates.
+            //
+            // Read off the optional interface rather than a concrete type
+            // check against OpenClawRoomChatSession, the same reason every
+            // other optional capability here (IRemoteChatMachine,
+            // IRemoteChatFetchWait, …) is asked for rather than switched on:
+            // a test's FakeChatSession can then stand in for a room by
+            // implementing IRemoteChatRoom itself, which a sealed concrete
+            // type it is not could never satisfy.
+            _soleSpeaker.IsRoom = (session as IRemoteChatRoom)?.IsRoom == true;
 
             // Whatever this agent's panel was last dragged to. Before the
             // transcript is built and before Reposition(), because the height
@@ -689,8 +825,11 @@ namespace ClaudeBuddy
             // rather than by WaitForOwnActivation, which sleeps the UI thread up
             // to 600ms — fine at the tail of a TerminalFocuser call, not between
             // a click and a window appearing.
-            Activate();
-            Dispatcher.UIThread.Post(() => Input.Focus(), DispatcherPriority.Input);
+            if (activate)
+            {
+                Activate();
+                Dispatcher.UIThread.Post(() => Input.Focus(), DispatcherPriority.Input);
+            }
 
             // Unconditionally, not the pinned-only rule — this used to be
             // ScrollToEndIfPinned and that is why a panel sometimes opened
@@ -728,6 +867,54 @@ namespace ClaudeBuddy
         {
             Input.Watermark = (session as IRemoteChatComposer)?.ComposerHint ?? "Message…";
             AttachButton.IsVisible = (session as IRemoteChatElsewhere)?.CanOpenElsewhere ?? false;
+
+            // A session that can be read and not written to loses the box
+            // entirely, and gets a sentence where it was.
+            //
+            // **Hidden, not disabled** — the opposite of what the watermark
+            // above does for a session that merely cannot be typed into *yet*,
+            // and the difference is measured rather than aesthetic. A cloud
+            // session has no input route at any address: `/input`, `/messages`,
+            // `/turns` and `/conversation` are all 404. A box that accepts a
+            // paragraph and only then admits the transport never had anywhere to
+            // put it has already lost the paragraph, which is CB-59's rule at
+            // its sharpest.
+            //
+            // The hint is kept rather than dropped with the box, because it says
+            // where the session *can* be replied to. Hiding the box and
+            // explaining nothing would leave a panel that looks truncated.
+            var readOnly = session is IRemoteChatReadOnly { IsReadOnly: true };
+
+            ComposerRow.IsVisible = !readOnly;
+            ReadOnlyBox.IsVisible = readOnly;
+            ReadOnlyNote.Text = readOnly
+                ? (session as IRemoteChatComposer)?.ComposerHint ?? ""
+                : "";
+
+            // ...and the way to where it can be replied to. Null means there is
+            // nowhere, and then the sentence stands on its own rather than a
+            // link to nothing sitting beside it.
+            _readOnlyUrl = readOnly ? (session as IRemoteChatReadOnly)?.ReplyUrl : null;
+            ReadOnlyLink.IsVisible = _readOnlyUrl is not null;
+            ReadOnlyLink.Text = _readOnlyUrl is null ? "" : "Open in your browser";
+        }
+
+        // Where the read-only link goes. Held rather than read back off the
+        // TextBlock, because what is *shown* is a label and what is opened is an
+        // address, and putting a URL on screen to have somewhere to keep it is
+        // how the two come to disagree.
+        private string? _readOnlyUrl;
+
+        // Excluded from coverage: the guard is reachable and asserted through
+        // ReadOnlyLink's visibility, and the half behind it launches a real
+        // browser. Which ProcessStartInfo that is, per platform, is
+        // CloudSessionLink.StartInfoFor and is covered there.
+        [ExcludeFromCodeCoverage]
+        private void OnReadOnlyLinkPressed(object? sender, PointerPressedEventArgs e)
+        {
+            if (_readOnlyUrl is null) return;
+
+            CloudSessionLink.Open(_readOnlyUrl);
         }
 
         // The same decoded frames the orb draws, at a size worth looking at.
@@ -2050,7 +2237,15 @@ namespace ClaudeBuddy
             var text = (Input.Text ?? "").Trim();
             if ((text.Length == 0 && _pendingImages.Count == 0) || _session is null) return;
 
-            Input.Text = "";
+            // CB-35: no longer cleared here. It used to be — unconditionally,
+            // before the send was even attempted — which is exactly the bug:
+            // a session that cannot send at all (replying switched off, no
+            // pane, nobody in the room) still returns from SendAsync having
+            // written nothing but a note, and the sentence that produced that
+            // note was already gone from the box by the time the note
+            // appeared. SendAndClearOnSuccessAsync below clears it once the
+            // send has actually told us whether it went anywhere.
+            var session = _session;
 
             var images = _pendingImages.Select(p => p.Path).ToList();
             _pendingImages.Clear();
@@ -2064,27 +2259,50 @@ namespace ClaudeBuddy
 
             // Deliberately not inserting the user's turn here: the session
             // raises TurnAdded for it, so one thing owns the transcript and a
-            // failed send leaves nothing behind to clean up.
-            if (images.Count > 0 && _session is IRemoteChatImages withImages)
-            {
-                _ = withImages.SendWithImagesAsync(text, images);
-            }
-            else
-            {
-                _ = _session.SendAsync(text);
-            }
+            // failed send leaves nothing behind to clean up beyond the note it
+            // writes itself.
+            _ = SendAndClearOnSuccessAsync(session, text, images);
         }
 
-        // Excluded from coverage: the one line a test cannot reach is Speak(),
-        // which makes the machine make a noise — and an exclusion stops that line
-        // being counted, not being run, so reaching it is not an option either.
+        // The part of Send() that has to wait for an answer before deciding
+        // what happens to the box.
         //
-        // Everything this method decides is covered around it: already speaking
-        // cancels instead of starting a second voice, and a conversation with no
-        // assistant reply, or a blank one, speaks nothing. Those two arms return
-        // before the call and are exercised in ChatPanelInteractionTests.
-        [ExcludeFromCodeCoverage]
-        private void SpeakLatest()
+        // Pictures are cleared from the composer in Send() itself regardless
+        // of outcome, not held back the way text is: they are already written
+        // to disk (see AttachImageAsync), so nothing is lost by clearing the
+        // strip, and a failed image send still explains itself in the
+        // transcript the same way a failed text-only one does. Retrying a
+        // failed picture means pasting it again, which is unchanged from
+        // before this ticket and out of its scope — CB-35 is about the one
+        // thing that had no copy anywhere else once the box was cleared: the
+        // sentence itself.
+        //
+        // Not disabling Input while this is in flight, on purpose. Every
+        // implementation's SendAsync returns as soon as the message has been
+        // handed to a gateway, typed into a terminal, or queued on a socket —
+        // none of them wait for a reply — so the window this covers is a
+        // single write, not the minutes a mirror's first fetch can take (see
+        // IRemoteChatFetchWait). Disabling the box for that instant would add
+        // a visible flicker for no protection worth having, and would need
+        // its own recovery path if the awaited call never completed.
+        private async Task SendAndClearOnSuccessAsync(
+            IRemoteChatSession session, string text, List<string> images)
+        {
+            var outcome = images.Count > 0 && session is IRemoteChatImages withImages
+                ? await withImages.SendWithImagesAsync(text, images)
+                : await session.SendAsync(text);
+
+            if (outcome == ChatSendOutcome.Sent) Input.Text = "";
+        }
+
+        // The button. Everything it decides beyond "am I already speaking" now
+        // belongs to SpeechRequest, which the orb's own speak button also enters
+        // — see that file's header for why this is one path and not two.
+        //
+        // No longer excluded from coverage: the utterance moved out with the
+        // rest, so what is left here is the cancel branch, the lookup of the
+        // last assistant turn, and a call. All three are reachable headlessly.
+        internal void SpeakLatest()
         {
             if (TextToSpeech.IsSpeaking)
             {
@@ -2093,44 +2311,7 @@ namespace ClaudeBuddy
             }
 
             var last = _turns.LastOrDefault(t => t.Role == ChatRole.Assistant);
-            if (last is null || string.IsNullOrWhiteSpace(last.Text)) return;
-
-            Speak(last.Text, VoiceFor(_session), RateFor(_session));
-        }
-
-        // A panel can hold several remote session kinds. Only OpenClaw agent
-        // sessions have workspace identity metadata; a room deliberately has
-        // no single agent voice, so both it and every other session keep the
-        // user's global speech selection.
-        internal static TextToSpeech.VoiceOption? VoiceFor(
-            IRemoteChatSession? session,
-            IEnumerable<TextToSpeech.VoiceOption>? options = null) =>
-            session?.SessionId.StartsWith("openclaw:agent:", StringComparison.Ordinal) != true
-                ? null
-                : options is null
-                    ? OpenClawSessions.VoiceForSession(session.SessionId)
-                    : OpenClawSessions.VoiceForSession(session.SessionId, options);
-
-        // Same eligibility as VoiceFor: a rate with no voice behind it has
-        // nothing to qualify, and a room's shared global voice has no single
-        // agent's rate to use either.
-        internal static double? RateFor(IRemoteChatSession? session) =>
-            session?.SessionId.StartsWith("openclaw:agent:", StringComparison.Ordinal) != true
-                ? null
-                : OpenClawSessions.RateForSession(session.SessionId);
-
-        // TextToSpeech.Speak is itself excluded from coverage ("starts a speech
-        // engine and makes the machine make a noise" — see its own comment) —
-        // pulled out here so that exclusion covers only this one call and not
-        // the decision above it, which a headless test can and does exercise
-        // (IsSpeaking -> cancel, no eligible reply -> do nothing). This one
-        // line — actually reaching a real utterance — has no headless seam and
-        // is deliberately left uncovered rather than exercised for real.
-        [ExcludeFromCodeCoverage]
-        private static void Speak(string text, TextToSpeech.VoiceOption? voice, double? rate = null)
-        {
-            if (voice is null) TextToSpeech.Speak(text, ClaudeBuddySettings.SpeakVoice);
-            else TextToSpeech.Speak(text, voice, rate);
+            SpeechRequest.Speak(last?.Text, _session?.SessionId);
         }
 
         private void ApplySpeakState(TextToSpeech.SpeakState state)
@@ -2472,7 +2653,7 @@ namespace ClaudeBuddy
         // To the newest message, after layout has caught up with the rows that
         // put it there.
         //
-        // Twice, at two priorities, for the reason LoadOlderAsync spells out at
+        // Starts with two ticks, for the reason LoadOlderAsync spells out at
         // length: one yield gets the rows into the visual tree, and the measure
         // that gives them height happens after that. A single ScrollToEnd() at
         // Loaded priority — which is what every one of these call sites used to
@@ -2481,16 +2662,86 @@ namespace ClaudeBuddy
         // whole transcript at once adds a lot, so "short of the bottom" is not a
         // few pixels; it is the middle of the conversation.
         //
-        // The first call is kept rather than only doing the late one: it puts
-        // the view roughly right on the frame the panel appears, so the
-        // correction is a settle rather than a visible jump.
+        // CB-51 stopped there, on the assumption two ticks were always enough.
+        // CB-160 is what happens when they aren't: an inline picture decoding
+        // on a worker thread (TurnView.LoadImage/LoadImageBytes both post the
+        // decoded bitmap back after a Task.Run, with no promise about which
+        // tick that lands on), a markdown block reflowing, an attachment row
+        // resizing — any of them can grow a turn's height after the second
+        // tick, and a fixed count has no third correction waiting for it. So
+        // the second tick now hands off to SettleScrollToEnd, which keeps
+        // re-scrolling across further layout passes until the extent genuinely
+        // stops changing rather than assuming it already has.
+        //
+        // The first two calls are kept rather than going straight to the
+        // settle loop: they put the view roughly right on the frame the panel
+        // appears, so the loop is a correction for whatever arrives late
+        // rather than the only thing moving the view at all.
         private void ScrollToEndAfterLayout()
         {
+            var generation = ++_scrollSettleGeneration;
+
             Dispatcher.UIThread.Post(() =>
             {
+                if (generation != _scrollSettleGeneration) return;
                 Scroll.ScrollToEnd();
-                Dispatcher.UIThread.Post(() => Scroll.ScrollToEnd(), DispatcherPriority.Background);
+                Dispatcher.UIThread.Post(() =>
+                {
+                    if (generation != _scrollSettleGeneration) return;
+                    Scroll.ScrollToEnd();
+                    SettleScrollToEnd(generation);
+                }, DispatcherPriority.Background);
             }, DispatcherPriority.Loaded);
+        }
+
+        // The correction CB-160 added: rather than trusting that the two
+        // ticks above were the last time this turn's rows could change height,
+        // this keeps re-scrolling to the end across further dispatcher passes
+        // until ScrollSettleTracker says the extent has held steady, instead
+        // of assuming a fixed count was always enough.
+        //
+        // Self-driven — a chain of Dispatcher.Post calls, not a subscription
+        // to Avalonia's LayoutUpdated event — and deliberately so. The first
+        // version of this watched LayoutUpdated instead, on the reasoning
+        // that it fires exactly when a layout pass produces a new
+        // measurement. It does, but only when something actually invalidates
+        // layout, and once every row has already reached its final height
+        // nothing does — so the handler stayed subscribed indefinitely,
+        // waiting for confirmation readings that would never arrive on their
+        // own. It only got them once *something else* touched layout later
+        // (a reader scrolling back up, a reply landing in a different
+        // conversation), which this settle loop then mistook for one of its
+        // own readings and used to justify snapping back to the bottom —
+        // fighting exactly the interactions ScrollToEndIfPinned and the
+        // pinned-reply tests below exist to protect. Driving the readings
+        // itself instead means each one happens on schedule whether or not
+        // layout actually changed, so the ordinary case — nothing left to
+        // settle — reaches ScrollSettleTracker's stable count in a small,
+        // bounded number of ticks and stops for good, while a genuinely
+        // late-arriving row (this ticket's actual case) still resets that
+        // count for as long as the extent keeps moving.
+        //
+        // Guarded by the same generation this panel's reuse already needs
+        // elsewhere: if a different session gets bound (a new
+        // ScrollToEndAfterLayout call, bumping the counter) while this chain
+        // is still running, the next scheduled tick notices and stops rather
+        // than going on fighting an offset that belongs to a conversation no
+        // longer on screen.
+        private void SettleScrollToEnd(int generation)
+        {
+            var tracker = new ScrollSettleTracker();
+
+            void Tick()
+            {
+                if (generation != _scrollSettleGeneration) return;
+
+                Scroll.ScrollToEnd();
+                tracker.Observe(Scroll.Extent.Height);
+
+                if (tracker.ShouldKeepWatching) Dispatcher.UIThread.Post(Tick, DispatcherPriority.Background);
+            }
+
+            Tick();
         }
 
         // The pin toggle, exposed so a test can drive the state change without
@@ -2522,6 +2773,16 @@ namespace ClaudeBuddy
             // does not: it can be dragged to the other side of the screen, and
             // the next click on this orb opens a transient beside it anyway.
             _owner?.SetChatOpen(false);
+
+            // CB-111: recorded the instant this becomes true, not only on the
+            // first drag afterward — a panel pinned and never moved again
+            // still has to come back in the same spot next run, and
+            // PositionChanged (see the constructor) never fires for a window
+            // that hasn't gone anywhere.
+            if (_owner is { PositionKey.Length: > 0 } owner)
+            {
+                ClaudeBuddySettings.SetPinnedChatPanelPosition(owner.PositionKey, Position.X, Position.Y);
+            }
         }
 
         private void Unpin()
@@ -2543,6 +2804,19 @@ namespace ClaudeBuddy
             // until the next Reposition moves it, and the orb goes back to
             // treating the arc's space as spoken for.
             _owner?.SetChatOpen(true);
+
+            // CB-111: the only place a saved position is forgotten. Unpinning
+            // is an explicit "stop keeping this open", and it is the one event
+            // that can actually tell that apart from a session ending or the
+            // app quitting — both of those close this same window (Dissolve,
+            // reached through CloseFor or the desktop lifetime's Shutdown()),
+            // and a clear reachable from there would erase every pin on every
+            // restart, which is the one thing this ticket exists to prevent.
+            // See ClearPinnedChatPanelPosition's own comment.
+            if (_owner is { PositionKey.Length: > 0 } owner)
+            {
+                ClaudeBuddySettings.ClearPinnedChatPanelPosition(owner.PositionKey);
+            }
         }
 
         private void ApplyPinAffordance()
@@ -3127,12 +3401,21 @@ namespace ClaudeBuddy
             public bool HasSpeaker => !string.IsNullOrEmpty(SpeakerName);
 
             // Falls back to the session's one agent, but only on the agent's
-            // own turns. Your messages are yours whoever else is in the room,
-            // and a system note is about the conversation rather than in it —
-            // stamping either with the agent's name would say it spoke them.
+            // own turns, and never in a room. Your messages are yours
+            // whoever else is in the room, and a system note is about the
+            // conversation rather than in it — stamping either with the
+            // agent's name would say it spoke them.
+            //
+            // CB-36: the room exclusion is ChatSpeaker.CanFallBackToSoleSpeaker,
+            // pure and tested there rather than inlined here — see its own
+            // comment for why an unattributed room turn must not borrow
+            // _soleSpeaker.Name (the panel's title, i.e. the channel) the way
+            // a one-to-one session's genuinely can.
             public string SpeakerName =>
                 !string.IsNullOrEmpty(_turn.Speaker) ? _turn.Speaker!
-                : _turn.Role == ChatRole.Assistant ? _soleSpeaker?.Name ?? ""
+                : _turn.Role == ChatRole.Assistant
+                    && ChatSpeaker.CanFallBackToSoleSpeaker(_soleSpeaker?.IsRoom ?? false)
+                    ? _soleSpeaker?.Name ?? ""
                 : "";
 
             // The name in words, beside the chip, only when the transcript

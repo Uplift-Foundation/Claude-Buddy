@@ -39,30 +39,65 @@ public class OpenClawGatewayTests
         new("gw.local", 4443, gatewayToken,
             (_, _, _, _) => Task.FromResult(
                 new OpenClawSocket.Connection(socket, Stream.Null, fingerprint)),
-            // Generous on purpose, and raised from two seconds — but read the
-            // second half of this before trusting it.
+            // No deadline at all, which is CB-23's answer to a number that has
+            // now been raised twice and flaked at both values.
             //
-            // Nothing here talks to a network: the socket is a fake answering
+            // The history is worth keeping because it is what rules the middle
+            // ground out. Two seconds was missable when the machine was busy and
+            // this class failed intermittently four times in one session that
+            // way; raising it to thirty helped measurably, and then CI failed
+            // here again at *exactly* thirty, which was read as a genuine hang
+            // on the grounds that a busy machine does not lose half a minute.
+            //
+            // A busy machine does not, but a starved *thread pool* does. Under
+            // a pool held by blocked work items — min threads forced to one,
+            // every worker parked — the handshake over this very fake took
+            // **25.5 seconds** on an idle-CPU Mac, against a thirty-second wall.
+            // So thirty is not a wall a hang has to climb; it is four seconds of
+            // headroom over a scheduling delay that is already measurable, and a
+            // failure at thirty tells you nothing that a failure at two did not.
+            // (That measurement is of a deliberately pathological pool, not of
+            // a CI runner — it bounds what scheduling *can* cost, not what CI
+            // actually costs. Either way it is not a number to sit just above.)
+            //
+            // Nothing here talks to a network. The socket is a fake answering
             // from memory, so a correct implementation replies immediately and
-            // the size of this timeout costs nothing. Two seconds was missable
-            // when the machine was busy with other suites, and this class failed
-            // intermittently four times in one session that way. Raising it
-            // measurably helped: reproduced within three attempts before, zero
-            // in eight after.
+            // an expired deadline never means "the gateway is slow" — it only
+            // ever means "this process did not get scheduled". That is not a
+            // fact about the gateway and it has no business failing an
+            // assertion about one. Removing the deadline makes the class say
+            // exactly one thing: a *failure* is a protocol bug, and a *hang* is
+            // a lost frame or a deadlock, reported by the job timeout with the
+            // test's name on it.
             //
-            // **It did not fix everything, and the residue is the interesting
-            // part.** CI then failed here again at *exactly* thirty seconds,
-            // which is not slowness — a busy machine does not lose half a
-            // minute. That is a genuine hang in the handshake, rarer than the
-            // scheduling misses and a different fault entirely. See CB-68.
-            //
-            // So this timeout now does something more useful than being
-            // generous: it separates the two. A failure at thirty seconds is a
-            // hang worth chasing; before, every failure looked alike. The one
-            // test actually *about* a timeout passes its own 50ms and is
-            // unaffected.
-            challengeTimeout ?? TimeSpan.FromSeconds(30),
-            requestTimeout ?? TimeSpan.FromSeconds(30));
+            // The three tests that are genuinely about a timeout pass their own
+            // small explicit values and are unaffected.
+            challengeTimeout ?? Timeout.InfiniteTimeSpan,
+            requestTimeout ?? Timeout.InfiniteTimeSpan);
+
+    // Connect, and say what happened when it didn't.
+    //
+    // CB-23 exists because this was `await gateway.ConnectAsync(...)` with the
+    // result dropped on the floor. Every failure path leaves GrantedScopes at
+    // its empty default, so a handshake that timed out surfaced three lines
+    // later as `Assert.Equal() Failure: Expected ["operator.read",
+    // "operator.write"], Actual: []` — a message that names neither the timeout
+    // nor the outcome nor the gateway's own detail, and reads for all the world
+    // like the scopes being parsed wrong.
+    //
+    // Discarding the result is the bug, not the timeout: the value that says
+    // what went wrong was returned and thrown away.
+    private static async Task<OpenClawGateway.ConnectResult> ConnectOrExplainAsync(
+        OpenClawGateway gateway)
+    {
+        var result = await gateway.ConnectAsync(null, CancellationToken.None);
+
+        Assert.True(
+            result.Outcome == OpenClawGateway.Outcome.Connected,
+            $"the handshake did not connect: {result.Outcome} — {result.Detail ?? "no detail"}");
+
+        return result;
+    }
 
     // A gateway that accepts the connect and grants what was asked for.
     private static FakeGatewaySocket Accepting(
@@ -156,22 +191,26 @@ public class OpenClawGatewayTests
 
     // The challenge is already on the socket when ConnectAsync starts — that is
     // how every fake here is written, and how a gateway that writes it the
-    // instant the upgrade completes looks. The two-second timeout is the one
-    // that failed on windows-latest when the receive loop consumed the frame
-    // before WaitForChallengeAsync subscribed. Passing at two seconds, not
-    // thirty, is the point: a lost event does not get faster if you wait.
+    // instant the upgrade completes looks. This is the case that failed on
+    // windows-latest when the receive loop consumed the frame before
+    // WaitForChallengeAsync subscribed.
+    //
+    // It used to make its point with a two-second deadline — "a lost event does
+    // not get faster if you wait", so passing quickly was the assertion. CB-23
+    // took that deadline away, because it could not tell a lost event from a
+    // slow scheduler and the second is measurable on a starved pool. What a
+    // regression looks like now is a hang rather than a failure: a challenge
+    // nobody is listening for is waited on forever, and the job timeout names
+    // this test. Uglier to read in a CI log, and unambiguous, which the two
+    // seconds was not.
     [Fact]
     public async Task AChallengeAlreadyOnTheSocketIsNotLost()
     {
         var socket = Accepting();
-        using var gateway = Gateway(
-            socket,
-            challengeTimeout: TimeSpan.FromSeconds(2),
-            requestTimeout: TimeSpan.FromSeconds(2));
+        using var gateway = Gateway(socket);
 
-        var result = await gateway.ConnectAsync(null, CancellationToken.None);
+        await ConnectOrExplainAsync(gateway);
 
-        Assert.Equal(OpenClawGateway.Outcome.Connected, result.Outcome);
         Assert.Equal("nonce-1", socket.Requests[0].Params.GetProperty("device")
             .GetProperty("nonce").GetString());
     }
@@ -186,7 +225,7 @@ public class OpenClawGatewayTests
         var socket = Accepting(new[] { "operator.read", "operator.write" });
         using var gateway = Gateway(socket, fingerprint: "fp-observed");
 
-        await gateway.ConnectAsync(null, CancellationToken.None);
+        await ConnectOrExplainAsync(gateway);
 
         Assert.Equal(new[] { "operator.read", "operator.write" }, gateway.GrantedScopes);
         Assert.Equal("1.2.3", gateway.ServerVersion);
@@ -206,7 +245,7 @@ public class OpenClawGatewayTests
         var socket = Accepting(server: new { });
         using var gateway = Gateway(socket);
 
-        await gateway.ConnectAsync(null, CancellationToken.None);
+        await ConnectOrExplainAsync(gateway);
 
         Assert.Equal("4", gateway.ServerVersion);
     }
@@ -219,7 +258,7 @@ public class OpenClawGatewayTests
         var socket = Accepting(policy: new { });
         using var gateway = Gateway(socket);
 
-        await gateway.ConnectAsync(null, CancellationToken.None);
+        await ConnectOrExplainAsync(gateway);
 
         Assert.Equal(30_000, gateway.TickIntervalMs);
         Assert.Equal(26_214_400, gateway.MaxPayload);
@@ -242,8 +281,10 @@ public class OpenClawGatewayTests
     }
 
     // The gateway speaks first, so there is nothing to send until the challenge
-    // arrives. A challenge with no nonce is the same situation as no challenge:
-    // there is nothing to sign.
+    // arrives. A challenge with no nonce leaves nothing to sign — the same dead
+    // end as no challenge, and until CB-23 reported with the same words, which
+    // sent anyone reading it looking for a gateway that was not answering when
+    // the gateway had answered.
     [Fact]
     public async Task AChallengeWithoutANonceIsNotAConnection()
     {
@@ -259,13 +300,18 @@ public class OpenClawGatewayTests
         var result = await gateway.ConnectAsync(null, CancellationToken.None);
 
         Assert.Equal(OpenClawGateway.Outcome.Unreachable, result.Outcome);
-        Assert.Equal("no connect.challenge", result.Detail);
+        Assert.Equal("the gateway sent connect.challenge with no nonce", result.Detail);
         Assert.Empty(socket.Requests);
     }
 
     // A gateway that connects and then says nothing. Unreachable rather than
     // rejected, so the supervisor keeps trying — a machine that is asleep is the
     // most likely reason a challenge never arrives.
+    //
+    // The deadline is named in the detail rather than left implicit. This is
+    // one of the three tests that is genuinely about a timeout, so it keeps an
+    // explicit one, and 50ms is short enough that no amount of scheduling delay
+    // makes it mean something else.
     [Fact]
     public async Task AGatewayThatNeverChallengesIsUnreachable()
     {
@@ -275,6 +321,7 @@ public class OpenClawGatewayTests
         var result = await gateway.ConnectAsync(null, CancellationToken.None);
 
         Assert.Equal(OpenClawGateway.Outcome.Unreachable, result.Outcome);
+        Assert.Equal("no connect.challenge within 0.05s", result.Detail);
     }
 
     // The transport failing, and the reason the exception chain is flattened:
@@ -402,6 +449,12 @@ public class OpenClawGatewayTests
     // which is terminal — so a gateway restarted between the upgrade and its
     // answer said "refused these credentials" and never tried again for the life
     // of the app. Everything that is not the gateway saying no is transport.
+    //
+    // The detail is asserted as well as the outcome, because this is the path
+    // CB-23 was actually on and the words were the whole problem: the gateway
+    // answered the challenge, took the connect and then said nothing, and the
+    // app reported "A task was canceled." — which names no method, no deadline
+    // and no gateway.
     [Fact]
     public async Task ASocketThatDiesMidHandshakeIsUnreachableAndNotRejected()
     {
@@ -414,6 +467,98 @@ public class OpenClawGatewayTests
         var result = await gateway.ConnectAsync(null, CancellationToken.None);
 
         Assert.Equal(OpenClawGateway.Outcome.Unreachable, result.Outcome);
+        Assert.Equal(
+            "the gateway accepted the socket but did not answer connect within 0.05s",
+            result.Detail);
+    }
+
+    // The caller giving up, which arrives as the same OperationCanceledException
+    // as the timeout above and means the opposite thing. Nobody needs telling
+    // that a connection they cancelled did not finish; they very much need
+    // telling that one they did not cancel ran out of patience.
+    [Fact]
+    public async Task ACancelledHandshakeSaysItWasAbandonedRatherThanTimedOut()
+    {
+        var socket = new FakeGatewaySocket();
+        socket.PushEvent("connect.challenge", new { nonce = "n" });
+
+        // Answers nothing, so the connect is still in flight when the caller
+        // withdraws. No deadline of its own — the cancellation is what ends it,
+        // which is exactly what the assertion is about.
+        using var gateway = Gateway(socket);
+        using var caller = new CancellationTokenSource();
+
+        var connecting = gateway.ConnectAsync(null, caller.Token);
+
+        while (socket.Requests.Count == 0) await Task.Delay(5);
+        caller.Cancel();
+
+        var result = await connecting;
+
+        Assert.Equal(OpenClawGateway.Outcome.Unreachable, result.Outcome);
+        Assert.Equal(
+            "the connection attempt was abandoned before the gateway answered connect",
+            result.Detail);
+    }
+
+    // The three arms of the handshake's own failure vocabulary, exercised
+    // directly. Two of them are reachable through ConnectAsync above; the third
+    // is the one that only shows up when something that is not a cancellation
+    // comes back, and it has to keep flattening the chain rather than inventing
+    // a sentence of its own.
+    [Fact]
+    public void AHandshakeFailureThatIsNotACancellationKeepsItsExceptionChain()
+    {
+        var ex = new IOException("outer", new IOException("the socket went away"));
+
+        Assert.Equal(
+            "outer — the socket went away",
+            OpenClawGateway.DescribeHandshakeFailure(ex, abandoned: false, TimeSpan.FromSeconds(20)));
+    }
+
+    [Fact]
+    public void ALapsedHandshakeNamesTheMethodAndTheDeadline()
+    {
+        Assert.Equal(
+            "the gateway accepted the socket but did not answer connect within 20s",
+            OpenClawGateway.DescribeHandshakeFailure(
+                new OperationCanceledException(), abandoned: false, TimeSpan.FromSeconds(20)));
+    }
+
+    [Fact]
+    public void AnAbandonedHandshakeSaysSoRatherThanBlamingTheGateway()
+    {
+        Assert.Equal(
+            "the connection attempt was abandoned before the gateway answered connect",
+            OpenClawGateway.DescribeHandshakeFailure(
+                new TaskCanceledException(), abandoned: true, TimeSpan.FromSeconds(20)));
+    }
+
+    // Silence and a malformed challenge are different faults and now read as
+    // different faults. They shared one sentence until CB-23, and the shared
+    // sentence described the one the gateway was not guilty of.
+    [Fact]
+    public void AChallengeThatNeverCameAndOneWithNoNonceAreDescribedApart()
+    {
+        Assert.Equal(
+            "no connect.challenge within 10s",
+            OpenClawGateway.DescribeMissingChallenge(arrived: false, TimeSpan.FromSeconds(10)));
+
+        Assert.Equal(
+            "the gateway sent connect.challenge with no nonce",
+            OpenClawGateway.DescribeMissingChallenge(arrived: true, TimeSpan.FromSeconds(10)));
+    }
+
+    // Timeout.InfiniteTimeSpan is minus one millisecond, and a deadline that was
+    // deliberately removed must not print as a negative one. Reachable only by
+    // calling this directly — a wait that never expires cannot report on itself
+    // — which is why it is asserted here rather than left to the two callers.
+    [Fact]
+    public void AWaitWithNoDeadlineIsDescribedAsHavingNone()
+    {
+        Assert.Equal("no limit", OpenClawGateway.DescribeWait(Timeout.InfiniteTimeSpan));
+        Assert.Equal("0.05s", OpenClawGateway.DescribeWait(TimeSpan.FromMilliseconds(50)));
+        Assert.Equal("20s", OpenClawGateway.DescribeWait(TimeSpan.FromSeconds(20)));
     }
 
     // Flatten's own contract: the chain, in order, without repeating a message
@@ -434,8 +579,7 @@ public class OpenClawGatewayTests
         var socket = Accepting();
         var gateway = Gateway(socket, requestTimeout: requestTimeout);
 
-        var result = await gateway.ConnectAsync(null, CancellationToken.None);
-        Assert.Equal(OpenClawGateway.Outcome.Connected, result.Outcome);
+        await ConnectOrExplainAsync(gateway);
 
         return (socket, gateway);
     }
@@ -566,7 +710,7 @@ public class OpenClawGatewayTests
             payload.ValueKind == JsonValueKind.Object
             && payload.TryGetProperty("sessionKey", out var k) ? k.GetString() : null));
 
-        await gateway.ConnectAsync(null, CancellationToken.None);
+        await ConnectOrExplainAsync(gateway);
 
         socket.PushEvent("agent", new { sessionKey = "agent:nova:discord" });
         await WaitFor(() => seen.Any(s => s.Name == "agent"));
@@ -586,7 +730,7 @@ public class OpenClawGatewayTests
         var names = new List<string>();
         gateway.EventReceived += (name, _) => names.Add(name);
 
-        await gateway.ConnectAsync(null, CancellationToken.None);
+        await ConnectOrExplainAsync(gateway);
 
         socket.PushJson("{\"event\":\"tick\"}");
         await WaitFor(() => names.Contains("tick"));
@@ -601,7 +745,7 @@ public class OpenClawGatewayTests
         var socket = Accepting();
         using var gateway = Gateway(socket);
 
-        await gateway.ConnectAsync(null, CancellationToken.None);
+        await ConnectOrExplainAsync(gateway);
 
         socket.PushJson("this is not json at all");
         socket.PushJson("[\"an array, not an object\"]");
@@ -628,7 +772,7 @@ public class OpenClawGatewayTests
         var socket = Accepting();
         using var gateway = Gateway(socket);
 
-        await gateway.ConnectAsync(null, CancellationToken.None);
+        await ConnectOrExplainAsync(gateway);
 
         socket.OnRequest = r => new
         {
@@ -651,7 +795,7 @@ public class OpenClawGatewayTests
         var socket = Accepting();
         using var gateway = Gateway(socket);
 
-        await gateway.ConnectAsync(null, CancellationToken.None);
+        await ConnectOrExplainAsync(gateway);
 
         socket.OnRequest = r => new { type = "res", id = r.Id, ok = true, count = 7 };
 
@@ -669,7 +813,7 @@ public class OpenClawGatewayTests
         var socket = Accepting();
         using var gateway = Gateway(socket);
 
-        await gateway.ConnectAsync(null, CancellationToken.None);
+        await ConnectOrExplainAsync(gateway);
 
         socket.OnRequest = r => FakeGatewaySocket.Error(
             r.Id, "forbidden", "missing scope: operator.write", "AUTH_SCOPE_MISMATCH");
@@ -689,7 +833,7 @@ public class OpenClawGatewayTests
         var socket = Accepting();
         using var gateway = Gateway(socket);
 
-        await gateway.ConnectAsync(null, CancellationToken.None);
+        await ConnectOrExplainAsync(gateway);
 
         socket.OnRequest = r => new { type = "res", id = r.Id, ok = false };
 
@@ -709,7 +853,7 @@ public class OpenClawGatewayTests
         var socket = Accepting();
         using var gateway = Gateway(socket);
 
-        await gateway.ConnectAsync(null, CancellationToken.None);
+        await ConnectOrExplainAsync(gateway);
 
         var pending = new List<FakeGatewaySocket.Request>();
         socket.OnRequest = r => { pending.Add(r); return null; };
@@ -738,7 +882,7 @@ public class OpenClawGatewayTests
         var socket = Accepting();
         using var gateway = Gateway(socket);
 
-        await gateway.ConnectAsync(null, CancellationToken.None);
+        await ConnectOrExplainAsync(gateway);
 
         var pending = new List<FakeGatewaySocket.Request>();
         socket.OnRequest = r => { pending.Add(r); return null; };
@@ -760,9 +904,9 @@ public class OpenClawGatewayTests
     public async Task ACloseWithNoReasonStillFailsEverythingInFlight()
     {
         var socket = Accepting();
-        using var gateway = Gateway(socket, requestTimeout: TimeSpan.FromSeconds(30));
+        using var gateway = Gateway(socket);
 
-        await gateway.ConnectAsync(null, CancellationToken.None);
+        await ConnectOrExplainAsync(gateway);
 
         var pending = new List<FakeGatewaySocket.Request>();
         socket.OnRequest = r => { pending.Add(r); return null; };
@@ -773,8 +917,9 @@ public class OpenClawGatewayTests
 
         socket.PushClose(WebSocketCloseStatus.NormalClosure, null);
 
-        // Both, and quickly: the request timeout above is thirty seconds, so a
-        // test that only passes because of it would not finish.
+        // Both, and because the close swept them rather than because a deadline
+        // expired: these requests have no deadline at all, so a test that only
+        // passed by waiting one out would never finish.
         await Assert.ThrowsAsync<IOException>(() => first);
         await Assert.ThrowsAsync<IOException>(() => second);
     }
@@ -786,9 +931,9 @@ public class OpenClawGatewayTests
     public async Task AFrameLargerThanTheAdvertisedLimitEndsTheLoop()
     {
         var socket = Accepting(policy: new { maxPayload = 64 });
-        using var gateway = Gateway(socket, requestTimeout: TimeSpan.FromSeconds(30));
+        using var gateway = Gateway(socket);
 
-        await gateway.ConnectAsync(null, CancellationToken.None);
+        await ConnectOrExplainAsync(gateway);
         Assert.Equal(64, gateway.MaxPayload);
 
         var pending = new List<FakeGatewaySocket.Request>();
@@ -811,9 +956,9 @@ public class OpenClawGatewayTests
     public async Task ASocketThatBreaksMidStreamFailsWhatWasInFlightWithTheReason()
     {
         var socket = Accepting();
-        using var gateway = Gateway(socket, requestTimeout: TimeSpan.FromSeconds(30));
+        using var gateway = Gateway(socket);
 
-        await gateway.ConnectAsync(null, CancellationToken.None);
+        await ConnectOrExplainAsync(gateway);
 
         var pending = new List<FakeGatewaySocket.Request>();
         socket.OnRequest = r => { pending.Add(r); return null; };
@@ -857,9 +1002,144 @@ public class OpenClawGatewayTests
         Assert.Null(gateway.ObservedFingerprint);
     }
 
+    // The same problem as the handshake deadline, one layer up: this used to
+    // give up after two hundred five-millisecond turns — one second — and a
+    // second is well inside what a starved scheduler costs, so a frame that
+    // arrived late failed as a frame that never arrived. The budget is now
+    // large enough that expiring it means something is genuinely wrong, and the
+    // message says how long it waited so nobody has to count the loop.
     private static async Task WaitFor(Func<bool> condition)
     {
-        for (var i = 0; i < 200 && !condition(); i++) await Task.Delay(5);
-        Assert.True(condition(), "the condition never became true");
+        var waited = TimeSpan.Zero;
+        var turn = TimeSpan.FromMilliseconds(5);
+        var budget = TimeSpan.FromSeconds(60);
+
+        while (!condition() && waited < budget)
+        {
+            await Task.Delay(turn);
+            waited += turn;
+        }
+
+        Assert.True(
+            condition(),
+            $"the condition never became true within {budget.TotalSeconds:0}s");
+    }
+
+    // ---- CB-68: the receive loop's own thread ---------------------------------
+
+    // The ordinary case, with the pool otherwise idle: the receive loop still
+    // runs on a thread the CLR grew specifically for it, not a borrowed pool
+    // worker. Cheap to assert and worth asserting anyway — a future edit that
+    // quietly changes this back to Task.Run would compile, pass every other
+    // test here, and reintroduce exactly the dependency CB-68 removed.
+    [Fact]
+    public async Task TheReceiveLoopRunsOnADedicatedThreadNotAPooledOne()
+    {
+        var socket = Accepting();
+        using var gateway = Gateway(socket);
+
+        var result = await ConnectOrExplainAsync(gateway);
+
+        Assert.Equal(OpenClawGateway.Outcome.Connected, result.Outcome);
+        Assert.False(gateway.ReceiveLoopStartedOnAPooledThread);
+    }
+
+    // The case CB-68 was actually filed over: the pool with no spare worker to
+    // hand out. Deterministic rather than timing-dependent — the saturation is
+    // built by pinning the pool's own ceiling to exactly as many blocking
+    // callbacks as are queued, not by hoping a slow machine reproduces it, so
+    // this either passes reliably or fails reliably rather than flaking either
+    // way. Same technique CB-23's own measurement above used to get its
+    // 25.5-second figure, aimed here at one specific, narrower claim.
+    //
+    // What this proves: the receive loop still gets a thread of its own and
+    // starts running within a bound far short of the thirty-second CI failure
+    // this ticket reports, even with literally nothing free in the pool. What
+    // it does not prove — and CB-68 should not be read as fully closed by it —
+    // is that the *whole* handshake is immune to the pool being saturated:
+    // ConnectAsync's later awaits still resume via ordinary Task continuations,
+    // which this test does not exercise under saturation. See the comment on
+    // ConnectAsync's Task.Factory.StartNew call for why that remainder is out
+    // of this ticket's scope.
+    //
+    // A raw, non-pooled Thread is the escape hatch that keeps this test itself
+    // from ever hanging: every blocking callback below only returns via
+    // `release.Set()`, called from a thread that never asks the ThreadPool for
+    // anything, so a wrong result here is a fast assertion failure rather than
+    // a CI run that never comes back.
+    [Fact]
+    public async Task TheReceiveLoopStartsPromptlyEvenWithTheThreadPoolFullySaturated()
+    {
+        ThreadPool.GetMaxThreads(out var maxWorkers, out var maxIo);
+        ThreadPool.GetMinThreads(out var minWorkers, out var minIo);
+
+        var pin = Math.Max(minWorkers, Environment.ProcessorCount);
+        var release = new ManualResetEventSlim(false);
+        var started = 0;
+
+        var safetyRelease = new Thread(() =>
+        {
+            Thread.Sleep(TimeSpan.FromSeconds(6));
+            release.Set();
+        })
+        { IsBackground = true };
+        safetyRelease.Start();
+
+        try
+        {
+            ThreadPool.SetMaxThreads(pin, maxIo);
+            ThreadPool.SetMinThreads(pin, minIo);
+
+            for (var i = 0; i < pin; i++)
+            {
+                ThreadPool.QueueUserWorkItem(_ =>
+                {
+                    Interlocked.Increment(ref started);
+                    release.Wait();
+                });
+            }
+
+            var saturating = System.Diagnostics.Stopwatch.StartNew();
+            while (Volatile.Read(ref started) < pin && saturating.Elapsed < TimeSpan.FromSeconds(3))
+            {
+                await Task.Delay(10);
+            }
+
+            var socket = Accepting();
+            using var gateway = Gateway(socket, challengeTimeout: TimeSpan.FromSeconds(20),
+                requestTimeout: TimeSpan.FromSeconds(20));
+
+            // Started but not awaited yet, on purpose: this test's claim is
+            // about how fast the *loop* starts, not about the rest of the
+            // handshake finishing, which is the part CB-68 did not fully close
+            // (see ConnectAsync's comment). Awaiting ConnectAsync itself here
+            // would fold that open question into this assertion and make the
+            // test fail for a reason it does not name.
+            var connecting = gateway.ConnectAsync(null, CancellationToken.None);
+
+            var startSw = System.Diagnostics.Stopwatch.StartNew();
+            while (gateway.ReceiveLoopStartedOnAPooledThread is null
+                   && startSw.Elapsed < TimeSpan.FromSeconds(5))
+            {
+                await Task.Delay(5);
+            }
+
+            Assert.NotNull(gateway.ReceiveLoopStartedOnAPooledThread);
+            Assert.False(gateway.ReceiveLoopStartedOnAPooledThread);
+            Assert.True(startSw.Elapsed < TimeSpan.FromSeconds(2),
+                $"the receive loop took {startSw.Elapsed} to start with the pool fully saturated");
+
+            // Let the saturation go so the connection can actually finish and
+            // the gateway disposes cleanly, rather than leaving `connecting`
+            // to be abandoned mid-handshake.
+            release.Set();
+            await connecting;
+        }
+        finally
+        {
+            release.Set();
+            ThreadPool.SetMinThreads(minWorkers, minIo);
+            ThreadPool.SetMaxThreads(maxWorkers, maxIo);
+        }
     }
 }

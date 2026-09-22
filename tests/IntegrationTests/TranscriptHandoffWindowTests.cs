@@ -12,6 +12,11 @@ namespace ClaudeBuddy.Tests;
 // session 6d3a9d57, CLI 2.1.251, identifiers scrubbed.
 public class TranscriptHandoffWindowTests
 {
+    private const string SessionId = "6d3a9d57-10c6-4e9d-bf25-38194fae23c0";
+
+    private static bool Handoff(string? path) =>
+        TranscriptHandoff.EndsBackgrounded(path, SessionId);
+
     private const string Marker =
         """{"parentUuid":"1b5cf160-79bf-4e2b-a01f-6511aee6b36b","isSidechain":false,"type":"system","subtype":"informational","content":"Backgrounding after the current tool finishes…","isMeta":false,"timestamp":"2026-08-28T17:53:15.295Z","uuid":"4f19d42a-80a5-4f9e-afe6-f234587acbf5","level":"warning","userType":"external","entrypoint":"cli","cwd":"/Users/w/project","sessionId":"6d3a9d57-10c6-4e9d-bf25-38194fae23c0","version":"2.1.251","gitBranch":"develop"}""";
 
@@ -26,26 +31,36 @@ public class TranscriptHandoffWindowTests
     {
         var path = WriteTempFile(UserSaid, Marker, CostState);
 
-        Assert.True(TranscriptHandoff.EndsBackgrounded(path));
+        Assert.True(Handoff(path));
 
         // Asked again without the file changing: the cache answers, and it
         // answers the same thing. A husk's transcript never grows again, so
         // this is the every-two-seconds case for the rest of the husk's life.
-        Assert.True(TranscriptHandoff.EndsBackgrounded(path));
+        Assert.True(Handoff(path));
     }
 
     [Fact]
     public void AFileThatGrowsIsReReadAndAResumedSessionGetsItsOrbBack()
     {
         var path = WriteTempFile(UserSaid, Marker, CostState);
-        Assert.True(TranscriptHandoff.EndsBackgrounded(path));
+        Assert.True(Handoff(path));
 
         // The self-correcting direction, end to end: a user row appended after
         // the marker has to flip the cached answer, because the cache is keyed
         // on the file's length and mtime rather than on the path alone.
         File.AppendAllText(path, UserSaid + "\n");
 
-        Assert.False(TranscriptHandoff.EndsBackgrounded(path));
+        Assert.False(Handoff(path));
+    }
+
+    [Fact]
+    public void CacheAnswersAreScopedToTheSessionWhoseMarkerWasRead()
+    {
+        var path = WriteTempFile(Marker);
+
+        Assert.True(Handoff(path));
+        Assert.False(TranscriptHandoff.EndsBackgrounded(path,
+            "b1425d42-0000-0000-0000-000000000000"));
     }
 
     [Fact]
@@ -57,9 +72,9 @@ public class TranscriptHandoffWindowTests
         var missing = Path.Combine(
             Path.GetTempPath(), "cb-absent-" + Guid.NewGuid() + ".jsonl");
 
-        Assert.False(TranscriptHandoff.EndsBackgrounded(missing));
-        Assert.False(TranscriptHandoff.EndsBackgrounded(""));
-        Assert.False(TranscriptHandoff.EndsBackgrounded((string?)null));
+        Assert.False(Handoff(missing));
+        Assert.False(Handoff(""));
+        Assert.False(Handoff(null));
     }
 
     // A stated limit, not a silent one — the same standing
@@ -82,7 +97,7 @@ public class TranscriptHandoffWindowTests
         Assert.True(new FileInfo(path).Length > TranscriptHandoff.TailWindowBytes,
             "the fixture has to be bigger than the window for this to mean anything");
 
-        Assert.False(TranscriptHandoff.EndsBackgrounded(path));
+        Assert.False(Handoff(path));
     }
 
     [Fact]
@@ -94,7 +109,7 @@ public class TranscriptHandoffWindowTests
         // place. The replacement is padded to the byte, so only the mtime says
         // anything changed.
         var path = WriteTempFile(Marker);
-        Assert.True(TranscriptHandoff.EndsBackgrounded(path));
+        Assert.True(Handoff(path));
 
         var markerBytes = new FileInfo(path).Length;
         var replacement = UserSaid + new string(' ',
@@ -103,7 +118,7 @@ public class TranscriptHandoffWindowTests
         File.SetLastWriteTimeUtc(path, DateTime.UtcNow + TimeSpan.FromSeconds(2));
 
         Assert.Equal(markerBytes, new FileInfo(path).Length);
-        Assert.False(TranscriptHandoff.EndsBackgrounded(path));
+        Assert.False(Handoff(path));
     }
 
     [Fact]
@@ -114,14 +129,14 @@ public class TranscriptHandoffWindowTests
         // it past 512 has to change no answer — the cap costs one extra read
         // per entry when it fires, and nothing else.
         var first = WriteTempFile(Marker);
-        Assert.True(TranscriptHandoff.EndsBackgrounded(first));
+        Assert.True(Handoff(first));
 
         for (var i = 0; i < 513; i++)
         {
-            Assert.False(TranscriptHandoff.EndsBackgrounded(WriteTempFile(UserSaid)));
+            Assert.False(Handoff(WriteTempFile(UserSaid)));
         }
 
-        Assert.True(TranscriptHandoff.EndsBackgrounded(first));
+        Assert.True(Handoff(first));
     }
 
     private static string WriteTempFile(params string[] rows)

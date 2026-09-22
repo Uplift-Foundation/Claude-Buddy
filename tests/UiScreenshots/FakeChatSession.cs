@@ -6,13 +6,44 @@ namespace ClaudeBuddy.Tests;
 // fake itself needs nothing internal, so a plain copy costs nothing. See
 // the original for the four IRemoteChatSession rules this honours.
 internal sealed class FakeChatSession :
-    IRemoteChatSession, IRemoteChatComposer, IRemoteChatElsewhere
+    IRemoteChatSession, IRemoteChatComposer, IRemoteChatElsewhere, IRemoteChatRoom,
+    IRemoteChatReadOnly,
+    IRemoteChatMachine
 {
     // Both default to what an ordinary typeable session answers — an ordinary
     // hint and no button — so every capture that predates them is unchanged.
     public string ComposerHint { get; set; } = "Message…";
 
     public bool CanOpenElsewhere { get; set; }
+
+    // False by default, so every capture that predates CB-164 still shows a
+    // panel with a composer in it. Settable for the reason the UiTests fake's
+    // copy is: one class has to be able to pose for both sides of the picture.
+    public bool IsReadOnly { get; set; }
+
+    // Null by default, which is the "read-only with nowhere to go" case — the
+    // panel then shows the sentence and no link. A test that wants the link
+    // sets it.
+    public string? ReplyUrl { get; set; }
+
+    // Null by default, which is what every capture before CB-164 showed: a
+    // session that names no machine is read as being on this one. Set for a
+    // cloud capture, because a picture of a cloud session with the reviewer's
+    // own laptop named in its header is a picture of the bug
+    // ClaudeCloudChatSession.MachineName exists to prevent — and a screenshot
+    // that contradicts the app is worse than no screenshot.
+    public string? MachineName { get; set; }
+
+    public event Action? MachineChanged
+    {
+        add { }
+        remove { }
+    }
+
+    // False by default, same reasoning as tests/UiTests/FakeChatSession.cs:
+    // an ordinary capture is a one-to-one conversation, and only the
+    // room-attribution scenario (CB-36) sets this.
+    public bool IsRoom { get; set; }
 
     // Never called from a capture, and it would open a window if it were.
     public void OpenElsewhere()
@@ -37,7 +68,7 @@ internal sealed class FakeChatSession :
         _history = seedHistory?.ToList() ?? new List<ChatTurn>();
     }
 
-    public Task SendAsync(string text)
+    public Task<ChatSendOutcome> SendAsync(string text)
     {
         SentTexts.Add(text);
 
@@ -45,7 +76,7 @@ internal sealed class FakeChatSession :
         _history.Add(turn);
         TurnAdded?.Invoke(turn);
 
-        return Task.CompletedTask;
+        return Task.FromResult(ChatSendOutcome.Sent);
     }
 
     public void Cancel()

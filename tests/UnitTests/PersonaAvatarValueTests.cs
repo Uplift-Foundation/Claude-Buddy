@@ -301,16 +301,47 @@ public class PersonaAvatarValueTests
     // The bug was an asymmetry between arms, so the assertion that matters is
     // that no arm is special. One value, written five ways, read five times
     // the same.
+    //
+    // The table row is not in this list any more: CB-145 scoped the table
+    // row's Avatar (and Voice) to a persona section, the same way CB-142
+    // scoped its Name, because no shipped profile was found using either
+    // field that way. `TheTableRowReadsTheSamePictureUnderAHeading` below
+    // covers the same value in the same shape, with the heading the arm now
+    // requires.
     [Theory]
     [InlineData("- Profile picture: `avatars/jessica.png` (animated, updated 2026-09-09)")]
     [InlineData("- **Profile picture:** `avatars/jessica.png` (animated, updated 2026-09-09)")]
     [InlineData("**Profile picture:** `avatars/jessica.png` (animated, updated 2026-09-09)")]
-    [InlineData("| Profile picture | `avatars/jessica.png` (animated, updated 2026-09-09) |")]
     public void EverySpellingOfTheBulletGrammarReadsTheSamePicture(string line)
     {
         var fields = PersonaMarkdown.Parse(new[] { line });
 
         Assert.Equal("avatars/jessica.png", fields.Avatar);
+    }
+
+    [Fact]
+    public void TheTableRowReadsTheSamePictureUnderAHeading()
+    {
+        var fields = PersonaMarkdown.Parse(new[]
+        {
+            "## Persona",
+            "| Profile picture | `avatars/jessica.png` (animated, updated 2026-09-09) |",
+        });
+
+        Assert.Equal("avatars/jessica.png", fields.Avatar);
+    }
+
+    // ...and refused without one, which is CB-145's fix stated as a picture
+    // rather than a voice.
+    [Fact]
+    public void TheTableRowPictureIsRefusedWithNoHeading()
+    {
+        var fields = PersonaMarkdown.Parse(new[]
+        {
+            "| Profile picture | `avatars/jessica.png` (animated, updated 2026-09-09) |",
+        });
+
+        Assert.Null(fields.Avatar);
     }
 
     [Fact]
@@ -330,21 +361,28 @@ public class PersonaAvatarValueTests
     // survivable while the bullet arm was the only place a picture could be
     // written, and not survivable once it normalised, because then the same
     // string means a portrait in one spelling and nothing in another.
+    //
+    // The table row's half of this moved under a heading for CB-145 — see
+    // `ATablesHeaderRowIsNotAPicture` below — because this repository's own
+    // `.claude/PERSONA.MD` names a `Profile Photo` and reading that as a
+    // picture the same way a bold field would is still the point being made
+    // here; only the bold field keeps doing it with no heading at all.
     [Theory]
     [InlineData("**Portrait:** cto.png")]
-    [InlineData("| Photo | cto.png |")]
-    public void ABoldFieldAndATableRowNameAPictureAsWellAsAVoice(string line)
+    public void ABoldFieldNamesAPictureAsWellAsAVoice(string line)
     {
         Assert.Equal("cto.png", PersonaMarkdown.Parse(new[] { line }).Avatar);
     }
 
     // A heading row is a header and not a value, which the arm decided before
-    // pictures reached it and still decides.
+    // pictures reached it and still decides. Wrapped in a persona heading for
+    // CB-145 — see the theory above's comment for why.
     [Fact]
     public void ATablesHeaderRowIsNotAPicture()
     {
         var fields = PersonaMarkdown.Parse(new[]
         {
+            "## Persona",
             "| Picture | Value |",
             "|-----|-----|",
             "| Picture | cto.png |",
@@ -394,18 +432,34 @@ public class PersonaAvatarValueTests
     // parser cannot use" — which is exactly why all twenty-four lines on the
     // mini said "unreadable — it is missing" about values that were never
     // files.
+    // The table row is not in this list — under CB-145's scope, an unheaded
+    // table row is refused before `ExplicitAvatar`/`ScopedField` ever asks
+    // whether the value reads as a path, so no rawAvatar is recorded at all,
+    // which `ATableRowRawAvatarIsKeptOnlyUnderAHeading` below asserts
+    // directly rather than leaving as an inference from this list shrinking.
     [Theory]
     [InlineData("- Avatar: data:image/webp;base64,UklGRhYAAABXRUJQ", "data:image/webp;base64,UklGRhYAAABXRUJQ")]
     [InlineData("- Profile picture: https://example.invalid/y.png", "https://example.invalid/y.png")]
     [InlineData("- Portrait: lovely", "lovely")]
     [InlineData("**Picture:** data:image/png;base64,iVBOR", "data:image/png;base64,iVBOR")]
-    [InlineData("| Photo | data:image/png;base64,iVBOR |", "data:image/png;base64,iVBOR")]
     public void ALabelledValueThatIsNotAPathIsKeptSoItCanBeReportedOn(string line, string raw)
     {
         var fields = PersonaMarkdown.Parse(new[] { line });
 
         Assert.Null(fields.Avatar);
         Assert.Equal(raw, fields.RawAvatar);
+    }
+
+    [Fact]
+    public void ATableRowRawAvatarIsKeptOnlyUnderAHeading()
+    {
+        var unheaded = PersonaMarkdown.Parse(new[] { "| Photo | data:image/png;base64,iVBOR |" });
+        Assert.Null(unheaded.Avatar);
+        Assert.Null(unheaded.RawAvatar);
+
+        var headed = PersonaMarkdown.Parse(new[] { "## Persona", "| Photo | data:image/png;base64,iVBOR |" });
+        Assert.Null(headed.Avatar);
+        Assert.Equal("data:image/png;base64,iVBOR", headed.RawAvatar);
     }
 
     [Fact]

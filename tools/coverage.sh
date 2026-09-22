@@ -66,6 +66,26 @@ dotnet test tests/IntegrationTests \
 # --coverage-output is relative to the test binary's own TestResults directory,
 # so the file is fished out of there afterwards rather than written straight to
 # $OUT.
+#
+# If either MTP suite ever ends with every test passing and then an
+# ArgumentOutOfRangeException about a path being "of an invalid length for use
+# with domain sockets", or a TimeoutException out of
+# Microsoft.CodeCoverage.Interprocess.LoggerClient.ConnectPipe, the cause is not
+# here and not upstream: something in the test process has moved TMPDIR. The
+# collector puts its IPC socket under TMPDIR, and its server end resolves that
+# path before the test assembly is loaded — so a module initializer that
+# repoints TMPDIR sends the client looking somewhere the server never bound. It
+# then fails one of two ways depending only on how long the wrong path is, which
+# is why it reads as two separate bugs. CB-172; the four TestBootstrap.cs files
+# carry the full story and CLAUDE_BUDDY_STATUS_ROOT is the seam that replaced it.
+#
+# **And do not check for the report by asking whether the file is there.** Both
+# of those failures still left a 5.3MB cobertura file on disk, freshly written,
+# well-formed, with the same line-rate each time — the collector throws on the
+# way out having already written something. So "it produced a report" was true
+# throughout the whole period this was broken, and anyone who checked that way
+# would have concluded the suite was fine. The find/exit-1 guards below catch a
+# missing file; only `merged N` catches a present one that nobody should trust.
 echo "==> tests/UiTests"
 dotnet test tests/UiTests -- \
   --coverage --coverage-output-format cobertura --coverage-output ui.cobertura.xml \

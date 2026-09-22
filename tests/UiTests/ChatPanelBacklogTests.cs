@@ -63,7 +63,7 @@ public class ChatPanelBacklogTests : IDisposable
             return Task.FromResult(false);
         }
 
-        public Task SendAsync(string text) => Task.CompletedTask;
+        public Task<ChatSendOutcome> SendAsync(string text) => Task.FromResult(ChatSendOutcome.Sent);
 
         public void Cancel()
         {

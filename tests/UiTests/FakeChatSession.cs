@@ -15,11 +15,18 @@ namespace ClaudeBuddy.Tests;
 //     sorting of its own.
 internal sealed class FakeChatSession :
     IRemoteChatSession, IRemoteChatImages, IRemoteChatSlashCommands,
-    IRemoteChatComposer, IRemoteChatElsewhere, IRemoteChatFetchWait
+    IRemoteChatComposer, IRemoteChatElsewhere, IRemoteChatFetchWait, IRemoteChatRoom,
+    IRemoteChatReadOnly
 {
     public string SessionId { get; init; } = "fake-session";
     public string DisplayName { get; init; } = "Fake Session";
     public RemoteChatState State { get; set; } = RemoteChatState.Connected;
+
+    // False by default, the same as any ordinary one-to-one session that
+    // doesn't implement IRemoteChatRoom at all — this fake implements it
+    // unconditionally only so a test can flip the property, per CB-36's own
+    // comment on why it is a property rather than a bare marker.
+    public bool IsRoom { get; set; }
 
     // Empty by default, the same as a session with nothing to say about
     // IRemoteChatSlashCommands. Settable rather than init-only, and after
@@ -36,6 +43,18 @@ internal sealed class FakeChatSession :
     public string ComposerHint { get; set; } = "Message…";
 
     public bool CanOpenElsewhere { get; set; }
+
+    // False by default, so every test that predates CB-164 still gets an
+    // ordinary panel with a composer in it. Implemented unconditionally and
+    // settable for the reason IsRoom above is: one fake has to be able to drive
+    // both sides of the panel's decision, which a bare marker interface could
+    // not express.
+    public bool IsReadOnly { get; set; }
+
+    // Null by default, which is the "read-only with nowhere to go" case — the
+    // panel then shows the sentence and no link. A test that wants the link
+    // sets it.
+    public string? ReplyUrl { get; set; }
 
     // Counted rather than performed. The real one opens or focuses a real
     // window, which is the half this suite must never execute — what is being
@@ -56,12 +75,22 @@ internal sealed class FakeChatSession :
     // reply.
     public List<string> SentTexts { get; } = new();
 
+    // What SendAsync (and SendWithImagesAsync below) hand back — CB-35's
+    // whole reason for existing. Settable per test rather than a
+    // constructor argument: most of this suite predates the ticket and
+    // wants the ordinary "it went through" answer, and defaulting to Sent
+    // is what keeps every one of those tests passing unchanged. A test of
+    // the retain-on-failure behaviour sets this to Failed before calling
+    // Send() on the panel, the same way ComposerHint is set for a
+    // can't-type panel.
+    public ChatSendOutcome SendOutcome { get; set; } = ChatSendOutcome.Sent;
+
     public FakeChatSession(IEnumerable<ChatTurn>? seedHistory = null)
     {
         _history = seedHistory?.ToList() ?? new List<ChatTurn>();
     }
 
-    public Task SendAsync(string text)
+    public Task<ChatSendOutcome> SendAsync(string text)
     {
         SentTexts.Add(text);
 
@@ -69,7 +98,7 @@ internal sealed class FakeChatSession :
         _history.Add(turn);
         TurnAdded?.Invoke(turn);
 
-        return Task.CompletedTask;
+        return Task.FromResult(SendOutcome);
     }
 
     public void Cancel()
@@ -82,7 +111,7 @@ internal sealed class FakeChatSession :
     // least one pending picture (see IRemoteChatImages).
     public List<(string Text, List<string> ImagePaths)> SentWithImages { get; } = new();
 
-    public Task SendWithImagesAsync(string text, IReadOnlyList<string> imagePaths)
+    public Task<ChatSendOutcome> SendWithImagesAsync(string text, IReadOnlyList<string> imagePaths)
     {
         SentWithImages.Add((text, imagePaths.ToList()));
 
@@ -90,7 +119,7 @@ internal sealed class FakeChatSession :
         _history.Add(turn);
         TurnAdded?.Invoke(turn);
 
-        return Task.CompletedTask;
+        return Task.FromResult(SendOutcome);
     }
 
     // Test helpers, not part of the interface: raise the two events the

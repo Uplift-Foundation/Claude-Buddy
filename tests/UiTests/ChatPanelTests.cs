@@ -108,6 +108,20 @@ public class ChatPanelTests : IDisposable
     private static Border BubbleBorderOf(Avalonia.Controls.Control row) =>
         row.GetVisualDescendants().OfType<Border>().First();
 
+    // CB-36: the whole speaker row — avatar/initials chip and name — is one
+    // StackPanel bound IsVisible="{Binding HasSpeaker}" (see ChatPanel.axaml).
+    // Matched by shape (horizontal, Spacing="5") rather than by name, since
+    // the template gives it none; nothing else in a turn's template is a
+    // horizontal StackPanel with that spacing. IsVisible is read directly
+    // rather than inferred from Bounds, since a control bound false keeps
+    // its place in the visual tree GetVisualDescendants walks — only its
+    // arrange/render is skipped.
+    private static bool HasVisibleSpeakerChip(Avalonia.Controls.Control row) =>
+        row.GetVisualDescendants().OfType<StackPanel>().Any(sp =>
+            sp.Orientation == Avalonia.Layout.Orientation.Horizontal
+            && sp.Spacing == 5
+            && sp.IsVisible);
+
     // A resize handle's centre, in panel coordinates — used as the position
     // carried by Drag's synthesized pointer events, not as a hit-test
     // target (see Drag's own comment for why hit-testing isn't used here).
@@ -264,6 +278,34 @@ public class ChatPanelTests : IDisposable
         Assert.Contains("Nova", texts);
     }
 
+    // CB-36's other half, and the one the ticket says must not change: a
+    // one-to-one session's assistant turn with no Speaker of its own is
+    // still the session's one agent, and the panel still says so with a
+    // chip. This fake is not a room (IsRoom defaults false), so the fallback
+    // in ChatPanel.TurnView.SpeakerName applies exactly as it always has —
+    // only a room turns it off.
+    [AvaloniaFact]
+    public void TurnWithNoSpeakerInATerminalSessionStillWearsTheSoleAgentsChip()
+    {
+        var orb = NewOrb();
+        var fake = NewFake(new[]
+        {
+            new ChatTurn { Role = ChatRole.Assistant, Text = "hello back" },
+        });
+
+        ChatPanel.OpenFor(orb, fake);
+        Flush();
+
+        var panel = ChatPanelTestAccess.Instance!;
+        var row = RenderedRows(panel)[0];
+
+        // "Fake Session" is this fake's DisplayName, which is what
+        // ChatSpeaker.Resolve falls back to with no persona identity behind
+        // the session id — the same answer a real terminal session's title
+        // gives once its first hook write lands.
+        Assert.True(HasVisibleSpeakerChip(row));
+    }
+
     // This brief expected HeadlessWindowExtensions.KeyTextInput/KeyPress (the
     // documented hardware-simulation surface — see the class comment on
     // OrbFlyoutTests, where they work fine) to drive this too. They don't,
@@ -326,6 +368,90 @@ public class ChatPanelTests : IDisposable
         Flush();
 
         Assert.Equal(new[] { "hello from a test" }, fake.SentTexts);
+        Assert.Equal("", input.Text);
+    }
+
+    // CB-35: a session that cannot send at all (replying switched off, no
+    // pane, nobody in the room — FakeChatSession.SendOutcome stands in for
+    // all of them here) used to lose the sentence anyway, because Send()
+    // cleared the box before knowing whether anything happened. The fix is
+    // in ChatPanel.SendAndClearOnSuccessAsync: the box is only cleared once
+    // the send has actually reported success.
+    [AvaloniaFact]
+    public void AFailedSendLeavesTheTypedTextInTheComposer()
+    {
+        var orb = NewOrb();
+        var fake = NewFake();
+        fake.SendOutcome = ChatSendOutcome.Failed;
+
+        ChatPanel.OpenFor(orb, fake);
+        Flush();
+
+        var panel = ChatPanelTestAccess.Instance!;
+        var input = panel.FindControl<TextBox>("Input")!;
+
+        input.Focus();
+        Flush();
+
+        input.RaiseEvent(new Avalonia.Input.TextInputEventArgs
+        {
+            RoutedEvent = Avalonia.Input.InputElement.TextInputEvent,
+            Text = "replying is off"
+        });
+        Flush();
+
+        input.RaiseEvent(new Avalonia.Input.KeyEventArgs
+        {
+            RoutedEvent = Avalonia.Input.InputElement.KeyDownEvent,
+            Key = Key.Enter
+        });
+        Flush();
+
+        // The session was still asked to send it — the panel does not
+        // second-guess whether a send is worth attempting, only what to do
+        // with the box once it knows the answer.
+        Assert.Equal(new[] { "replying is off" }, fake.SentTexts);
+
+        // ...and the sentence is still there to edit or retry, rather than
+        // gone with only a note elsewhere explaining why.
+        Assert.Equal("replying is off", input.Text);
+    }
+
+    // The other half of the same fix, stated as its own test rather than left
+    // to be inferred from the first: a session that *can* send still gets its
+    // box cleared, so this is a genuine on/off distinction driven by the
+    // return value and not e.g. the box being left alone unconditionally now.
+    [AvaloniaFact]
+    public void ASuccessfulSendStillClearsTheComposer()
+    {
+        var orb = NewOrb();
+        var fake = NewFake();
+        fake.SendOutcome = ChatSendOutcome.Sent;
+
+        ChatPanel.OpenFor(orb, fake);
+        Flush();
+
+        var panel = ChatPanelTestAccess.Instance!;
+        var input = panel.FindControl<TextBox>("Input")!;
+
+        input.Focus();
+        Flush();
+
+        input.RaiseEvent(new Avalonia.Input.TextInputEventArgs
+        {
+            RoutedEvent = Avalonia.Input.InputElement.TextInputEvent,
+            Text = "this will go through"
+        });
+        Flush();
+
+        input.RaiseEvent(new Avalonia.Input.KeyEventArgs
+        {
+            RoutedEvent = Avalonia.Input.InputElement.KeyDownEvent,
+            Key = Key.Enter
+        });
+        Flush();
+
+        Assert.Equal(new[] { "this will go through" }, fake.SentTexts);
         Assert.Equal("", input.Text);
     }
 
@@ -908,6 +1034,69 @@ public class ChatPanelTests : IDisposable
         File.Delete(path);
     }
 
+    // CB-35's fix applies just the same on this entry point: a failed
+    // SendWithImagesAsync must not lose the caption either. The attachment
+    // strip itself still clears regardless of outcome — see
+    // ChatPanel.SendAndClearOnSuccessAsync's own comment on why pictures are
+    // not held back the way text is — but the caption is exactly the thing a
+    // failed text-only send already keeps, and the image path should be no
+    // different.
+    [AvaloniaFact]
+    public async Task AFailedImageSendRetainsTheCaptionButStillClearsTheAttachment()
+    {
+        var orb = NewOrb();
+        var fake = NewFake();
+        fake.SendOutcome = ChatSendOutcome.Failed;
+
+        ChatPanel.OpenFor(orb, fake);
+        Flush();
+
+        var panel = ChatPanelTestAccess.Instance!;
+        var input = panel.FindControl<TextBox>("Input")!;
+        var attachments = panel.FindControl<ItemsControl>("Attachments")!;
+
+        input.Focus();
+        Flush();
+
+        var bitmap = new WriteableBitmap(new PixelSize(4, 4), new Vector(96, 96));
+        await panel.Clipboard!.SetBitmapAsync(bitmap);
+
+        var gesture = TextBox.PasteGesture!;
+        input.RaiseEvent(new KeyEventArgs
+        {
+            RoutedEvent = InputElement.KeyDownEvent,
+            Key = gesture.Key,
+            KeyModifiers = gesture.KeyModifiers
+        });
+        await FlushAsync();
+
+        input.RaiseEvent(new TextInputEventArgs
+        {
+            RoutedEvent = InputElement.TextInputEvent,
+            Text = "a screenshot"
+        });
+        Flush();
+
+        input.RaiseEvent(new KeyEventArgs
+        {
+            RoutedEvent = InputElement.KeyDownEvent,
+            Key = Key.Enter
+        });
+        Flush();
+
+        var sent = Assert.Single(fake.SentWithImages);
+        Assert.Equal("a screenshot", sent.Text);
+        var path = Assert.Single(sent.ImagePaths);
+
+        // The strip is gone either way — the picture is already on disk, so
+        // nothing about the failure needs it kept — but the caption survives,
+        // exactly as a failed plain-text send's does.
+        Assert.False(attachments.IsVisible);
+        Assert.Equal("a screenshot", input.Text);
+
+        File.Delete(path);
+    }
+
     // The same paste against a session that does *not* implement
     // IRemoteChatImages — a gateway room, today — must not be swallowed:
     // OnInputKeyDown only intercepts the gesture when the bound session has
@@ -1021,12 +1210,12 @@ public class ChatPanelTests : IDisposable
         public event Action<ChatTurn>? TurnUpdated;
         public event Action<RemoteChatState>? StateChanged;
 
-        public Task SendAsync(string text)
+        public Task<ChatSendOutcome> SendAsync(string text)
         {
             var turn = new ChatTurn { Role = ChatRole.User, Text = text };
             _history.Add(turn);
             TurnAdded?.Invoke(turn);
-            return Task.CompletedTask;
+            return Task.FromResult(ChatSendOutcome.Sent);
         }
 
         public void Cancel()

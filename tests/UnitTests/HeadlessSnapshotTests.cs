@@ -223,10 +223,11 @@ public class HeadlessSnapshotTests
     // TranscriptHandoffTests, which is where the full fixtures and the reasoning
     // about each field live; what matters here is only that the tail reads as
     // handed off, not why.
-    private const string BackgroundingRow =
+    private static string BackgroundingRow(string sessionId) =>
         @"{""type"":""system"",""subtype"":""informational"","
       + @"""content"":""Backgrounding after the current tool finishes…"","
-      + @"""timestamp"":""2026-08-28T17:53:15.295Z"",""level"":""warning""}";
+      + @"""timestamp"":""2026-08-28T17:53:15.295Z"",""level"":""warning"","
+      + "\"sessionId\":\"" + sessionId + "\"}";
 
     private const string ConversationRow =
         @"{""type"":""assistant"",""message"":{""role"":""assistant"","
@@ -267,7 +268,7 @@ public class HeadlessSnapshotTests
 
         Func<bool> handedToBackground = () =>
             SessionPresence.CouldBeABackgroundedHusk(status, phase)
-            && TranscriptHandoff.EndsBackgrounded(status.TranscriptPath);
+            && TranscriptHandoff.EndsBackgrounded(status.TranscriptPath, sessionId);
 
         return SessionManager.JudgeLiveness(
             sessionId, status, written, now, SessionManager.StaleAfter,
@@ -298,7 +299,7 @@ public class HeadlessSnapshotTests
         var dir = NewStatusDir();
         try
         {
-            var transcript = WriteTranscript(dir, ConversationRow, BackgroundingRow);
+            var transcript = WriteTranscript(dir, ConversationRow, BackgroundingRow("husk1"));
             var status = Husk(transcript);
             WriteStatus(dir, "husk1", status);
 
@@ -330,7 +331,7 @@ public class HeadlessSnapshotTests
         var dir = NewStatusDir();
         try
         {
-            var transcript = WriteTranscript(dir, BackgroundingRow, ConversationRow);
+            var transcript = WriteTranscript(dir, BackgroundingRow("husk2"), ConversationRow);
             var status = Husk(transcript);
             WriteStatus(dir, "husk2", status);
 

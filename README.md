@@ -818,6 +818,19 @@ An orb goes away when any of six things happens.
    the fork (whose transcript inherits the marker) from reading itself as the
    leftover.
 
+   **Such a session also cannot be ended from its orb, and that is deliberate.**
+   The leftover is hidden, not gone, and a transcript that could not be read
+   leaves it on screen — so it is still possible to right-click one. Its process
+   is the window you are reading the background job's conversation in *and* the
+   ancestor of the daemon hosting every other job on the machine, which is both
+   of the things "End this session" promises never to touch. Right-clicking it
+   therefore gets a disabled row naming how many background jobs are at stake
+   instead of the ordinary one. On macOS ending it used to kill only that
+   window, leaving the job running with its transcript intact; on Windows the
+   same gesture kills the whole process tree, so it would have taken the daemon
+   and every background job with it. Close the terminal if you want the window
+   gone, or end the job from the job's own orb.
+
 **The app also deletes status files it is sure are finished with.** Until
 recently nothing did, apart from the `SessionEnd` hook — so a Ctrl+C'd session's
 file stayed in the temp directory for good, and a finished background job's
@@ -986,6 +999,32 @@ would be worse than no button. That parsing has a test suite of its own
 (`dotnet run --project tests/TranscriptTests`) whose fixtures are transcribed
 from real captures.
 
+## Global hotkeys
+
+**Ctrl+Alt+H** hides or shows every orb, from anywhere — the same toggle as
+the tray menu's "Show orbs" checkbox, reachable without finding the menu bar
+icon first. It works whether or not Claude Buddy has focus: macOS registers it
+through Carbon's `RegisterEventHotKey`, which asks the window server for one
+exact key combination rather than a feed of every keystroke, so — unlike an
+`NSEvent` global monitor or a `CGEventTap` — it needs no Accessibility or
+Input Monitoring permission. Windows registers the same combination with
+`RegisterHotKey` against a hidden window created for the purpose.
+
+Override the combination in `settings.json`:
+
+```json
+{ "toggleOrbsHotkey": "Ctrl+Shift+H" }
+```
+
+Modifiers are `Ctrl`/`Control`, `Alt`/`Option`, `Shift`, and `Cmd`/`Command`/
+`Win`/`Windows`/`Super`/`Meta` (all four spellings mean the same physical key,
+whichever platform you're on), joined with `+` and ending in a letter or digit
+key. An unparseable value falls back to the built-in default rather than
+leaving the hotkey unregistered, so a typo costs you the override, not the
+feature. There is no settings-window control for this yet — only the one
+hotkey exists so far, and this file's whole point is that the registry
+(`HotkeyRegistry.cs`) has room for more without needing one added first.
+
 ## Personas from CLAUDE.md
 
 An orb is normally named for whatever Claude Code decided the conversation was
@@ -1007,15 +1046,21 @@ drawn exactly as it was before.
 
 A bullet, with or without a bold label, carries all three fields, and so does
 YAML front matter — labels are case-insensitive, and the first valid value for
-each field wins. A standalone bold field (`**Name:** Leota`) and a two-cell
-table row carry all three as well, except that a name is read from either only
-underneath a persona heading — described below — because `| Name | string |` in
-an ordinary schema table must not rename an orb. `Avatar`, `Profile
-Picture`, `Profile Pic`, `Profile Image`, `Profile Photo`, `Picture`,
-`Portrait`, `Photo`, `Image` and `Image Animated` (or `image_animated:` in
-front matter) all name the picture; `Voice`, `Voice Name`, `Speech Voice` and
-`TTS Voice` all name the voice; `Name` and `Slug` both name the agent, with
-`Name` winning when a file states both.
+each field wins. A standalone bold field (`**Name:** Leota`) carries all three
+as well, except that a name is read from it only underneath a persona heading
+— described below — because `| Name | string |` in an ordinary schema table
+must not rename an orb, and `**Name**: the value passed to the constructor` is
+exactly as realistic a sentence to write in ordinary prose. A two-cell table
+row scopes its name **and its voice and picture** to a persona heading the
+same way, which the bold field's voice and picture deliberately do not: a real
+IDENTITY.md writes `**Voice:** af_bella (Kokoro TTS)` as a bare bold field with
+no heading above it, so scoping that arm would stop it speaking, while no
+shipped profile has been found writing a voice or a picture as a table row at
+all. `Avatar`, `Profile Picture`, `Profile Pic`, `Profile Image`, `Profile
+Photo`, `Picture`, `Portrait`, `Photo`, `Image` and `Image Animated` (or
+`image_animated:` in front matter) all name the picture; `Voice`, `Voice
+Name`, `Speech Voice` and `TTS Voice` all name the voice; `Name` and `Slug`
+both name the agent, with `Name` winning when a file states both.
 
 **Front matter carries all three fields, and its quotes are YAML's rather than
 part of the value.** A generator that writes
@@ -1763,6 +1808,20 @@ machine is perfectly reachable while Claude Buddy cannot open a socket to it.
 Check System Settings → Privacy & Security → Local Network. `docs/` and CB-38
 have the full diagnosis.
 
+## Claude Code in the cloud (off by default)
+
+The section above is about your Claude Code sessions on machines you own. This one is about the ones that are not on a machine at all — Claude Code sessions running in Anthropic's cloud, which have no process here, no terminal, no working directory and no transcript file on this disk. Turn it on in Settings → *Claude Code in the cloud*, and each one gets an orb like everything else, wearing a ☁ badge that says it is not local.
+
+There is nothing to sign in to. It reads the login the Claude Code CLI already stores on this machine, which means that on macOS the read raises a Keychain prompt naming an item you have probably never looked at. **Choose "Always Allow"**, so you are not asked every time — though Claude Code refreshing its own login can bring the prompt back, so do not be surprised to see it again. Declining it is the one way to make this feature quietly do nothing: the switch stays on, no orb ever appears, and nothing else on screen says why. The status line under the switch is where the real answer goes, so read that first if the orbs do not turn up.
+
+**You can read a cloud session in Claude Buddy's chat panel** — hover the orb and press the keyboard button, the same way you would for any session whose conversation lives somewhere else. It is the same panel every other orb opens — the transcript comes from the session's own events, so it is the same conversation you would see in the browser. What you cannot do is reply there. A cloud session has no input route at any address, so the panel shows no message box at all rather than one that accepts a paragraph and then admits it had nowhere to send it; in its place is a line saying so and a link that opens that exact session in your browser, which is where replying works.
+
+**Clicking a cloud orb opens the session in your browser** for the same reason. Everything else an orb offers assumes a terminal to jump to or a conversation this app can carry, and a cloud session has neither, so the right-click menu says as much rather than offering a reset that would not reach anything: its state belongs to Anthropic's cloud and not to this machine.
+
+Two things a cloud orb draws that a local one does not. It wears a ring showing how full its context window is, in the same green/amber/red the usage orbs use, so a session close to the end of its window is visible before you open it — and no ring at all when nothing reported a number, which is not the same as a session at zero. And its hover text is the roster's own words for what it is doing, with the last thing it was seen to do beside them, in the slot a local orb spends on its directory.
+
+Like every other source here it is read-only, and off means off: with the switch down the app asks the OS for no credential and opens no connection.
+
 ## 1. Install it
 
 Either download an installer or build from source — both are fully supported,
@@ -1790,6 +1849,22 @@ offers to do step 2 and to start the app at sign-in. It is **not** code-signed
 yet, so SmartScreen shows a warning — choose *More info → Run anyway*.
 Uninstall through Apps & Features; that also removes the hook entries from
 `settings.json`.
+
+**Crash keep-alive.** If **Serve on launch** (Settings → Remote Control) is
+turned on, both installers also register a way for the OS to bring Claude
+Buddy back after a crash — a launchd `LaunchAgent` on macOS, a Scheduled Task
+triggered off Windows' own Application Error event on Windows. Neither is on
+by default: it only registers for a machine already told to keep serving,
+because a keep-alive that came back after every exit — including a deliberate
+Quit — would be worse than the crash it exists to survive. Both are built to
+restart the app only after it actually dies (a nonzero exit or crash), never
+after a normal Quit, and both come out again if you turn that setting back off
+and re-run the installer (macOS: re-run **Install Hooks.command**; Windows:
+re-run the setup), or if you uninstall outright. See `tools/install-hooks.sh`
+and `tools/ClaudeBuddy.iss` for the detail — this is a floor under crashes,
+not a fix for what a restart itself costs: it drops and re-registers both of
+the app's Remote Control relays, so the other end of a pairing sees an
+`HTTP 409` until its next poll.
 
 Either way, **don't skip step 2**. Orbs come from a Claude Code hook, and until
 it's wired up the app runs correctly and displays nothing, which looks broken
@@ -2382,6 +2457,8 @@ outside the app (a launchd agent, an installer replacing the bundle) stopped it.
   than twice. A recycled pid reads as alive, which errs toward keeping an orb
   rather than dropping a live session's, and the timer still catches that unless
   the lifetime is Forever.
+
+  "The daemon does not vouch for" is every ClaudeCode session reading `NotAJob` or `Unknown`, and on a machine with nothing background-ish running that is every ordinary terminal session — the husk test runs, and pays its `FileInfo` stat, for all of them every scan, not only for a real husk. That widened from CB-20's own change and went unmeasured until CB-22's `HuskScanCostTests`: 15 live sessions with transcripts named, one mid-generation so its cached answer can never be reused, scanned 300 times — 1.1664-1.1665ms/scan, against 1.0211-1.0236ms/scan for the same fifteen with no transcript path at all, so roughly 0.14-0.15ms/scan is this check. Negligible against the two-second poll interval, so it stays ungated by status-file state rather than narrowed further.
 - **Stacking layout and staleness**: `SessionManager.cs` has the stacking
   math (`ReflowPositions()`, which steps over orbs the user has dragged —
   those live in `orbPositions` in `settings.json`, keyed by the session's

@@ -75,6 +75,14 @@ public class OpenClawDeliveredPictureTests
         Assert.Null(OpenClawSessions.DeliveredPictureName(Mirror, "my holiday.png"));
     }
 
+    [Theory]
+    [InlineData("a\tb.png")]
+    [InlineData("a\rb.png")]
+    public void AControlCharacterInAFilenameIsNotAccepted(string name)
+    {
+        Assert.Null(OpenClawSessions.DeliveredPictureName(Mirror, name));
+    }
+
     // The newline half of that same rejection, which nothing reached before:
     // the trimming case above hands the check a string whose newline Trim has
     // already taken off, so the arm was never actually asked a question.

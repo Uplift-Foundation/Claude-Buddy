@@ -154,15 +154,54 @@ namespace ClaudeBuddy
     //     list with no heading anywhere in it, and profile-gen writes YAML in
     //     both of its templates — so scoping either would break every shipped
     //     profile, while no shipped profile names an agent with a bold field
-    //     or a table row at all. Voice and picture stay unscoped on these two
-    //     arms for exactly that reason in reverse, and the evidence is named
-    //     rather than asserted because it has been doubted once already: the
-    //     fixture in
+    //     or a table row at all.
+    //
+    //   * **The scope guard generalizes to any field the table row names, but
+    //     not to the bold field** (CB-145). CB-142 scoped Name and left Voice
+    //     and picture alone on both arms, on the strength of one sentence
+    //     asserting that real profiles write those unscoped — asserted, not
+    //     measured, which is exactly the shape of claim CLAUDE.md warns costs
+    //     hours. CB-145 measured it: `| Voice | string |`, with no heading
+    //     anywhere in the file, resolved to `voice = "string"`, the same
+    //     defect CB-142 fixed for Name, one field over. `VoiceValue("string")`
+    //     accepts it for the same reason `NameValue("string")` does — one
+    //     short well-formed token is exactly what the bound is for, and a
+    //     table row in a schema-documentation table (`| Field | Type |`) looks
+    //     identical to a table row of persona attributes without a heading to
+    //     tell them apart.
+    //
+    //     So the table row now asks the same question for Voice and Avatar
+    //     that it already asked for Name — `ScopedField` below is one
+    //     function taking the field kind as a parameter, rather than a second
+    //     copy of `ScopedName`'s body with `Voice` typed over `Name`, because
+    //     that second copy is exactly how this defect reached a third field:
+    //     whichever field is added to the table row next inherits the guard
+    //     on day one instead of waiting for its own ticket.
+    //
+    //     **The bold field is deliberately not scoped for Voice or Avatar,
+    //     and that is measured too, not assumed in the other direction this
+    //     time.** The evidence is named rather than asserted because the
+    //     first draft of this ticket got it backwards and had to be
+    //     corrected: the fixture in
     //     `OpenClawWorkspaceIdentityIntegrationTests.ARedactedProfileKokoroVoiceReachesTheMatchingNeuralOption`
     //     is a **redacted real** `IDENTITY.md` whose voice is a bare
-    //     `**Voice:** af_bella (Kokoro TTS)` — not a bullet — under a title
-    //     that is not a persona heading. Scoping the bold arm's voice would
-    //     stop that profile speaking. CB-142 moved a name and nothing else.
+    //     `**Voice:** af_bella (Kokoro TTS)` — not a bullet, not a table row —
+    //     under a title that is not a persona heading. Scoping the bold arm's
+    //     Voice would stop that profile speaking. No such fixture exists for
+    //     a bold-field or table-row Picture, so scoping the table row's
+    //     Avatar is free by the same absence-of-evidence that makes scoping
+    //     its Voice free; the bold field's Avatar is left unscoped alongside
+    //     its Voice rather than split from it on no evidence either way — a
+    //     narrower fix here would be exactly the same mistake this section
+    //     exists to name, aimed at a different field.
+    //
+    //     A bold-field `**Voice:** string` therefore still resolves outside
+    //     any bound this file states today. That is a named gap, not a
+    //     silent one: refusing it needs a value bound that tells a documented
+    //     type name from a real voice identifier without a blocklist, which
+    //     nobody has designed, and inventing one under this ticket would be
+    //     building the same undesigned fix CB-142's own author warned against
+    //     for Name. See CB-145's history for the full argument.
     //
     //     CB-142 first gave this arm alone a fence check, and CB-144
     //     replaced it with one gate covering every arm. The narrow version
@@ -399,42 +438,74 @@ namespace ClaudeBuddy
                 return true;
             }
 
-            // A name written as a standalone bold field or a two-cell table
-            // row, which the two arms below share (CB-142). One function
-            // rather than two copies, for the reason `ExplicitAvatar` above is
-            // one function: the arms agree about every part of this — the
-            // label list, the bound, first-statement-wins — and two copies of
-            // an agreement is one copy that can drift.
+            // A field named by a standalone bold line or a two-cell table
+            // row, but only inside a persona section. CB-142 wrote this for
+            // Name alone, under the name `ScopedName`; CB-145 generalizes it
+            // to take the field kind as a parameter, because CB-142's whole
+            // argument was never really about Name specifically — it was that
+            // a short, well-formed token passes that field's own bound
+            // regardless of which field is asking, so `| Voice | string |`
+            // turned out to be exactly as innocent a token as
+            // `| Name | string |` was. See the header comment's CB-145
+            // section for why only the table-row arm calls this for Voice and
+            // Avatar, and why the bold-field arm still does not.
             //
             // Every guard is asked here rather than at the call sites so that
-            // neither arm can acquire one and not the other. `sectionLevel`
-            // first because it is the cheaper question and the one doing the
-            // work: `NameValue` accepts the word "string", so a schema table's
-            // `| Name | string |` is refused by scope alone.
+            // neither field nor arm can acquire one and not the other.
+            // `sectionLevel` is asked first because it is the cheaper question
+            // and the one doing the real work, exactly as it was for Name.
             //
-            // **There is no `inFence` check here, and there used to be.**
-            // CB-142 added one, because a `## Persona` section whose fenced
-            // example reads `| Name | Aurora |` must not rename an orb. It was
-            // the right rule in the wrong place: a *new* arm guarding itself
-            // while every older arm leaked, which CB-144 then measured as four
-            // separate holes including the bullet arm this function never
-            // touches. The rule now lives once, above, as `if (inFence &&
-            // !inMarkedYaml) continue;`, and every arm gets it. Do not
-            // reintroduce a copy here — one rule in one place is the whole
-            // point, and a second copy is the thing that drifts.
+            // **There is no `inFence` check here, and there used to be one on
+            // the Name-only version.** CB-142 added one, because a
+            // `## Persona` section whose fenced example reads
+            // `| Name | Aurora |` must not rename an orb. It was the right
+            // rule in the wrong place: a *new* arm guarding itself while every
+            // older arm leaked, which CB-144 then measured as four separate
+            // holes including the bullet arm this function never touches. The
+            // rule now lives once, above, as `if (inFence && !inMarkedYaml)
+            // continue;`, and every arm gets it. Do not reintroduce a copy
+            // here — one rule in one place is the whole point, and a second
+            // copy is the thing that drifts.
             //
-            // Returns whether the line was *claimed*, which unlike
-            // `ExplicitAvatar` means "a name came out of it". A recognised
-            // label whose value fails the bound falls through to the arms
-            // below instead, exactly as the front-matter arm lets it — nothing
-            // down there recognises `Name` as a voice or a picture, so the
-            // line ends up read by nobody, which is what a refusal means.
-            bool ScopedName(string label, string value)
+            // Returns whether the line was *claimed*. A recognised label
+            // whose value fails the bound falls through to whatever the
+            // caller does next, exactly as `ExplicitAvatar` lets a rejected
+            // picture fall through — nothing downstream of the table-row arm
+            // recognises `Voice` as a name or `Name` as a picture, so a line
+            // that fails here ends up read by nobody, which is what a refusal
+            // means.
+            bool ScopedField(ProseKind kind, string label, string value)
             {
-                if (sectionLevel <= 0 || !NameLabel(label)) return false;
-                if (NameValue(value) is not { } stated) return false;
+                if (sectionLevel <= 0) return false;
 
-                name ??= stated;
+                if (kind is ProseKind.Name)
+                {
+                    if (!NameLabel(label) || NameValue(value) is not { } stated) return false;
+
+                    name ??= stated;
+                    return true;
+                }
+
+                if (kind is ProseKind.Voice)
+                {
+                    if (!VoiceLabel(label)) return false;
+                    var (statedVoice, statedRate) = VoiceValue(value);
+                    if (statedVoice is null) return false;
+
+                    voice ??= statedVoice;
+                    rate ??= statedRate;
+                    return true;
+                }
+
+                // ProseKind.Avatar. Same claim semantics as ExplicitAvatar: a
+                // recognised label with a valid, non-placeholder value is
+                // claimed whether or not it normalizes to a picture, so
+                // rawAvatar still has something to report a picture nobody
+                // could resolve from.
+                if (!AvatarLabel(label) || !Valid(value)) return false;
+
+                rawAvatar ??= value;
+                avatar ??= ExplicitAvatarValue(value);
                 return true;
             }
 
@@ -639,25 +710,26 @@ namespace ClaudeBuddy
                 if (TableField(trimmed, out var tableLabel, out var tableValue)
                     && (index + 1 >= source.Count || !TableSeparator(source[index + 1])))
                 {
-                    // Asked before the voice and picture arms purely for
-                    // symmetry with the front-matter arm above; the three
-                    // label lists are disjoint, so the order decides nothing.
-                    if (ScopedName(tableLabel, tableValue)) continue;
-
-                    if (VoiceLabel(tableLabel) && VoiceValue(tableValue) is var (tableVoice, tableRate) && tableVoice is not null)
-                    {
-                        voice ??= tableVoice;
-                        rate ??= tableRate;
-                        continue;
-                    }
-
-                    if (ExplicitAvatar(tableLabel, tableValue)) continue;
+                    // All three fields go through ScopedField here (CB-145) —
+                    // see the header comment's CB-145 section for why the
+                    // table row scopes Voice and Avatar and the bold field
+                    // below deliberately does not. Order is still symmetry
+                    // with the front-matter arm above rather than a decision:
+                    // the three label lists are disjoint.
+                    if (ScopedField(ProseKind.Name, tableLabel, tableValue)) continue;
+                    if (ScopedField(ProseKind.Voice, tableLabel, tableValue)) continue;
+                    if (ScopedField(ProseKind.Avatar, tableLabel, tableValue)) continue;
                 }
 
                 if (BoldField(trimmed, out var boldLabel, out var boldValue))
                 {
-                    if (ScopedName(boldLabel, boldValue)) continue;
+                    if (ScopedField(ProseKind.Name, boldLabel, boldValue)) continue;
 
+                    // Voice and Avatar are deliberately unscoped here — see
+                    // the header comment's CB-145 section. A real redacted
+                    // IDENTITY.md writes its Voice as exactly this shape with
+                    // no heading above it, so scoping it would stop that
+                    // profile speaking.
                     if (VoiceLabel(boldLabel) && VoiceValue(boldValue) is var (boldVoice, boldRate) && boldVoice is not null)
                     {
                         voice ??= boldVoice;

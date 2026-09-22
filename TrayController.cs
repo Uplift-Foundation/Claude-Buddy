@@ -309,8 +309,11 @@ namespace ClaudeBuddy
         // host that is not a desktop app — stays measured, and is the only part a
         // headless run can reach anyway.
         [ExcludeFromCodeCoverage]
-        private static void Shutdown(IClassicDesktopStyleApplicationLifetime desktop) =>
+        private static void Shutdown(IClassicDesktopStyleApplicationLifetime desktop)
+        {
+            GlobalHotkeys.Stop();
             desktop.Shutdown();
+        }
 
         // Excluded from coverage: SettingsWindow.Toggle puts the app in the Dock
         // via MacOSActivation.SetRegular, shows a window and takes it key, then

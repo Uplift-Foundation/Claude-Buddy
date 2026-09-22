@@ -91,6 +91,8 @@ namespace ClaudeBuddy
             // duration of the click.
             Task.Run(() =>
             {
+                if (!HasVerifiedTmuxPane(status)) return;
+
                 // detached is what the tmux attempt learned on its way past: the
                 // pane is alive, it has been selected, and no client is attached
                 // to that server anywhere. Kept rather than re-asked, because
@@ -357,6 +359,8 @@ namespace ClaudeBuddy
 
             return Task.Run(async () =>
             {
+                if (!HasVerifiedTmuxPane(status)) return;
+
                 // Reuses FocusCore as-is rather than a bespoke synchronous
                 // variant: FocusCore's own osascript calls are fire-and-forget
                 // (see RunOsaScript), so there's no return value to await
@@ -908,8 +912,7 @@ namespace ClaudeBuddy
 
             if (OperatingSystem.IsWindows())
             {
-                FocusWindows(status);
-                return true;
+                return FocusWindows(status);
             }
 
             if (!OperatingSystem.IsMacOS()) return false;
@@ -983,6 +986,51 @@ namespace ClaudeBuddy
         }
 
         // --- tmux ---
+
+        // A status file remembers a pane id, but tmux reuses that id after a
+        // conversation exits. Do not focus or type into a pane unless its live
+        // Claude process names the session whose orb was clicked. Missing
+        // identity is retained for older or synthetic callers; a real status
+        // scan always supplies it from the filename.
+        private static bool HasVerifiedTmuxPane(SessionStatus status)
+        {
+            if (string.IsNullOrEmpty(status.TmuxPane) || string.IsNullOrEmpty(status.SessionId)) return true;
+            if (!OperatingSystem.IsMacOS()) return true;
+
+            var owner = TmuxPaneOwner(status);
+            return TmuxPaneOwnershipRules.PermitsAction(status.SessionId, owner);
+        }
+
+        // Exposed for the scan's reconciliation pass. Null is intentionally not
+        // a negative answer: tmux or ps can fail while a session is otherwise
+        // healthy, so callers must fail closed for actions and keep status data.
+        internal static string? TmuxPaneOwner(SessionStatus status)
+        {
+            if (!OperatingSystem.IsMacOS() || string.IsNullOrEmpty(status.TmuxPane)) return null;
+
+            var tmux = ResolveTmuxBinary(status.TmuxBin);
+            if (tmux is null
+                || !TryRun(tmux, out var panePidText,
+                    TmuxArgs(status, "display-message", "-p", "-t", status.TmuxPane, "#{pane_pid}"))
+                || !int.TryParse(panePidText.Trim(), out var panePid))
+            {
+                return null;
+            }
+
+            if (!TryRun("/bin/ps", out var listing, "-eo", "pid=,ppid=,args=")) return null;
+
+            var processes = new List<ProcessCommand>();
+            foreach (var line in listing.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var parts = line.Trim().Split((char[]?)null, 3, StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length != 3
+                    || !int.TryParse(parts[0], out var pid)
+                    || !int.TryParse(parts[1], out var parentPid)) continue;
+                processes.Add(new ProcessCommand(pid, parentPid, parts[2]));
+            }
+
+            return TmuxPaneOwnershipRules.SessionIdIn(processes, panePid);
+        }
         //
         // Two separate jobs, and skipping either one leaves you looking at the
         // wrong thing:
@@ -1016,7 +1064,7 @@ namespace ClaudeBuddy
             TryRun(tmux, out _, TmuxArgs(status, "select-window", "-t", pane));
             TryRun(tmux, out _, TmuxArgs(status, "select-pane", "-t", pane));
 
-            var client = ResolveClient(tmux, status, sessionName);
+            var client = ResolveClient(tmux, status, sessionName, out var attachedWithNoUsableTty);
 
             // No client attached anywhere: the pane is now selected, so the
             // session is waiting correctly for whenever it's next attached,
@@ -1031,9 +1079,25 @@ namespace ClaudeBuddy
             // selected two lines up. Left as a bare false, this was the exact
             // path a click on an agent-team member in a detached swarm socket
             // took to doing nothing at all.
+            //
+            // CB-158: those are not the only two facts a null client can carry.
+            // list-clients can report a client attached to exactly this session
+            // with an empty tty — TerminalScripts.AttachedWithNoUsableTty is what
+            // ResolveClient checked on the way here — and that is someone
+            // sitting at the session right now, not an empty server. Reporting
+            // that as paneAliveButDetached sent it straight into AttachSocket's
+            // `open -a`, which opens a fresh terminal unconditionally: the click
+            // that was supposed to bring the user's own tab forward instead gave
+            // them a second one, every time list-clients answered that way. Only
+            // the genuinely-nobody case gets to say "detached, safe to attach a
+            // new terminal"; the attached-but-unaimable case reports plain
+            // failure instead, the same as not knowing which app owns a tty at
+            // all a few lines down, so the click falls through to this session's
+            // own tty/TermId heuristics rather than duplicating a window someone
+            // is already reading.
             if (client is null)
             {
-                paneAliveButDetached = true;
+                paneAliveButDetached = !attachedWithNoUsableTty;
                 return false;
             }
 
@@ -1118,8 +1182,18 @@ namespace ClaudeBuddy
         // on screen at all. Either way, ties break toward the most recently
         // active client: a session can be attached from several terminals at
         // once, and the one you touched last is the one you're sitting at.
-        private static (string Tty, bool ControlMode)? ResolveClient(string tmux, SessionStatus status, string sessionName)
+        //
+        // attachedWithNoUsableTty is CB-158's addition: null from here used to
+        // mean one thing to FocusTmux — "detached, safe to open a new terminal"
+        // — when it could also mean "attached, but list-clients gave nothing to
+        // aim a window-selection script at". See
+        // TerminalScripts.AttachedWithNoUsableTty for which is which and why the
+        // difference matters.
+        private static (string Tty, bool ControlMode)? ResolveClient(
+            string tmux, SessionStatus status, string sessionName, out bool attachedWithNoUsableTty)
         {
+            attachedWithNoUsableTty = false;
+
             if (!TryRun(tmux, out var listing, TmuxArgs(
                     status, "list-clients", "-F", TerminalScripts.ClientListFormat)))
             {
@@ -1137,7 +1211,11 @@ namespace ClaudeBuddy
             // window selection. With one client attached none of that mattered;
             // with two, choosing wrong brings the wrong window of the same
             // application to the front.
-            if (TerminalScripts.ChooseClient(clients, sessionName) is not { } choice) return null;
+            if (TerminalScripts.ChooseClient(clients, sessionName) is not { } choice)
+            {
+                attachedWithNoUsableTty = TerminalScripts.AttachedWithNoUsableTty(clients, sessionName);
+                return null;
+            }
 
             // Only when it is not already there. A client on the target session
             // needs no switch, and switching a *second* client onto it would drag
@@ -1650,7 +1728,7 @@ namespace ClaudeBuddy
         // not something that should steal keyboard focus just by existing),
         // so clicking it never makes ClaudeBuddy.exe the foreground process —
         // hence WindowsForegroundWindow's AttachThreadInput dance below.
-        private static void FocusWindows(SessionStatus status)
+        private static bool FocusWindows(SessionStatus status)
         {
             try
             {
@@ -1677,8 +1755,7 @@ namespace ClaudeBuddy
                 if (status.TermProgram == "WindowsTerminal"
                     && TrySelectWindowsTerminalTab(status, out var tabWindow))
                 {
-                    WindowsForegroundWindow.BringToFront(tabWindow);
-                    return;
+                    return WindowsForegroundWindow.BringToFront(tabWindow);
                 }
 
                 var hwnd = IntPtr.Zero;
@@ -1700,18 +1777,19 @@ namespace ClaudeBuddy
                         "vscode" => "Code",
                         _ => null
                     };
-                    if (processName is null) return;
+                    if (processName is null) return false;
 
                     hwnd = Process.GetProcessesByName(processName)
                         .Select(p => p.MainWindowHandle)
                         .FirstOrDefault(h => h != IntPtr.Zero);
                 }
 
-                WindowsForegroundWindow.BringToFront(hwnd);
+                return WindowsForegroundWindow.BringToFront(hwnd);
             }
             catch
             {
                 // Same convenience-only rule as macOS.
+                return false;
             }
         }
 

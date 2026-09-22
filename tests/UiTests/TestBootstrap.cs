@@ -52,13 +52,29 @@ internal static class TestBootstrap
 
         Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", scratch);
 
-        // StatusDirectory.Path() (settings-errors.log's home) honors TMPDIR,
-        // not CLAUDE_BUDDY_SETTINGS_DIR — see IntegrationTests' TestBootstrap
-        // for the full reasoning, including why this is a short, separate
-        // suffix rather than `scratch` itself (CB-17).
-        Environment.SetEnvironmentVariable(
-            "TMPDIR",
-            Path.Combine(Path.GetTempPath(), "cbt-" + Guid.NewGuid().ToString("N")[..8]));
+        // No test in this assembly asks the OS for a credential. On macOS the
+        // cloud arm's credential lives in the login Keychain, and reading it from
+        // another application raises a consent dialog — which, headless, nobody
+        // answers: the read waits out its forty-five-second budget, leaks the pool
+        // thread parked inside Security.framework, and repeats for the next test
+        // that gets there. It is invisible in CI, where no such Keychain item
+        // exists and the query fails fast, and it only bites on a machine where
+        // somebody has actually logged in. Set here with the settings seam above,
+        // before any static constructor can run.
+        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_NO_CREDENTIAL_STORE", "1");
+
+        // Where StatusDirectory.Path() puts settings-errors.log — left unset,
+        // every suite run appends failure traces to the developer's real
+        // $TMPDIR/claude_buddy/settings-errors.log (CB-17).
+        //
+        // CLAUDE_BUDDY_STATUS_ROOT, not TMPDIR: moving TMPDIR from inside the
+        // test process breaks the coverage collector's IPC and cost this repo
+        // its added-line coverage rule for a while. See IntegrationTests'
+        // TestBootstrap for the full reasoning (CB-172).
+        var statusRoot = Path.Combine(
+            Path.GetTempPath(), "cbt-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(statusRoot);
+        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_STATUS_ROOT", statusRoot);
 
         // ...and no test in this assembly may start a real relay: that is a live
         // Claude Code session in tmux, on the developer's own account, holding a

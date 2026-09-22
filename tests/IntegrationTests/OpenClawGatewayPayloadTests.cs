@@ -26,6 +26,30 @@ namespace ClaudeBuddy.Tests;
 [Collection("Settings")]
 public class OpenClawGatewayPayloadTests
 {
+    // CB-99: history is an external payload, so prove the full record carries
+    // the two provenance fields into the delivery predicate. A missing field
+    // preserves compatibility, while a present mismatch must not initiate a
+    // media request.
+    [Fact]
+    public void HistoryDeliveryProvenanceIsAppliedWithoutBreakingLegacyRows()
+    {
+        var messages = JsonDocument.Parse("""
+        [
+          {"model":"delivery-mirror","content":[{"type":"text","text":"legacy.png"}]},
+          {"role":"assistant","provider":"another-provider","model":"delivery-mirror",
+           "content":[{"type":"text","text":"wrong-provider.png"}]},
+          {"role":"user","provider":"openclaw","model":"delivery-mirror",
+           "content":[{"type":"text","text":"wrong-role.png"}]}
+        ]
+        """).RootElement;
+
+        var turns = OpenClawSessions.TurnsFromHistory(messages, "agent:main:main");
+
+        Assert.NotNull(turns.Single(t => t.Text == "legacy.png").ImageUrl);
+        Assert.Null(turns.Single(t => t.Text == "wrong-provider.png").ImageUrl);
+        Assert.Null(turns.Single(t => t.Text == "wrong-role.png").ImageUrl);
+    }
+
     // Nine agents standing in one channel, which is what the room this was
     // diagnosed against actually looked like. Their activity times span five
     // months, so the recency window has something real to cut.
@@ -403,6 +427,150 @@ public class OpenClawGatewayPayloadTests
         }
         """;
 
+    // Two members' views of one stretch of the same channel, for CB-32 and
+    // CB-33. Same provenance as the page above — the structure is real and every
+    // value in it is invented — and the same five minutes seen twice, which is
+    // the only way the merge's questions can be asked of a payload at all.
+    //
+    // What is in it: Quill answers a question; the operator says "ok" and then
+    // says "ok" again a minute later; and another person in the channel quotes
+    // Quill's answer and adds a question of their own. Quill's page carries its
+    // own reply as an assistant turn, Aster's carries the same words as the
+    // relayed user turn every other member in the channel receives — which is
+    // the asymmetry the whole merge exists for.
+    private const string QuillPage = """
+        {
+          "sessionKey": "agent:quill:discord:channel:900000000000000001",
+          "sessionId": "00000000-0000-4000-8000-000000000000",
+          "messages": [
+            {
+              "role": "assistant",
+              "content": [{ "type": "text", "text": "Build is green on both legs." }],
+              "stopReason": "stop",
+              "api": "cli",
+              "provider": "claude-cli",
+              "model": "claude-sonnet-4-6",
+              "timestamp": 1787880000000,
+              "idempotencyKey": "cli-assistant:00000000-0000-4000-8000-0000000000b1",
+              "__openclaw": {
+                "id": "00000000-0000-4000-8000-0000000000b2",
+                "recordTimestampMs": 1787880000100,
+                "seq": 1
+              }
+            },
+            {
+              "role": "user",
+              "content": "ok",
+              "timestamp": 1787880060000,
+              "__openclaw": {
+                "senderIsOwner": true,
+                "senderId": "900000000000000101",
+                "senderName": "quillfeather",
+                "id": "00000000-0000-4000-8000-0000000000b3",
+                "recordTimestampMs": 1787880060100,
+                "seq": 2
+              }
+            },
+            {
+              "role": "user",
+              "content": "ok",
+              "timestamp": 1787880120000,
+              "__openclaw": {
+                "senderIsOwner": true,
+                "senderId": "900000000000000101",
+                "senderName": "quillfeather",
+                "id": "00000000-0000-4000-8000-0000000000b4",
+                "recordTimestampMs": 1787880120100,
+                "seq": 3
+              }
+            },
+            {
+              "role": "user",
+              "content": "Build is green on both legs. Are we sure about the arm64 one?",
+              "timestamp": 1787880180000,
+              "__openclaw": {
+                "senderIsOwner": false,
+                "senderId": "900000000000000102",
+                "senderName": "Thistle",
+                "senderUsername": "Thistle",
+                "id": "00000000-0000-4000-8000-0000000000b5",
+                "recordTimestampMs": 1787880180100,
+                "seq": 4
+              }
+            }
+          ],
+          "offset": 0,
+          "hasMore": false,
+          "totalMessages": 4
+        }
+        """;
+
+    private const string AsterPage = """
+        {
+          "sessionKey": "agent:aster:discord:channel:900000000000000001",
+          "sessionId": "00000000-0000-4000-8000-000000000001",
+          "messages": [
+            {
+              "role": "user",
+              "content": "Build is green on both legs.",
+              "timestamp": 1787880000500,
+              "__openclaw": {
+                "senderIsOwner": false,
+                "senderId": "900000000000000103",
+                "senderName": "Quillbot",
+                "senderUsername": "Quillbot",
+                "id": "00000000-0000-4000-8000-0000000000c1",
+                "recordTimestampMs": 1787880000600,
+                "seq": 1
+              }
+            },
+            {
+              "role": "user",
+              "content": "ok",
+              "timestamp": 1787880060500,
+              "__openclaw": {
+                "senderIsOwner": true,
+                "senderId": "900000000000000101",
+                "senderName": "quillfeather",
+                "id": "00000000-0000-4000-8000-0000000000c2",
+                "recordTimestampMs": 1787880060600,
+                "seq": 2
+              }
+            },
+            {
+              "role": "user",
+              "content": "ok",
+              "timestamp": 1787880120500,
+              "__openclaw": {
+                "senderIsOwner": true,
+                "senderId": "900000000000000101",
+                "senderName": "quillfeather",
+                "id": "00000000-0000-4000-8000-0000000000c3",
+                "recordTimestampMs": 1787880120600,
+                "seq": 3
+              }
+            },
+            {
+              "role": "user",
+              "content": "Build is green on both legs. Are we sure about the arm64 one?",
+              "timestamp": 1787880180500,
+              "__openclaw": {
+                "senderIsOwner": false,
+                "senderId": "900000000000000102",
+                "senderName": "Thistle",
+                "senderUsername": "Thistle",
+                "id": "00000000-0000-4000-8000-0000000000c4",
+                "recordTimestampMs": 1787880180600,
+                "seq": 4
+              }
+            }
+          ],
+          "offset": 0,
+          "hasMore": false,
+          "totalMessages": 4
+        }
+        """;
+
     private static JsonElement Json(string text) => JsonDocument.Parse(text).RootElement;
 
     // A moment just after the newest session in the fixture, so "the last hour"
@@ -544,6 +712,70 @@ public class OpenClawGatewayPayloadTests
         Assert.False(turns[5].Mine);
         Assert.Equal("can you take the release notes?", turns[5].Text);
         Assert.NotNull(turns[5].Speaker);
+    }
+
+    // --- two pages, merged into one room -----------------------------------
+
+    // CB-32 and CB-33 across the whole exchange: two members' pages of real
+    // gateway shape, parsed by the same code production parses them with, loaded
+    // into real sessions and merged by the real room.
+    //
+    // Here as well as in tests/UnitTests because the two fail differently. The
+    // unit suite hands the merge strings and asks whether the rule is right; this
+    // asks whether the rule is being asked the right question — the merge keys on
+    // what `TurnsFromHistory` produced, so a `senderIsOwner` read wrong, or a
+    // mirror prefix left on, changes which turns look identical to each other
+    // without changing a line of the merge.
+    [Fact]
+    public void ARoomBuiltFromTwoRealPagesKeepsRepeatsAndQuotes()
+    {
+        var quillPayload = Json(QuillPage);
+        var asterPayload = Json(AsterPage);
+
+        var quill = new OpenClawChatSession(
+            "openclaw:agent:quill:discord:channel:900000000000000001",
+            "agent:quill:discord:channel:900000000000000001", "quill");
+        var aster = new OpenClawChatSession(
+            "openclaw:agent:aster:discord:channel:900000000000000001",
+            "agent:aster:discord:channel:900000000000000001", "aster");
+
+        quill.SetHistory(OpenClawSessions.TurnsFromHistory(
+            quillPayload.GetProperty("messages"),
+            quillPayload.GetProperty("sessionKey").GetString()));
+        aster.SetHistory(OpenClawSessions.TurnsFromHistory(
+            asterPayload.GetProperty("messages"),
+            asterPayload.GetProperty("sessionKey").GetString()));
+
+        // Nothing held back, so the trust window does not also cut this.
+        quill.HasMore = false;
+        aster.HasMore = false;
+
+        var room = new OpenClawRoomChatSession("openclaw:room:" + Room, "#lobby");
+        room.SetMembers(new[] { (quill, "Quill", "#7f7"), (aster, "Aster", "#77f") });
+        room.Rebuild();
+
+        // Quill's answer once, attributed to Quill from its own transcript
+        // rather than to the bot account the relay wore.
+        var mine = room.History.Where(t => t.Mine).ToList();
+        var quillsAnswer = room.History
+            .Where(t => t.Text == "Build is green on both legs.")
+            .ToList();
+
+        Assert.Single(quillsAnswer);
+        Assert.Equal("Quill", quillsAnswer[0].Speaker);
+
+        // "ok" twice — two messages, four deliveries, and this is the count that
+        // used to come back as one.
+        Assert.Equal(2, mine.Count);
+        Assert.All(mine, t => Assert.Equal("ok", t.Text));
+
+        // Thistle's quote, whole, once. This is the message that used to be
+        // drawn nowhere at all.
+        var quote = Assert.Single(room.History, t => t.Speaker == "Thistle");
+        Assert.Equal(
+            "Build is green on both legs. Are we sure about the arm64 one?", quote.Text);
+
+        Assert.Equal(4, room.History.Count);
     }
 
     // --- the assistant-media request, as a shape ---------------------------

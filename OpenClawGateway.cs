@@ -235,12 +235,66 @@ namespace ClaudeBuddy
             // EventReceived with nobody listening. The handshake then sits out
             // its timeout and reports Unreachable. Windows CI failed that way
             // in OpenClawRoomSendTests at exactly the two-second challenge
-            // timeout; OpenClawGatewayTests had already widened its own to
-            // thirty seconds to paper over the same miss.
-            var nonceTask = WaitForChallengeAsync(_cts.Token);
-            _receiveLoop = Task.Run(() => ReceiveLoopAsync(_cts.Token));
-            var nonce = await nonceTask;
-            if (nonce is null) return new ConnectResult(Outcome.Unreachable, "no connect.challenge");
+            // timeout; OpenClawGatewayTests had widened its own to thirty
+            // seconds, which papered over the same miss rather than finding it.
+            // CB-23 took that deadline away entirely — a test over an in-memory
+            // socket has nothing to wait for, so a lost frame there is now a
+            // hang with a name rather than an assertion about scopes. CB-23's
+            // own measurement — 25.5 seconds for this same handshake against a
+            // deliberately starved pool — is the direct evidence that the next
+            // comment builds on.
+            //
+            // CB-68: started on a dedicated (LongRunning) thread rather than a
+            // plain Task.Run. This is the one piece of that ticket's
+            // investigation that was actually confirmed rather than guessed,
+            // so it is worth being precise about what it does and does not fix.
+            //
+            // Measured directly, with every ThreadPool worker pinned in a
+            // blocking call (tests/UnitTests/OpenClawGatewayTests.cs has the
+            // harness this was proven against): a plain
+            // `Task.Run(() => ReceiveLoopAsync(...))` here is not guaranteed a
+            // thread promptly — under sustained saturation, some queued item in
+            // the process is left waiting for however long the pool stays
+            // saturated, and which item that turns out to be is a race, not a
+            // fixed victim. `TaskCreationOptions.LongRunning` removes the
+            // receive loop from that race entirely: instrumented, it started on
+            // a genuine non-pool thread (`Thread.IsThreadPoolThread == false`)
+            // within tens of milliseconds even with the pool fully pinned,
+            // every time. That is a real, verified improvement — the one thing
+            // in this class that runs for the whole life of the connection no
+            // longer depends on the pool having a spare worker to begin with.
+            //
+            // What this does **not** fix, and CB-68 should not be read as
+            // closed on the strength of it alone: WaitForChallengeAsync's and
+            // RequestAsync's TaskCompletionSources use
+            // RunContinuationsAsynchronously (see the comment on the one in
+            // RequestAsync for why that flag has to stay), which means the
+            // continuation that resumes this method after `await challengeTask`
+            // — and after every `await RequestAsync(...)` — is itself an
+            // ordinary Task continuation scheduled onto the same ThreadPool.
+            // Under the same saturation, that resumption can still queue.
+            // Measured: even with this fix in place, ConnectAsync's overall
+            // completion was still delayed by however long the saturation in
+            // the test harness lasted. Eliminating that would mean not using
+            // ordinary async/await for the rest of the handshake at all, which
+            // is a different and much larger change than this ticket's scope.
+            // Recorded here rather than left implicit, because a fix that reads
+            // as "the hang is solved" when only one contributing cause was is
+            // exactly the overclaim CLAUDE.md warns against.
+            var challengeTask = WaitForChallengeAsync(_cts.Token);
+            _receiveLoop = Task.Factory.StartNew(
+                () => ReceiveLoopAsync(_cts.Token),
+                _cts.Token,
+                TaskCreationOptions.LongRunning | TaskCreationOptions.DenyChildAttach,
+                TaskScheduler.Default).Unwrap();
+            var challenge = await challengeTask;
+            if (challenge.Nonce is null)
+            {
+                return new ConnectResult(Outcome.Unreachable,
+                    DescribeMissingChallenge(challenge.Arrived, _challengeTimeout));
+            }
+
+            var nonce = challenge.Nonce;
 
             var signedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             var token = OpenClawIdentity.TokenFor(_host);
@@ -311,7 +365,20 @@ namespace ClaudeBuddy
                 // credentials" and never try again for the life of the app.
                 //
                 // Only the gateway saying no is a reason to stop asking.
-                return new ConnectResult(Outcome.Unreachable, Flatten(ex));
+                //
+                // `_cts` is what separates "we gave up" from "it never
+                // answered": the request timeout lives on its own linked source
+                // inside RequestAsync and does not cancel this one, so a
+                // cancellation with `_cts` still live can only be the timeout.
+                //
+                // `!` rather than `?.` deliberately. It is assigned at the top
+                // of this method, so the null arm of a `?.` cannot be reached —
+                // and an unreachable arm is not free: it is a branch in the
+                // coverage denominator with no possible numerator, which reads
+                // for ever after as a tested method that isn't.
+                return new ConnectResult(Outcome.Unreachable,
+                    DescribeHandshakeFailure(
+                        ex, _cts!.IsCancellationRequested, _requestTimeout));
             }
 
             if (response.TryGetProperty("protocol", out var protocol)) ServerVersion =
@@ -460,6 +527,54 @@ namespace ClaudeBuddy
             return false;
         }
 
+        // Why the handshake never got a nonce, and why the two arms are worth
+        // separating.
+        //
+        // Both used to report "no connect.challenge", which reads as "the
+        // gateway said nothing" — so a gateway that *did* answer, with a frame
+        // missing a field, was described as silent. Those want opposite
+        // responses: one is a machine that is asleep and worth retrying, the
+        // other is a protocol disagreement that retrying cannot fix. The
+        // supervisor prints this detail verbatim, so the sentence is the whole
+        // diagnosis a person gets.
+        internal static string DescribeMissingChallenge(bool arrived, TimeSpan waited) =>
+            arrived
+                ? "the gateway sent connect.challenge with no nonce"
+                : $"no connect.challenge within {DescribeWait(waited)}";
+
+        // Why the `connect` request itself came back empty-handed.
+        //
+        // Everything that isn't a cancellation is already a real exception
+        // chain and Flatten says what it was. A cancellation is the case worth
+        // spelling out: it reaches the user as "A task was canceled.", which
+        // names neither what was being waited for nor for how long, and it is
+        // the *likeliest* failure of the three — a gateway that accepted the
+        // socket and then went quiet is what a sleeping machine, a restarted
+        // gateway and a starved client scheduler all look like from here.
+        //
+        // CB-23 is what this is for. A handshake that lapsed on the request
+        // timeout reported "A task was canceled." and left GrantedScopes at its
+        // empty default, so the failure surfaced downstream as an empty
+        // collection with no indication that a timeout was involved at all —
+        // reproduced locally by starving the thread pool, where the receive
+        // loop's continuation is queued behind whatever else is blocked.
+        internal static string DescribeHandshakeFailure(
+            Exception ex, bool abandoned, TimeSpan waited) =>
+            ex is not OperationCanceledException
+                ? Flatten(ex)
+                : abandoned
+                    ? "the connection attempt was abandoned before the gateway answered connect"
+                    : "the gateway accepted the socket but did not answer connect within "
+                      + DescribeWait(waited);
+
+        // Timeout.InfiniteTimeSpan is minus one millisecond, which would print
+        // as "-0.001s" and read as a bug in the clock rather than as a deadline
+        // that was deliberately removed. The tests configure exactly that — see
+        // OpenClawGatewayTests' Gateway helper — so the case is real even though
+        // a wait that never expires cannot reach the two callers above.
+        internal static string DescribeWait(TimeSpan waited) =>
+            waited == Timeout.InfiniteTimeSpan ? "no limit" : $"{waited.TotalSeconds:0.###}s";
+
         internal static string Flatten(Exception ex)
         {
             var parts = new List<string>();
@@ -471,14 +586,23 @@ namespace ClaudeBuddy
             return string.Join(" — ", parts);
         }
 
-        private async Task<string?> WaitForChallengeAsync(CancellationToken ct)
+        // What the challenge wait came back with. `Arrived` is the field that
+        // did not exist: a null nonce used to mean both "nothing came" and "a
+        // challenge came without one", and the caller could not tell which it
+        // was being asked to report. `default` is deliberately the silent case,
+        // so the timeout registration below stays a one-liner.
+        private readonly record struct Challenge(string? Nonce, bool Arrived);
+
+        private async Task<Challenge> WaitForChallengeAsync(CancellationToken ct)
         {
-            var tcs = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var tcs = new TaskCompletionSource<Challenge>(TaskCreationOptions.RunContinuationsAsynchronously);
 
             void OnEvent(string name, JsonElement payload)
             {
                 if (name != "connect.challenge") return;
-                tcs.TrySetResult(payload.TryGetProperty("nonce", out var n) ? n.GetString() : null);
+                tcs.TrySetResult(new Challenge(
+                    payload.TryGetProperty("nonce", out var n) ? n.GetString() : null,
+                    Arrived: true));
             }
 
             EventReceived += OnEvent;
@@ -486,7 +610,7 @@ namespace ClaudeBuddy
             {
                 using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 timeout.CancelAfter(_challengeTimeout);
-                using (timeout.Token.Register(() => tcs.TrySetResult(null)))
+                using (timeout.Token.Register(() => tcs.TrySetResult(default)))
                 {
                     return await tcs.Task;
                 }
@@ -554,8 +678,17 @@ namespace ClaudeBuddy
             }
         }
 
+        // CB-68: recorded the moment the loop actually starts running, on
+        // whatever thread it got. A test seam rather than a debugging
+        // leftover — it is the only way to assert the fix above from outside
+        // the class, since "did this run on a pooled thread" has no other
+        // externally observable trace once the loop is past its first line.
+        internal bool? ReceiveLoopStartedOnAPooledThread { get; private set; }
+
         private async Task ReceiveLoopAsync(CancellationToken ct)
         {
+            ReceiveLoopStartedOnAPooledThread = Thread.CurrentThread.IsThreadPoolThread;
+
             var buffer = new byte[16 * 1024];
             var message = new ArrayBufferWriter<byte>();
 

@@ -112,6 +112,23 @@ namespace ClaudeBuddy
             return new PixelRect(new PixelPoint(x, y), size);
         }
 
+        // CB-111: a pinned panel's saved position, pulled back onto whatever
+        // work area it is being restored into. Reuses Clamp rather than
+        // duplicating its Math.Clamp/Math.Max pair, for the same reason
+        // SessionManager.ClampIntoWork is shared between a restored orb
+        // position and one rescued from a display that changed shape — the
+        // two callers clamp for the same reason, and drifting apart would
+        // mean one of them stranding a panel the other would have saved.
+        //
+        // Sized to the panel rather than to a fixed orb footprint: unlike an
+        // orb, a chat panel's width and height vary per agent (see
+        // ChatPanelSizes), and clamping only the top-left corner into the
+        // work area — the way RestoreOrbPosition/ClampIntoWork do for a
+        // square 56x56 orb — would leave a wide or tall panel's far edge
+        // hanging off a monitor that shrank since the position was saved.
+        internal static PixelPoint ClampSavedPosition(PixelPoint saved, PixelSize size, PixelRect work) =>
+            Clamp(new PixelRect(saved, size), size, work).Position;
+
         private static bool Intersects(PixelRect candidate, IReadOnlyList<PixelRect> occupied)
         {
             for (var i = 0; i < occupied.Count; i++)

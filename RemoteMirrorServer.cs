@@ -441,13 +441,59 @@ namespace ClaudeBuddy
                     string.IsNullOrWhiteSpace(status.Color) ? null : status.Color,
                     Commands(status),
                     status.State,
-                    _seams.CanDeliver?.Invoke(status)));
+                    _seams.CanDeliver?.Invoke(status),
+                    RouteFor(resolved.Value.SessionId),
+                    ResolvePeerPersona(status)));
+            }
+
+            // AgentRoster is Claude Code's authority, not a universal session
+            // registry. Codex and Grok status files have no matching agent row,
+            // so offer those live local CLIs directly when the peer asks for the
+            // complete roster. Their route, not their display title, is the
+            // round-trip identity and prevents two same-titled sessions from
+            // being confused on fetch or input.
+            if (everything)
+            {
+                foreach (var session in sessions.Where(s => s.Status.Source is SessionSource.Codex or SessionSource.Grok))
+                {
+                    if (entries.Any(e => string.Equals(e.Route, RouteFor(session.SessionId), StringComparison.Ordinal))) continue;
+                    var status = session.Status;
+                    var name = string.IsNullOrWhiteSpace(status.Title)
+                        ? (string.IsNullOrWhiteSpace(status.Cwd) ? MirrorProtocol.CliFor(status.Source) : Path.GetFileName(status.Cwd))
+                        : status.Title;
+                    var hasTranscript = !string.IsNullOrEmpty(status.TranscriptPath) && File.Exists(status.TranscriptPath);
+                    if (hasTranscript && !LivelyEnough(status)) continue;
+                    entries.Add(new MirrorProtocol.MirrorRosterEntry(name, MirrorProtocol.CliFor(status.Source),
+                        hasTranscript, _seams.CanType(status), string.IsNullOrWhiteSpace(status.Color) ? null : status.Color,
+                        Commands(status), status.State, _seams.CanDeliver?.Invoke(status), RouteFor(session.SessionId),
+                        ResolvePeerPersona(status)));
+                }
             }
 
             await SendTransferAsync(
                 fromPeer, frame.Id, MirrorProtocol.EncodeRoster(entries),
                 new Dictionary<string, string>(), sub: null)
                 .ConfigureAwait(false);
+        }
+
+        // This is intentionally on the serving side of the protocol. The
+        // receiving Buddy must never ask LocalPersona to resolve a remote cwd:
+        // equal path text on two machines says nothing about equal contents.
+        //
+        // LocalPersona already validates the markdown's avatar path while it
+        // is still meaningful, and PersonaFiles applies its byte bound again
+        // while reading. Sending no persona on any unreadable input is more
+        // honest than sending a partial path for the receiver to reinterpret.
+        internal static MirrorProtocol.PeerPersona? ResolvePeerPersona(SessionStatus status)
+        {
+            if (!status.IsLocalCli || string.IsNullOrWhiteSpace(status.Cwd)) return null;
+
+            var candidates = LocalPersona.CandidateFiles(
+                status.Cwd, LocalPersona.UserConfigDirs(), status.Source, status.Agent);
+            var local = LocalPersona.ResolveFrom(candidates, status.Cwd);
+            var avatar = local.AvatarPath is null ? null : PersonaFiles.ReadAvatarFile(local.AvatarPath);
+            var peer = new MirrorProtocol.PeerPersona(local.Name, local.Voice, local.Rate, avatar);
+            return peer.IsEmpty ? null : peer;
         }
 
         // The commands that session can actually run, read off this machine's
@@ -545,8 +591,18 @@ namespace ClaudeBuddy
         private static (string SessionId, SessionStatus Status)? Resolve(
             string name,
             IReadOnlyList<AgentRoster.Entry> agents,
-            IReadOnlyList<(string SessionId, SessionStatus Status)> sessions) =>
-            Pick(name, agents, sessions);
+            IReadOnlyList<(string SessionId, SessionStatus Status)> sessions)
+        {
+            if (!name.StartsWith(RoutePrefix, StringComparison.Ordinal))
+                return Pick(name, agents, sessions);
+
+            var id = name[RoutePrefix.Length..];
+            var matched = sessions.Where(s => string.Equals(s.SessionId, id, StringComparison.Ordinal)).ToList();
+            return matched.Count == 1 ? matched[0] : null;
+        }
+
+        internal const string RoutePrefix = "sid:";
+        internal static string RouteFor(string sessionId) => RoutePrefix + sessionId;
 
         // Every session worth offering, and what to call each one.
         //

@@ -185,10 +185,10 @@ public class ChatHeaderFactsScreenshots : IDisposable
 
         public event Action<RemoteChatState>? StateChanged;
 
-        public Task SendAsync(string text)
+        public Task<ChatSendOutcome> SendAsync(string text)
         {
             // Nothing here sends: the capture is of a header.
-            return Task.CompletedTask;
+            return Task.FromResult(ChatSendOutcome.Sent);
         }
 
         public void Cancel()

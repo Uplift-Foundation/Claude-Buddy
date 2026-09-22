@@ -26,9 +26,13 @@ public class OpenClawChatSendTests
         ClaudeBuddySettings.OpenClawReplyEnabled = enabled;
     }
 
-    // A System turn rather than an exception: the person has just typed a
-    // sentence, and losing it behind a dialog is a poor answer to "why didn't
-    // that send". The note also has to say where to turn it on.
+    // CB-35: the user's own turn goes on *before* the refusal note, the same
+    // shape OpenClawRoomChatSession's no-address refusal already had. This
+    // used to be a System turn on its own — nothing else in the transcript —
+    // which disagreed with the room's own refusal about the one thing
+    // neither transport actually decides: where the user's own words go.
+    // See RemoteControlChatSessionTurnTests.WithRemoteControlOffTheMessageIsRefusedButKept
+    // for the transport that always did it this way.
     [Fact]
     public async Task WithReplyingOffTheMessageIsRefusedInTheTranscript()
     {
@@ -37,30 +41,35 @@ public class OpenClawChatSendTests
 
         await session.SendAsync("hello?");
 
-        var turn = Assert.Single(session.History);
-        Assert.Equal(ChatRole.System, turn.Role);
-        Assert.Contains("Replying is off", turn.Text);
-        Assert.Contains("Settings", turn.Text);
+        Assert.Collection(session.History,
+            first =>
+            {
+                Assert.Equal(ChatRole.User, first.Role);
+                Assert.Equal("hello?", first.Text);
+            },
+            second =>
+            {
+                Assert.Equal(ChatRole.System, second.Role);
+                Assert.Contains("Replying is off", second.Text);
+                Assert.Contains("Settings", second.Text);
+            });
     }
 
-    // And the typed text is NOT added as a user turn, so nothing on screen
-    // claims to have been sent.
-    //
-    // RemoteControlChatSession does the opposite — it adds the user's turn first
-    // and puts the refusal underneath, so the typed text survives — while its
-    // comment says "same reasoning as OpenClawChatSession's". See
-    // RemoteControlChatSessionTurnTests.WithRemoteControlOffTheMessageIsRefusedButKept.
-    // Both behaviours are asserted where they are, rather than one of them being
-    // quietly changed to match the other: which is right is a product call.
+    // CB-35: the typed text IS added as a user turn now — see the previous
+    // test's comment for why. This test used to assert the opposite; it now
+    // asserts the return value that replaces "nothing looks like it was
+    // sent" as the way a caller finds out nothing went anywhere: SendAsync
+    // itself says so, which is what lets ChatPanel.Send() retain the typed
+    // text in the composer instead of losing it.
     [Fact]
-    public async Task WithReplyingOffNothingLooksLikeItWasSent()
+    public async Task WithReplyingOffSendAsyncReportsFailure()
     {
         Replying(false);
         var session = Session();
 
-        await session.SendAsync("hello?");
+        var outcome = await session.SendAsync("hello?");
 
-        Assert.DoesNotContain(session.History, t => t.Role == ChatRole.User);
+        Assert.Equal(ChatSendOutcome.Failed, outcome);
     }
 
     // The user's own turn is added by the session rather than the panel, so one
@@ -72,7 +81,7 @@ public class OpenClawChatSendTests
         Replying(true);
         var session = Session();
 
-        await session.SendAsync("hello?");
+        var outcome = await session.SendAsync("hello?");
 
         Assert.Collection(session.History,
             first =>
@@ -86,6 +95,13 @@ public class OpenClawChatSendTests
                 Assert.Equal(ChatRole.System, second.Role);
                 Assert.StartsWith("Couldn't send:", second.Text);
             });
+
+        // CB-35: there is no live gateway in this test, so SendOrFailureAsync's
+        // catch always fires and this is the one outcome reachable here —
+        // see AFailedSendLeavesTheMessageOnScreenWithAReasonUnderIt's own
+        // comment above for why that arm exists at all. The Sent arm has no
+        // in-process seam to drive without a real gateway accepting a write.
+        Assert.Equal(ChatSendOutcome.Failed, outcome);
     }
 
     // Every turn this class adds is complete on arrival — none of them stream —

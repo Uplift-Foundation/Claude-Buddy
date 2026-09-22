@@ -104,11 +104,19 @@ public class PersonaMarkdownGrammarTests
     // A table row is recognised by having exactly two cells, and the row after
     // it decides whether it is a *header* rather than a value — but the row
     // after it is often not a row at all.
+    //
+    // Wrapped in a persona heading, here and in the two cases below, because
+    // CB-145 scoped the table row's Voice to a persona section — these three
+    // are about the row/header mechanics `TableField`/`TableSeparator`
+    // implement, not about scope, so the heading is what lets them keep
+    // testing that mechanic rather than the (already covered elsewhere)
+    // refusal outside one.
     [Fact]
     public void ATableRowFollowedByOrdinaryProseIsStillARow()
     {
         var fields = PersonaMarkdown.Parse(new[]
         {
+            "## Persona",
             "| Voice | Ava |",
             "and then some ordinary prose",
         });
@@ -124,6 +132,7 @@ public class PersonaMarkdownGrammarTests
     {
         var fields = PersonaMarkdown.Parse(new[]
         {
+            "## Persona",
             "| Voice | Ava |",
             "|---x|---|",
         });
@@ -136,6 +145,7 @@ public class PersonaMarkdownGrammarTests
     {
         var fields = PersonaMarkdown.Parse(new[]
         {
+            "## Persona",
             "| Voice | Value |",
             "|-----|-----|",
             "| Voice | Ava |",

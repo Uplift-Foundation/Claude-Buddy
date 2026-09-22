@@ -278,6 +278,14 @@ if [[ $INSTALL -eq 1 ]]; then
   rm -rf "/Applications/$APP_NAME.app"
   cp -R "$APP" "/Applications/"
   echo "==> Installed /Applications/$APP_NAME.app"
+  # CB-49: reconcile the crash keep-alive LaunchAgent against whatever
+  # settings.json already says about "Serve on launch" -- installed here
+  # rather than assumed, so a --install run on a machine already opted in
+  # comes back up under launchd's KeepAlive after this build replaces the
+  # running one. --keepalive-only skips hook wiring; install-hooks.sh's own
+  # header explains why this call lives there instead of in this script.
+  # Best-effort: a failure here shouldn't fail an otherwise-successful build.
+  "/Applications/$APP_NAME.app/Contents/Resources/install-hooks.sh" --keepalive-only || true
   echo "    Launch it with: open -a \"$APP_NAME\""
 else
   echo "    Try it with:    open \"$APP\""

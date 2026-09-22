@@ -113,8 +113,8 @@ namespace ClaudeBuddy.Tests
         }
 
         // The second bug. The relayed copy is sometimes cut short, so equality
-        // misses it — a long enough prefix has to count, in either direction,
-        // because nothing says the stored original is the longer of the two.
+        // misses it — a long enough prefix of what the agent said has to count
+        // as that message.
         [Fact]
         public void ATruncatedEchoIsStillRecognisedAsTheSameMessage()
         {
@@ -130,19 +130,30 @@ namespace ClaudeBuddy.Tests
             Assert.Equal("Nova", room.History[0].Speaker);
         }
 
-        // ...and the other way round, since the truncation can be on either side.
+        // The fourth bug, CB-33, and the reason the rule above runs one way
+        // round rather than both. It used to match a prefix in either direction,
+        // on the grounds that nothing says the stored original is the longer of
+        // the two — and what that reliably matched was a person quoting an agent
+        // and adding their own words, which is ordinary chat behaviour. The
+        // whole message went, not a duplicate: the room drew nothing at all for
+        // the person.
+        //
+        // This is the ticket's confirmed failing input, verbatim.
         [Fact]
-        public void TheEchoMayBeTheLongerOfTheTwo()
+        public void QuotingAnAgentAndAddingYourOwnWordsIsKept()
         {
             var nova = Member("nova");
             var aurora = Member("aurora");
 
-            Give(nova, (ChatRole.Assistant, "Nodes loaded and ready", 1));
-            Give(aurora, (ChatRole.User, "Nodes loaded and ready: 41 of them", 1));
+            Give(nova, (ChatRole.Assistant, "Build is green on both legs.", 1));
+            Give(aurora,
+                (ChatRole.User, "Build is green on both legs. Are we sure about the arm64 one?", 2));
 
             var room = Room((nova, "Nova", "#7f7"), (aurora, "Aurora", "#77f"));
 
-            Assert.Single(room.History);
+            Assert.Equal(2, room.History.Count);
+            Assert.Contains(room.History,
+                t => t.Text == "Build is green on both legs. Are we sure about the arm64 one?");
         }
 
         // The floor on prefix matching, and the reason for it: below sixteen
@@ -177,6 +188,114 @@ namespace ClaudeBuddy.Tests
             var room = Room((nova, "Nova", "#7f7"), (aurora, "Aurora", "#77f"));
 
             Assert.Single(room.History);
+        }
+
+        // The quote that carries a name. CB-27's Mine check already rescued the
+        // operator's own quote; another person in the channel had no such
+        // rescue, and this is the half of CB-33 that survived that fix.
+        [Fact]
+        public void ANamedPersonQuotingAnAgentIsKept()
+        {
+            var nova = Member("nova");
+            var aurora = Member("aurora");
+
+            Give(nova, (ChatRole.Assistant, "Build is green on both legs.", 1));
+            GiveAttributed(aurora,
+                (ChatRole.User, "Build is green on both legs. Are we sure?", 2, false, "Thistle"));
+
+            var room = Room((nova, "Nova", "#7f7"), (aurora, "Aurora", "#77f"));
+
+            Assert.Equal(2, room.History.Count);
+            Assert.Contains(room.History, t => t.Speaker == "Thistle");
+        }
+
+        // ...and the operator's own quote still is, which is CB-27's behaviour
+        // and must not regress: it is rescued by the Mine test running ahead of
+        // the echo test, not by anything CB-33 changed.
+        [Fact]
+        public void YourOwnQuoteOfAnAgentIsStillKept()
+        {
+            var nova = Member("nova");
+            var aurora = Member("aurora");
+
+            Give(nova, (ChatRole.Assistant, "Build is green on both legs.", 1));
+            GiveAttributed(aurora,
+                (ChatRole.User, "Build is green on both legs. Are we sure?", 2, true, null));
+
+            var room = Room((nova, "Nova", "#7f7"), (aurora, "Aurora", "#77f"));
+
+            Assert.Equal(2, room.History.Count);
+            Assert.Contains(room.History, t => t.Mine);
+        }
+
+        // The threshold, in the direction that still matches. Sixteen characters
+        // of an agent's sentence, and nothing after them, is the truncated relay
+        // the rule was written for.
+        [Fact]
+        public void ExactlySixteenCharactersOfAnAgentsSentenceIsATruncatedEcho()
+        {
+            var nova = Member("nova");
+            var aurora = Member("aurora");
+
+            Give(nova, (ChatRole.Assistant, "Nodes are loaded and ready", 1));
+            Give(aurora, (ChatRole.User, "Nodes are loaded", 2));
+
+            var room = Room((nova, "Nova", "#7f7"), (aurora, "Aurora", "#77f"));
+
+            Assert.Single(room.History);
+        }
+
+        // One character below it is not, which is the floor doing its job rather
+        // than a coincidence of this fixture.
+        [Fact]
+        public void FifteenCharactersOfAnAgentsSentenceIsNotAnEcho()
+        {
+            var nova = Member("nova");
+            var aurora = Member("aurora");
+
+            Give(nova, (ChatRole.Assistant, "Nodes are loaded and ready", 1));
+            Give(aurora, (ChatRole.User, "Nodes are loade", 2));
+
+            var room = Room((nova, "Nova", "#7f7"), (aurora, "Aurora", "#77f"));
+
+            Assert.Equal(2, room.History.Count);
+        }
+
+        // The same threshold in the direction that no longer matches. The ticket
+        // measured this exactly: fourteen characters survived and sixteen was
+        // swallowed, which says the constant was never the problem — what was
+        // above it went with no trace.
+        [Fact]
+        public void SixteenCharactersOfAnAgentFollowedByYourOwnWordsIsKept()
+        {
+            var nova = Member("nova");
+            var aurora = Member("aurora");
+
+            Give(nova, (ChatRole.Assistant, "Nodes are loaded", 1));
+            Give(aurora, (ChatRole.User, "Nodes are loaded — how many of them?", 2));
+
+            var room = Room((nova, "Nova", "#7f7"), (aurora, "Aurora", "#77f"));
+
+            Assert.Equal(2, room.History.Count);
+        }
+
+        // An agent's message relayed *whole* is still one bubble. Removing the
+        // longer-than arm cost nothing here, because equality was always the
+        // first test and is what the ordinary relay matches.
+        [Fact]
+        public void AWholeRelayedCopyIsStillOneBubble()
+        {
+            var nova = Member("nova");
+            var aurora = Member("aurora");
+
+            Give(nova, (ChatRole.Assistant, "Build is green on both legs.", 1));
+            GiveAttributed(aurora,
+                (ChatRole.User, "Build is green on both legs.", 2, false, "Novabot"));
+
+            var room = Room((nova, "Nova", "#7f7"), (aurora, "Aurora", "#77f"));
+
+            Assert.Single(room.History);
+            Assert.Equal("Nova", room.History[0].Speaker);
         }
 
         // --- attribution the gateway supplied ---
@@ -360,6 +479,217 @@ namespace ClaudeBuddy.Tests
 
             Assert.Single(room.History);
             Assert.Equal("real", room.History[0].Text);
+        }
+
+        // --- saying the same thing twice ---
+
+        // CB-32, in all three flavours of user turn. Saying "ok" and then "ok"
+        // again is two messages, and the room drew one of them — the earlier,
+        // carrying the earlier timestamp — because a set of texts cannot tell
+        // "the same message reaching a second agent" from "the person said it
+        // twice".
+        [Fact]
+        public void APersonSayingTheSameThingTwiceIsDrawnTwice()
+        {
+            var nova = Member("nova");
+            Give(nova, (ChatRole.User, "ok", 1), (ChatRole.User, "ok", 2));
+
+            var room = Room((nova, "Nova", "#7f7"));
+
+            Assert.Equal(2, room.History.Count);
+            Assert.Equal(new[] { T0.AddMinutes(1), T0.AddMinutes(2) }, room.History.Select(t => t.At));
+        }
+
+        [Fact]
+        public void ANamedPersonSayingTheSameThingTwiceIsDrawnTwice()
+        {
+            var nova = Member("nova");
+            GiveAttributed(nova,
+                (ChatRole.User, "ok", 1, false, "Thistle"),
+                (ChatRole.User, "ok", 2, false, "Thistle"));
+
+            var room = Room((nova, "Nova", "#7f7"));
+
+            Assert.Equal(2, room.History.Count);
+            Assert.All(room.History, t => Assert.Equal("Thistle", t.Speaker));
+        }
+
+        [Fact]
+        public void YourOwnMessageSaidTwiceIsDrawnTwice()
+        {
+            var nova = Member("nova");
+            GiveAttributed(nova,
+                (ChatRole.User, "ok", 1, true, null),
+                (ChatRole.User, "ok", 2, true, null));
+
+            var room = Room((nova, "Nova", "#7f7"));
+
+            Assert.Equal(2, room.History.Count);
+            Assert.All(room.History, t => Assert.True(t.Mine));
+        }
+
+        // ...while one message reaching two agents is still one bubble, which is
+        // the fact the set was there for and the whole reason this is a count
+        // per member rather than a count.
+        [Fact]
+        public void OneMessageInTwoTranscriptsIsStillOneBubbleWhenItIsSaidTwice()
+        {
+            var nova = Member("nova");
+            var aurora = Member("aurora");
+
+            Give(nova, (ChatRole.User, "ok", 1), (ChatRole.User, "ok", 3));
+            Give(aurora, (ChatRole.User, "ok", 2), (ChatRole.User, "ok", 4));
+
+            var room = Room((nova, "Nova", "#7f7"), (aurora, "Aurora", "#77f"));
+
+            // Two messages, four deliveries. Not four bubbles, and not one.
+            Assert.Equal(2, room.History.Count);
+        }
+
+        // The copies come from one member's transcript rather than being taken
+        // as they are found, so the two bubbles carry the two times that member
+        // actually recorded. Taking the first two found would quote the first
+        // message twice and never reach the second.
+        [Fact]
+        public void TheMemberThatHeardItMostOftenIsTheOneQuoted()
+        {
+            var nova = Member("nova");
+            var aurora = Member("aurora");
+
+            // Nova dropped out after the first one; Aurora heard both.
+            Give(nova, (ChatRole.User, "ok", 1));
+            Give(aurora, (ChatRole.User, "ok", 2), (ChatRole.User, "ok", 9));
+
+            var room = Room((nova, "Nova", "#7f7"), (aurora, "Aurora", "#77f"));
+
+            Assert.Equal(
+                new[] { T0.AddMinutes(2), T0.AddMinutes(9) },
+                room.History.Select(t => t.At));
+        }
+
+        // The deliveries need not line up in time across members — the same
+        // message is timestamped per delivery, and this is the shape that used
+        // to argue for keying on text alone. It still is: the count is per
+        // member, and nothing here compares one member's times with another's.
+        [Fact]
+        public void CopiesArrivingOutOfOrderAcrossMembersAreStillTwoMessages()
+        {
+            var nova = Member("nova");
+            var aurora = Member("aurora");
+
+            Give(nova, (ChatRole.User, "ok", 1), (ChatRole.User, "ok", 8));
+            Give(aurora, (ChatRole.User, "ok", 3), (ChatRole.User, "ok", 5));
+
+            var room = Room((nova, "Nova", "#7f7"), (aurora, "Aurora", "#77f"));
+
+            Assert.Equal(2, room.History.Count);
+        }
+
+        // The asymmetry CB-32 also names: an agent repeating itself was always
+        // drawn twice, because assistant turns never went through the dedupe at
+        // all. That stays true, and it is now what the human side does too — if
+        // a person's repeat must be preserved, an agent's must be as well.
+        [Fact]
+        public void AnAgentRepeatingItselfIsDrawnTwiceAndItsEchoesStillAreNot()
+        {
+            var nova = Member("nova");
+            var aurora = Member("aurora");
+
+            Give(nova,
+                (ChatRole.Assistant, "Nodes loaded and ready", 1),
+                (ChatRole.Assistant, "Nodes loaded and ready", 2));
+
+            // Aurora received both, as user turns, the way every member does.
+            Give(aurora,
+                (ChatRole.User, "Nodes loaded and ready", 1),
+                (ChatRole.User, "Nodes loaded and ready", 2));
+
+            var room = Room((nova, "Nova", "#7f7"), (aurora, "Aurora", "#77f"));
+
+            Assert.Equal(2, room.History.Count);
+            Assert.All(room.History, t => Assert.Equal("Nova", t.Speaker));
+        }
+
+        // --- how many copies to draw ---
+
+        // The rule itself, without a transcript behind it. Two members each
+        // holding one copy is one message that reached both.
+        [Fact]
+        public void OneCopyEachIsOneMessage()
+        {
+            var whose = OpenClawRoomChatSession.WhoseCopiesToDraw(
+                new IReadOnlyList<string>[] { new[] { "ok" }, new[] { "ok" } });
+
+            Assert.Equal(0, whose["ok"]);
+        }
+
+        // ...and the member holding two of them is the one the room quotes,
+        // however many members hold one.
+        [Fact]
+        public void TheMemberHoldingTheMostCopiesWins()
+        {
+            var whose = OpenClawRoomChatSession.WhoseCopiesToDraw(
+                new IReadOnlyList<string>[]
+                {
+                    new[] { "ok" },
+                    new[] { "ok", "ok" },
+                    new[] { "ok" }
+                });
+
+            Assert.Equal(1, whose["ok"]);
+        }
+
+        // A tie goes to the earliest member, so a room whose members all agree
+        // quotes the same transcript on every rebuild rather than shuffling
+        // which one it reads from.
+        [Fact]
+        public void ATieGoesToTheEarliestMember()
+        {
+            var whose = OpenClawRoomChatSession.WhoseCopiesToDraw(
+                new IReadOnlyList<string>[]
+                {
+                    new[] { "ok", "ok" },
+                    new[] { "ok", "ok" }
+                });
+
+            Assert.Equal(0, whose["ok"]);
+        }
+
+        // Each text is decided on its own: the member that heard the most of one
+        // message is not necessarily the member that heard the most of another.
+        [Fact]
+        public void EachTextPicksItsOwnMember()
+        {
+            var whose = OpenClawRoomChatSession.WhoseCopiesToDraw(
+                new IReadOnlyList<string>[]
+                {
+                    new[] { "ok", "ok", "fine" },
+                    new[] { "ok", "fine", "fine" }
+                });
+
+            Assert.Equal(0, whose["ok"]);
+            Assert.Equal(1, whose["fine"]);
+        }
+
+        // A room with nobody in it asks nothing of this, and gets an empty
+        // answer rather than a throw.
+        [Fact]
+        public void NoMembersIsNoCopies()
+        {
+            Assert.Empty(OpenClawRoomChatSession.WhoseCopiesToDraw(
+                Array.Empty<IReadOnlyList<string>>()));
+        }
+
+        // A member with nothing to say contributes no entry, rather than an
+        // entry saying zero.
+        [Fact]
+        public void AMemberWithNoUserTurnsContributesNothing()
+        {
+            var whose = OpenClawRoomChatSession.WhoseCopiesToDraw(
+                new IReadOnlyList<string>[] { Array.Empty<string>(), new[] { "ok" } });
+
+            Assert.Equal(1, whose["ok"]);
+            Assert.Single(whose);
         }
 
         // --- order ---
@@ -757,6 +1087,13 @@ namespace ClaudeBuddy.Tests
         // else said in the room. Which member carries it is therefore not a
         // routing decision at all — only a question of whose transcript the send
         // sits in.
+        // CB-35: the user's own message goes on first, then the note — the
+        // same shape the no-address refusal below always had. This test used
+        // to assert the note was the *only* thing added; that disagreed with
+        // the no-address case about where the user's own words go for what is
+        // otherwise the same kind of failure, which CB-35 asks to fix by
+        // aligning this path (and the no-members one below) to the
+        // no-address shape rather than the other way round.
         [Fact]
         public async Task WithReplyingOffTheMessageIsRefusedInTheRoom()
         {
@@ -768,11 +1105,25 @@ namespace ClaudeBuddy.Tests
             var room = Room((nova, "Nova", "#ff0000"));
             var before = room.History.Count;
 
-            await room.SendAsync("anyone about?");
+            var outcome = await room.SendAsync("anyone about?");
 
-            var note = Assert.Single(room.History.Skip(before));
-            Assert.Equal(ChatRole.System, note.Role);
-            Assert.Contains("Replying is off", note.Text);
+            var added = room.History.Skip(before).ToList();
+            Assert.Collection(added,
+                mine =>
+                {
+                    Assert.Equal(ChatRole.User, mine.Role);
+                    Assert.Equal("anyone about?", mine.Text);
+                },
+                note =>
+                {
+                    Assert.Equal(ChatRole.System, note.Role);
+                    Assert.Contains("Replying is off", note.Text);
+                });
+
+            // CB-35: the return value is what lets ChatPanel.Send() retain the
+            // typed text in the composer — the note above is only ever a
+            // record of the attempt, not a signal a caller can act on.
+            Assert.Equal(ChatSendOutcome.Failed, outcome);
         }
 
         // A channel every agent has gone quiet in has nobody to send through.
@@ -786,11 +1137,23 @@ namespace ClaudeBuddy.Tests
 
             var room = new OpenClawRoomChatSession("openclaw:room:discord:1", "#general");
 
-            await room.SendAsync("anyone about?");
+            var outcome = await room.SendAsync("anyone about?");
 
-            var note = Assert.Single(room.History);
-            Assert.Equal(ChatRole.System, note.Role);
-            Assert.Contains("Nobody is in this channel", note.Text);
+            // CB-35: same reordering as the replying-off case above — the
+            // message goes on before the note explaining why nobody heard it.
+            Assert.Collection(room.History,
+                mine =>
+                {
+                    Assert.Equal(ChatRole.User, mine.Role);
+                    Assert.Equal("anyone about?", mine.Text);
+                },
+                note =>
+                {
+                    Assert.Equal(ChatRole.System, note.Role);
+                    Assert.Contains("Nobody is in this channel", note.Text);
+                });
+
+            Assert.Equal(ChatSendOutcome.Failed, outcome);
         }
 
         // --- picking the carrier ---
@@ -1102,7 +1465,7 @@ namespace ClaudeBuddy.Tests
 
             var room = Room((quill, "Quill", "#ff0000"), (aster, "Aster", "#00ff00"));
 
-            await room.SendAsync("anyone about?");
+            var outcome = await room.SendAsync("anyone about?");
 
             Assert.Contains(room.History, t =>
                 t.Role == ChatRole.System
@@ -1111,6 +1474,8 @@ namespace ClaudeBuddy.Tests
             // Nothing reached either member: no transcript, no send.
             Assert.Empty(quill.History);
             Assert.Empty(aster.History);
+
+            Assert.Equal(ChatSendOutcome.Failed, outcome);
         }
 
         // A member that *can* post, with no gateway to post through. A different
@@ -1127,11 +1492,13 @@ namespace ClaudeBuddy.Tests
 
             var room = Room((quill, "Quill", "#ff0000"));
 
-            await room.SendAsync("anyone about?");
+            var outcome = await room.SendAsync("anyone about?");
 
             var note = Assert.Single(room.History, t => t.Role == ChatRole.System);
             Assert.StartsWith("Couldn't post to #general:", note.Text);
             Assert.Contains("Nothing was sent", note.Text);
+
+            Assert.Equal(ChatSendOutcome.Failed, outcome);
         }
 
         // A note has to survive the next rebuild, and until now none did.
@@ -1187,6 +1554,72 @@ namespace ClaudeBuddy.Tests
             Assert.Equal(T0.AddMinutes(3), mine.At);
         }
 
+        // One copy back retires one optimistic copy, not both of them — the
+        // other half of CB-32, in the layer that holds what you have just typed.
+        //
+        // Send the same words twice and one of the gateway's copies comes back
+        // first, which is the ordinary case: they are written as two messages
+        // and acknowledged one at a time. The old predicate asked only whether
+        // *any* merged turn matched, so the single returning copy retired both
+        // locals and the second message vanished off the screen until its own
+        // copy arrived — a message the person can see they sent, gone, which is
+        // the same failure the merge had.
+        [Fact]
+        public async Task OneCopyComingBackRetiresOneOptimisticCopy()
+        {
+            ClaudeBuddySettings.ReloadForTests();
+            ClaudeBuddySettings.OpenClawReplyEnabled = true;
+
+            var quill = Member("quill");
+            quill.HasMore = false;
+            quill.Delivery = Address("quillbot");
+
+            var room = Room((quill, "Quill", "#ff0000"));
+
+            await room.SendAsync("ok");
+            await room.SendAsync("ok");
+
+            Assert.Equal(2, room.History.Count(t => t.Text == "ok"));
+
+            // The gateway records the first one and the member's transcript
+            // reloads with it in. The second has not come back yet.
+            GiveAttributed(quill, (ChatRole.User, "ok", 3, true, null));
+            room.Rebuild();
+
+            Assert.Equal(2, room.History.Count(t => t.Text == "ok"));
+            Assert.Contains(room.History, t => t.Text == "ok" && t.At == T0.AddMinutes(3));
+        }
+
+        // ...and when the second copy lands too, both optimistic copies are
+        // retired and the room is the gateway's record of the conversation
+        // rather than this window's. Without the pairing this would be the case
+        // that regressed: a budget that never ran out would leave one local copy
+        // behind forever and draw three bubbles for two messages.
+        [Fact]
+        public async Task BothCopiesComingBackRetireBothOptimisticCopies()
+        {
+            ClaudeBuddySettings.ReloadForTests();
+            ClaudeBuddySettings.OpenClawReplyEnabled = true;
+
+            var quill = Member("quill");
+            quill.HasMore = false;
+            quill.Delivery = Address("quillbot");
+
+            var room = Room((quill, "Quill", "#ff0000"));
+
+            await room.SendAsync("ok");
+            await room.SendAsync("ok");
+
+            GiveAttributed(quill,
+                (ChatRole.User, "ok", 3, true, null),
+                (ChatRole.User, "ok", 4, true, null));
+            room.Rebuild();
+
+            Assert.Equal(
+                new[] { T0.AddMinutes(3), T0.AddMinutes(4) },
+                room.History.Where(t => t.Text == "ok").Select(t => t.At));
+        }
+
         // The dedupe predicate walks past turns that are not yours without
         // matching them. Obvious, and uncovered until now because every case
         // that reached it had nothing else in the room to walk past — so the
@@ -1216,11 +1649,17 @@ namespace ClaudeBuddy.Tests
             Assert.Contains(room.History, t => t.Mine);
         }
 
-        // The same sentence twice in a row says nothing the first one did not.
-        // Three attempts with replying off used to leave three identical notes
-        // stacked, which reads as three separate problems and is one.
+        // CB-35 removed the dedupe this test used to name
+        // ("TheSameNoteTwiceRunningIsSaidOnce"): SendAsync now adds the
+        // user's own message before every refusal it produces (see its own
+        // comment), so a repeated identical note is never adjacent to its
+        // twin any more — there is always a fresh message between them, the
+        // same as there always was for the no-address refusal. Three
+        // attempts with replying off now read as three attempts, each with
+        // its own message and its own explanation, which is the behaviour
+        // CB-35 asks this path to match the others in.
         [Fact]
-        public async Task TheSameNoteTwiceRunningIsSaidOnce()
+        public async Task EachRefusedAttemptKeepsItsOwnMessageAndNote()
         {
             ClaudeBuddySettings.ReloadForTests();
             ClaudeBuddySettings.OpenClawReplyEnabled = false;
@@ -1233,7 +1672,11 @@ namespace ClaudeBuddy.Tests
             await room.SendAsync("second try");
             await room.SendAsync("third try");
 
-            Assert.Single(room.History, t => t.Role == ChatRole.System);
+            Assert.Equal(3, room.History.Count(t => t.Role == ChatRole.System));
+            Assert.Equal(3, room.History.Count(t => t.Role == ChatRole.User));
+            Assert.Equal(
+                new[] { "first try", "second try", "third try" },
+                room.History.Where(t => t.Role == ChatRole.User).Select(t => t.Text));
         }
 
         // ...but a note with your own message between it and the last identical

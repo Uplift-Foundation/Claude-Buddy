@@ -312,7 +312,9 @@ namespace ClaudeBuddy
             // break. The rule itself is LocalPersona.OrbLabel, pure and tested,
             // for the same reason OrbGlyph is: it was checkable only by looking
             // at the screen otherwise.
-            var personaName = status.IsLocalCli ? LocalPersonas.For(SessionId)?.Name : null;
+            var personaName = status.IsLocalCli
+                ? LocalPersonas.For(SessionId)?.Name
+                : status.Source == SessionSource.RemoteControl ? PeerPersonas.For(SessionId)?.Name : null;
             var name = LocalPersona.OrbLabel(status.Agent, personaName, status.Title, folder);
 
             // Whoever the orb is named for, followed by what the session is —
@@ -337,7 +339,15 @@ namespace ClaudeBuddy
                 tipTitle = tipTitle + " · " + presenceWord;
             }
 
-            var tipPath = string.IsNullOrEmpty(status.Cwd) ? null : status.Cwd;
+            // The second line is normally where this session is, which for a
+            // cloud session is nowhere on this disk — so the roster's own words
+            // take the slot instead. Both halves can be absent and the line is
+            // then simply not drawn: an orb saying "unknown" is worse than an
+            // orb saying nothing, and a placeholder would be on screen far more
+            // often than a real detail.
+            var tipPath = status.Source == SessionSource.ClaudeCloud
+                ? CloudTipDetail(status.StatusDetail, status.RecentAction)
+                : string.IsNullOrEmpty(status.Cwd) ? null : status.Cwd;
 
             // UpdateFrom runs on every session poll, but SetTip always builds
             // a fresh Border. Doing that while the pointer is resting on the
@@ -370,7 +380,7 @@ namespace ClaudeBuddy
             // repeat — and without it a room orb is indistinguishable from an
             // ordinary one.
             ApplyKind(status.Kind);
-            ApplyCli(status.Source);
+            ApplyCli(status.Source, status.RemoteCli);
             ApplyHeartbeat(status.Heartbeat);
 
             // A room orb is named for its channel, like every other orb is named
@@ -401,6 +411,15 @@ namespace ClaudeBuddy
             AgentsViewItem.IsVisible = ClickRouting.OffersTheAgentsView(status);
             DismissItem.IsVisible = SessionPresence.CanDismiss(status);
             EndSessionItem.IsVisible = SessionPresence.CanEndSession(status);
+
+            // Back to the plain wording on every pass, so a refusal explained
+            // once does not outlive the thing it was about. A husk whose job has
+            // since finished has no daemon under it any more, and the row it
+            // left behind would otherwise go on refusing an action that is now
+            // ordinary — a stale sentence being the one failure mode a menu
+            // written at open-time can still have. SessionMenu_Opening puts the
+            // real answer back a moment before anyone can read it.
+            ApplyEndSessionGuard(SessionDependents.Nothing);
             var resetIdleExplanation = status.Source switch
             {
                 SessionSource.OpenClaw => (
@@ -409,6 +428,10 @@ namespace ClaudeBuddy
                 SessionSource.RemoteControl => (
                     "This session's state is controlled on its other machine",
                     "This session is managed on its other machine, so it must be reset there."),
+                SessionSource.ClaudeCloud => (
+                    "Anthropic's cloud controls this session's state",
+                    "This session runs in Anthropic's cloud, so its state is theirs to change "
+                    + "and not this machine's."),
                 _ => (
                     "Reset this session to idle",
                     "Changes this orb's displayed state only; the next hook event may update it again.")
@@ -436,6 +459,12 @@ namespace ClaudeBuddy
             // motion. Applied in the other order, an orb that parked and
             // changed state in one update would be left breathing.
             ApplyPresence(status.Presence);
+
+            // After the state block too, and for a milder version of the same
+            // reason: the ring is drawn over the orb's own glow, and applying it
+            // before a colour fade starts would leave it underneath a brush that
+            // is still animating.
+            ApplyContextRing(status.ContextPercent);
         }
 
         // --- presence ---------------------------------------------------------
@@ -481,6 +510,76 @@ namespace ClaudeBuddy
                 OrbPresence.Finished => ("\u2713", "finished"),
                 _ => null
             };
+
+        // The hover line for a cloud session: what it says it is doing, and the
+        // last thing it was seen to do underneath.
+        //
+        // Pure and separate because it is the one part of this that is a
+        // decision rather than a paint: which of four combinations of two
+        // nullable strings produces a line, and in what order. Null in, null
+        // out — the tooltip then shows the name alone, which is what every orb
+        // without a directory already does.
+        //
+        // Joined with a middle dot rather than stacked into a third TextBlock.
+        // The bubble is two lines by construction everywhere else in this app,
+        // and a cloud orb growing a taller tooltip than its neighbours would be
+        // a difference the user has to account for to read either.
+        internal static string? CloudTipDetail(string? detail, string? recent)
+        {
+            var left = string.IsNullOrWhiteSpace(detail) ? null : detail!.Trim();
+            var right = string.IsNullOrWhiteSpace(recent) ? null : recent!.Trim();
+
+            if (left is null) return right;
+            if (right is null) return left;
+            return left + " \u00B7 " + right;
+        }
+
+        // --- the context ring -------------------------------------------------
+
+        // How full this session's context window is, drawn as an arc around the
+        // orb — for the sessions whose roster says, which today is the cloud
+        // ones and nothing else.
+        //
+        // The arithmetic and the palette are the account orbs', not a second
+        // set: UsageRingGeometry decides the sweep and the colour band, and the
+        // three hexes come from AccountOrbWindow so a ring at 90% is the same
+        // red wherever it is drawn. Two scales that agree by coincidence stop
+        // agreeing the first time one of them is tuned.
+        //
+        // Null percent hides the whole layer, track included. Nobody reporting
+        // a number is not a session at zero, and an empty track drawn around an
+        // orb claims a measurement that was never taken — the same distinction
+        // AccountOrbWindow.ApplyExtra draws, arrived at independently and worth
+        // saying twice.
+        private static readonly Point ContextRingCentre = new(28, 28);
+        private const double ContextRingRadius = 22;
+
+        internal void ApplyContextRing(int? percent)
+        {
+            if (percent is not { } value)
+            {
+                ContextRingLayer.IsVisible = false;
+                ContextArc.Data = null;
+                ContextArc.Stroke = null;
+                ContextRingColour = null;
+                return;
+            }
+
+            ContextRingLayer.IsVisible = true;
+
+            var colour = UsageRingGeometry.ColourFor(
+                value, AccountOrbWindow.CalmHex, AccountOrbWindow.WarnHex, AccountOrbWindow.DangerHex);
+
+            ContextArc.Data = UsageRingGeometry.GeometryFor(
+                ContextRingCentre, ContextRingRadius, value);
+            ContextArc.Stroke = new SolidColorBrush(Color.Parse(colour));
+            ContextRingColour = colour;
+        }
+
+        // What a person would have seen, without a test reading a brush back off
+        // a shape. Null when no ring is drawn. Same seam, and the same reason,
+        // as AccountOrbWindow.ApplyRing returning its colour.
+        internal string? ContextRingColour { get; private set; }
 
         // What the chat panel and the tooltip say about presence, or null when
         // there is nothing to say. Read the same way KindLabel is, so the two
@@ -631,8 +730,15 @@ namespace ClaudeBuddy
         // swap it for a new one when they did.
         internal Control? CurrentThoughtBubble => ToolTip.GetTip(Root) as Control;
 
-        private void ApplyCli(SessionSource source)
+        private void ApplyCli(SessionSource source, string? remoteCli = null)
         {
+            if (source == SessionSource.RemoteControl)
+            {
+                source = string.Equals(remoteCli, MirrorProtocol.CliGrok, StringComparison.OrdinalIgnoreCase)
+                    ? SessionSource.Grok
+                    : string.Equals(remoteCli, MirrorProtocol.CliCodex, StringComparison.OrdinalIgnoreCase)
+                        ? SessionSource.Codex : SessionSource.ClaudeCode;
+            }
             var mark = CliMark.For(source);
             if (mark is null)
             {
@@ -683,6 +789,54 @@ namespace ClaudeBuddy
             // same kind would carry different marks depending on what they were
             // doing, which is what every other badge here avoids.
             SessionKind.Background => ("\u2699", "background job"),
+
+            // A cloud, for a session running in Anthropic's cloud rather than
+            // on any machine the user owns. The most literal glyph in this
+            // switch and deliberately so: everything else here is a convention
+            // borrowed from a chat surface, where this one is the word people
+            // already use for the thing.
+            //
+            // It is also the only mark such an orb carries. CliMark returns
+            // nothing for this source, which is right — a Claude spark says
+            // "local Claude Code" from across a room, and that is the one thing
+            // this session is not.
+            SessionKind.Cloud => ("\u2601", "in the cloud"),
+            _ => null
+        };
+
+        // The kinds whose badge is drawn rather than typed, as SVG path data
+        // in a 16x16 box — the same shape CliMark's marks take, and stretched
+        // uniformly into the badge the same way.
+        //
+        // Only the cloud so far, and the test for whether a glyph belongs here
+        // is not "is it in the font". U+2601 *is* reachable on both platforms:
+        // asked directly, the font manager resolves it to Hiragino Sans on
+        // macOS and to Segoe UI Emoji on Windows, so this was never a tofu
+        // box. It is that neither face draws a cloud at 13px. The macOS one
+        // collapses to an undifferentiated white lump; the Windows one is a
+        // colour-emoji glyph, which means it arrives at its own size and in
+        // its own colours — it overflows the 22px disc and comes out lavender
+        // against a badge whose whole design is one white mark on near-black.
+        //
+        // @ and # stay as text deliberately. They are ASCII, every font has
+        // them, they are the characters the surfaces themselves use, and
+        // redrawing them as paths would be worse at every size.
+        //
+        // The clock, gear and arrows are the open question this does not
+        // answer: they resolve to colour-emoji faces on Windows too, so they
+        // are legible but wrong-coloured there. Left alone here because a
+        // hand-drawn stopwatch or gear is a design decision, not a bug fix,
+        // and a bad one reads worse than a mis-coloured emoji. Worth its own
+        // ticket, with the Windows captures as the evidence.
+        internal static string? KindMarkFor(SessionKind kind) => kind switch
+        {
+            // Three lobes and a flat base. Deliberately fat and simple: at
+            // 13px a cloud with fine edges is the lump this replaces, so the
+            // lobes are large enough to survive two or three pixels each.
+            SessionKind.Cloud =>
+                "M4.6,13 C2.3,13 0.5,11.3 0.5,9.2 C0.5,7.4 1.8,5.9 3.5,5.5 "
+                + "C4.0,3.5 5.9,2 8.2,2 C10.4,2 12.2,3.4 12.8,5.3 "
+                + "C14.3,5.7 15.5,7.1 15.5,8.8 C15.5,11.1 13.7,13 11.4,13 Z",
             _ => null
         };
 
@@ -702,7 +856,25 @@ namespace ClaudeBuddy
                 return;
             }
 
-            KindGlyph.Text = badge.Value.Glyph;
+            var mark = KindMarkFor(kind);
+
+            if (mark is null)
+            {
+                KindMark.IsVisible = false;
+                KindGlyph.Text = badge.Value.Glyph;
+                KindGlyph.IsVisible = true;
+            }
+            else
+            {
+                // Cleared rather than left behind: the two share a Panel, and a
+                // stale glyph under a drawn mark would show through the gaps in
+                // it on the one orb that changes kind in place.
+                KindGlyph.Text = null;
+                KindGlyph.IsVisible = false;
+                KindMark.Data = StreamGeometry.Parse(mark);
+                KindMark.IsVisible = true;
+            }
+
             KindBadge.IsVisible = true;
         }
 
@@ -772,6 +944,10 @@ namespace ClaudeBuddy
             KindBadge.Width = KindBadge.Height = BadgeSize * scale;
             KindBadge.CornerRadius = new CornerRadius(BadgeSize * scale / 2);
             KindGlyph.FontSize = BadgeGlyphSize * scale;
+
+            // The drawn mark shrinks with the disc for the same reason
+            // CliGlyph does: a 13px cloud inside a 16px badge overflows it.
+            KindMark.Width = KindMark.Height = BadgeGlyphSize * scale;
 
             var inset = 28 - (18 * scale * 0.7071) - (BadgeSize * scale / 2);
             KindBadge.Margin = new Thickness(0, 0, Math.Max(0, inset), Math.Max(0, inset));
@@ -877,12 +1053,20 @@ namespace ClaudeBuddy
             // SessionIdentity for why the grammar deliberately has no such
             // field — so a local orb with no picture keeps falling back to its
             // letters, which is what it did before any of this.
+            if (status.Source == SessionSource.RemoteControl)
+            {
+                var persona = PeerPersonas.For(SessionId);
+                return persona?.Avatar is null
+                    ? null
+                    : OpenClawAvatars.For(PeerPersonas.AvatarKey(SessionId), persona.Avatar);
+            }
+
             if (!status.IsLocalCli) return null;
 
-            var persona = LocalPersonas.For(SessionId);
-            return persona?.AvatarPath is null
+            var localPersona = LocalPersonas.For(SessionId);
+            return localPersona?.AvatarPath is null
                 ? null
-                : OpenClawAvatars.ForFile(LocalPersonas.AvatarKey(SessionId), persona.AvatarPath);
+                : OpenClawAvatars.ForFile(LocalPersonas.AvatarKey(SessionId), localPersona.AvatarPath);
         }
 
         private void ShowAvatar(OpenClawAvatars.Avatar avatar)
@@ -1593,17 +1777,17 @@ namespace ClaudeBuddy
             SpeakIfThereIsAnything(FindSpeakableText());
         }
 
-        // Excluded from coverage: both of its lines. Reaching SpeakLocal means a
-        // transcript with something in it was found, and what happens next is the
-        // machine running the tests reading it out loud — so a test that covered
-        // this line would be one nobody could run with other people in the room.
-        // Which text is found is FindSpeakableText, which is measured; which
-        // voice says it is VoiceForLocalSpeech, which is measured too.
-        [ExcludeFromCodeCoverage]
+        // No longer excluded from coverage, and that is the fix rather than a
+        // side effect of it. What used to be here spoke `text` verbatim, having
+        // never asked SpeechPlan or the scope setting anything — the "does not
+        // summarise" half of CB-165's second trip through QA — and it was
+        // invisible precisely because the method was excluded for containing the
+        // utterance. Handing the reply to SpeechRequest instead leaves nothing
+        // here that a test cannot see.
         private void SpeakIfThereIsAnything(string? text)
         {
             if (text is null) return;
-            SpeakLocal(text, VoiceForLocalSpeech(SessionId), LocalPersonas.RateForSession(SessionId));
+            SpeechRequest.Speak(text, SessionId);
         }
 
         // Safe to call: SessionManager.Instance is null outside the running app, so
@@ -1618,30 +1802,6 @@ namespace ClaudeBuddy
         [ExcludeFromCodeCoverage]
         private static void OpenSettings() => SettingsWindow.Toggle();
 
-        // Excluded from coverage: makes the machine make a noise. TextToSpeech.Speak
-        // is itself already excluded for that, and scoping the exclusion to this one
-        // call keeps OnSpeakClicked's decisions — already speaking, nothing to say —
-        // measured. An earlier attempt at testing the caller end to end actually
-        // spoke out loud on a developer's machine, which is how narrow this needs
-        // to be.
-        //
-        // The *decision* this is handed — which voice, at what rate — is not
-        // excluded and is not guessed at here: VoiceForLocalSpeech and
-        // LocalPersonas.RateForSession answer it, and both are tested against an
-        // injected option list rather than against whatever this machine has
-        // installed. Which is the whole shape of the exclusion: the choice is
-        // measured, only the noise is not. Same body as the remote path in
-        // SpeakRemoteAsync, deliberately — a persona's voice and a gateway
-        // agent's are the same feature seen from two ends, and "no voice matched"
-        // has to mean the user's own setting in both or one of them silently
-        // stops speaking.
-        [ExcludeFromCodeCoverage]
-        private static void SpeakLocal(string text, TextToSpeech.VoiceOption? voice, double? rate)
-        {
-            if (voice is null) TextToSpeech.Speak(text, ClaudeBuddySettings.SpeakVoice);
-            else TextToSpeech.Speak(text, voice, rate);
-        }
-
         internal async Task SpeakRemoteAsync()
         {
             var title = _lastStatus?.Title ?? "";
@@ -1649,36 +1809,11 @@ namespace ClaudeBuddy
 
             if (string.IsNullOrWhiteSpace(text)) return;
 
-            var voice = VoiceForRemoteSpeech(SessionId);
-            var rate = OpenClawSessions.RateForSession(SessionId);
-            Dispatcher.UIThread.Post(() =>
-            {
-                if (voice is null) TextToSpeech.Speak(text, ClaudeBuddySettings.SpeakVoice);
-                else TextToSpeech.Speak(text, voice, rate);
-            });
+            // Back to the UI thread before anything is decided, not merely
+            // before the utterance: SpeechRequest moves TextToSpeech's state,
+            // which every orb's flyout is bound to.
+            Dispatcher.UIThread.Post(() => SpeechRequest.Speak(text, SessionId));
         }
-
-        // The production path asks the process-owned resolver for the current
-        // machine's options. Keeping the list injectable makes the UI decision
-        // testable without downloading Kokoro or launching a custom command.
-        internal static TextToSpeech.VoiceOption? VoiceForRemoteSpeech(
-            string sessionId,
-            IEnumerable<TextToSpeech.VoiceOption>? options = null) =>
-            options is null
-                ? OpenClawSessions.VoiceForSession(sessionId)
-                : OpenClawSessions.VoiceForSession(sessionId, options);
-
-        // The local half of the same seam, and deliberately the same shape: a
-        // persona that names a voice the machine does not have answers null, and
-        // null is the global setting rather than silence. Injectable for the
-        // same reason — a test that had to install Kokoro to assert which voice
-        // a CLAUDE.md picked would be a test nobody runs.
-        internal static TextToSpeech.VoiceOption? VoiceForLocalSpeech(
-            string sessionId,
-            IEnumerable<TextToSpeech.VoiceOption>? options = null) =>
-            options is null
-                ? LocalPersonas.VoiceForSession(sessionId)
-                : LocalPersonas.VoiceForSession(sessionId, options);
 
         // Called by SessionManager when speech starts, changes phase or stops.
         public void SetFlyoutSpeakState(TextToSpeech.SpeakState state) =>
@@ -1762,6 +1897,15 @@ namespace ClaudeBuddy
         // The flyout's keyboard button. Same destination a gateway orb's click
         // reaches, arrived at differently because for a local session the click
         // is already spoken for.
+        //
+        // ...and for a cloud session too, which is the reason this deliberately
+        // does *not* carry the TryOpenInBrowser guard that GoToSession and the
+        // dictation path both do. A cloud orb's click is spoken for — it goes to
+        // claude.ai, where the session can actually be replied to — so the
+        // keyboard button is the way to the panel, which is where it can be
+        // read. Guarding here as well would leave both gestures going to the
+        // browser and the panel reachable by nothing, which is what the first
+        // draft of CB-164's chat wiring did.
         // Excluded from coverage: needs SessionManager.Instance to hand back a
         // session, and this suite deliberately never sets it — making one current
         // starts the status-directory watcher, the two-second scan timer and a
@@ -2016,6 +2160,19 @@ namespace ClaudeBuddy
                 ChatPanel.AppendToInput(this, text);
                 return;
             }
+
+            // Dictated at a cloud orb, which has neither of the two places the
+            // branches below put words: no panel, because nothing here can read
+            // or write that conversation, and no terminal, because it is not on
+            // this machine or on any machine the user owns.
+            //
+            // **The transcription is lost, and there is nowhere for it to go.**
+            // That is stated rather than hidden because the alternative is
+            // worse: falling through reaches TerminalFocuser.SendText, which
+            // would hunt for a pane and type the words into whichever session
+            // happened to match — somebody else's terminal, silently. Opening
+            // the browser at least lands the user where they can say it again.
+            if (TryOpenInBrowser()) return;
 
             // Dictated at a gateway orb with no panel up: open one and put the
             // words in it. Still unsent — the panel is what makes "review before
@@ -2379,6 +2536,14 @@ namespace ClaudeBuddy
         // anywhere to go to.
         internal void GoToSession()
         {
+            // Before either of the two below, because a cloud session can
+            // satisfy neither. There is no chat session to hand back for it —
+            // it is not on the gateway and not on a paired machine — and there
+            // is certainly no terminal, so without this arm the click fell all
+            // the way through to TerminalFocuser.Focus and went hunting a pane
+            // for a conversation that has never been on this disk.
+            if (TryOpenInBrowser()) return;
+
             if (!(_lastStatus?.IsLocalCli ?? false) && TryOpenRemoteChat()) return;
 
             TerminalFocuser.Focus(
@@ -2447,11 +2612,73 @@ namespace ClaudeBuddy
             SessionManager.Instance?.EndSession(SessionId);
         }
 
+        // What is running underneath this session, asked once, as the menu
+        // opens — CB-26.
+        //
+        // Here rather than in UpdateFrom because of what it costs: the answer
+        // comes from a `ps` over the whole process table, and UpdateFrom runs
+        // for every orb on screen every couple of seconds. Opening a context
+        // menu is a gesture a person makes a few times an hour, and the answer
+        // is cached for two seconds either side of it, so the click that follows
+        // shares this read rather than paying for a second one.
+        //
+        // Excluded from coverage: reads the live process table by way of
+        // SessionManager.Instance, which this suite never sets — the same reason
+        // TryOpenRemoteChat below carries the attribute. What it decides is
+        // ApplyEndSessionGuard, which is internal and driven directly.
+        [ExcludeFromCodeCoverage]
+        internal void SessionMenu_Opening(object? sender, System.ComponentModel.CancelEventArgs e)
+        {
+            var manager = SessionManager.Instance;
+            if (manager is null) return;
+
+            ApplyEndSessionGuard(manager.DependentsOf(SessionId));
+        }
+
+        // The row that says what it will do, or why it will not.
+        //
+        // Disabled rather than hidden, and worded as what the user would lose
+        // rather than as what the app refuses — SessionDependents.Explain and
+        // ExplainTip own both sentences, so the menu and the manager's guard
+        // cannot end up describing different rules. The visibility above is
+        // untouched: whether this session can be ended *at all* is
+        // CanEndSession's question, and this only answers whether it may be
+        // ended right now.
+        internal void ApplyEndSessionGuard(SessionDependents.Verdict dependents)
+        {
+            EndSessionItem.IsEnabled = !SessionDependents.BlocksTermination(dependents);
+            EndSessionItem.Header = SessionDependents.Explain(dependents);
+            ToolTip.SetTip(EndSessionItem, SessionDependents.ExplainTip(dependents));
+        }
+
         // Excluded from coverage: needs SessionManager.Instance to hand back a
         // session, and this suite never sets it — making one current starts the
         // status-directory watcher, the scan timer and a tray icon. Same reason
         // OpenChat above carries the attribute, and the panel it would open is
         // covered directly in the ChatPanel suites against a FakeChatSession.
+        // Where a cloud session actually is. False for everything else, so this
+        // can sit in front of the two destinations that assume a conversation
+        // this machine can reach.
+        //
+        // Guarded on the source rather than on the URL being non-empty. A cloud
+        // session whose address never arrived should open nothing and stop
+        // there — falling through to a terminal focus would send the click to
+        // whatever pane happened to match, which is the failure this arm exists
+        // to prevent and is worse than the click doing nothing.
+        // Excluded from coverage: its one effect is CloudSessionLink.Open, which
+        // launches a real browser on whichever machine runs the suite. Both
+        // halves of what it decides are reachable elsewhere — the rule is
+        // ClickRouting.OpensInABrowser and the launch is
+        // CloudSessionLink.StartInfoFor, and both are pure and covered.
+        [ExcludeFromCodeCoverage]
+        internal bool TryOpenInBrowser()
+        {
+            if (!ClickRouting.OpensInABrowser(_lastStatus)) return false;
+
+            CloudSessionLink.Open(_lastStatus!.Url);
+            return true;
+        }
+
         [ExcludeFromCodeCoverage]
         private bool TryOpenRemoteChat()
         {

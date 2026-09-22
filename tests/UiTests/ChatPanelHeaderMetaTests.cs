@@ -546,12 +546,12 @@ public class ChatPanelHeaderMetaTests : IDisposable
 
         public event Action<RemoteChatState>? StateChanged;
 
-        public Task SendAsync(string text)
+        public Task<ChatSendOutcome> SendAsync(string text)
         {
             // Nothing here sends: this fake exists for the header, and a turn
             // added would only be a row the assertions have to skip past.
             TurnAdded?.Invoke(new ChatTurn { Role = ChatRole.User, Text = text });
-            return Task.CompletedTask;
+            return Task.FromResult(ChatSendOutcome.Sent);
         }
 
         public void Cancel()
