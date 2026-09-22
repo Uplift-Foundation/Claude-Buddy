@@ -36,6 +36,31 @@ internal static class TestBootstrap
         // before any static constructor can run.
         Environment.SetEnvironmentVariable("CLAUDE_BUDDY_NO_CREDENTIAL_STORE", "1");
 
+        // The floor under CrashLog.Directory, and the reason forgetting to
+        // isolate it is now harmless rather than a race.
+        //
+        // Any test that refuses a persona picture writes a line about it, two
+        // calls removed and without naming the variable: PersonaFiles.Reject →
+        // PersonaLog.Record → Directory.CreateDirectory(CrashLog.Directory).
+        // Dozens of cases here do that incidentally while asserting something
+        // else entirely. Left unset, every one of them wrote into the
+        // developer's real ~/Library/Logs/ClaudeBuddy unless some *other*
+        // class happened to have the variable pointed elsewhere at that moment
+        // — and when one did, the write landed in that class's scratch
+        // directory instead, which is how CrashLogFileTests' assertion that its
+        // own directory does not exist yet could be falsified by a test that
+        // has nothing to do with crash logs.
+        //
+        // One directory for the assembly, and deliberately not per-class: the
+        // classes that assert on what is *in* the log take a CrashLog
+        // .ScopeForTests instead, which is AsyncLocal and therefore invisible
+        // to everyone else. This is only somewhere harmless for the writes
+        // nobody is looking at. Nothing asserts about it, so nothing races over
+        // it.
+        Environment.SetEnvironmentVariable(
+            "CLAUDE_BUDDY_LOG_DIR",
+            Path.Combine(Path.GetTempPath(), "cb-integrationtests-log-" + Guid.NewGuid()));
+
         // Where StatusDirectory.Path() puts settings-errors.log. Left unset,
         // every suite run appended Save/Load failure traces to the real
         // $TMPDIR/claude_buddy/settings-errors.log on the developer's machine —

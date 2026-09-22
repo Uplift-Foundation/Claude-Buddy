@@ -24,14 +24,16 @@ public class PersonaWorkspaceRootFileTests : IDisposable
     private readonly string _logDir =
         Path.Combine(Path.GetTempPath(), "cb-persona-workspace-root-log-" + Guid.NewGuid());
 
-    private readonly string? _logWas;
+    private readonly IDisposable _logScope;
 
     public PersonaWorkspaceRootFileTests()
     {
         Directory.CreateDirectory(_root);
 
-        _logWas = Environment.GetEnvironmentVariable("CLAUDE_BUDDY_LOG_DIR");
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_LOG_DIR", _logDir);
+        // AsyncLocal rather than CLAUDE_BUDDY_LOG_DIR: _logDir is asserted
+        // about below, so it must not be a name any parallel test can see.
+        // See CrashLog.ScopeForTests for the whole argument.
+        _logScope = CrashLog.ScopeForTests(_logDir);
 
         // Process-wide and deliberately never expiring — see
         // PersonaAvatarValueFileTests for why this is reset per test.
@@ -40,7 +42,7 @@ public class PersonaWorkspaceRootFileTests : IDisposable
 
     public void Dispose()
     {
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_LOG_DIR", _logWas);
+        _logScope.Dispose();
         PersonaLog.ResetForTests();
 
         try { Directory.Delete(_root, recursive: true); } catch (IOException) { }
