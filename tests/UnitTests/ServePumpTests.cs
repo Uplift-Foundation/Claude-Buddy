@@ -99,7 +99,17 @@ public class ServePumpTests
     public async Task Stops_for_good_once_disposed()
     {
         var runs = 0;
-        var pump = new ServePump(() => { runs++; return Task.CompletedTask; }, TimeSpan.FromMilliseconds(5));
+
+        // An hour, like every other case in this file, and not the 5ms this
+        // case used to run with: this is a claim about Dispose stopping the
+        // pump, not about a real clock, and a short period raced its own
+        // assertion on a loaded runner — Start() queues the first tick one
+        // period out, so a scheduler delay between Start() and Dispose() of
+        // 5ms or more (ordinary under contention) let that first tick land
+        // before Dispose() ran, and runs was 1 rather than 0. Whether the
+        // timer fires at all belongs to ServePumpTimerTests, which watches a
+        // signal instead of a wall clock for exactly this reason.
+        var pump = new ServePump(() => { runs++; return Task.CompletedTask; }, TimeSpan.FromHours(1));
 
         pump.Start();
         Assert.True(pump.Running);
@@ -107,7 +117,21 @@ public class ServePumpTests
         pump.Dispose();
 
         Assert.False(pump.Running);
+
+        // These two are what the case now rests on, and both bite: Running
+        // reads _timer, which Dispose nulls, and TickOnceAsync is guarded by
+        // _disposed. Removing either line from Dispose turns this red.
         Assert.False(await pump.TickOnceAsync());
+
+        // Said plainly because the alternative is a reader trusting it: with
+        // an hour-long period this one cannot fail on its own — a timer that
+        // was never stopped still would not have ticked by now. It is kept
+        // because it is the assertion that catches a leaked callback should
+        // TickOnceAsync ever stop declining post-dispose, not because it
+        // carries the case. ServePumpTimerTests owns the real-clock half:
+        // Disposing_a_running_pump_stops_it waits for a genuine tick to land
+        // before disposing, so the live-timer disposal path is still covered
+        // against a moving clock rather than a constant.
         Assert.Equal(0, runs);
 
         // Disposing twice is what a handover racing a shutdown looks like.
