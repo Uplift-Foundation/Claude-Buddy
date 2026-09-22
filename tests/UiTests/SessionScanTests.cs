@@ -2526,4 +2526,53 @@ public class SessionScanTests
 
         Assert.Contains("theirs", OrbIds(Scan(scratch)));
     }
+
+    // --- CLIs this app started for itself -----------------------------------
+
+    // The live scan's own copy of the internal-session filter, which is the one
+    // the screen is drawn from.
+    //
+    // Covered here as well as through HeadlessSnapshot because they are two
+    // separate lines in two separate methods, and only this one reaches a
+    // window. The mirror's copy being right says nothing about the copy a user
+    // sees, and a filter wired into only one of them would look exactly like
+    // this feature working — right up until somebody watched their own screen.
+    // The pair below is the same shape as the relay's directly above, for the
+    // same reason: a rule that hid everything would pass the first of them on
+    // its own.
+    [AvaloniaFact]
+    public void TheSummariserThisAppSpawnedGetsNoOrb()
+    {
+        using var scratch = new Scratch();
+        scratch.Write("summariser");
+
+        // Scratch.Write records this process's pid, which is the one pid on the
+        // machine that is certainly alive — so the liveness rule keeps the
+        // session and the drop under test is the only thing that can remove it.
+        // Cleared in a finally because the set is process-wide: every scan test
+        // writes this same pid, and leaving it claimed would empty theirs too.
+        InternalSessions.Clear();
+        InternalSessions.Remember(LivePid);
+        try
+        {
+            Assert.Empty(OrbIds(Scan(scratch)));
+        }
+        finally
+        {
+            InternalSessions.Clear();
+        }
+    }
+
+    // The direction that matters more: an ordinary session of identical shape,
+    // which this app did not start, still gets its orb.
+    [AvaloniaFact]
+    public void AnIdenticalSessionThisAppDidNotStartKeepsItsOrb()
+    {
+        using var scratch = new Scratch();
+        scratch.Write("theirs");
+
+        InternalSessions.Clear();
+
+        Assert.Contains("theirs", OrbIds(Scan(scratch)));
+    }
 }

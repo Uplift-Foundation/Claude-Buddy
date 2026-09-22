@@ -403,6 +403,25 @@ namespace ClaudeBuddy
                 using var process = Process.Start(psi);
                 if (process is null) return null;
 
+                // No InternalSessions claim here, deliberately, and this is the
+                // note that stops one being added later by analogy with the
+                // summariser.
+                //
+                // UsageProcess already passes `--settings
+                // {"disableAllHooks":true}` for precisely this reason — see its
+                // own comment, which says it keeps the poller from
+                // "manufacturing the orbs it is measuring". So no hook runs, no
+                // status file is written, and there is nothing for the scan to
+                // pick up. Measured: over a ~40s poll producing real output,
+                // $TMPDIR/claude_buddy was never created at all.
+                //
+                // Claiming the pid anyway would be a guard against a file that
+                // cannot exist, sitting inside an [ExcludeFromCodeCoverage]
+                // method where nothing would ever notice it rotting. **If that
+                // flag is ever removed, claim the pid here the way SpeechSummary
+                // does** — that is the condition under which this becomes
+                // necessary, rather than merely tidy.
+
                 // Both pipes drained before waiting, and stdin closed so the CLI
                 // knows no further requests are coming and exits. A blocking
                 // ReadToEnd here would make the timeout below unreachable, and an

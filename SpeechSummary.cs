@@ -298,25 +298,40 @@ namespace ClaudeBuddy
                 using var proc = new Process { StartInfo = startInfo };
                 if (!proc.Start()) return null;
 
-                await proc.StandardInput.WriteAsync(Prompt(reply)).ConfigureAwait(false);
-                proc.StandardInput.Close();
+                // Before the first byte goes in, because the hook that writes
+                // this child's status file fires on its own schedule and the
+                // scan runs on a timer: claiming the pid after the round trip
+                // would leave a window in which an orb is drawn for it. Released
+                // in the finally below rather than here, so it covers the
+                // timeout and throw paths as well as the ordinary one.
+                InternalSessions.Remember(proc.Id);
 
-                var stdout = proc.StandardOutput.ReadToEndAsync();
-
-                using var cts = new CancellationTokenSource(TimeoutMs);
                 try
                 {
-                    await proc.WaitForExitAsync(cts.Token).ConfigureAwait(false);
+                    await proc.StandardInput.WriteAsync(Prompt(reply)).ConfigureAwait(false);
+                    proc.StandardInput.Close();
+
+                    var stdout = proc.StandardOutput.ReadToEndAsync();
+
+                    using var cts = new CancellationTokenSource(TimeoutMs);
+                    try
+                    {
+                        await proc.WaitForExitAsync(cts.Token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        try { proc.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
+                        return null;
+                    }
+
+                    if (proc.ExitCode != 0) return null;
+
+                    return Clean(await stdout.ConfigureAwait(false));
                 }
-                catch (OperationCanceledException)
+                finally
                 {
-                    try { proc.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
-                    return null;
+                    InternalSessions.Forget(proc.Id);
                 }
-
-                if (proc.ExitCode != 0) return null;
-
-                return Clean(await stdout.ConfigureAwait(false));
             }
             // The same two arms UsagePoller keeps, and for the same reason: a
             // summariser that throws into the UI thread would take the panel

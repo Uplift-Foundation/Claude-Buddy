@@ -1198,6 +1198,13 @@ namespace ClaudeBuddy
                 if (!EnabledFor(status.Source)) continue;
                 if (MachineNames.LooksLikeALeftoverRelay(status.Cwd)) continue;
 
+                // And here too, so a peer asking this machine what it is running
+                // is told the same thing the screen shows. A summariser
+                // advertised over the mirror would draw its orb on somebody
+                // else's desk instead of this one, which is the same defect
+                // wearing a different machine.
+                if (InternalSessions.IsInternal(status.SessionPid)) continue;
+
                 found.Add(new ScanEntry(
                     Path.GetFileNameWithoutExtension(file), status, written));
             }
@@ -1872,6 +1879,18 @@ namespace ClaudeBuddy
                 // see RemoteControlBridge.IsOwnRelayCwd for why it is the prefix
                 // and not the live tag, and why the cwd rather than argv.
                 if (MachineNames.LooksLikeALeftoverRelay(status.Cwd)) continue;
+
+                // A CLI this app started for its own purposes — the throwaway
+                // `claude -p` that writes a spoken summary, and the usage poll.
+                // Same argument as the relay directly above: it is plumbing
+                // wearing a session's clothes, its hook fires like anyone's, and
+                // nothing before this branch told it apart.
+                //
+                // Dropped here for the same reason too. Suppressing the orb
+                // further down would leave a session the pid grouping, the team
+                // links, the tray and the right-click menu could all still be
+                // pointed at, which is a worse shape than not seeing it at all.
+                if (InternalSessions.IsInternal(status.SessionPid)) continue;
 
                 found.Add(new ScanEntry(sessionId, status, written));
             }
