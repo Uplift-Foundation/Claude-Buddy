@@ -71,6 +71,28 @@ namespace ClaudeBuddy
             StateChanged?.Invoke(state);
         }
 
+        // How many times somebody has actually asked for speech to stop.
+        //
+        // The state alone cannot answer that question, and reading it as if it
+        // could is what made a spoken summary vanish. `_state` is one static
+        // shared by every orb in the process, so a pending summary that compared
+        // it against Preparing on completion was really asking "has *anything*
+        // touched speech in the last seven seconds" — and on a machine running
+        // twenty agents, the answer is routinely yes for reasons that have
+        // nothing to do with the user: a previous utterance's own Exited handler
+        // calling Enter(Idle) is enough. The summary was then dropped with no
+        // sound and no message.
+        //
+        // A counter that only Cancel moves separates the two facts. "The user
+        // stopped it" is this number changing; "the state is no longer what it
+        // was" is not evidence of anything, because it never was.
+        private static int _stopGeneration;
+
+        internal static int StopGeneration
+        {
+            get { lock (Gate) return _stopGeneration; }
+        }
+
         public static void Cancel()
         {
             Process? victim;
@@ -78,6 +100,7 @@ namespace ClaudeBuddy
             {
                 victim = _speaking;
                 _speaking = null;
+                _stopGeneration++;
             }
 
             if (victim is not null) KillTree(victim);
