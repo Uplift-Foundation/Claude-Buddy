@@ -42,19 +42,30 @@ namespace ClaudeBuddy
         // and takes the process with it.
         //
         // A pool thread does get there first on an unattended machine, and only
-        // there. RemoteControlSessions.StartAsync reaches its
-        // `Dispatcher.UIThread.Post(EnsureTimer)` only after
-        // `await bridge.StartAsync().ConfigureAwait(false)`, so that post runs
-        // on the pool. On an ordinary machine Main is already inside
+        // there. The path CB-28 was written against was
+        // RemoteControlSessions.StartAsync reaching its
+        // `Dispatcher.UIThread.Post(EnsureTimer)` after an awaited
+        // `bridge.StartAsync()`, so that post ran on the pool — and **that
+        // path no longer exists.** The bridge went with the relay, and
+        // `StartAsync` and `EnsureTimer` now survive only in comments; see
+        // ServePump.cs's header, which has the rest of what went with it.
+        //
+        // The hazard did not go with it, which is why this still has to happen
+        // first. `serveOnLaunch` starts OpenClawSessions and
+        // ClaudeCloudSessions on `Task.Run` loops and PeerSessions on plain
+        // Timers, and all three reach `Dispatcher.UIThread.Post` from a pool
+        // thread to push their results at the UI. Any one of them is the same
+        // race in the same shape, against a different caller.
+        //
+        // On an ordinary machine Main is already inside
         // StartWithClassicDesktopLifetime by then and has claimed the
         // dispatcher; on a machine whose screen never unlocks Main is asleep
         // in WaitForUnlock and cannot have. That is the whole of the race, and
         // it is why the crash was always at the two-hour mark — back when two
         // hours was when that sleep ended. A reported lock now runs to a
-        // twelve-hour cap instead (see ScreenLockWait), so the deadline a race
-        // could be timed off is six times further out; the claim below still
-        // has to happen first, and for a longer window than before rather than
-        // a shorter one.
+        // twelve-hour cap instead (see ScreenLockWait), so the window in which
+        // a pool thread could win is six times longer rather than shorter: the
+        // claim below matters more than it did, not less.
         //
         // Idempotent, and cheap enough not to think about: after the first call
         // it is a static field read.

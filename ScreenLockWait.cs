@@ -234,10 +234,33 @@ namespace ClaudeBuddy
         // the long cap, so an already-expired two-hour deadline cannot start
         // the UI into a -6661 the way it did.
         //
-        // That the cap is selected per iteration rather than once is the whole
-        // reason this survives a state change across a sleep. Latching a
-        // deadline at entry would pin the machine to whatever it happened to
-        // report before it slept.
+        // **Each waiting state gets its own clock, and that is a bug fix rather
+        // than a refinement.** An earlier version measured both caps from one
+        // `start` taken at entry, which meant a long wait under one cap spent
+        // the other cap's budget without ever being in that state. Three hours
+        // locked, then a single transient NoWindowServerSession reading, and
+        // `now() - start` is already past the two-hour cap — so it starts
+        // instantly into a context with no window server, which is the very
+        // -6661 this file exists to prevent. A DarkWake is exactly where a
+        // session dictionary might read differently for a beat, so that is not
+        // a hypothetical path.
+        //
+        // **Latched once and never moved, rather than restarted on every
+        // change.** Restarting the clock whenever the state changes sounds
+        // like the same fix and is a worse one: a reading that oscillates
+        // between Locked and NoWindowServerSession would reset its budget on
+        // every poll and never expire either cap, which is the permanent
+        // silent absence the caps exist to make impossible. Latching only ever
+        // accrues, so both caps still fire, while a state that has genuinely
+        // just appeared is measured from when it appeared.
+        //
+        // This is also what keeps the DarkWake property the previous version
+        // had. A machine that sleeps through its own cap is not scheduled, so
+        // it notices only on the next wake and finds the deadline already
+        // behind it — the 2026-09-22 crash landed 1.5 seconds into one. Because
+        // the latch is a fixed instant rather than a rolling one, that wake
+        // compares against when the state was first seen and acts on it, rather
+        // than resetting its budget and waiting all over again.
         internal static void Wait(
             Func<ScreenLockState> probe,
             Func<DateTime> now,
@@ -247,11 +270,40 @@ namespace ClaudeBuddy
             TimeSpan interval)
         {
             var start = now();
+            DateTime? lockedSince = null;
+            DateTime? unknownSince = null;
+            var firstReading = true;
 
             while (true)
             {
                 var policy = PolicyFor(probe());
-                var expired = now() - start >= CapFor(policy, cap, lockedCap);
+                var readAt = now();
+
+                // The first reading is latched at `start` rather than at its
+                // own clock read, so a wait that begins with its deadline
+                // already behind it sees that on the first pass instead of
+                // sleeping once for nothing.
+                var latch = firstReading ? start : readAt;
+                firstReading = false;
+
+                DateTime since;
+                switch (policy)
+                {
+                    case ScreenLockWaitPolicy.WaitUpToLockedCap:
+                        lockedSince ??= latch;
+                        since = lockedSince.Value;
+                        break;
+                    case ScreenLockWaitPolicy.WaitUpToCap:
+                        unknownSince ??= latch;
+                        since = unknownSince.Value;
+                        break;
+                    default:
+                        // StartNow, whose cap is zero — the latch is immaterial.
+                        since = latch;
+                        break;
+                }
+
+                var expired = readAt - since >= CapFor(policy, cap, lockedCap);
 
                 if (ShouldStartNow(policy, expired)) return;
                 sleep(interval);

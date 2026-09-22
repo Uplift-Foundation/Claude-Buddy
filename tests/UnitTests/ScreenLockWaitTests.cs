@@ -285,6 +285,79 @@ public class ScreenLockWaitTests
     }
 
     [Fact]
+    public void A_transient_no_session_after_a_long_lock_does_not_start_immediately()
+    {
+        // The defect this suite could not see, because it lives in the
+        // *sequence* rather than in any one state. Both caps used to be
+        // measured from one `start` taken at entry, so three hours spent
+        // correctly waiting out a reported lock also spent the whole of the
+        // two-hour no-session cap. A single transient NoWindowServerSession
+        // reading then found `capExpired` already true and started the UI at
+        // once, into a context with no window server — the -6661 this whole
+        // change exists to prevent, reached through the code meant to prevent
+        // it. Every per-state test passed throughout.
+        var clock = new DateTime(2026, 9, 22, 0, 0, 0, DateTimeKind.Utc);
+        var probes = 0;
+
+        ScreenLockWait.Wait(
+            probe: () =>
+            {
+                probes++;
+                // Locked for three hours, then no session for ever after.
+                return probes <= 3
+                    ? ScreenLockState.Locked
+                    : ScreenLockState.NoWindowServerSession;
+            },
+            now: () => clock,
+            sleep: slept => clock += slept,
+            cap: TimeSpan.FromHours(2),
+            lockedCap: TimeSpan.FromHours(12),
+            interval: TimeSpan.FromHours(1));
+
+        // The no-session cap is measured from 03:00, when that state was first
+        // seen, so it expires at 05:00 rather than instantly. Six probes:
+        // three locked, then no-session at 03:00, 04:00 and 05:00.
+        //
+        // The number that matters is the clock, not the count. Before the fix
+        // this returned at 03:00 having slept three times — and *that* is the
+        // assertion, because a run which starts at 03:00 is the crash.
+        Assert.Equal(6, probes);
+        Assert.Equal(new DateTime(2026, 9, 22, 5, 0, 0, DateTimeKind.Utc), clock);
+    }
+
+    [Fact]
+    public void An_oscillating_reading_still_expires_rather_than_waiting_for_ever()
+    {
+        // The reason each state's clock is latched once rather than restarted
+        // whenever the state changes. Restarting is the obvious fix for the
+        // test above and a worse one: a reading that flips every poll would
+        // reset its budget every poll and never expire either cap, which is
+        // the permanent silent absence the caps exist to rule out. Latching
+        // only accrues, so an alternating reading still terminates.
+        var clock = new DateTime(2026, 9, 22, 0, 0, 0, DateTimeKind.Utc);
+        var probes = 0;
+
+        ScreenLockWait.Wait(
+            probe: () =>
+            {
+                probes++;
+                return probes % 2 == 1
+                    ? ScreenLockState.Locked
+                    : ScreenLockState.NoWindowServerSession;
+            },
+            now: () => clock,
+            sleep: slept => clock += slept,
+            cap: TimeSpan.FromHours(2),
+            lockedCap: TimeSpan.FromHours(12),
+            interval: TimeSpan.FromHours(1));
+
+        // No-session is first seen at 01:00, so its cap expires at 03:00 —
+        // reached on an even probe, which is a no-session one. Had the clock
+        // restarted on each change this would never have returned at all.
+        Assert.Equal(new DateTime(2026, 9, 22, 3, 0, 0, DateTimeKind.Utc), clock);
+    }
+
+    [Fact]
     public void Lets_the_state_change_between_polls_rather_than_latching_the_first_answer()
     {
         // A screen can be locked, then the session can go away, then come
