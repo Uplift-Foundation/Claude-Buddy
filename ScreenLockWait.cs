@@ -255,6 +255,19 @@ namespace ClaudeBuddy
         // accrues, so both caps still fire, while a state that has genuinely
         // just appeared is measured from when it appeared.
         //
+        // **The clock runs from first sighting, not from time actually spent
+        // in the state — a deliberate trade, not an oversight.** A null blip
+        // at 03:00 latches the unknown arm there; if the screen then reports
+        // locked until 05:00, a second null blip at 05:00 finds two hours
+        // already on that arm's clock and starts, where an accumulator
+        // crediting only time genuinely spent unknown would still be waiting.
+        // It is the right trade twice over: it is the *same* property that
+        // makes an oscillating reading terminate rather than wait for ever, so
+        // the two cannot be separated, and it errs toward starting, which this
+        // repository prefers to being invisibly absent. Written down because
+        // it is not visible in the `??=` and the next reader would otherwise
+        // have to re-derive it.
+        //
         // This is also what keeps the DarkWake property the previous version
         // had. A machine that sleeps through its own cap is not scheduled, so
         // it notices only on the next wake and finds the deadline already
