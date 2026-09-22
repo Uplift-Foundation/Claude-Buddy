@@ -73,20 +73,47 @@ public class SingleInstanceTests
         using var holderReady = new ManualResetEventSlim(false);
         using var releaseHolder = new ManualResetEventSlim(false);
 
+        // The holder's own failure has to be carried back to the test
+        // thread by hand. An exception thrown in here — including a failed
+        // Assert — is swallowed by the thread it happens on, and the only
+        // symptom on the test thread is that holderReady never gets set:
+        // the test then fails with "holder thread never acquired the mutex",
+        // which is a true statement about a symptom and a false one about
+        // the cause. A test that misreports why it failed costs more than a
+        // test that fails, because the next person debugs the wrong thing —
+        // so the exception is captured here and rethrown below, where xUnit
+        // can see it.
+        Exception? holderFailure = null;
+
         var holder = new Thread(() =>
         {
-            var (claim, mutex) = SingleInstance.Claim(name);
-            Assert.Equal(SingleInstanceClaim.Acquired, claim);
-            holderReady.Set();
-            releaseHolder.Wait();
-            mutex.ReleaseMutex();
-            mutex.Dispose();
+            try
+            {
+                var (claim, mutex) = SingleInstance.Claim(name);
+                Assert.Equal(SingleInstanceClaim.Acquired, claim);
+                holderReady.Set();
+                releaseHolder.Wait();
+                mutex.ReleaseMutex();
+                mutex.Dispose();
+            }
+            catch (Exception ex)
+            {
+                holderFailure = ex;
+                // Unblock the test thread rather than leaving it to time out
+                // on a five-second wait for a signal that is never coming.
+                holderReady.Set();
+            }
         });
         holder.Start();
 
         try
         {
-            Assert.True(holderReady.Wait(TimeSpan.FromSeconds(5)), "holder thread never acquired the mutex");
+            Assert.True(holderReady.Wait(TimeSpan.FromSeconds(5)), "holder thread never signalled");
+            if (holderFailure is not null)
+            {
+                throw new Xunit.Sdk.XunitException(
+                    "the holder thread failed before it could hold the mutex: " + holderFailure);
+            }
 
             var (secondClaim, secondMutex) = SingleInstance.Claim(name);
             try

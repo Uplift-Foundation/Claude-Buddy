@@ -93,16 +93,27 @@ namespace ClaudeBuddy
         // `/tmp/.dotnet/shm/session<SID>/<name>` (session-scoped, not
         // literally machine-wide — worth knowing on its own, see MutexName's
         // comment), and a dead owner's hold on that file is simply gone
-        // rather than flagged abandoned: there is no Unix equivalent of the
-        // Windows-kernel abandoned-mutex bookkeeping that
-        // `AbandonedMutexException` reports.
+        // rather than flagged abandoned, with no sign of the Windows-kernel
+        // abandoned-mutex bookkeeping that `AbandonedMutexException`
+        // reports.
+        //
+        // Be precise about how far that measurement reaches, because the
+        // shorter version of this sentence is wrong. What was measured is
+        // four *cross-process* cases on one machine — this Mac, .NET
+        // 10.0.400, macOS arm64. It is not a statement about "Unix", not a
+        // statement about every .NET version, and in particular **the CI
+        // runner was never measured**. Same-thread, in-process abandonment
+        // is a different mechanism again: the CLR tracks that itself rather
+        // than through the file-backed store, so a result about one says
+        // nothing about the other.
         //
         // The arm is kept anyway, not deleted: `AbandonedMutexException` is
         // part of `Mutex`'s documented cross-platform contract, this app
         // ships a Windows build too, and Windows' kernel does track
-        // abandonment — "never observed on macOS" is a statement about this
-        // platform's runtime, not a claim that the BCL can't produce it
-        // elsewhere. Catching it and treating it as Acquired costs nothing
+        // abandonment — "never observed on this machine, cross-process" is
+        // the whole of what was measured, not a claim that the BCL cannot
+        // produce it elsewhere, and not a claim about any machine that was
+        // not measured. Catching it and treating it as Acquired costs nothing
         // and is the only safe answer if it ever does fire. See Claim's own
         // comment for exactly what was run to measure this and where that
         // leaves this arm's test coverage.
@@ -189,16 +200,27 @@ namespace ClaudeBuddy
         // Excluded from coverage, and only this arm — not the rest of
         // Claim, which tests/IntegrationTests exercises directly against a
         // real named mutex for the Acquired and HeldByAnother cases (see
-        // that suite's SingleInstanceTests). This one line is the part
-        // nothing here can reach on the macOS leg: it only runs if WaitOne
-        // throws AbandonedMutexException, and QA measured directly that this
-        // runtime never throws it — not for a `kill -9`'d holder, not for
-        // one that exited normally without calling ReleaseMutex, three
-        // repeats each (see AbandonedByPreviousOwner's own comment on the
-        // enum above). Reaching this line inside an automated suite would
-        // therefore mean asserting a platform behaviour that was just
-        // measured to be absent here, on either death mode — there is no
-        // honest way to make this arm green on macOS. It was proved by hand
+        // that suite's SingleInstanceTests). This one line is the part no
+        // test here reaches: it only runs if WaitOne throws
+        // AbandonedMutexException, and QA measured directly that it was
+        // never thrown on the machine they measured — not for a `kill -9`'d
+        // holder, not for one that exited normally without calling
+        // ReleaseMutex, three repeats each (see AbandonedByPreviousOwner's
+        // own comment on the enum above). Writing a test that asserts the
+        // arm fires would therefore mean asserting behaviour measured to be
+        // absent where it was measured.
+        //
+        // Deliberately *not* claimed: that this line cannot execute on the
+        // CI runner. An earlier draft of this comment said "cannot execute
+        // on the macOS leg", which asserts a property of a machine nobody
+        // measured on the strength of a measurement taken on a different
+        // one — a developer Mac. That is the adjacent-evidence mistake
+        // CLAUDE.md catalogues, and it is worse inside a comment justifying
+        // a coverage exclusion, because a justification that reads as
+        // measured carries more weight than one that reads as a guess. If
+        // this arm ever does fire on a runner, that is new information and
+        // not a contradiction of anything recorded here. Do not restore the
+        // broader wording. It was proved by hand
         // instead: a throwaway console harness that takes the mutex, gets
         // `kill -9`'d, and lets a second copy attempt the same claim (the
         // CB-178 PR body has the exact commands and output). What is left
