@@ -308,25 +308,25 @@ namespace ClaudeBuddy
 
                 try
                 {
-                await proc.StandardInput.WriteAsync(Prompt(reply)).ConfigureAwait(false);
-                proc.StandardInput.Close();
+                    await proc.StandardInput.WriteAsync(Prompt(reply)).ConfigureAwait(false);
+                    proc.StandardInput.Close();
 
-                var stdout = proc.StandardOutput.ReadToEndAsync();
+                    var stdout = proc.StandardOutput.ReadToEndAsync();
 
-                using var cts = new CancellationTokenSource(TimeoutMs);
-                try
-                {
-                    await proc.WaitForExitAsync(cts.Token).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException)
-                {
-                    try { proc.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
-                    return null;
-                }
+                    using var cts = new CancellationTokenSource(TimeoutMs);
+                    try
+                    {
+                        await proc.WaitForExitAsync(cts.Token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        try { proc.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
+                        return null;
+                    }
 
-                if (proc.ExitCode != 0) return null;
+                    if (proc.ExitCode != 0) return null;
 
-                return Clean(await stdout.ConfigureAwait(false));
+                    return Clean(await stdout.ConfigureAwait(false));
                 }
                 finally
                 {
