@@ -39,6 +39,30 @@ namespace ClaudeBuddy
         // list itself and runs the user's own listing command.
         internal static IEnumerable<TextToSpeech.VoiceOption>? VoiceOptionsForTests;
 
+        // How many speak requests have been made. Only ever read as "is the
+        // request I started still the current one", never for its value.
+        private static int _requestGeneration;
+
+        private static int NextRequest() => Interlocked.Increment(ref _requestGeneration);
+
+        // Whether a summary that has just come back should still be spoken.
+        //
+        // Pure, and separated out for the reason the rest of this file is: the
+        // old version of this decision was one expression inside the method that
+        // utters, so nothing could see it, and it was wrong for seven months of
+        // machine-time before a user described the symptom.
+        //
+        // The two things that legitimately suppress a pending summary are a user
+        // asking for silence, and a newer speak request having replaced this one.
+        // Both are counted rather than inferred. What must *not* suppress it is
+        // the shared speak state having moved for any other reason — that is what
+        // the old `State != Preparing` check actually tested, and on a machine
+        // with several orbs it is true constantly for reasons the user never
+        // caused. See TextToSpeech.StopGeneration.
+        internal static bool ShouldStillSpeak(
+            int startedRequest, int currentRequest, int startedStop, int currentStop) =>
+            startedRequest == currentRequest && startedStop == currentStop;
+
         // The entry point both buttons use. Everything below it is the same
         // sequence for both, which is the whole point of the file.
         //
@@ -51,6 +75,12 @@ namespace ClaudeBuddy
             var plan = SpeechPlan.For(reply, ClaudeBuddySettings.SpeakScope);
             if (plan.Silent) return;
 
+            // Claimed before either branch, so a full-text utterance supersedes a
+            // summary still in flight exactly as a second summary would. Taking
+            // it only on the summary path would let a pending summary speak over
+            // the top of a reply the user asked for afterwards.
+            var request = NextRequest();
+
             if (!plan.NeedsSummary)
             {
                 Utter(plan.Text!, sessionId);
@@ -59,7 +89,7 @@ namespace ClaudeBuddy
 
             // Deliberately not awaited: the summariser takes seconds and the UI
             // thread is the one drawing the hourglass that says so.
-            _ = SpeakSummaryAsync(plan.Text!, sessionId);
+            _ = SpeakSummaryAsync(plan.Text!, sessionId, request);
         }
 
         // The summary leg, which is the one with a wait in it.
@@ -73,18 +103,36 @@ namespace ClaudeBuddy
         // off the same state change (SessionManager broadcasts it to every orb),
         // so this one line is what makes the two buttons look alike as well as
         // behave alike.
-        internal static async Task SpeakSummaryAsync(string reply, string? sessionId)
+        internal static Task SpeakSummaryAsync(string reply, string? sessionId) =>
+            SpeakSummaryAsync(reply, sessionId, NextRequest());
+
+        internal static async Task SpeakSummaryAsync(string reply, string? sessionId, int request)
         {
+            var stop = TextToSpeech.StopGeneration;
+
             TextToSpeech.Enter(TextToSpeech.SpeakState.Preparing);
 
             var text = await SpeechSummary.SummarizeOrSayWhyAsync(reply).ConfigureAwait(true);
 
-            // The user pressed the button again while the summariser was
-            // running, so TextToSpeech is back to Idle and speaking now would
-            // start audio they have already asked to stop. This is the only
-            // point at which that can be honoured: the round trip is several
-            // seconds and there is nothing else watching it.
-            if (TextToSpeech.State != TextToSpeech.SpeakState.Preparing) return;
+            // Either the user asked for silence while the summariser was running,
+            // or a newer speak request replaced this one. Both mean speaking now
+            // would start audio nobody is waiting for. This is the only point at
+            // which that can be honoured: the round trip is several seconds and
+            // there is nothing else watching it.
+            //
+            // It used to read `State != Preparing`, which looks like the same
+            // question and is not. The state is process-wide, so it also moved
+            // whenever an unrelated utterance elsewhere finished and its Exited
+            // handler called Enter(Idle) — and a summary that had been produced
+            // perfectly well was then discarded in silence. The counters below
+            // answer what was actually meant.
+            if (!ShouldStillSpeak(request, _requestGeneration, stop, TextToSpeech.StopGeneration))
+            {
+                // Only ours to clear if nothing else has since claimed it;
+                // otherwise the newer request owns the hourglass.
+                if (request == _requestGeneration) TextToSpeech.Enter(TextToSpeech.SpeakState.Idle);
+                return;
+            }
 
             TextToSpeech.Enter(TextToSpeech.SpeakState.Idle);
             Utter(text, sessionId);

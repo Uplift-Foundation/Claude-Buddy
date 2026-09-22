@@ -128,8 +128,53 @@ public class SpeakScopeUiTests : IDisposable
         ClaudeBuddySettings.SpeakScope = SpeakScope.Summary;
         var reply = LongReply();
 
+        var spoken = (string?)null;
+        SpeechRequest.UtteranceForTests = (text, _, _) => spoken = text;
+
+        // Cancel(), not Enter(Idle). This case used to fake the cancellation by
+        // moving the state directly, which is what both speak buttons *look*
+        // like they do and is not what they do — they call Cancel(). Asserting
+        // against the state meant the test passed for a reason unrelated to
+        // anybody having cancelled anything, and it went on passing while the
+        // feature was silently broken for every user. See the companion case
+        // below, which is the half this one could never catch.
         SpeechSummary.SummarizerForTests = _ =>
         {
+            TextToSpeech.Cancel();
+            return Task.FromResult<string?>("a summary");
+        };
+
+        var panel = OpenWith(reply);
+        await SpeechRequest.SpeakSummaryAsync(reply, _lastFakeId);
+
+        Assert.Null(spoken);
+    }
+
+    // The regression this whole change exists for.
+    //
+    // TextToSpeech's state is one static shared by every orb in the process, so
+    // an utterance finishing anywhere calls Enter(Idle) — and the summary leg
+    // used to read that as "the user cancelled" and drop a perfectly good
+    // summary without a sound or a message. On a machine running twenty agents
+    // the collision is routine, which is why the symptom was "vibe code speak
+    // stopped working" rather than anything intermittent-looking.
+    //
+    // Nobody cancelled here. The summary must still be spoken.
+    [AvaloniaFact]
+    public async Task UnrelatedSpeechActivityDuringTheWaitDoesNotEatTheSummary()
+    {
+        ClaudeBuddySettings.SpeakScope = SpeakScope.Summary;
+        var reply = LongReply();
+
+        var spoken = (string?)null;
+        SpeechRequest.UtteranceForTests = (text, _, _) => spoken = text;
+
+        SpeechSummary.SummarizerForTests = _ =>
+        {
+            // Exactly what another orb's finishing utterance does to the shared
+            // state, and the only thing this case does differently from the one
+            // above.
+            TextToSpeech.Enter(TextToSpeech.SpeakState.Speaking);
             TextToSpeech.Enter(TextToSpeech.SpeakState.Idle);
             return Task.FromResult<string?>("a summary");
         };
@@ -137,9 +182,33 @@ public class SpeakScopeUiTests : IDisposable
         var panel = OpenWith(reply);
         await SpeechRequest.SpeakSummaryAsync(reply, _lastFakeId);
 
-        // Still Idle: had it gone on to speak, the state would have been set by
-        // the utterance instead.
-        Assert.Equal(TextToSpeech.SpeakState.Idle, TextToSpeech.State);
+        Assert.Equal("a summary", spoken);
+    }
+
+    // A newer request still wins. The counter that fixes the case above must not
+    // resurrect the case it replaced: if the user asks for something else to be
+    // spoken while a summary is in flight, the stale summary stays quiet.
+    [AvaloniaFact]
+    public async Task ANewerRequestSupersedesASummaryStillInFlight()
+    {
+        ClaudeBuddySettings.SpeakScope = SpeakScope.Summary;
+        var reply = LongReply();
+
+        var spoken = new List<string>();
+        SpeechRequest.UtteranceForTests = (text, _, _) => spoken.Add(text);
+
+        SpeechSummary.SummarizerForTests = _ =>
+        {
+            // A second press, arriving while this one is still summarising.
+            ClaudeBuddySettings.SpeakScope = SpeakScope.Full;
+            SpeechRequest.Speak("something else entirely", _lastFakeId);
+            return Task.FromResult<string?>("a stale summary");
+        };
+
+        var panel = OpenWith(reply);
+        await SpeechRequest.SpeakSummaryAsync(reply, _lastFakeId);
+
+        Assert.Equal(new[] { "something else entirely" }, spoken);
     }
 
     // --- no regression for the default ---
@@ -379,8 +448,11 @@ public class SpeakScopeUiTests : IDisposable
 
         SpeechSummary.SummarizerForTests = _ =>
         {
-            // The user pressed it again while the summariser ran.
-            TextToSpeech.Enter(TextToSpeech.SpeakState.Idle);
+            // The user pressed it again while the summariser ran — which is
+            // OnSpeakClicked's cancel branch, and that calls Cancel(). Moving
+            // the state directly, as this used to, is not what pressing the
+            // button does and is not what the summary leg now listens for.
+            TextToSpeech.Cancel();
             return Task.FromResult<string?>("a summary");
         };
 
