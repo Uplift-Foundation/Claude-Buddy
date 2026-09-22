@@ -39,13 +39,6 @@ namespace ClaudeBuddy
         // list itself and runs the user's own listing command.
         internal static IEnumerable<TextToSpeech.VoiceOption>? VoiceOptionsForTests;
 
-        // The entry point both buttons use. Everything below it is the same
-        // sequence for both, which is the whole point of the file.
-        //
-        // The cancel branch stays with the callers rather than moving here: the
-        // orb's is reached before it has gone looking for any text at all (a
-        // gateway session's costs a round trip over the wire), so folding it in
-        // would mean fetching a reply in order to discover it was not wanted.
         // How many speak requests have been made. Only ever read as "is the
         // request I started still the current one", never for its value.
         private static int _requestGeneration;
@@ -70,6 +63,13 @@ namespace ClaudeBuddy
             int startedRequest, int currentRequest, int startedStop, int currentStop) =>
             startedRequest == currentRequest && startedStop == currentStop;
 
+        // The entry point both buttons use. Everything below it is the same
+        // sequence for both, which is the whole point of the file.
+        //
+        // The cancel branch stays with the callers rather than moving here: the
+        // orb's is reached before it has gone looking for any text at all (a
+        // gateway session's costs a round trip over the wire), so folding it in
+        // would mean fetching a reply in order to discover it was not wanted.
         internal static void Speak(string? reply, string? sessionId)
         {
             var plan = SpeechPlan.For(reply, ClaudeBuddySettings.SpeakScope);
