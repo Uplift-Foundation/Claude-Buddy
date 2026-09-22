@@ -998,7 +998,7 @@ namespace ClaudeBuddy
             if (!OperatingSystem.IsMacOS()) return true;
 
             var owner = TmuxPaneOwner(status);
-            return string.Equals(owner, status.SessionId, StringComparison.OrdinalIgnoreCase);
+            return TmuxPaneOwnershipRules.PermitsAction(status.SessionId, owner);
         }
 
         // Exposed for the scan's reconciliation pass. Null is intentionally not

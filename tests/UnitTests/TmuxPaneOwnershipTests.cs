@@ -9,6 +9,16 @@ public class TmuxPaneOwnershipTests
     private const string A = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
     private const string B = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
 
+    // The CB-177 repro, verbatim: a real Claude Code 2.1.278 agent-team member.
+    // --parent-session-id names the *lead's* session, not this pane's own, and
+    // it sits one word away from a flag whose suffix is literally "session-id".
+    private const string TeamMemberParentSessionId = "9401a866-f86b-4453-98db-b68596f0b8b6";
+    private const string TeamMemberArgv =
+        "/Users/warrenthompson/.local/share/claude/versions/2.1.278 --agent-id pm-cb177@session-9401a866 " +
+        "--agent-name pm-cb177 --team-name session-9401a866 --agent-color blue " +
+        "--parent-session-id " + TeamMemberParentSessionId + " --agent-type general-purpose " +
+        "--dangerously-skip-permissions --model opus";
+
     private static ProcessCommand Shell(int pid = 10) => new(pid, 1, "/bin/zsh");
     private static ProcessCommand Claude(int pid, int parent, string id) =>
         new(pid, parent, "/Users/w/.local/bin/claude --session-id " + id);
@@ -44,6 +54,118 @@ public class TmuxPaneOwnershipTests
         var tool = new ProcessCommand(11, 10, "/bin/echo --session-id " + A);
 
         Assert.Null(TmuxPaneOwnershipRules.SessionIdIn(new[] { Shell(), tool }, 10));
+    }
+
+    // PermitsAction is what HasVerifiedTmuxPane now delegates to. Each case
+    // below matches an outcome a real pane probe can hand back, per CB-177.
+
+    [Fact]
+    public void PermitsActionAllowsAPositivelyMatchedOwner()
+    {
+        Assert.True(TmuxPaneOwnershipRules.PermitsAction(A, A));
+    }
+
+    [Fact]
+    public void PermitsActionRefusesAPositivelyDifferentOwner()
+    {
+        // Commit 7e9fd51a's case: tmux reused the pane id for another
+        // conversation, and the probe named it. This must stay refused.
+        Assert.False(TmuxPaneOwnershipRules.PermitsAction(A, B));
+    }
+
+    [Fact]
+    public void PermitsActionAllowsAPlainInteractiveSessionWithNoSessionIdInArgv()
+    {
+        // The bare repro from the bug report: an ordinary "claude" invocation
+        // carries no --session-id at all, so SessionIdIn must come back null --
+        // Unknown, not Mismatch -- and the action must still be permitted.
+        var processes = new[] { Shell(), new ProcessCommand(11, 10, "claude") };
+
+        Assert.Null(TmuxPaneOwnershipRules.SessionIdIn(processes, 10));
+        Assert.True(TmuxPaneOwnershipRules.PermitsAction(A, TmuxPaneOwnershipRules.SessionIdIn(processes, 10)));
+    }
+
+    [Fact]
+    public void PermitsActionAllowsATeamMemberWhoseArgvNamesAgentIdNotSessionId()
+    {
+        // Claude Code 2.1.278's team-member argv from the bug report: it
+        // satisfies LooksLikeClaudeBinary via the /claude/versions/ arm, but
+        // carries --agent-id/--team-name/--parent-session-id, never
+        // --session-id, so it is just as Unknown as the bare invocation above.
+        var processes = new[] { Shell(), new ProcessCommand(11, 10, TeamMemberArgv) };
+
+        Assert.Null(TmuxPaneOwnershipRules.SessionIdIn(processes, 10));
+        Assert.True(TmuxPaneOwnershipRules.PermitsAction(A, TmuxPaneOwnershipRules.SessionIdIn(processes, 10)));
+    }
+
+    [Fact]
+    public void TeamMemberArgvIsAcceptedAsClaudeOnlyViaTheVersionsPathArm()
+    {
+        // Pin *why* the scan above reaches null for an honest reason. The
+        // leaf here is "2.1.278" -- no "claude" in it anywhere -- so
+        // Path.GetFileName(argv0) is "claude" or "claude.exe" does not fire.
+        // It is accepted on the other arm, the literal "/claude/versions/"
+        // substring, which is what lets the argv reach the --session-id scan
+        // at all instead of being rejected outright at the binary check.
+        Assert.True(SessionPresence.LooksLikeClaudeBinary(
+            "/Users/warrenthompson/.local/share/claude/versions/2.1.278"));
+    }
+
+    [Fact]
+    public void ParentSessionIdNeverBecomesAuthorityForThePaneEvenWhenItMatchesTheExpectedId()
+    {
+        // The dangerous failure the PM flagged: SessionIdFrom's word match
+        // ("words[i] == "--session-id"") must never loosen into a Contains,
+        // an EndsWith, or a "strip the dashes" tidy-up, because
+        // --parent-session-id sits one word away from a real UUID -- the
+        // lead's, not this pane's -- and a loosened match would let it leak in
+        // as if it were the pane's own --session-id.
+        var processes = new[] { Shell(), new ProcessCommand(11, 10, TeamMemberArgv) };
+
+        var owner = TmuxPaneOwnershipRules.SessionIdIn(processes, 10);
+        Assert.Null(owner);
+        Assert.NotEqual(TeamMemberParentSessionId, owner);
+
+        // Pin the shape of the trap, not just its absence: an orb whose own
+        // expected session id happens to equal the lead's uuid must still
+        // read Unknown -- never Match, which is the one verdict a leaked
+        // parent id would produce and which SessionIdFrom's honest null
+        // currently rules out entirely.
+        Assert.Equal(TmuxPaneOwnership.Unknown,
+            TmuxPaneOwnershipRules.For(TeamMemberParentSessionId, 10, processes));
+        Assert.True(TmuxPaneOwnershipRules.PermitsAction(TeamMemberParentSessionId, owner));
+
+        // And an orb expecting some other id entirely reads Unknown too, never
+        // Mismatch -- there is nothing positive here to disagree with.
+        Assert.Equal(TmuxPaneOwnership.Unknown, TmuxPaneOwnershipRules.For(A, 10, processes));
+    }
+
+    [Fact]
+    public void PermitsActionAllowsWhenTheProbeItselfProducedNothing()
+    {
+        // tmux or ps failing outright -- the process list never came back --
+        // is exactly as Unknown as a process list with no session id in it.
+        Assert.True(TmuxPaneOwnershipRules.PermitsAction(A, null));
+        Assert.True(TmuxPaneOwnershipRules.PermitsAction(A, string.Empty));
+    }
+
+    [Fact]
+    public void PermitsActionAllowsAnAmbiguousPaneWithTwoDifferentDescendantIds()
+    {
+        // Two distinct ids among the descendants is Unknown, not Mismatch --
+        // SessionIdIn already refuses to pick one, so there is nothing positive
+        // for PermitsAction to refuse against either.
+        var processes = new[] { Shell(), Claude(11, 10, A), Claude(12, 10, B) };
+
+        Assert.Null(TmuxPaneOwnershipRules.SessionIdIn(processes, 10));
+        Assert.True(TmuxPaneOwnershipRules.PermitsAction(A, TmuxPaneOwnershipRules.SessionIdIn(processes, 10)));
+    }
+
+    [Fact]
+    public void PermitsActionAllowsWhenThereIsNoExpectedSessionIdToViolate()
+    {
+        Assert.True(TmuxPaneOwnershipRules.PermitsAction(null, A));
+        Assert.True(TmuxPaneOwnershipRules.PermitsAction(string.Empty, A));
     }
 
     [Fact]

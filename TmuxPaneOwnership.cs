@@ -57,6 +57,37 @@ namespace ClaudeBuddy
                 : TmuxPaneOwnership.Mismatch;
         }
 
+        // Whether an *action* -- focusing a pane, typing a keystroke into it --
+        // may proceed against a pane whose live owner resolved to resolvedOwner.
+        // This is the caller's half of the answer above: For and SessionIdIn
+        // report the truth about what the probe could establish, including when
+        // that truth is "nothing" -- it is deliberately not their job to collapse
+        // Unknown into a refusal just because a refusal looks like the safe
+        // default.
+        //
+        // resolvedOwner is null or empty when tmux or ps failed, or -- the
+        // ordinary case -- when the pane's claude process carries no
+        // --session-id in its argv at all, which is true of a plain interactive
+        // session and of an agent-team member alike (its argv names
+        // --agent-id/--team-name, never --session-id). Refusing on that would
+        // mean every click and every dictation into an ordinary session's pane
+        // does nothing, silently, forever: "I cannot prove this pane is yours"
+        // and "I have proven this pane belongs to someone else" would read as
+        // the same failure, and they are not the same risk. An indeterminate
+        // probe has found no evidence the pane changed hands, so there is
+        // nothing here to refuse on. A resolvedOwner that positively names a
+        // *different* session -- tmux having reused the pane id for a new
+        // conversation after the old one exited -- is a real answer, and that
+        // one still fails closed; see commit 7e9fd51a for why this half must
+        // never soften. An empty expectedSessionId permits for the same reason:
+        // with nothing to compare against, there is no expectation left to
+        // violate.
+        internal static bool PermitsAction(string? expectedSessionId, string? resolvedOwner)
+        {
+            if (string.IsNullOrEmpty(expectedSessionId) || string.IsNullOrEmpty(resolvedOwner)) return true;
+            return string.Equals(resolvedOwner, expectedSessionId, StringComparison.OrdinalIgnoreCase);
+        }
+
         // Claude's argv uses two words, and deliberately not a substring
         // search: a prompt, path, or child tool merely mentioning a UUID must
         // never become authority for a pane.
