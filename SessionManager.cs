@@ -1101,18 +1101,31 @@ namespace ClaudeBuddy
             // away. Pruning it would hide the orb exactly when it matters
             // most. Use "Reset this session to idle" to clear a genuinely
             // abandoned one manually.
-            // "generating" is exempt for gateway and cloud sessions for the
-            // same reason "waiting" is exempt for local ones: it is the state
-            // where hiding the orb is worst. A local session can't be caught
-            // by this because its file is being rewritten as it works, which
-            // neither a gateway nor a cloud session has an equivalent of —
-            // both are a roster read on a timer, so "still working" and
-            // "nothing has been heard for a while" look identical from here.
+            // "generating" is exempt for gateway sessions for the same reason
+            // "waiting" is exempt for local ones: it is the state where hiding
+            // the orb is worst. A local session can't be caught by this because
+            // its file is being rewritten as it works, which a gateway session
+            // has no equivalent of — it is a roster read on a timer, so "still
+            // working" and "nothing has been heard for a while" look identical
+            // from here.
+            //
+            // **A cloud session is exempt in every state, not just that one**
+            // (CB-182). "Keep orbs for" is a rule about local sessions, where a
+            // quiet status file means the process has probably exited and the
+            // orb left behind is a husk nothing will ever clean up. A cloud
+            // session has no process to have exited: it is a durable
+            // server-side resource that can be resumed at any time, so a clock
+            // measuring silence here is measuring the wrong thing entirely.
+            // Retention for these is already decided by ClaudeCloudRoster.Keep,
+            // whose `!archived` half is the user's own signal in the product
+            // that owns the sessions — and a second retention rule, on a clock,
+            // is what made an idle cloud session nineteen hours quiet draw no
+            // orb at all until somebody typed into the web UI to move its
+            // `updated_at` back inside the window.
             if (staleAfter is not null
+                && status.Source != SessionSource.ClaudeCloud
                 && status.State != "waiting"
-                && !((status.Source == SessionSource.OpenClaw
-                        || status.Source == SessionSource.ClaudeCloud)
-                    && status.State == "generating")
+                && !(status.Source == SessionSource.OpenClaw && status.State == "generating")
                 && now - written > staleAfter)
             {
                 return ScanVerdict.Expired;
@@ -2150,14 +2163,27 @@ namespace ClaudeBuddy
                             : OrbPresence.Present,
                     },
 
-                    // The session's own last activity, never `now`. The account
-                    // API lists every cloud session the account has ever had —
-                    // 578 rows on the machine this was measured against — so
-                    // stamping the time of the read would give all of them a
-                    // permanent orb. Stamping real activity lets the user's own
-                    // "Keep orbs for" setting do the filtering, which is the
-                    // same argument the gateway block above makes at length and
-                    // the same trap it was written to avoid.
+                    // The session's own last activity, never `now` — a scan
+                    // entry's stamp is a claim about when something last
+                    // happened, and the headless-drop diagnostic prints it as
+                    // one. Inventing a time would make every cloud session log
+                    // as having been worked in this second.
+                    //
+                    // **The argument this used to carry was the wrong one, and
+                    // it had a bug behind it (CB-182):** that stamping real
+                    // activity is what lets the user's "Keep orbs for" setting
+                    // filter these, on the strength of the account API listing
+                    // 578 rows. Those 578 are the *unfiltered* roster; 573 of
+                    // them are `bridge` rows that ClaudeCloudRoster.Keep drops
+                    // long before this loop sees one, so the volume being
+                    // defended against is a set that never reaches the sweep.
+                    // What does reach it is a handful of non-archived cloud
+                    // sessions — five on that account, one of them not archived
+                    // — and letting a lifetime clock filter those took the orb
+                    // away from the only one there was. JudgeLiveness exempts
+                    // cloud sessions from expiry outright now, so nothing on
+                    // this path reads the stamp as a retention decision any
+                    // more; it stays because it is true.
                     session.LastActivity));
             }
 

@@ -209,6 +209,102 @@ public class ScanVerdictTests
             Liveness(Healthy(SessionSource.OpenClaw, pid: 0), staleAfter, old));
     }
 
+    // --- JudgeLiveness: cloud sessions never expire (CB-182) -----------------
+
+    // The bug in one case. A cloud session sitting `idle` was exempt from
+    // neither the `waiting` rule nor the `generating` one, so the lifetime
+    // clock took its orb away — and the account measured for CB-182 had exactly
+    // one non-archived cloud session on it, nineteen hours quiet, which is to
+    // say the feature drew nothing at all until somebody typed into the web UI
+    // to move its `updated_at` back inside the window.
+    //
+    // One minute is the shortest "Keep orbs for" the picker offers, so this is
+    // the setting the exemption has to survive; anything longer would pass on a
+    // fixture that was merely recent.
+    [Fact]
+    public void AnIdleCloudSessionNeverExpiresHoweverLongItHasBeenQuiet()
+    {
+        var shortest = TimeSpan.FromMinutes(1);
+
+        Assert.Equal(
+            SessionManager.ScanVerdict.Keep,
+            Liveness(Healthy(SessionSource.ClaudeCloud, pid: 0), shortest,
+                     written: Now - TimeSpan.FromMinutes(1146)));
+    }
+
+    // Every state, not just the two the old rule happened to exempt. A cloud
+    // session's `State` is ClaudeCloudRoster.StateFor's answer, which falls to
+    // "idle" for a status this version has never heard of — so a shape change on
+    // the server must not be able to reintroduce the expiry by arriving as a
+    // word the rule does not recognise.
+    [Theory]
+    [InlineData("idle")]
+    [InlineData("generating")]
+    [InlineData("waiting")]
+    [InlineData("something-the-server-invented-later")]
+    public void ACloudSessionSurvivesInEveryStateAtEveryAge(string state)
+    {
+        var shortest = TimeSpan.FromMinutes(1);
+
+        foreach (var written in new[]
+                 {
+                     Now - TimeSpan.FromSeconds(30),          // inside the window
+                     Now - TimeSpan.FromMinutes(90),          // well outside it
+                     new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                     DateTime.MinValue,                       // what an unparseable
+                                                              // updated_at becomes
+                 })
+        {
+            Assert.Equal(
+                SessionManager.ScanVerdict.Keep,
+                Liveness(Healthy(SessionSource.ClaudeCloud, state, pid: 0), shortest, written));
+        }
+    }
+
+    // **The negative control, and the only thing that makes the cases above
+    // mean anything.** An exemption written one clause too wide would keep a
+    // cloud session and every local one beside it, and a test that only ever
+    // asserts the cloud answer is exactly as green either way. Same state, same
+    // age, same staleAfter — only the source differs, and everything that is
+    // not cloud still expires.
+    [Theory]
+    [InlineData(SessionSource.ClaudeCode)]
+    [InlineData(SessionSource.Codex)]
+    [InlineData(SessionSource.Grok)]
+    [InlineData(SessionSource.OpenClaw)]
+    [InlineData(SessionSource.RemoteControl)]
+    public void EverySourceButCloudStillExpiresAtTheSameAgeAndSetting(SessionSource source)
+    {
+        var shortest = TimeSpan.FromMinutes(1);
+        var quiet = Now - TimeSpan.FromMinutes(1146);
+
+        Assert.Equal(
+            SessionManager.ScanVerdict.Expired,
+            Liveness(Healthy(source, pid: 0), shortest, quiet));
+
+        // ...and the cloud arm of the same comparison, so the pair is read
+        // together rather than trusted to a test in another part of the file.
+        Assert.Equal(
+            SessionManager.ScanVerdict.Keep,
+            Liveness(Healthy(SessionSource.ClaudeCloud, pid: 0), shortest, quiet));
+    }
+
+    // The exemption is about the clock and nothing else. A cloud session has no
+    // pid to check and is never handed to a background job, but Superseded is
+    // reachable for one — the scan drops an id it has moved on from before it
+    // asks anything else — and skipping expiry must not have made a cloud entry
+    // unremovable by every other rule as well.
+    [Fact]
+    public void ACloudSessionIsStillDroppedForReasonsThatAreNotTheClock()
+    {
+        var superseded = new HashSet<string>(StringComparer.Ordinal) { "session-1" };
+
+        Assert.Equal(
+            SessionManager.ScanVerdict.Superseded,
+            Liveness(Healthy(SessionSource.ClaudeCloud, pid: 0), TimeSpan.FromMinutes(1),
+                     written: new DateTime(2020, 1, 1), superseded: superseded));
+    }
+
     // --- JudgeLiveness: the backgrounded husk (see TranscriptHandoff) --------
 
     [Fact]

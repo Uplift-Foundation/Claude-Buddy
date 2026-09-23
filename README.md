@@ -1820,6 +1820,8 @@ There is nothing to sign in to. It reads the login the Claude Code CLI already s
 
 Two things a cloud orb draws that a local one does not. It wears a ring showing how full its context window is, in the same green/amber/red the usage orbs use, so a session close to the end of its window is visible before you open it — and no ring at all when nothing reported a number, which is not the same as a session at zero. And its hover text is the roster's own words for what it is doing, with the last thing it was seen to do beside them, in the slot a local orb spends on its directory.
 
+**"Keep orbs for" does not apply to cloud sessions, and deliberately so.** That setting is about local sessions, where a status file that has gone quiet usually means the process behind it is gone and the orb left over is a husk. A cloud session has no process to have exited — it lives on Anthropic's servers and can be resumed whenever you go back to it — so an orb for one stays until you archive the session, however long ago it was last touched. Archiving is the retention control, in the product that owns those sessions; before CB-182 the lifetime clock was a second one, and a session idle overnight lost its orb until somebody typed into the web UI.
+
 Like every other source here it is read-only, and off means off: with the switch down the app asks the OS for no credential and opens no connection.
 
 ## 1. Install it
