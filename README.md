@@ -2539,11 +2539,16 @@ outside the app (a launchd agent, an installer replacing the bundle) stopped it.
   — plain activation already works for anything that lives in an `.app`.
   Focus work runs on a background thread (it shells out and waits), so a
   click can't stall the orb animations.
-- **Turn sounds**: a chime on two transitions — `generating → idle` (a turn
-  finished) and any known state `→ waiting` (a session needs you) — decided
-  by pure classifiers in `TurnSignals.cs` and `TurnSoundPolicy.cs`, so the
-  scan wiring in `SessionManager.cs` only has to hand over what happened and
-  never has to decide whether to make noise. `ChimePlayer.cs` plays the
+- **Turn sounds**: a chime on three transitions — `generating → idle` and
+  `waiting → idle` (both read as a turn finishing) and any known state
+  `→ waiting` (a session needs you) — decided by pure classifiers in
+  `TurnSignals.cs` and `TurnSoundPolicy.cs`, so the scan wiring in
+  `SessionManager.cs` only has to hand over what happened and never has to
+  decide whether to make noise. `waiting → idle` counts because Claude Code
+  and Grok wire no `PostToolUse` hook, so approving the last permission
+  prompt of a turn never re-asserts `generating` before `Stop` moves the
+  status straight from `waiting` to `idle` — without this arm, that turn
+  finished with no sound at all. `ChimePlayer.cs` plays the
   actual sound (`afplay` on macOS, `Media.SoundPlayer` via PowerShell on
   Windows), capped at 5 seconds and never sharing a process slot with
   `TextToSpeech`, so a chime can never cancel speech. `SystemSoundCatalog.cs`
