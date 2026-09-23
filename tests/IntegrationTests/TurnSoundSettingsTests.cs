@@ -56,6 +56,31 @@ public class TurnSoundSettingsTests
         Assert.True(ClaudeBuddySettings.TurnSoundsEnabled);
     }
 
+    // QA (CB-167): root["turnSoundsEnabled"]?.GetValue<bool>() reaching a
+    // hand-edited non-bool value threw straight into Load's one catch that
+    // replaces the *entire* model with defaults — a garbage value in this
+    // one new key was costing every other setting in the file, speakScope
+    // and turnFinishedSound included, the exact hole Text() and Number()
+    // already exist to close for every other type. Two shapes of garbage: a
+    // JSON string, and a JSON number, neither of which TryGetValue<bool>
+    // may throw on.
+    [Theory]
+    [InlineData("\"yes\"")]
+    [InlineData("1")]
+    public void AGarbageTurnSoundsEnabledCostsOnlyItselfNotEveryOtherSetting(string garbage)
+    {
+        var dir = NewSettingsDir();
+        File.WriteAllText(Path.Combine(dir, "settings.json"),
+            "{ \"speakScope\": \"summary\", \"turnFinishedSound\": \"Hero\", \"turnSoundsEnabled\": "
+                + garbage + " }");
+
+        PointSettingsAt(dir);
+
+        Assert.Equal(SpeakScope.Summary, ClaudeBuddySettings.SpeakScope);
+        Assert.Equal("Hero", ClaudeBuddySettings.TurnFinishedSound);
+        Assert.True(ClaudeBuddySettings.TurnSoundsEnabled);
+    }
+
     // --- turnFinishedSound / needsAttentionSound ---
 
     [Fact]
@@ -118,6 +143,19 @@ public class TurnSoundSettingsTests
         PointSettingsAt(NewSettingsDir());
 
         Assert.Null(ClaudeBuddySettings.OrbTurnSoundFor("never-touched"));
+    }
+
+    // QA (CB-167): SoundKeyFor now genuinely produces "" for a local
+    // session with no cwd (see SessionScanRulesTests), which makes this an
+    // arm a real scan can reach rather than a purely defensive one.
+    [Theory]
+    [InlineData("")]
+    [InlineData(null)]
+    public void OrbTurnSoundFor_IsNullForAnEmptyKey(string? key)
+    {
+        PointSettingsAt(NewSettingsDir());
+
+        Assert.Null(ClaudeBuddySettings.OrbTurnSoundFor(key!));
     }
 
     [Fact]

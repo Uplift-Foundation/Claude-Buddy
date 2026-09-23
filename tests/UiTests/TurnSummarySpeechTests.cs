@@ -1,4 +1,5 @@
 using Avalonia.Headless.XUnit;
+using Avalonia.Threading;
 using Xunit;
 
 namespace ClaudeBuddy.Tests;
@@ -32,6 +33,15 @@ public class TurnSummarySpeechTests : IDisposable
     private static string LongReply() =>
         string.Join(" ", Enumerable.Repeat("the assistant did a great deal", 60))
             .PadRight(SpeechPlan.ShortEnoughChars + 1, '.');
+
+    // SpeakTurnSummaryAsync's local branch now posts the utterance onto the
+    // UI thread rather than calling it inline (QA, CB-167 — the transcript
+    // walk that used to happen synchronously here moved off-thread, and
+    // SpeechRequest.SpeakTurnSummary has to stay on the UI thread regardless
+    // of which thread the continuation resumes on). A case that awaits the
+    // method and then wants to assert what got spoken has to pump the
+    // dispatcher once afterwards to let that posted job actually run.
+    private static void Flush() => Dispatcher.UIThread.RunJobs();
 
     // --- SpeechRequest.SpeakTurnSummary --------------------------------------
 
@@ -145,8 +155,23 @@ public class TurnSummarySpeechTests : IDisposable
         return path;
     }
 
+    // QA (CB-167) named this arm specifically: an orb that has never had
+    // UpdateFrom called (TurnSounds.Deliver's callback resolving a window
+    // that scan just created, before the first UpdateFrom on the very
+    // fastest path — theoretical today, but this is what makes both
+    // SpeakTurnSummaryAsync and SpeakTurnSummaryRemoteAsync's null-status
+    // arms real code paths and not merely lines that happen never to be
+    // asked).
     [AvaloniaFact]
-    public void ASessionWithNoTranscriptAnywhereSpeaksNothing()
+    public async Task ANeverInitialisedOrbReportsNothingSpokenRatherThanThrowing()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+
+        Assert.False(await orb.SpeakTurnSummaryAsync());
+    }
+
+    [AvaloniaFact]
+    public async Task ASessionWithNoTranscriptAnywhereSpeaksNothing()
     {
         var spoken = (string?)null;
         SpeechRequest.UtteranceForTests = (text, _, _) => spoken = text;
@@ -161,17 +186,20 @@ public class TurnSummarySpeechTests : IDisposable
             TranscriptPath = "",
         });
 
-        orb.SpeakTurnSummary();
+        var spoke = await orb.SpeakTurnSummaryAsync();
+        Flush();
 
+        Assert.False(spoke);
         Assert.Null(spoken);
     }
 
     // Safe to press for real, the same reason SpeakScopeUiTests presses the
     // ordinary button for real: SpeechRequest's seam stands in for the one
-    // excluded line, so this reaches SpeakTurnSummary's whole local branch —
-    // FindSpeakableText, SpeechPlan, and Utter — without starting a process.
+    // excluded line, so this reaches SpeakTurnSummaryAsync's whole local
+    // branch — the off-thread FindSpeakableText walk, SpeechPlan, and Utter
+    // — without starting a process.
     [AvaloniaFact]
-    public void ALocalSessionWithATranscriptSpeaksItsLastTurnThroughTheTurnSummaryPath()
+    public async Task ALocalSessionWithATranscriptSpeaksItsLastTurnThroughTheTurnSummaryPath()
     {
         const string AssistantSaid =
             """{"type":"assistant","uuid":"a1","timestamp":"2026-08-16T10:00:09Z","message":{"role":"assistant","content":[{"type":"text","text":"Fixed the nested-team case."}]}}""";
@@ -192,8 +220,10 @@ public class TurnSummarySpeechTests : IDisposable
                 TranscriptPath = path,
             });
 
-            orb.SpeakTurnSummary();
+            var spoke = await orb.SpeakTurnSummaryAsync();
+            Flush();   // runs the Dispatcher.UIThread.Post(...) this queued
 
+            Assert.True(spoke);
             Assert.Equal("Fixed the nested-team case.", spoken);
         }
         finally
@@ -202,8 +232,22 @@ public class TurnSummarySpeechTests : IDisposable
         }
     }
 
+    // RemoteControl and ClaudeCloud orbs, and anything else that isn't a
+    // local CLI, have no transcript FindSpeakableText can read — the same
+    // guard FindSpeakableText itself has, checked first here so TurnSounds
+    // knows to fall back to a chime rather than trying and failing to find
+    // text for an orb kind that never has any.
     [AvaloniaFact]
-    public void AGatewayOrbWithOpenClawDisabledFiresTheRemotePathWithoutThrowing()
+    public async Task ARemoteControlOrbReportsNothingSpokenRatherThanAttemptingATranscriptWalk()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        orb.UpdateFrom(new SessionStatus { Source = SessionSource.RemoteControl, State = "idle" });
+
+        Assert.False(await orb.SpeakTurnSummaryAsync());
+    }
+
+    [AvaloniaFact]
+    public async Task AGatewayOrbWithOpenClawDisabledFiresTheRemotePathWithoutThrowing()
     {
         var wasEnabled = ClaudeBuddySettings.OpenClawEnabled;
         try
@@ -216,7 +260,10 @@ public class TurnSummarySpeechTests : IDisposable
                 Source = SessionSource.OpenClaw, State = "idle", Title = "Nova"
             });
 
-            orb.SpeakTurnSummary();
+            // OpenClawEnabled = false means LastAssistantTextAsync's callee,
+            // ChatFor, returns null immediately — the "nothing to say" half
+            // of the remote branch.
+            Assert.False(await orb.SpeakTurnSummaryAsync());
         }
         finally
         {
@@ -252,7 +299,7 @@ public class TurnSummarySpeechTests : IDisposable
                 Source = SessionSource.OpenClaw, State = "idle", Title = "Nova"
             });
 
-            await orb.SpeakTurnSummaryRemoteAsync();
+            Assert.True(await orb.SpeakTurnSummaryRemoteAsync());
         }
         finally
         {

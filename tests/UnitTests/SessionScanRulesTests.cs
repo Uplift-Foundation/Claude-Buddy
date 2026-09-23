@@ -535,6 +535,26 @@ public class SessionScanRulesTests
         Assert.Equal("id-9", SessionManager.SoundKeyFor(status, "id-9"));
     }
 
+    // QA (CB-167): a local session with no cwd has PositionKeyFor == "" —
+    // deliberately "no key," per PositionKeyFor's own early return — but the
+    // original SoundKeyFor turned that into "\n<agent>" whenever an agent
+    // name was set: a real, non-empty key shared by every same-named
+    // teammate in every project, since none of them carry a cwd into it.
+    // Muting one would have silently muted them all, everywhere. Staying
+    // empty whenever PositionKeyFor does is what the accessors on
+    // ClaudeBuddySettings already read as "no override" — see
+    // OrbTurnSoundFor's own guard.
+    [Fact]
+    public void SoundKeyFor_AnAgentWithNoCwdIsNotASharedCrossProjectKey()
+    {
+        var status = new SessionStatus
+        {
+            Source = SessionSource.ClaudeCode, Cwd = "", Title = "build", Agent = "engineer-a"
+        };
+
+        Assert.Equal("", SessionManager.SoundKeyFor(status, "id-1"));
+    }
+
     // --- GatherTeams ---------------------------------------------------------
     //
     // The stacking order the tray menu reads top-to-bottom and the orbs are

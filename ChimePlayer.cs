@@ -71,13 +71,20 @@ namespace ClaudeBuddy
             }
             else if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             {
-                // Single-quoted into a PowerShell string literal, escaped the
-                // same way TextToSpeech's own PowerShell command line escapes
-                // a voice name — a path containing an apostrophe is rare but
-                // not exotic (OneDrive's default folder names include one on
-                // some locales), and closing the string early would run
-                // whatever came after it as a second command.
-                var escaped = path.Replace("'", "''");
+                // QA (CB-167): not interpolated into the command line at
+                // all, even quoted. A single-quote escape only guards
+                // against U+0027 — PowerShell's tokenizer also accepts the
+                // Unicode "smart" apostrophes U+2018 through U+201B as
+                // string delimiters, so a path containing one of those
+                // (a OneDrive folder renamed with a curly quote, a
+                // copy-pasted file name) would close the string early and
+                // let whatever followed run as a second command. Passed
+                // through the environment instead, where PowerShell never
+                // tokenizes it as script text, and read back as a literal
+                // value with $env:. TextToSpeech's own PowerShell voice-name
+                // escaping has the identical hole and is deliberately left
+                // alone here — out of scope for this fix, tracked as its own
+                // bug.
                 proc = new Process
                 {
                     StartInfo = new ProcessStartInfo
@@ -86,7 +93,7 @@ namespace ClaudeBuddy
                         ArgumentList =
                         {
                             "-NoProfile", "-Command",
-                            $"(New-Object Media.SoundPlayer '{escaped}').PlaySync()"
+                            "(New-Object Media.SoundPlayer $env:CLAUDEBUDDY_CHIME).PlaySync()"
                         },
                         UseShellExecute = false,
                         CreateNoWindow = true,
@@ -94,6 +101,7 @@ namespace ClaudeBuddy
                         RedirectStandardError = true
                     }
                 };
+                proc.StartInfo.EnvironmentVariables["CLAUDEBUDDY_CHIME"] = path;
             }
             else
             {

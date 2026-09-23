@@ -1821,7 +1821,7 @@ namespace ClaudeBuddy
         // summary is what should be spoken for it — everything upstream of
         // this point (coalescing, the rate limit, the busy-speech fallback to
         // an ordinary chime) has already happened, so this has nothing left
-        // to decide except *which text*.
+        // to decide except *which text*, and whether there was any.
         //
         // Deliberately not OnSpeakClicked with a flag bolted on: that method
         // opens with "if already speaking, cancel" because it is a button a
@@ -1830,27 +1830,55 @@ namespace ClaudeBuddy
         // this orb's own say-so. TurnSoundPolicy's speechBusy check is what
         // keeps this from being called at all while something else is
         // talking; this method's job starts after that question is settled.
-        internal void SpeakTurnSummary()
+        //
+        // Async and bool-returning (QA, CB-167): a caller that gets false
+        // back knows nothing was said — no transcript, no gateway history, or
+        // an orb kind this can't read at all (RemoteControl, ClaudeCloud) —
+        // and TurnSounds uses exactly that to fall back to an ordinary chime
+        // rather than the turn finishing in total silence. The false return
+        // is not an error; a summary that never had anything to summarise is
+        // an ordinary outcome, the same way FindSpeakableText returning null
+        // always has been.
+        internal async Task<bool> SpeakTurnSummaryAsync()
         {
             if (_lastStatus?.Source == SessionSource.OpenClaw)
             {
-                _ = SpeakTurnSummaryRemoteAsync();
-                return;
+                return await SpeakTurnSummaryRemoteAsync().ConfigureAwait(false);
             }
 
-            var text = FindSpeakableText();
-            if (text is null) return;
-            SpeechRequest.SpeakTurnSummary(text, SessionId);
+            // Every other orb kind that isn't a local CLI — RemoteControl,
+            // ClaudeCloud — has no transcript this can read at all.
+            // FindSpeakableText's own guard says the same thing for the same
+            // reason; this is checked first only so the walk below is never
+            // attempted for a kind that can never produce anything from it.
+            if (!(_lastStatus?.IsLocalCli ?? false)) return false;
+
+            // Off whatever thread called this: FindSpeakableText walks a
+            // transcript file and, on the cwd-fallback path, a directory
+            // tree — neither belongs on the Avalonia UI thread
+            // ScanAndUpdateCore runs on, which is exactly the thread QA
+            // found this reaching before this fix.
+            var text = await Task.Run(() => FindSpeakableText()).ConfigureAwait(false);
+            if (text is null) return false;
+
+            // Posted rather than called directly, the same as the remote
+            // branch below and OnSpeakClicked's own local path once did
+            // before CB-165 — SpeechRequest moves TextToSpeech's state,
+            // which every orb's flyout is bound to, and this continuation is
+            // running on a thread pool thread by the time it gets here.
+            Dispatcher.UIThread.Post(() => SpeechRequest.SpeakTurnSummary(text, SessionId));
+            return true;
         }
 
-        internal async Task SpeakTurnSummaryRemoteAsync()
+        internal async Task<bool> SpeakTurnSummaryRemoteAsync()
         {
             var title = _lastStatus?.Title ?? "";
             var text = await OpenClawSessions.LastAssistantTextAsync(SessionId, title);
 
-            if (string.IsNullOrWhiteSpace(text)) return;
+            if (string.IsNullOrWhiteSpace(text)) return false;
 
             Dispatcher.UIThread.Post(() => SpeechRequest.SpeakTurnSummary(text, SessionId));
+            return true;
         }
 
         // Called by SessionManager when speech starts, changes phase or stops.

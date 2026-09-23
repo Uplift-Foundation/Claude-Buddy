@@ -2586,10 +2586,26 @@ namespace ClaudeBuddy
             // One sound for the whole pass, decided from everything the loop
             // above noticed. The callback is how this reaches an orb without
             // TurnSounds ever holding a window reference of its own — see its
-            // own header comment.
-            TurnSounds.Deliver(turnSoundEvents, id =>
+            // own header comment. Async and bool-returning (QA, CB-167): the
+            // window is the only thing that can say whether it actually had
+            // something to speak, and TurnSounds needs that answer, off this
+            // thread, to decide whether to fall back to a chime.
+            //
+            // The dictionary lookup itself goes through Dispatcher.UIThread.
+            // InvokeAsync rather than reading _windows directly, because this
+            // callback is not always called from the UI thread: a deferred
+            // decision (the rate-limit gap was still closed) fires later off
+            // TurnSounds' own timer, and _windows is otherwise only ever
+            // touched from the scan itself. Reading it from a background
+            // thread at the same moment a live scan mutates it is exactly
+            // the kind of race that would show up once in a great while and
+            // be unreproducible.
+            TurnSounds.Deliver(turnSoundEvents, async id =>
             {
-                if (_windows.TryGetValue(id, out var window)) window.SpeakTurnSummary();
+                var window = await Dispatcher.UIThread.InvokeAsync(
+                    () => _windows.TryGetValue(id, out var w) ? w : null);
+                if (window is null) return false;
+                return await window.SpeakTurnSummaryAsync().ConfigureAwait(false);
             }, now);
 
             // After the removal pass, so an orb has already gone before its file
@@ -3497,7 +3513,20 @@ namespace ClaudeBuddy
         internal static string SoundKeyFor(SessionStatus status, string sessionId)
         {
             var key = PositionKeyFor(status, sessionId);
-            return string.IsNullOrEmpty(status.Agent) ? key : key + "\n" + status.Agent;
+
+            // QA (CB-167): an empty PositionKeyFor is a deliberate "no key"
+            // — a local session with no cwd, per PositionKeyFor's own early
+            // return — and the accessors on ClaudeBuddySettings already read
+            // an empty key as "no override, don't bother looking." Appending
+            // the agent name onto that empty string used to turn it into
+            // "\n<agent>", a real, non-empty key with no cwd in it at all —
+            // shared by every session anywhere naming that same agent, in
+            // every project. Muting one teammate would have silently muted
+            // them everywhere. Staying empty whenever PositionKeyFor does is
+            // what keeps this a per-orb key rather than a per-agent-name one.
+            if (key.Length == 0 || string.IsNullOrEmpty(status.Agent)) return key;
+
+            return key + "\n" + status.Agent;
         }
 
         private void RestoreOrbPosition(OrbWindow window, SessionStatus status)

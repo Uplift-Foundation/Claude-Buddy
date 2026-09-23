@@ -1677,7 +1677,7 @@ namespace ClaudeBuddy
                         SpeakCommandVoice = Text(root["speakCommandVoice"]),
                         SpeakEngine = Text(root["speakEngine"]),
                         SpeakScope = Text(root["speakScope"]),
-                        TurnSoundsEnabled = root["turnSoundsEnabled"]?.GetValue<bool>() ?? true,
+                        TurnSoundsEnabled = Bool(root["turnSoundsEnabled"], true),
                         TurnFinishedSound = Text(root["turnFinishedSound"]),
                         NeedsAttentionSound = Text(root["needsAttentionSound"])
                     };
@@ -1983,6 +1983,19 @@ namespace ClaudeBuddy
             node is JsonValue value && value.TryGetValue<double>(out var number)
                 ? number
                 : null;
+
+        // The same defence again, for a bool — written for turnSoundsEnabled
+        // specifically (QA, CB-167). `root["turnSoundsEnabled"]?.GetValue
+        // <bool>()` reaching a hand-edited `"turnSoundsEnabled": "yes"` (or
+        // any non-bool JSON value) throws, and that throw lands in Load's one
+        // catch that replaces the *entire* model with defaults — a brand new
+        // key costing someone every profile name and dragged orb position
+        // over one bad value is exactly the hole Text() and Number() above
+        // were already written to close for every other type. A fallback
+        // rather than null because every other bool setting in this file
+        // defaults to a concrete value too, and turnSoundsEnabled's is true.
+        private static bool Bool(JsonNode? node, bool fallback) =>
+            node is JsonValue value && value.TryGetValue<bool>(out var result) ? result : fallback;
 
         // Test seam: this class is static, so it caches _model and _loaded for
         // the life of the process. A test that points CLAUDE_BUDDY_SETTINGS_DIR

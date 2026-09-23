@@ -1,5 +1,6 @@
 using System.Reflection;
 using Avalonia.Headless.XUnit;
+using Avalonia.Threading;
 using Xunit;
 
 namespace ClaudeBuddy.Tests;
@@ -22,7 +23,22 @@ public class TurnSoundScanTests : IDisposable
 {
     private static readonly int LivePid = Environment.ProcessId;
 
+    private readonly object _lock = new();
     private readonly List<string> _played = new();
+    private TaskCompletionSource<bool>? _chimeSignal;
+
+    // QA (CB-167) found ChimePlayer.Play blocking the UI thread and the fix
+    // is to run it fire-and-forget on a background task — which means a
+    // test can no longer assume a chime has already "played" the instant
+    // ScanAndUpdate() returns. _chimeSignal is what closes that gap: set
+    // right before an assertion needs it, completed by the seam below the
+    // moment a real background Play call actually lands, awaited with a
+    // bounded timeout so a genuine regression (nothing ever plays) fails
+    // this test in five seconds instead of hanging the suite. The timeout
+    // is a hang-guard, not the thing being waited on — the completion
+    // source is. _spoken has no matching completion source: see
+    // WaitForSpeechAsync below for why that path is polled instead.
+    private string? _spoken;
 
     public TurnSoundScanTests()
     {
@@ -42,10 +58,75 @@ public class TurnSoundScanTests : IDisposable
         // otherwise-correct chime silently vanish into "too soon".
         TurnSounds.ResetForTests();
 
-        ChimePlayer.PlayForTests = path => _played.Add(path);
+        ChimePlayer.PlayForTests = path =>
+        {
+            lock (_lock)
+            {
+                _played.Add(path);
+                _chimeSignal?.TrySetResult(true);
+            }
+        };
+
+        SpeechRequest.UtteranceForTests = (text, _, _) =>
+        {
+            lock (_lock) _spoken = text;
+        };
     }
 
-    public void Dispose() => ChimePlayer.PlayForTests = null;
+    public void Dispose()
+    {
+        ChimePlayer.PlayForTests = null;
+        SpeechRequest.UtteranceForTests = null;
+    }
+
+    // Waits for the next background ChimePlayer.Play call, or returns
+    // immediately if one already landed (the live, non-deferred path can
+    // finish before this is even called). Five seconds is generous against
+    // ChimePlayer's own five-second cap plus scheduling slack, and still
+    // fails a genuine regression fast rather than hanging CI.
+    private async Task WaitForChimeAsync()
+    {
+        TaskCompletionSource<bool> signal;
+        lock (_lock)
+        {
+            if (_played.Count > 0) return;
+            signal = _chimeSignal = new TaskCompletionSource<bool>();
+        }
+
+        var winner = await Task.WhenAny(signal.Task, Task.Delay(TimeSpan.FromSeconds(5)));
+        Assert.True(winner == signal.Task, "Timed out waiting for a chime to play in the background.");
+    }
+
+    // A polling pump rather than a plain await: the vibe-summary path
+    // crosses the UI thread twice more after this call returns (once to
+    // resolve the OrbWindow, once to post the actual utterance), each via
+    // Dispatcher.UIThread — and unlike the chime path above, which is pure
+    // background-thread work, nothing drives a headless test's dispatcher
+    // queue on its own between awaits. RunJobs() is what
+    // SpeakScopeUiTests calls this "pumping"; this just does it in a loop
+    // until the seam actually fires or five seconds pass.
+    private async Task WaitForSpeechAsync()
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (DateTime.UtcNow < deadline)
+        {
+            lock (_lock)
+            {
+                if (_spoken is not null) return;
+            }
+
+            Dispatcher.UIThread.RunJobs();
+
+            lock (_lock)
+            {
+                if (_spoken is not null) return;
+            }
+
+            await Task.Delay(20);
+        }
+
+        Assert.Fail("Timed out waiting for a turn summary to be spoken.");
+    }
 
     private sealed class Scratch : IDisposable
     {
@@ -107,10 +188,53 @@ public class TurnSoundScanTests : IDisposable
         return windows.Keys.Cast<string>().ToList();
     }
 
+    // --- the UI thread ---
+
+    // QA (CB-167), measured on a real Mac: ChimePlayer.Play blocks its
+    // caller on WaitForExit for the length of the sound — ~2.45s for Glass
+    // or Ping, 5.05s (the cap) for a long user file. TurnSounds.Deliver used
+    // to call it synchronously from ScanAndUpdateCore, which ScheduleScan
+    // (the real production entry point, used here rather than the
+    // synchronous ScanAndUpdate the other cases in this file call) deliberately
+    // resumes on the Avalonia UI thread — CB-106's own fix for a different bug
+    // depends on that being true. So every chime used to freeze the whole UI
+    // for up to five seconds. The seam fires exactly where the real Play
+    // would run, so the thread it fires on is the thread a real process wait
+    // would have blocked.
+    [AvaloniaFact]
+    public async Task AChimeIsNeverPlayedOnTheUiThread()
+    {
+        using var scratch = new Scratch();
+        scratch.Write("session-a", state: "generating");
+
+        // Overrides the constructor's seam locally, since this case cares
+        // about *which thread* called Play, not whether one did — signalled
+        // the same way WaitForChimeAsync signals for every other case here.
+        var onUiThread = new List<bool>();
+        var signal = new TaskCompletionSource<bool>();
+        ChimePlayer.PlayForTests = _ =>
+        {
+            onUiThread.Add(Dispatcher.UIThread.CheckAccess());
+            signal.TrySetResult(true);
+        };
+
+        ClaudeBuddySettings.ClaudeCodeEnabled = true;
+        var manager = new SessionManager(scratch.Dir);
+
+        await manager.ScheduleScan();
+        scratch.Write("session-a", state: "idle");
+        await manager.ScheduleScan();
+
+        await Task.WhenAny(signal.Task, Task.Delay(TimeSpan.FromSeconds(5)));
+
+        var single = Assert.Single(onUiThread);
+        Assert.False(single, "ChimePlayer.Play ran on the UI thread; the real one blocks it for up to 5 s");
+    }
+
     // --- generating -> idle ---
 
     [AvaloniaFact]
-    public void GeneratingToIdlePlaysExactlyOnce()
+    public async Task GeneratingToIdlePlaysExactlyOnce()
     {
         using var scratch = new Scratch();
         scratch.Write("session-a", state: "generating");
@@ -120,12 +244,13 @@ public class TurnSoundScanTests : IDisposable
 
         scratch.Write("session-a", state: "idle");
         manager.ScanAndUpdate();
+        await WaitForChimeAsync();
 
         Assert.Single(_played);
     }
 
     [AvaloniaFact]
-    public void ARepeatScanOfTheSameIdleStateDoesNotReplay()
+    public async Task ARepeatScanOfTheSameIdleStateDoesNotReplay()
     {
         using var scratch = new Scratch();
         scratch.Write("session-a", state: "generating");
@@ -133,6 +258,7 @@ public class TurnSoundScanTests : IDisposable
 
         scratch.Write("session-a", state: "idle");
         manager.ScanAndUpdate();
+        await WaitForChimeAsync();
         Assert.Single(_played);
 
         // The file on disk is unchanged, so this scan finds idle again — the
@@ -148,7 +274,7 @@ public class TurnSoundScanTests : IDisposable
     // only ResolveFinishedSound, which the generating→idle cases above
     // already cover on their own.
     [AvaloniaFact]
-    public void GeneratingToWaitingPlaysTheAttentionChime()
+    public async Task GeneratingToWaitingPlaysTheAttentionChime()
     {
         using var scratch = new Scratch();
         scratch.Write("session-a", state: "generating");
@@ -156,6 +282,7 @@ public class TurnSoundScanTests : IDisposable
 
         scratch.Write("session-a", state: "waiting");
         manager.ScanAndUpdate();
+        await WaitForChimeAsync();
 
         Assert.Single(_played);
     }
@@ -239,30 +366,47 @@ public class TurnSoundScanTests : IDisposable
     // no chime anywhere in this case, which is the assertion that proves the
     // Summary branch ran rather than silently falling back to one.
     [AvaloniaFact]
-    public void ATurnFinishedSetToSummarySpeaksTheSessionsLastTurnRatherThanChiming()
+    public async Task ATurnFinishedSetToSummarySpeaksTheSessionsLastTurnRatherThanChiming()
     {
         ClaudeBuddySettings.TurnFinishedSound = "summary";
 
-        var spoken = (string?)null;
-        SpeechRequest.UtteranceForTests = (text, _, _) => spoken = text;
-        try
-        {
-            using var scratch = new Scratch();
-            const string AssistantSaid =
-                """{"type":"assistant","uuid":"a1","timestamp":"2026-08-16T10:00:09Z","message":{"role":"assistant","content":[{"type":"text","text":"Fixed the nested-team case."}]}}""";
-            var transcriptPath = scratch.WriteTranscript("session-a", AssistantSaid);
-            scratch.Write("session-a", state: "generating", transcriptPath: transcriptPath);
-            var manager = Scan(scratch);
+        using var scratch = new Scratch();
+        const string AssistantSaid =
+            """{"type":"assistant","uuid":"a1","timestamp":"2026-08-16T10:00:09Z","message":{"role":"assistant","content":[{"type":"text","text":"Fixed the nested-team case."}]}}""";
+        var transcriptPath = scratch.WriteTranscript("session-a", AssistantSaid);
+        scratch.Write("session-a", state: "generating", transcriptPath: transcriptPath);
+        var manager = Scan(scratch);
 
-            scratch.Write("session-a", state: "idle", transcriptPath: transcriptPath);
-            manager.ScanAndUpdate();
+        scratch.Write("session-a", state: "idle", transcriptPath: transcriptPath);
+        manager.ScanAndUpdate();
+        await WaitForSpeechAsync();
 
-            Assert.Empty(_played);
-            Assert.Equal("Fixed the nested-team case.", spoken);
-        }
-        finally
-        {
-            SpeechRequest.UtteranceForTests = null;
-        }
+        Assert.Empty(_played);
+        Assert.Equal("Fixed the nested-team case.", _spoken);
+    }
+
+    // QA (CB-167): a summary that found no text used to go silent —
+    // RemoteControl/ClaudeCloud orbs and a local orb whose transcript has no
+    // assistant text both get false back from SpeakTurnSummaryAsync, and
+    // _lastPlayed had already been stamped by the time that was discovered.
+    // The fix falls back to the ordinary finished chime instead: the turn
+    // still finished, and silence is not an acceptable answer to that.
+    [AvaloniaFact]
+    public async Task ATurnFinishedSetToSummaryFallsBackToTheChimeWhenThereIsNoTextToSpeak()
+    {
+        ClaudeBuddySettings.TurnFinishedSound = "summary";
+
+        using var scratch = new Scratch();
+        // No transcript at all: FindSpeakableText has nothing to read, so
+        // SpeakTurnSummaryAsync reports false and TurnSounds must fall back.
+        scratch.Write("session-a", state: "generating");
+        var manager = Scan(scratch);
+
+        scratch.Write("session-a", state: "idle");
+        manager.ScanAndUpdate();
+        await WaitForChimeAsync();
+
+        Assert.Single(_played);
+        Assert.Null(_spoken);
     }
 }
