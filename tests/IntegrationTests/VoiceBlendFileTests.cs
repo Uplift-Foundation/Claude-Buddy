@@ -28,7 +28,7 @@ public class VoiceBlendFileTests : IDisposable
     private readonly string _engineVoices;
     private readonly string _userVoices;
     private readonly string _logDir;
-    private readonly string? _logWas;
+    private readonly IDisposable _logScope;
 
     public VoiceBlendFileTests()
     {
@@ -39,8 +39,10 @@ public class VoiceBlendFileTests : IDisposable
         Directory.CreateDirectory(_engineVoices);
         Directory.CreateDirectory(_userVoices);
 
-        _logWas = Environment.GetEnvironmentVariable("CLAUDE_BUDDY_LOG_DIR");
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_LOG_DIR", _logDir);
+        // AsyncLocal rather than CLAUDE_BUDDY_LOG_DIR: _logDir is asserted
+        // about below, so it must not be a name any parallel test can see.
+        // See CrashLog.ScopeForTests for the whole argument.
+        _logScope = CrashLog.ScopeForTests(_logDir);
         PersonaLog.ResetForTests();
 
         VoiceBlends.SetPathsForTests(
@@ -50,7 +52,7 @@ public class VoiceBlendFileTests : IDisposable
     public void Dispose()
     {
         VoiceBlends.SetPathsForTests(null);
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_LOG_DIR", _logWas);
+        _logScope.Dispose();
         PersonaLog.ResetForTests();
 
         try { Directory.Delete(_root, recursive: true); } catch (IOException) { }

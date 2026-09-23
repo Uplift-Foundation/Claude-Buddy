@@ -14,19 +14,27 @@ namespace ClaudeBuddy.Tests;
 public class CrashLogFileTests : IDisposable
 {
     private readonly string _dir;
-    private readonly string? _was;
+    private readonly IDisposable _scope;
 
     public CrashLogFileTests()
     {
-        _was = Environment.GetEnvironmentVariable("CLAUDE_BUDDY_LOG_DIR");
         _dir = Path.Combine(Path.GetTempPath(), "cb-crashlog-" + Guid.NewGuid().ToString("N"));
 
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_LOG_DIR", _dir);
+        // A scope, not CLAUDE_BUDDY_LOG_DIR, and this class is the one that
+        // paid for the difference. Writes_the_entry_into_a_directory_it_creates
+        // asserts _dir does not exist yet; setting the environment variable
+        // published _dir to every test running in parallel, and any of the
+        // many that refuse a persona picture — which creates CrashLog.Directory
+        // two calls down from PersonaFiles.Reject, naming no variable — could
+        // create it in the window before that assertion ran. The scope is
+        // AsyncLocal, so _dir has no name outside this test's own flow and
+        // nothing else can reach it. See CrashLog.ScopeForTests.
+        _scope = CrashLog.ScopeForTests(_dir);
     }
 
     public void Dispose()
     {
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_LOG_DIR", _was);
+        _scope.Dispose();
         try { Directory.Delete(_dir, recursive: true); } catch { }
     }
 
@@ -116,7 +124,7 @@ public class CrashLogFileTests : IDisposable
         var blocked = Path.Combine(Path.GetTempPath(), "cb-crashlog-blocked-" + Guid.NewGuid().ToString("N"));
         File.WriteAllText(blocked, "not a directory");
 
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_LOG_DIR", Path.Combine(blocked, "logs"));
+        using var unwritable = CrashLog.ScopeForTests(Path.Combine(blocked, "logs"));
 
         try
         {
@@ -124,7 +132,6 @@ public class CrashLogFileTests : IDisposable
         }
         finally
         {
-            Environment.SetEnvironmentVariable("CLAUDE_BUDDY_LOG_DIR", _dir);
             try { File.Delete(blocked); } catch { }
         }
     }

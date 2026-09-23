@@ -32,14 +32,16 @@ public class PersonaRealFileTests : IDisposable
     private readonly string _logDir =
         Path.Combine(Path.GetTempPath(), "cb-persona-log-" + Guid.NewGuid());
 
-    private readonly string? _logWas;
+    private readonly IDisposable _logScope;
 
     public PersonaRealFileTests()
     {
         Directory.CreateDirectory(_root);
 
-        _logWas = Environment.GetEnvironmentVariable("CLAUDE_BUDDY_LOG_DIR");
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_LOG_DIR", _logDir);
+        // AsyncLocal rather than CLAUDE_BUDDY_LOG_DIR: _logDir is asserted
+        // about below, so it must not be a name any parallel test can see.
+        // See CrashLog.ScopeForTests for the whole argument.
+        _logScope = CrashLog.ScopeForTests(_logDir);
 
         // The dedupe is process-wide and never expires by design, so a message
         // another case already wrote would be silently skipped here.
@@ -48,7 +50,7 @@ public class PersonaRealFileTests : IDisposable
 
     public void Dispose()
     {
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_LOG_DIR", _logWas);
+        _logScope.Dispose();
         PersonaLog.ResetForTests();
 
         if (!OperatingSystem.IsWindows())
@@ -660,7 +662,9 @@ public class PersonaRealFileTests : IDisposable
         var blocked = Path.Combine(_root, "not-a-directory");
         File.WriteAllText(blocked, "I am a file");
 
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_LOG_DIR", blocked);
+        // Nested inside the class's own scope; disposing restores that one
+        // rather than dropping this flow back to the environment variable.
+        using var onAFile = CrashLog.ScopeForTests(blocked);
 
         PersonaLog.Record("a picture was ignored");
 
