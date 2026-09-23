@@ -2539,7 +2539,17 @@ outside the app (a launchd agent, an installer replacing the bundle) stopped it.
   — plain activation already works for anything that lives in an `.app`.
   Focus work runs on a background thread (it shells out and waits), so a
   click can't stall the orb animations.
-- **Sound**: no audio right now, purely visual per your original ask. If
-  you later want a soft sound on the waiting transition, that's one line
-  in `OrbWindow.ApplyState()` — e.g. shell out to `afplay` on macOS or
-  play a system sound on Windows.
+- **Turn sounds**: a chime on two transitions — `generating → idle` (a turn
+  finished) and any known state `→ waiting` (a session needs you) — decided
+  by pure classifiers in `TurnSignals.cs` and `TurnSoundPolicy.cs`, so the
+  scan wiring in `SessionManager.cs` only has to hand over what happened and
+  never has to decide whether to make noise. `ChimePlayer.cs` plays the
+  actual sound (`afplay` on macOS, `Media.SoundPlayer` via PowerShell on
+  Windows), capped at 5 seconds and never sharing a process slot with
+  `TextToSpeech`, so a chime can never cancel speech. `SystemSoundCatalog.cs`
+  lists and resolves the platform's own sound drawer — no audio ships with
+  the app. Settings live under "Sounds" (master switch, plus a picker per
+  trigger offering Off, a spoken vibe-code summary for the finished trigger
+  only, every system sound, or a chosen file); an individual orb can override
+  either trigger from its right-click "Sound" submenu, keyed by
+  `SessionManager.SoundKeyFor`.
