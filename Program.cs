@@ -12,11 +12,36 @@ namespace ClaudeBuddy
     [ExcludeFromCodeCoverage]
     internal static class Program
     {
-        // How long to wait for the screen to unlock before starting anyway. Long
-        // enough to cover coming back to the machine after a while, short enough
-        // that a misread lock state can't keep the app off the menu bar for a
-        // whole session.
+        // How long to wait before starting anyway *when the lock state cannot
+        // be read at all* — a daemon or background-job context, where
+        // CGSessionCopyCurrentDictionary returns null and there is no window
+        // server session to ask. Long enough to cover coming back to the
+        // machine after a while, short enough that an unknowable state can't
+        // keep the app off the menu bar for a whole session.
+        //
+        // This is no longer the cap on a screen the window server has *told*
+        // us is locked — that one is LockedWait below, and starting when this
+        // shorter one expired is what the 2026-09-22 -6661 crash was.
         private static readonly TimeSpan LockWait = TimeSpan.FromHours(2);
+
+        // How long to wait when the window server reports the screen locked.
+        //
+        // Six times LockWait, because the two are answers to different
+        // questions. LockWait is short because an unknowable state might be
+        // wrong and a wrong answer must not cost a session. This one is long
+        // because the reading is the window server's own and starting against
+        // it is a guaranteed -6661 — so the cap should not fire in any real
+        // lock, and twelve hours of continuous lock is not a machine anybody
+        // is waiting to see a menu bar on.
+        //
+        // It is capped at all, rather than waiting forever, because a key
+        // stuck true after a real unlock would otherwise leave Buddy
+        // invisibly absent with no recovery. Capped, that case starts; and if
+        // the screen really is locked, the crash is restarted by
+        // KeepAlive{SuccessfulExit:false} and waits again. ScreenLockWait's
+        // CapFor has the full argument.
+        private static readonly TimeSpan LockedWait = TimeSpan.FromHours(12);
+
         private static readonly TimeSpan LockPoll = TimeSpan.FromSeconds(2);
 
         // Held for the process's lifetime once we own it, so it is not
@@ -65,7 +90,7 @@ namespace ClaudeBuddy
                 // certain to be free, which is the only moment it is:
                 // everything after this line either starts something that
                 // posts to the dispatcher from the thread pool, or holds this
-                // thread for two hours while it does.
+                // thread for hours while it does.
                 claimUiThread: Startup.ClaimUiThread,
 
                 // The serve path before the screen-lock wait below, because it
@@ -98,8 +123,8 @@ namespace ClaudeBuddy
                     // machine kept permanently locked (a headless server Buddy,
                     // paired to hand another machine its resolved agent
                     // voices) never restarted it in any practical timeframe: it
-                    // restarts on every relaunch, so the two-hour cap this
-                    // file's waitForUnlock imposes never actually elapses.
+                    // restarts on every relaunch, so the cap this file's
+                    // waitForUnlock imposes never actually elapses.
                     // Opening the gateway connection is a WebSocket client and
                     // a background poll loop, the same shape as PeerSessions
                     // above rather than anything that touches a window, so it
@@ -119,8 +144,11 @@ namespace ClaudeBuddy
                 },
 
                 // Avalonia's macOS render timer is a CVDisplayLink, and
-                // CVDisplayLinkStart fails with -6661 (kCVReturnInvalidDisplay)
-                // while the screen is locked, which killed startup outright. A
+                // creating one fails with -6661 (kCVReturnInvalidArgument —
+                // see MacOSScreenLock for why this was called
+                // kCVReturnInvalidDisplay, which is -6670, and why the
+                // conclusion holds anyway) while the screen is locked, which
+                // killed startup outright. A
                 // Login Item starts before you type your password, so every
                 // reboot hit this and the app was simply missing afterwards
                 // with no visible reason.
@@ -130,7 +158,16 @@ namespace ClaudeBuddy
                 // locked still get picked up, because the hook writes status
                 // files to disk and SessionManager reads them on its first
                 // scan.
-                waitForUnlock: () => MacOSScreenLock.WaitForUnlock(LockWait, LockPoll),
+                //
+                // This step used to hand back a bool saying "the cap expired
+                // and the screen is still locked", and this lambda's
+                // conversion to Startup.Run's `Action` threw it away — so the
+                // UI started on a screen the app had just confirmed was
+                // locked, which is exactly the -6661 above. It returns void
+                // now and the decision lives in ScreenLockWait, one arm per
+                // state, so there is nothing here left to discard.
+                waitForUnlock: () =>
+                    MacOSScreenLock.WaitForUnlock(LockWait, LockedWait, LockPoll),
 
                 startUi: () => BuildAvaloniaApp().StartWithClassicDesktopLifetime(args));
         }

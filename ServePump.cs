@@ -9,9 +9,29 @@ namespace ClaudeBuddy
     // no display anywhere in it — and CB-39 is what happens when the two are
     // conflated.
     //
-    // On a machine whose screen never unlocks, Program.Main starts the relay,
-    // then sleeps in MacOSScreenLock.WaitForUnlock for up to two hours before
-    // Avalonia starts. Both DispatcherTimers are created by a
+    // **Not currently constructed anywhere outside the tests.**
+    // `RemoteControlSessions._servePump` is declared and read by
+    // `ServePumpRunning`, and never assigned; every `new ServePump` in the tree
+    // is in `tests/UnitTests/ServePumpTests.cs` or
+    // `tests/IntegrationTests/ServePumpTimerTests.cs`. The relay this was
+    // written to keep alive went with the bridge — see RemoteControlSessions,
+    // "the bridge itself is gone and this is the shell it lived in". So the
+    // history below describes a window this class no longer covers, and
+    // nothing should be argued from its existence without checking that first:
+    // a draft of the screen-lock change (below) leaned on this pump covering
+    // the no-dispatcher window, and it does not.
+    //
+    // What does cover that window today is `serveOnLaunch`, which runs before
+    // `MacOSScreenLock.WaitForUnlock` and starts PeerSessions' two plain
+    // System.Threading.Timers plus OpenClawSessions' and ClaudeCloudSessions'
+    // Task.Run loops — none of which need a dispatcher. That matters more
+    // since the wait on a reported lock went from a two-hour cap to a
+    // twelve-hour one: startup can now sit here for the better part of a day.
+    //
+    // The history, kept because the shape is still the right one if a relay
+    // comes back. On a machine whose screen never unlocks, Program.Main
+    // started the relay, then slept in MacOSScreenLock.WaitForUnlock for up to
+    // two hours before Avalonia starts. Both DispatcherTimers are created by a
     // Dispatcher.UIThread.Post, so for those two hours the post only queues: the
     // relay is up, registered, and visible to every other machine, and nothing
     // ever reads a byte of its transcript. Measured on the mini on 29 Aug 2026 —
