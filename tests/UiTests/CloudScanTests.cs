@@ -183,33 +183,35 @@ public class CloudScanTests
         }
     }
 
-    // **The negative control for the whole mapping.**
+    // **CB-182, through the scan rather than through the rule.**
     //
-    // The account API lists every cloud session the account has ever had, so the
-    // one thing that must be true of the scan entry is that its timestamp is the
-    // session's own last activity and not the time of the read. Stamped "now",
-    // this session would be five seconds old and would get an orb; stamped
-    // honestly, it is ten minutes stale against a one-minute lifetime and gets
-    // none.
+    // This case used to assert the opposite — that a cloud session ten minutes
+    // quiet against a one-minute lifetime got no orb — and that was the bug
+    // rather than the contract. "Keep orbs for" is about local sessions, where
+    // silence means the process is probably gone; a cloud session has no process
+    // to have exited, so the only thing its `updated_at` going quiet says is that
+    // nobody has typed into it lately. Nineteen hours is the age measured on the
+    // live account, where it was the only non-archived cloud session there was.
     //
-    // Idle deliberately, not generating: JudgeLiveness exempts a *working* cloud
-    // session from the staleness check on purpose, so a fixture in that state
-    // would pass this test no matter which timestamp the mapping used, and would
-    // therefore prove nothing at all.
+    // Idle deliberately, not generating: a generating fixture was exempt from the
+    // staleness check before this change too, so it would have passed either way
+    // and proved nothing.
     [AvaloniaFact]
-    public void AStaleCloudSessionGetsNoOrb()
+    public void ALongIdleCloudSessionStillGetsAnOrb()
     {
         using var scratch = new Scratch();
         var wasLifetime = ClaudeBuddySettings.OrbLifetimeMinutes;
         try
         {
+            // The shortest the picker offers, so nothing longer can be what
+            // carried this.
             ClaudeBuddySettings.OrbLifetimeMinutes = 1;
-            Publish(Session("session_01old", state: "idle", lastActivity: Now.AddMinutes(-10)));
+            Publish(Session("session_01old", state: "idle", lastActivity: Now.AddMinutes(-1146)));
 
             var manager = Manager(scratch.Dir);
             manager.ScanAndUpdate();
 
-            Assert.Empty(Orbs(manager));
+            Assert.Contains("cloud:session_01old", Orbs(manager).Keys);
         }
         finally
         {
@@ -218,9 +220,116 @@ public class CloudScanTests
         }
     }
 
-    // ...and the positive half of the same pair, on the same lifetime, so a
-    // scan that drew nothing for an unrelated reason cannot pass the control
-    // above by accident.
+    // **The negative control, in one scan, which is what makes the case above
+    // mean anything.** An exemption a clause too wide stops the clock for
+    // everybody, and a suite that only ever asks about cloud orbs is green
+    // either way. So: one cloud session and one local status file, the same age,
+    // in the same pass, against the same setting. The cloud orb is drawn and the
+    // local one is not — the sweep is still running, it just no longer reaches
+    // the cloud.
+    [AvaloniaFact]
+    public void ALocalSessionOfTheSameAgeStillExpiresInTheSameScan()
+    {
+        using var scratch = new Scratch();
+        var wasLifetime = ClaudeBuddySettings.OrbLifetimeMinutes;
+        var wasClaudeCode = ClaudeBuddySettings.ClaudeCodeEnabled;
+        try
+        {
+            ClaudeBuddySettings.OrbLifetimeMinutes = 1;
+            ClaudeBuddySettings.ClaudeCodeEnabled = true;
+            Publish(Session("session_01old", state: "idle", lastActivity: Now.AddMinutes(-1146)));
+
+            // The hooks' own shape: a live pid (this process, the one pid on the
+            // machine certainly alive, so ProcessGone cannot be what drops it)
+            // and a terminal, with an mtime as old as the cloud session's
+            // last activity.
+            var local = Path.Combine(scratch.Dir, "local-session.txt");
+            File.WriteAllText(local, System.Text.Json.JsonSerializer.Serialize(new SessionStatus
+            {
+                State = "idle",
+                Cwd = "/Users/user/project",
+                SessionPid = Environment.ProcessId,
+                TermProgram = "iTerm.app",
+                Tty = "/dev/ttys004",
+            }));
+            File.SetLastWriteTimeUtc(local, Now.AddMinutes(-1146));
+
+            var manager = Manager(scratch.Dir);
+            manager.ScanAndUpdate();
+
+            Assert.Contains("cloud:session_01old", Orbs(manager).Keys);
+            Assert.DoesNotContain("local-session", Orbs(manager).Keys);
+        }
+        finally
+        {
+            ClaudeBuddySettings.ClaudeCodeEnabled = wasClaudeCode;
+            ClaudeBuddySettings.OrbLifetimeMinutes = wasLifetime;
+            PublishNothing();
+        }
+    }
+
+    // **The other negative control: archiving is the retention policy, and it is
+    // ClaudeCloudRoster.Keep that applies it — not the clock.**
+    //
+    // Both rows go through the real roster parse rather than being hand-built as
+    // sessions, because that is the only way to show *which* rule dropped the
+    // archived one. The archived row is recent and the kept one is nineteen hours
+    // quiet, so a clock would have taken exactly the wrong one: the orb that
+    // survives is the old one and the orb that never appears is the fresh one.
+    [AvaloniaFact]
+    public void AnArchivedCloudSessionDrawsNoOrbAndTheFilterIsWhatDroppedIt()
+    {
+        using var scratch = new Scratch();
+        var wasLifetime = ClaudeBuddySettings.OrbLifetimeMinutes;
+        try
+        {
+            ClaudeBuddySettings.OrbLifetimeMinutes = 1;
+
+            var reduction = ClaudeCloudRoster.Reduce(new[]
+            {
+                ClaudeCloudRoster.ParsePage(
+                    "{\"data\":["
+                    + RosterRow("session_01gone", "archived", Now.AddMinutes(-1))
+                    + "," + RosterRow("session_01kept", "idle", Now.AddMinutes(-1146))
+                    + "],\"has_more\":false}")
+            }, truncated: false);
+
+            // Said before the scan, so a scan drawing one orb cannot be read as
+            // the filter working when it was really the roster arriving empty.
+            Assert.Equal("session_01kept", Assert.Single(reduction.Sessions).Id);
+
+            Publish(reduction.Sessions.ToArray());
+
+            var manager = Manager(scratch.Dir);
+            manager.ScanAndUpdate();
+
+            Assert.Contains("cloud:session_01kept", Orbs(manager).Keys);
+            Assert.DoesNotContain("cloud:session_01gone", Orbs(manager).Keys);
+        }
+        finally
+        {
+            ClaudeBuddySettings.OrbLifetimeMinutes = wasLifetime;
+            PublishNothing();
+        }
+    }
+
+    // A roster row as the account API writes one, reduced to the fields these two
+    // cases turn on. `session_url` and `session_context.cwd` are empty because
+    // they were empty on every row measured — see ClaudeCloudRosterTests, whose
+    // fixture this follows.
+    private static string RosterRow(string id, string status, DateTime updated) =>
+        "{\"id\":\"" + id + "\",\"environment_kind\":\"anthropic_cloud\""
+        + ",\"session_status\":\"" + status + "\",\"status_bucket\":\"idle\""
+        + ",\"title\":\"a session\",\"updated_at\":\""
+        + updated.ToString("yyyy-MM-ddTHH:mm:ssZ")
+        + "\",\"created_at\":\"2026-09-01T00:00:00Z\",\"session_url\":\"\""
+        + ",\"session_context\":{\"cwd\":\"\"}}";
+
+    // A recent cloud session on the same one-minute lifetime. It says less than
+    // it did before CB-182 — both halves of the pair are Keep now — but it is
+    // still the case that fails if the mapping stops producing a scan entry at
+    // all, which is the only way the archived-session control above could pass
+    // for the wrong reason.
     [AvaloniaFact]
     public void ARecentCloudSessionSurvivesTheSameLifetime()
     {
@@ -342,11 +451,11 @@ public class CloudScanTests
         }
     }
 
-    // A working cloud session is exempt from the staleness check, which is the
-    // other half of the pair AStaleCloudSessionGetsNoOrb relies on — and the
-    // reason that test uses an idle fixture. A roster read on a timer cannot
-    // tell "still working" from "nothing heard for a while", so hiding a
-    // generating orb is the worst available answer.
+    // A working cloud session that has gone quiet. This was the *only* cloud
+    // exemption before CB-182 — the reason the idle cases above are written idle
+    // — and it is kept because a roster read on a timer cannot tell "still
+    // working" from "nothing heard for a while", so this is the state where
+    // hiding the orb would be worst if the broader exemption were ever narrowed.
     [AvaloniaFact]
     public void AWorkingCloudSessionSurvivesGoingQuiet()
     {
