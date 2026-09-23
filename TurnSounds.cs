@@ -38,6 +38,19 @@ namespace ClaudeBuddy
         private static Func<string, Task<bool>>? _pendingSpeak;
         private static Timer? _pendingTimer;
 
+        // QA (CB-167): playback is chained onto this rather than fired
+        // independently per decision. The 2 s rate limit only spaces out
+        // when a new sound is *decided*; it says nothing about how long the
+        // previous one takes to actually finish, and a user's own chosen
+        // file can run the full 5 s cap ChimePlayer allows. Two decisions
+        // landing 2.1 s apart — perfectly legal under the rate limit — could
+        // otherwise start a second afplay/PlaySync while the first was still
+        // running. Chaining makes "the next chime waits for the previous one
+        // to actually finish" true regardless of how close together two
+        // decisions land; TaskScheduler.Default keeps each link off
+        // whatever thread scheduled it.
+        private static Task _chimeChain = Task.CompletedTask;
+
         // Test seam: a scan-level test wants a clean rate-limit clock and no
         // timer left armed from a previous case, without sleeping two real
         // seconds to clear either — the same reason
@@ -51,6 +64,36 @@ namespace ClaudeBuddy
                 _pendingSpeak = null;
                 _pendingTimer?.Dispose();
                 _pendingTimer = null;
+                _chimeChain = Task.CompletedTask;
+            }
+        }
+
+        // QA (CB-167): called from a session's own removal — pruned from
+        // the scan (a husk, backgrounded or genuinely gone) or Settled by a
+        // manual reset — so a deferred signal for that exact session can
+        // never fire late for an orb that has already stopped meaning
+        // anything by the time its two seconds are up. Ignored for any
+        // other session's pending signal, since the one still-relevant
+        // pending slot is the only thing here.
+        internal static void CancelPendingFor(string sessionId)
+        {
+            lock (Gate)
+            {
+                if (_pending?.SessionId == sessionId) ClearPendingLocked();
+            }
+        }
+
+        // The Prune-shaped version of the same guard: whatever the scan no
+        // longer sees this pass is exactly what Prune is about to drop from
+        // the tracker, and a pending signal for any of them is stale for the
+        // identical reason. Called with the same `seen` set
+        // ScanAndUpdateCore already built, so this costs nothing extra to
+        // compute.
+        internal static void CancelPendingUnlessSeen(IReadOnlySet<string> seen)
+        {
+            lock (Gate)
+            {
+                if (_pending is { } pending && !seen.Contains(pending.SessionId!)) ClearPendingLocked();
             }
         }
 
@@ -111,13 +154,22 @@ namespace ClaudeBuddy
 
         private static void ClearPending()
         {
-            lock (Gate)
-            {
-                _pending = null;
-                _pendingSpeak = null;
-                _pendingTimer?.Dispose();
-                _pendingTimer = null;
-            }
+            lock (Gate) ClearPendingLocked();
+        }
+
+        // The shared body every clearing path uses, callable only while
+        // already holding Gate — CancelPendingFor and
+        // CancelPendingUnlessSeen both check a condition and clear
+        // atomically with it, which a lock-then-call-the-locking-version
+        // shape cannot do without either double-locking (fine here, since
+        // .NET locks are reentrant, but confusing to read) or duplicating
+        // this body.
+        private static void ClearPendingLocked()
+        {
+            _pending = null;
+            _pendingSpeak = null;
+            _pendingTimer?.Dispose();
+            _pendingTimer = null;
         }
 
         // Runs on the timer's own thread-pool callback thread — never the
@@ -170,17 +222,31 @@ namespace ClaudeBuddy
             // is the one that has to wait and see.
             lock (Gate) _lastPlayed = moment;
 
-            _ = Task.Run(() =>
+            EnqueueChime(path);
+        }
+
+        // Every real chime — the direct path here and the vibe-summary
+        // fallback below — goes through this one chain, which is what
+        // guarantees the two can never overlap either: a fallback chime
+        // starting while an unrelated orb's chime is still mid-playback
+        // would be exactly the same rattle two ordinary chimes landing
+        // close together would be.
+        private static void EnqueueChime(string path)
+        {
+            lock (Gate)
             {
-                try
+                _chimeChain = _chimeChain.ContinueWith(_ =>
                 {
-                    ChimePlayer.Play(path);
-                }
-                catch (Exception ex)
-                {
-                    Console.Error.WriteLine($"Claude Buddy: couldn't play a turn sound: {ex.Message}");
-                }
-            });
+                    try
+                    {
+                        ChimePlayer.Play(path);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.Error.WriteLine($"Claude Buddy: couldn't play a turn sound: {ex.Message}");
+                    }
+                }, TaskScheduler.Default);
+            }
         }
 
         // Off the UI thread for its whole life: trySpeakTurnSummary walks a
@@ -212,7 +278,7 @@ namespace ClaudeBuddy
                 if (fallback is null) return;   // even the platform default is missing on this machine
 
                 lock (Gate) _lastPlayed = moment;
-                ChimePlayer.Play(fallback);
+                EnqueueChime(fallback);
             }
             catch (Exception ex)
             {

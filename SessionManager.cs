@@ -2583,6 +2583,14 @@ namespace ClaudeBuddy
             // just keeps every "after the loop, once" step grouped together.
             _turnSignals.Prune(seen);
 
+            // QA (CB-167): a deferred signal still waiting out the rate
+            // limit for a session that has just dropped out of `seen` — a
+            // backgrounded husk, one genuinely gone — must not fire once its
+            // two seconds are up. The signal was real when it was raised,
+            // but by the time the timer would fire the session it was about
+            // is no longer one the scan is willing to say anything about.
+            TurnSounds.CancelPendingUnlessSeen(seen);
+
             // One sound for the whole pass, decided from everything the loop
             // above noticed. The callback is how this reaches an orb without
             // TurnSounds ever holding a window reference of its own — see its
@@ -3751,6 +3759,13 @@ namespace ClaudeBuddy
             // never notice the actual generating → idle transition that
             // follows. See TurnSignalTracker.Settle's own comment.
             _turnSignals.Settle(sessionId, "idle");
+
+            // QA (CB-167): the same silence Settle just gave the tracker
+            // applies to a sound still waiting on this session — a person
+            // clearing a stuck orb should not have it ding a couple of
+            // seconds later for a turn they just told the app to forget
+            // about.
+            TurnSounds.CancelPendingFor(sessionId);
 
             if (_windows.TryGetValue(sessionId, out var window))
             {

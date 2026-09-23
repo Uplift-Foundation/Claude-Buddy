@@ -24,8 +24,13 @@ namespace ClaudeBuddy
     {
         internal static readonly SoundAction Silent = new(SoundActionKind.Silent);
 
-        internal static SoundAction Chime(string path, DateTime? playAt = null) =>
-            new(SoundActionKind.Chime, Path: path, PlayAt: playAt);
+        // QA (CB-167): a Chime action now carries the session id that
+        // resolved to it too, not just Path — a pending Chime needs one to
+        // be cancellable the same way a pending Summary already was.
+        // TurnSounds is what actually reads it; Decide never inspects its
+        // own output's SessionId for anything.
+        internal static SoundAction Chime(string sessionId, string path, DateTime? playAt = null) =>
+            new(SoundActionKind.Chime, Path: path, SessionId: sessionId, PlayAt: playAt);
 
         internal static SoundAction Summary(string sessionId, DateTime? playAt = null) =>
             new(SoundActionKind.Summary, SessionId: sessionId, PlayAt: playAt);
@@ -132,7 +137,7 @@ namespace ClaudeBuddy
                 var playAt = lastPlayed + MinimumGap;
                 return chosen.Kind == SoundActionKind.Summary
                     ? SoundAction.Summary(chosen.SessionId!, playAt)
-                    : SoundAction.Chime(chosen.Path!, playAt);
+                    : SoundAction.Chime(chosen.SessionId!, chosen.Path!, playAt);
             }
 
             return chosen;
@@ -166,16 +171,16 @@ namespace ClaudeBuddy
                 // to something else — which is worse than the chime someone
                 // who never asked for speech gets every time.
                 return speechBusy
-                    ? ChimeOrSilent(settings.ResolveFinishedSound(null))
+                    ? ChimeOrSilent(ev.SessionId, settings.ResolveFinishedSound(null))
                     : SoundAction.Summary(ev.SessionId);
             }
 
             var resolve = isAttention ? settings.ResolveAttentionSound : settings.ResolveFinishedSound;
-            return ChimeOrSilent(resolve(setting));
+            return ChimeOrSilent(ev.SessionId, resolve(setting));
         }
 
-        private static SoundAction ChimeOrSilent(string? path) =>
-            path is null ? SoundAction.Silent : SoundAction.Chime(path);
+        private static SoundAction ChimeOrSilent(string sessionId, string? path) =>
+            path is null ? SoundAction.Silent : SoundAction.Chime(sessionId, path);
 
         private static bool IsOff(string? setting) =>
             setting is not null && string.Equals(setting, Off, StringComparison.OrdinalIgnoreCase);

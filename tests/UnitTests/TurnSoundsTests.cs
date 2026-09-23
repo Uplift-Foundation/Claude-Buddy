@@ -1,3 +1,4 @@
+using System.Threading;
 using Xunit;
 
 namespace ClaudeBuddy.Tests;
@@ -106,27 +107,186 @@ public class TurnSoundsTests : IDisposable
         ClaudeBuddySettings.TurnSoundsEnabled = true;
         ClaudeBuddySettings.TurnFinishedSound = null;
 
-        TurnSounds.Deliver(new[] { Finished("key-a", "session-a") }, NoSummary, Past);
+        // Anchored to the real clock rather than Past for this one case,
+        // deliberately: SchedulePending's own delay is always computed
+        // against real DateTime.UtcNow, so a decision built from a `now`
+        // years in the past (as every other case here uses) gives that
+        // timer a delay that clamps to zero — which fires it before this
+        // test's own third Deliver call could ever race it fairly. Anchored
+        // to "now," the pending timer gets a real ~2 s window, and the third
+        // call's *logical* clock (not the real one) is what makes it live
+        // rather than deferred — so it reliably arrives first.
+        var start = DateTime.UtcNow;
+
+        TurnSounds.Deliver(new[] { Finished("key-a", "session-a") }, NoSummary, start);
         await Task.WhenAny(signal.Task, Task.Delay(TimeSpan.FromSeconds(2)));
         Assert.Single(played);
 
-        // Deferred — still inside the gap.
-        TurnSounds.Deliver(new[] { Finished("key-b", "session-b") }, NoSummary, Past.AddSeconds(1));
+        // Deferred — 0.1 s of logical time after the first, still inside
+        // the 2 s gap. Real elapsed time so far is milliseconds, so the
+        // pending timer this arms has close to a real two-second delay.
+        TurnSounds.Deliver(new[] { Finished("key-b", "session-b") }, NoSummary, start.AddMilliseconds(100));
 
-        // A third signal, this time genuinely past the gap (Decide's own
-        // clock, not the pending timer's real one) — a live decision that
-        // must clear the still-pending second one before it plays.
+        // A third signal, logically 2.5 s after the first (so Decide calls
+        // it live, not deferred) but issued in real time only milliseconds
+        // after the second — well before the pending timer's real-world
+        // deadline. This is what a live decision clearing a still-pending
+        // one actually looks like without racing the clock that would
+        // otherwise decide the test's outcome.
         signal = new TaskCompletionSource<bool>();
-        TurnSounds.Deliver(new[] { Finished("key-c", "session-c") }, NoSummary, Past.AddSeconds(10));
+        TurnSounds.Deliver(new[] { Finished("key-c", "session-c") }, NoSummary, start.AddSeconds(2.5));
 
         var third = await Task.WhenAny(signal.Task, Task.Delay(TimeSpan.FromSeconds(2)));
         Assert.Equal(signal.Task, third);
 
-        // Give the cleared timer a moment it would have needed to fire if
-        // clearing it had not actually worked, then check the count settled
-        // rather than kept climbing.
-        await Task.Delay(TimeSpan.FromMilliseconds(200));
+        // Wait past the real two seconds the cleared timer would have
+        // needed to fire on its own, then check the count settled at two —
+        // the first play and the third's live one — rather than climbing to
+        // three from the second playing anyway.
+        await Task.Delay(TimeSpan.FromSeconds(2));
         Assert.Equal(2, played.Count);
+    }
+
+    // QA (CB-167): the 2 s rate limit only spaces out when a sound is
+    // *decided* — it says nothing about how long the previous one takes to
+    // actually finish, and a user's own chosen file can run the full 5 s
+    // cap. Two live decisions landing exactly 2 s apart (both legal, one
+    // right after the gap the other closed) must still never have their
+    // playback overlap if the first is still running. The seam simulates a
+    // real duration with a short sleep — not a wait for a signal, an
+    // honest stand-in for "afplay is still running" — so the test can
+    // observe whether the second's start actually waited for the first's
+    // finish rather than merely being decided after it.
+    [Fact]
+    public async Task TwoChimesDecidedTwoSecondsApartNeverOverlapInActualPlayback()
+    {
+        var events = new System.Collections.Generic.List<(string Path, DateTime Started, DateTime Finished)>();
+        var done = new TaskCompletionSource<bool>();
+
+        ChimePlayer.PlayForTests = path =>
+        {
+            var started = DateTime.UtcNow;
+            Thread.Sleep(300); // stands in for a real, audible-length chime
+            var finished = DateTime.UtcNow;
+            lock (events)
+            {
+                events.Add((path, started, finished));
+                if (events.Count == 2) done.TrySetResult(true);
+            }
+        };
+
+        ClaudeBuddySettings.TurnSoundsEnabled = true;
+        ClaudeBuddySettings.TurnFinishedSound = null;
+
+        var start = DateTime.UtcNow;
+        TurnSounds.Deliver(new[] { Finished("key-a", "session-a") }, NoSummary, start);
+        TurnSounds.Deliver(new[] { Finished("key-b", "session-b") }, NoSummary, start.AddSeconds(2));
+
+        await Task.WhenAny(done.Task, Task.Delay(TimeSpan.FromSeconds(3)));
+
+        Assert.Equal(2, events.Count);
+        Assert.True(
+            events[1].Started >= events[0].Finished,
+            "the second chime started before the first had finished playing");
+    }
+
+    // QA (CB-167): a deferred signal must never fire late for a session
+    // that has already been told to forget what it was doing — a husk
+    // pruned from the scan, or a manual reset. CancelPendingFor and
+    // CancelPendingUnlessSeen are SessionManager's two call sites for that;
+    // both are anchored to the real clock for the same race-avoidance
+    // reason ALiveDecisionAfterADeferredOneDoesNotAlsoPlayThePendingOne is.
+    [Fact]
+    public async Task CancelPendingForDropsAPendingSignalBeforeItsTimerFires()
+    {
+        var played = new System.Collections.Generic.List<string>();
+        var signal = new TaskCompletionSource<bool>();
+        ChimePlayer.PlayForTests = path =>
+        {
+            lock (played) played.Add(path);
+            signal.TrySetResult(true);
+        };
+
+        ClaudeBuddySettings.TurnSoundsEnabled = true;
+        ClaudeBuddySettings.TurnFinishedSound = null;
+
+        var start = DateTime.UtcNow;
+        TurnSounds.Deliver(new[] { Finished("key-a", "session-a") }, NoSummary, start);
+        await Task.WhenAny(signal.Task, Task.Delay(TimeSpan.FromSeconds(2)));
+        Assert.Single(played);
+
+        // Deferred — real delay close to two seconds, plenty of window to
+        // cancel it before it would fire on its own.
+        TurnSounds.Deliver(new[] { Finished("key-b", "session-b") }, NoSummary, start.AddMilliseconds(100));
+
+        TurnSounds.CancelPendingFor("session-b");
+
+        await Task.Delay(TimeSpan.FromSeconds(2));
+        Assert.Single(played); // still just the first — the second never played
+    }
+
+    // The negative control: cancelling a *different* session's pending slot
+    // must not touch this one's — otherwise CancelPendingFor could not be
+    // told apart from ClearPending, which is precisely the bug this
+    // wouldn't catch if the session id check were ever dropped.
+    [Fact]
+    public async Task CancelPendingForADifferentSessionLeavesTheRealPendingSignalAlone()
+    {
+        var played = new System.Collections.Generic.List<string>();
+        var signal = new TaskCompletionSource<bool>();
+        ChimePlayer.PlayForTests = path =>
+        {
+            lock (played) played.Add(path);
+            signal.TrySetResult(true);
+        };
+
+        ClaudeBuddySettings.TurnSoundsEnabled = true;
+        ClaudeBuddySettings.TurnFinishedSound = null;
+
+        var start = DateTime.UtcNow;
+        TurnSounds.Deliver(new[] { Finished("key-a", "session-a") }, NoSummary, start);
+        await Task.WhenAny(signal.Task, Task.Delay(TimeSpan.FromSeconds(2)));
+        Assert.Single(played);
+
+        signal = new TaskCompletionSource<bool>();
+        TurnSounds.Deliver(new[] { Finished("key-b", "session-b") }, NoSummary, start.AddMilliseconds(100));
+
+        TurnSounds.CancelPendingFor("some-other-session-entirely");
+
+        var second = await Task.WhenAny(signal.Task, Task.Delay(TimeSpan.FromSeconds(3)));
+        Assert.Equal(signal.Task, second);
+        Assert.Equal(2, played.Count);
+    }
+
+    // The Prune-shaped guard: a session missing from `seen` (a husk the
+    // scan just dropped) loses its pending signal the same way a Settled
+    // one does.
+    [Fact]
+    public async Task CancelPendingUnlessSeenDropsAPendingSignalForASessionTheScanNoLongerSees()
+    {
+        var played = new System.Collections.Generic.List<string>();
+        var signal = new TaskCompletionSource<bool>();
+        ChimePlayer.PlayForTests = path =>
+        {
+            lock (played) played.Add(path);
+            signal.TrySetResult(true);
+        };
+
+        ClaudeBuddySettings.TurnSoundsEnabled = true;
+        ClaudeBuddySettings.TurnFinishedSound = null;
+
+        var start = DateTime.UtcNow;
+        TurnSounds.Deliver(new[] { Finished("key-a", "session-a") }, NoSummary, start);
+        await Task.WhenAny(signal.Task, Task.Delay(TimeSpan.FromSeconds(2)));
+        Assert.Single(played);
+
+        TurnSounds.Deliver(new[] { Finished("key-b", "session-b") }, NoSummary, start.AddMilliseconds(100));
+
+        // "session-b" is the husk this pass no longer sees.
+        TurnSounds.CancelPendingUnlessSeen(new HashSet<string> { "session-a" });
+
+        await Task.Delay(TimeSpan.FromSeconds(2));
+        Assert.Single(played);
     }
 
     // Both background catches: a chime backend and a summary attempt can

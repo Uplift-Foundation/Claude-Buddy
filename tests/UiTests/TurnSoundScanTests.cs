@@ -84,12 +84,27 @@ public class TurnSoundScanTests : IDisposable
     // finish before this is even called). Five seconds is generous against
     // ChimePlayer's own five-second cap plus scheduling slack, and still
     // fails a genuine regression fast rather than hanging CI.
-    private async Task WaitForChimeAsync()
+    //
+    // `baseline` is how many chimes must already have played before this
+    // call is satisfied by count alone — the caller reads _played.Count
+    // *before* triggering the scan it is about to wait on, not this method
+    // reading it after being called. QA's own fix (CB-167) had this
+    // backwards for one case and broke a passing one to fix it: capturing
+    // the baseline *inside* this method, after the triggering scan had
+    // already run, raced the background chain — EnqueueChime's continuation
+    // can land in well under a millisecond on a warm thread pool, faster
+    // than this method's own two lock acquisitions apart. A single-chime
+    // test whose chime had already fired by the time this ran would then
+    // capture that 1 as its own baseline and wait forever for a second one
+    // that was never coming. The check and the arm are one atomic lock
+    // now, which closes that gap; a baseline supplied by the caller closes
+    // the other.
+    private async Task WaitForChimeAsync(int baseline = 0)
     {
         TaskCompletionSource<bool> signal;
         lock (_lock)
         {
-            if (_played.Count > 0) return;
+            if (_played.Count > baseline) return;
             signal = _chimeSignal = new TaskCompletionSource<bool>();
         }
 
@@ -138,7 +153,7 @@ public class TurnSoundScanTests : IDisposable
         public void Write(
             string sessionId, string state, string title = "", string cwd = "/Users/user/project",
             int? pid = null, string termProgram = "iTerm.app", string tty = "/dev/ttys004",
-            string transcriptPath = "")
+            string transcriptPath = "", string cli = "")
         {
             var path = Path.Combine(Dir, sessionId + ".txt");
             File.WriteAllText(path, System.Text.Json.JsonSerializer.Serialize(new SessionStatus
@@ -150,6 +165,7 @@ public class TurnSoundScanTests : IDisposable
                 TermProgram = termProgram,
                 Tty = tty,
                 TranscriptPath = transcriptPath,
+                Cli = cli,
             }));
         }
 
@@ -161,6 +177,12 @@ public class TurnSoundScanTests : IDisposable
             File.WriteAllText(path, string.Join("\n", lines) + "\n");
             return path;
         }
+
+        // Deleting the status file is the whole of "this session is gone" —
+        // the same SessionEnd path SessionScanTests exercises, and QA's own
+        // route for making a session a husk the scan simply no longer sees.
+        public void Delete(string sessionId) =>
+            File.Delete(Path.Combine(Dir, sessionId + ".txt"));
 
         public void Dispose()
         {
@@ -408,5 +430,117 @@ public class TurnSoundScanTests : IDisposable
 
         Assert.Single(_played);
         Assert.Null(_spoken);
+    }
+
+    // --- a deferred signal for a session that stops mattering ---
+
+    // QA (CB-167): "the deferral must never let a husk chime late." A real
+    // scan, using ScanAndUpdate's own real clock rather than a fake one
+    // (ScanAndUpdate has no override), so the wait below is a genuine two
+    // real seconds — slower than the pure TurnSoundsTests cases, and the
+    // only way to prove SessionManager's own Prune-then-CancelPending
+    // wiring rather than just TurnSounds' half of it.
+    [AvaloniaFact]
+    public async Task APrunedHuskNeverPlaysASignalThatWasStillWaitingOnTheGap()
+    {
+        using var scratch = new Scratch();
+        scratch.Write("session-a", state: "generating");
+        // codex, not the default ClaudeCode: two files sharing both a pid
+        // and a CLI put Superseded's job-list lookup in play (see
+        // SessionScanTests' own header), which is not what this case is
+        // about.
+        scratch.Write("session-b", state: "generating", cli: "codex");
+        var manager = Scan(scratch);
+
+        // A finishes and plays immediately — the rate limit's clock starts
+        // here.
+        scratch.Write("session-a", state: "idle");
+        manager.ScanAndUpdate();
+        await WaitForChimeAsync();
+        Assert.Single(_played);
+
+        // B hits a permission prompt right away, well inside A's 2 s gap —
+        // deferred, not dropped, per the earlier QA fix.
+        scratch.Write("session-b", state: "waiting", cli: "codex");
+        manager.ScanAndUpdate();
+
+        // B is pruned before its two seconds are up: SessionEnd's own path,
+        // its status file simply gone, so the next scan's `seen` no longer
+        // names it at all.
+        scratch.Delete("session-b");
+        manager.ScanAndUpdate();
+
+        // Past the real gap. If cancelling the pending signal had not
+        // worked, B's Ping would land here.
+        await Task.Delay(TimeSpan.FromSeconds(2.5));
+        Assert.Single(_played);
+    }
+
+    // The Settle-shaped sibling of the case above: a person manually
+    // resetting the *other* orb while B's Ping is still waiting on the gap
+    // must not leave B's deferred signal armed either.
+    [AvaloniaFact]
+    public async Task AManualResetOfAnUnrelatedSessionDoesNotCancelThisSessionsPendingSignal()
+    {
+        // The negative control: resetting session-a (unrelated to the
+        // pending signal) must NOT clear session-b's — only Cancel
+        // targeting the actual pending session id should. Otherwise this
+        // fix could not be told apart from ClearPending firing on anything.
+        using var scratch = new Scratch();
+        scratch.Write("session-a", state: "generating");
+        // codex, not the default ClaudeCode: two files sharing both a pid
+        // and a CLI put Superseded's job-list lookup in play (see
+        // SessionScanTests' own header), which is not what this case is
+        // about.
+        scratch.Write("session-b", state: "generating", cli: "codex");
+        var manager = Scan(scratch);
+
+        scratch.Write("session-a", state: "idle");
+        manager.ScanAndUpdate();
+        await WaitForChimeAsync();
+        Assert.Single(_played);
+
+        scratch.Write("session-b", state: "waiting", cli: "codex");
+        manager.ScanAndUpdate();
+
+        // Resetting a *different*, unrelated session (one with nothing
+        // pending) must leave session-b's deferred Ping alone.
+        manager.ResetSessionToIdle("session-a");
+
+        // Baseline supplied explicitly: exactly one chime has played so
+        // far (asserted above), so this waits for a genuinely *second* one
+        // rather than being satisfied by the first all over again.
+        await WaitForChimeAsync(baseline: 1);
+        Assert.Equal(2, _played.Count);
+    }
+
+    // The real Settle path: resetting the *same* session the pending
+    // signal belongs to drops it.
+    [AvaloniaFact]
+    public async Task ResettingTheSessionThePendingSignalBelongsToCancelsIt()
+    {
+        using var scratch = new Scratch();
+        scratch.Write("session-a", state: "generating");
+        // codex, not the default ClaudeCode: two files sharing both a pid
+        // and a CLI put Superseded's job-list lookup in play (see
+        // SessionScanTests' own header), which is not what this case is
+        // about.
+        scratch.Write("session-b", state: "generating", cli: "codex");
+        var manager = Scan(scratch);
+
+        scratch.Write("session-a", state: "idle");
+        manager.ScanAndUpdate();
+        await WaitForChimeAsync();
+        Assert.Single(_played);
+
+        scratch.Write("session-b", state: "waiting", cli: "codex");
+        manager.ScanAndUpdate();
+
+        // A person clears the stuck orb by hand before its two seconds are
+        // up.
+        manager.ResetSessionToIdle("session-b");
+
+        await Task.Delay(TimeSpan.FromSeconds(2.5));
+        Assert.Single(_played);
     }
 }
