@@ -284,6 +284,7 @@ namespace ClaudeBuddy
         public void UpdateFrom(SessionStatus status)
         {
             _lastStatus = status;
+            RefreshSoundKey(status);
 
             var folder = string.IsNullOrEmpty(status.Cwd)
                 ? ""
@@ -2304,14 +2305,21 @@ namespace ClaudeBuddy
         public string PositionKey { get; set; } = "";
 
         // CB-167's key for a per-orb sound override (SessionManager.SoundKeyFor),
-        // cached here the same way PositionKey is and set alongside it in
-        // RestoreOrbPosition. Not PositionKey itself: SoundKeyFor appends the
-        // agent name to close the one gap PositionKeyFor leaves open — two
-        // team members sharing a cwd and an auto-generated title, which is
-        // fine for a shared *position* but wrong for a sound override, where
-        // muting one teammate would silently mute the other. Read by the
-        // Sound submenu on Opening; empty until an orb's first scan sets it,
-        // same as PositionKey.
+        // cached here the same way PositionKey is. Not PositionKey itself:
+        // SoundKeyFor appends the agent name to close the one gap
+        // PositionKeyFor leaves open — two team members sharing a cwd and an
+        // auto-generated title, which is fine for a shared *position* but
+        // wrong for a sound override, where muting one teammate would
+        // silently mute the other. Read by the Sound submenu on Opening.
+        //
+        // QA round 2 (HIGH): originally set once, in RestoreOrbPosition, on
+        // the theory that it was as stable as PositionKey. It isn't —
+        // SoundKeyFor depends on Title, and an untitled session keys on its
+        // own session id until Claude Code names it — so a menu selection
+        // made before that point wrote an override under a key the scan
+        // stopped looking up under the moment the title arrived. Now
+        // recomputed on every UpdateFrom (see there for the migration this
+        // requires) rather than left to settle once at creation.
         public string SoundKey { get; set; } = "";
 
         // True once the user has placed this orb by hand, whether in this run or
@@ -2808,6 +2816,39 @@ namespace ClaudeBuddy
         {
             var over = ClaudeBuddySettings.OrbTurnSoundFor(SoundKey);
             ClaudeBuddySettings.SetOrbTurnSound(SoundKey, over?.Finished, value);
+        }
+
+        // QA round 2 (HIGH): called from UpdateFrom on every poll rather
+        // than once at creation — see SoundKey's own comment for why a
+        // one-time value goes stale the moment an untitled session gets its
+        // real title.
+        //
+        // A changed key migrates its override rather than simply moving on:
+        // if the old key still carries one and the new key doesn't already
+        // have its own (an orb that never had an override at all, or one
+        // whose new key happens to collide with an existing choice, is left
+        // alone either way), it is rewritten under the new key and cleared
+        // from the old one. Without this, a choice a user already made —
+        // "Off" clicked from the menu before the title arrived — would keep
+        // silently reverting to the default the instant Claude Code named
+        // the session, which is exactly the bug QA found: the menu showed
+        // Off ticked while the orb went on chiming.
+        internal void RefreshSoundKey(SessionStatus status)
+        {
+            var key = SessionManager.SoundKeyFor(status, SessionId);
+            if (key == SoundKey) return;
+
+            if (!string.IsNullOrEmpty(SoundKey))
+            {
+                var stale = ClaudeBuddySettings.OrbTurnSoundFor(SoundKey);
+                if (stale is not null && ClaudeBuddySettings.OrbTurnSoundFor(key) is null)
+                {
+                    ClaudeBuddySettings.SetOrbTurnSound(key, stale.Finished, stale.Attention);
+                    ClaudeBuddySettings.ClearOrbTurnSound(SoundKey);
+                }
+            }
+
+            SoundKey = key;
         }
 
         // The row that says what it will do, or why it will not.

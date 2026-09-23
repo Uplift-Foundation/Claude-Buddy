@@ -2848,6 +2848,30 @@ namespace ClaudeBuddy
             return result.Count == 0 ? null : result[0].TryGetLocalPath();
         }
 
+        // How long a preview waits for the selection to settle before it
+        // actually plays — see PreviewSound's own comment for why, and
+        // ClaudeBuddySettings.SaveDelay a few hundred lines up in that file
+        // for the sibling problem (a colour wheel drag) this same shape of
+        // fix already solves there.
+        private static readonly TimeSpan PreviewDebounce = TimeSpan.FromMilliseconds(250);
+
+        // A DispatcherTimer rather than Task.Delay, on purpose, after an
+        // earlier draft of this fix used Task.Delay(ms, CancellationToken)
+        // inside a Task.Run and it produced two genuine test-case-cleanup
+        // failures in unrelated suites under `dotnet test -c Release`
+        // (AccountOrbsTests, SettingsWindowCoverageTests) — a stray
+        // background continuation still winding down its delay after a
+        // test's own teardown reached into shared Avalonia state it no
+        // longer owned. ClaudeBuddySettings' own deferred-write timer
+        // (_deferred, a few hundred lines up in that file) solves the
+        // identical "debounce something that changes fast" problem the
+        // same way for exactly that reason, and its own comment there is
+        // explicit that no test should ever wait on a real tick — this
+        // reuses that same shape, including a Flush...ForTests seam rather
+        // than a sleep, instead of reinventing a worse one.
+        private static DispatcherTimer? _previewTimer;
+        private static string? _pendingPreviewPath;
+
         // Off and the vibe summary both resolve to nothing playable — Off by
         // the plan's own rule, and the vibe summary because there is no
         // static audio for it, only a per-session sentence SpeechRequest
@@ -2868,7 +2892,81 @@ namespace ClaudeBuddy
             var path = SystemSoundCatalog.Resolve(
                 setting ?? defaultName, SystemSoundCatalog.DefaultDirectory, SystemSoundCatalog.DefaultExtensions);
 
-            if (path is not null) ChimePlayer.Play(path);
+            if (path is null) return;
+
+            // QA round 2 (HIGH): ChimePlayer.Play blocks its caller on
+            // WaitForExit for the length of the sound — about 2.4 s for a
+            // short system chime, the full 5 s cap for a long user file —
+            // and this used to call it straight from SelectionChanged and
+            // the ▶ click, both on the Avalonia UI thread. Arrowing through
+            // the picker froze the settings window for that long on every
+            // step.
+            //
+            // QA round 3: moving that call to a background Task.Run on its
+            // own is not enough — five arrow-key steps taken faster than one
+            // sound plays out would start five overlapping ChimePlayer.Play
+            // processes, each a real afplay/PlaySync with no way for this
+            // class to reach in and stop one once it has started. ChimePlayer
+            // cannot stop a process it has already handed off to WaitForExit
+            // either; that needs its own process-tracking work, landing
+            // separately and out of scope for this file to build.
+            //
+            // Debounced instead of "started then stopped": every call
+            // restarts the same timer, so ChimePlayer.Play is only ever
+            // reached once the selection has actually settled for a quarter
+            // second — the last of a fast burst wins, and the first four are
+            // never played at all rather than played and then silenced. That
+            // is also a truer reading of "preview it once" than firing on
+            // every transient selection a fast arrow-key press only passed
+            // through. The one case this does not cover — settle on A, hear
+            // it start, immediately pick B before A's ~2.4 s finishes —
+            // still needs ChimePlayer's own stop support and is out of scope
+            // here for the same reason.
+            _pendingPreviewPath = path;
+            RestartThePreviewDebounce();
+        }
+
+        private static void RestartThePreviewDebounce()
+        {
+            if (_previewTimer is null)
+            {
+                _previewTimer = new DispatcherTimer { Interval = PreviewDebounce };
+                _previewTimer.Tick += OnPreviewTick;
+            }
+
+            _previewTimer.Stop();
+            _previewTimer.Start();
+        }
+
+        // Excluded from coverage: fires only when the debounce interval
+        // actually elapses, and no test waits on a real timer — see the
+        // class comment on _previewTimer for the exact shape of flake that
+        // already cost this file one broken fix. What it does when it fires
+        // is PlayPendingPreview, which is covered every other way, and
+        // FlushPendingPreviewForTests is the seam a test uses instead.
+        [ExcludeFromCodeCoverage]
+        private static void OnPreviewTick(object? sender, EventArgs e)
+        {
+            _previewTimer!.Stop();
+            PlayPendingPreview();
+        }
+
+        // internal: a test calls this instead of waiting out the real 250ms
+        // — the identical role ClaudeBuddySettings.FlushPendingSave plays
+        // for the deferred write, and named the same way on purpose.
+        internal static void FlushPendingPreviewForTests()
+        {
+            if (_previewTimer is null || !_previewTimer.IsEnabled) return;
+
+            _previewTimer.Stop();
+            PlayPendingPreview();
+        }
+
+        private static void PlayPendingPreview()
+        {
+            var path = _pendingPreviewPath;
+            _pendingPreviewPath = null;
+            if (path is not null) _ = Task.Run(() => ChimePlayer.Play(path));
         }
 
         // A drawn triangle rather than the "▶" text glyph it stands in for —
@@ -2929,18 +3027,27 @@ namespace ClaudeBuddy
 
         internal Control[] SoundRows() => new[]
         {
+            // QA round 2 (copy): the old wording named the JSON keys this
+            // switch and its two rows write — needsAttentionSound,
+            // turnFinishedSound, settings.json — which means nothing to
+            // someone reading the settings window rather than the source.
+            // Said the same thing in plain terms instead.
             Row("Play a sound", Switch(ClaudeBuddySettings.TurnSoundsEnabled, OnTurnSoundsToggled),
-                "Off silences both rows below, whatever they're set to — the same "
-                + "master/per-trigger split needsAttentionSound and turnFinishedSound "
-                + "already have in settings.json."),
+                "Off silences both rows below, whatever sound each one is set to."),
 
+            // QA round 2 (copy): "it never interrupts speech already
+            // playing, and falls back to the chime below it if it would
+            // have to" described the mechanism rather than what a user
+            // would actually hear. Says the outcome instead — Dmitri's QA
+            // round 2 fix is what makes this true rather than aspirational,
+            // by only marking the sound "played" once something real was
+            // actually about to be heard.
             SoundPickerRow("When a turn finishes", TurnFinishedSoundPicker(),
                 () => ClaudeBuddySettings.TurnFinishedSound, SystemSoundCatalog.DefaultFinishedSoundName,
                 "Plays once a reply is done and Claude Buddy is waiting on you again. "
                 + "Vibe summary speaks one to three sentences on what just happened and "
-                + "what's next, in that orb's own voice, instead of a chime — it never "
-                + "interrupts speech already playing, and falls back to the chime below "
-                + "it if it would have to."),
+                + "what's next, in that orb's own voice — if you're already listening to "
+                + "something else, it plays the chime below instead of talking over it."),
 
             SoundPickerRow("When a session needs you", NeedsAttentionSoundPicker(),
                 () => ClaudeBuddySettings.NeedsAttentionSound, SystemSoundCatalog.DefaultAttentionSoundName,

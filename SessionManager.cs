@@ -3542,12 +3542,17 @@ namespace ClaudeBuddy
             var key = PositionKeyFor(status, window.SessionId);
             window.PositionKey = key;
 
-            // Set alongside PositionKey rather than gated behind the same
-            // early return below — a sound override is useful even for a
-            // session with no stable position key (nothing to pin), since
-            // SoundKeyFor's fallback (the session id, or the id plus agent
-            // name) is still a real, if run-scoped, identity.
-            window.SoundKey = SoundKeyFor(status, window.SessionId);
+            // window.SoundKey is no longer set here. QA round 2 (HIGH):
+            // SoundKeyFor depends on Title, which can arrive after this
+            // method's one-time call (RestoreOrbPosition only runs for a
+            // brand-new orb) — an untitled session keys on its own id until
+            // Claude Code names it, so a value set only here would go stale
+            // the moment a title showed up. OrbWindow.UpdateFrom now
+            // recomputes it on every poll instead, and this same status
+            // already reached UpdateFrom before this method ever runs
+            // (SessionManager.cs's per-session loop calls UpdateFrom first),
+            // so window.SoundKey is already correct by the time execution
+            // gets here.
 
             if (string.IsNullOrEmpty(key)) return;
 

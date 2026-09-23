@@ -17,11 +17,28 @@ namespace ClaudeBuddy.Tests;
 public class OrbSoundSubmenuTests : IDisposable
 {
     private readonly List<string> _clearedKeys = new();
+    private readonly List<string> _tempFiles = new();
 
     public void Dispose()
     {
         SettingsWindow.ChooseSoundFileForTests = null;
         foreach (var key in _clearedKeys) ClaudeBuddySettings.ClearOrbTurnSound(key);
+        foreach (var path in _tempFiles)
+        {
+            try { File.Delete(path); } catch { /* best effort */ }
+        }
+    }
+
+    // A real file on disk, the same reason SoundSettingsRowTests' own
+    // version exists — a made-up path is indistinguishable from a real one
+    // to everything except SystemSoundCatalog.Resolve's File.Exists check,
+    // which is exactly the thing QA round 2 found silently skipped.
+    private string NewRealTempFile()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "cb-orb-sound-" + Guid.NewGuid() + ".wav");
+        File.WriteAllBytes(path, Array.Empty<byte>());
+        _tempFiles.Add(path);
+        return path;
     }
 
     private OrbWindow NewOrb(string? soundKey = null)
@@ -160,9 +177,7 @@ public class OrbSoundSubmenuTests : IDisposable
     [AvaloniaFact]
     public async Task ChoosingChooseFileWritesThePickedPathForFinished()
     {
-        var picked = OperatingSystem.IsWindows()
-            ? @"C:\Users\me\Music\orb-chime.wav"
-            : "/Users/me/orb-chime.wav";
+        var picked = NewRealTempFile();
         SettingsWindow.ChooseSoundFileForTests = () => Task.FromResult<string?>(picked);
 
         var orb = NewOrb();
@@ -231,5 +246,242 @@ public class OrbSoundSubmenuTests : IDisposable
 
         Assert.NotEmpty(FinishedMenu(orb).Items.Cast<MenuItem>());
         Assert.NotEmpty(AttentionMenu(orb).Items.Cast<MenuItem>());
+    }
+
+    // --- SoundKey staleness (QA round 2, HIGH) ---
+    //
+    // These build orbs the way SessionManager actually does — through
+    // UpdateFrom, not NewOrb()'s direct SoundKey assignment — since the bug
+    // is specifically about SoundKey being wrong *because* it was cached
+    // once instead of tracking the status that computes it.
+
+    // The finding itself: an untitled orb keys on its own session id
+    // (SessionManager.PositionKeyFor's CB-10 fix, inherited by SoundKeyFor).
+    // A menu choice made in that window used to be stranded there forever,
+    // because SoundKey was never recomputed once the real title arrived and
+    // the scan moved on to looking the override up under the new key — the
+    // menu kept showing the choice ticked while the orb went on chiming.
+    [AvaloniaFact]
+    public void TheMenuStillShowsAndWritesUnderTheKeyAfterTheOrbIsTitled()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        var cwd = "/Users/user/project-" + Guid.NewGuid();
+
+        orb.UpdateFrom(new SessionStatus { State = "idle", Cwd = cwd, Title = "" });
+        var oldKey = orb.SoundKey;
+        Assert.Equal(orb.SessionId, oldKey); // untitled: keys on the session id
+        _clearedKeys.Add(oldKey);
+
+        orb.RebuildSoundSubmenus();
+        var offItem = FinishedMenu(orb).Items.Cast<MenuItem>().Single(i => Equals(i.Header, "Off"));
+        offItem.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(MenuItem.ClickEvent));
+        Assert.Equal("off", ClaudeBuddySettings.OrbTurnSoundFor(oldKey)?.Finished);
+
+        // Claude Code names the session.
+        orb.UpdateFrom(new SessionStatus { State = "idle", Cwd = cwd, Title = "claude-buddy" });
+        var newKey = orb.SoundKey;
+        _clearedKeys.Add(newKey);
+
+        Assert.NotEqual(oldKey, newKey);
+        Assert.Null(ClaudeBuddySettings.OrbTurnSoundFor(oldKey));
+        Assert.Equal("off", ClaudeBuddySettings.OrbTurnSoundFor(newKey)?.Finished);
+
+        // And the menu, reopened, agrees — reads the override back under the
+        // key it now actually lives at, not the one it was set under.
+        orb.RebuildSoundSubmenus();
+        var checkedItem = Assert.Single(FinishedMenu(orb).Items.Cast<MenuItem>(), i => i.IsChecked);
+        Assert.Equal("Off", checkedItem.Header);
+    }
+
+    // QA round 3 (a): an orb that never gets titled at all — a background
+    // job, a session Claude Code never named — must keep working on its
+    // session-id key across every poll, not just the first one. Every
+    // UpdateFrom recomputes the key (that is the whole fix), so this is the
+    // negative control for the migration case above: the key must be
+    // exactly as stable here as it was before this ticket touched it.
+    [AvaloniaFact]
+    public void AnOrbThatIsNeverTitledKeepsWorkingOnItsSessionIdKey()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        var cwd = "/Users/user/project-" + Guid.NewGuid();
+
+        orb.UpdateFrom(new SessionStatus { State = "idle", Cwd = cwd, Title = "" });
+        var key = orb.SoundKey;
+        Assert.Equal(orb.SessionId, key);
+        _clearedKeys.Add(key);
+
+        orb.RebuildSoundSubmenus();
+        var offItem = FinishedMenu(orb).Items.Cast<MenuItem>().Single(i => Equals(i.Header, "Off"));
+        offItem.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(MenuItem.ClickEvent));
+        Assert.Equal("off", ClaudeBuddySettings.OrbTurnSoundFor(key)?.Finished);
+
+        // Several more polls, still untitled — the key must not drift, and
+        // the override must keep reading back correctly every time.
+        for (var i = 0; i < 3; i++)
+        {
+            orb.UpdateFrom(new SessionStatus { State = "idle", Cwd = cwd, Title = "" });
+            Assert.Equal(key, orb.SoundKey);
+            Assert.Equal("off", ClaudeBuddySettings.OrbTurnSoundFor(orb.SoundKey)?.Finished);
+        }
+
+        orb.RebuildSoundSubmenus();
+        var checkedItem = Assert.Single(FinishedMenu(orb).Items.Cast<MenuItem>(), i => i.IsChecked);
+        Assert.Equal("Off", checkedItem.Header);
+    }
+
+    // The no-op path: a key that hasn't changed writes nothing and migrates
+    // nothing, whether or not an override exists — RefreshSoundKey's own
+    // `if (key == SoundKey) return;` guard, exercised both with and without
+    // an override present so a future change can't quietly turn this into
+    // an unconditional re-write.
+    [AvaloniaFact]
+    public void RefreshSoundKeyIsANoOpWhenTheKeyHasNotChanged()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        var status = new SessionStatus { State = "idle", Cwd = "/Users/user/project", Title = "claude-buddy" };
+
+        orb.UpdateFrom(status);
+        var key = orb.SoundKey;
+        _clearedKeys.Add(key);
+        ClaudeBuddySettings.SetOrbTurnSound(key, "off", null);
+
+        orb.UpdateFrom(status); // the identical status again
+
+        Assert.Equal(key, orb.SoundKey);
+        Assert.Equal("off", ClaudeBuddySettings.OrbTurnSoundFor(key)?.Finished);
+    }
+
+    // The key changes but there was never an override to move — just the
+    // key itself updates, and nothing gets written under either key.
+    [AvaloniaFact]
+    public void RefreshSoundKeyJustUpdatesTheKeyWhenThereWasNoOverrideToMigrate()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        var cwd = "/Users/user/project-" + Guid.NewGuid();
+
+        orb.UpdateFrom(new SessionStatus { State = "idle", Cwd = cwd, Title = "" });
+        var oldKey = orb.SoundKey;
+        _clearedKeys.Add(oldKey);
+
+        orb.UpdateFrom(new SessionStatus { State = "idle", Cwd = cwd, Title = "claude-buddy" });
+        var newKey = orb.SoundKey;
+        _clearedKeys.Add(newKey);
+
+        Assert.NotEqual(oldKey, newKey);
+        Assert.Null(ClaudeBuddySettings.OrbTurnSoundFor(oldKey));
+        Assert.Null(ClaudeBuddySettings.OrbTurnSoundFor(newKey));
+    }
+
+    // The end-to-end version, copied and adapted from QA round 2's own
+    // demonstrating suite (Cb167QaRound2UiTests.cs, written to fail on
+    // 5370ac56) rather than reinvented — this is the acceptance test QA
+    // actually asked for by this name, driving a real SessionManager over
+    // real status files rather than calling RebuildSoundSubmenus() and
+    // UpdateFrom() directly the way the rest of this file does. It proves
+    // the thing a user would actually notice: not just that the key
+    // migrates, but that the orb genuinely stays quiet afterward, through
+    // the real scan → TurnSoundPolicy → ChimePlayer path.
+    //
+    // Its own settings directory (CLAUDE_BUDDY_SETTINGS_DIR +
+    // ClaudeBuddySettings.ReloadForTests()) rather than this file's usual
+    // _clearedKeys cleanup — the same isolation TurnSoundScanTests uses,
+    // since a real SessionManager scan reads ClaudeBuddySettings.
+    // TurnSoundsEnabled and friends beyond just OrbTurnSounds, and mixing a
+    // scan-level case into a suite that otherwise only pokes individual
+    // settings keys is exactly where a leftover value from a sibling test
+    // would matter.
+    [AvaloniaFact]
+    public void AnOverrideSetFromTheMenuAfterTheOrbIsTitledStillApplies()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "cb-orbsound-e2e-" + Guid.NewGuid());
+        Directory.CreateDirectory(dir);
+        try
+        {
+            Environment.SetEnvironmentVariable(
+                "CLAUDE_BUDDY_SETTINGS_DIR", Path.Combine(dir, "settings"));
+            ClaudeBuddySettings.ReloadForTests();
+            TurnSounds.ResetForTests();
+
+            var played = new List<string>();
+            ChimePlayer.PlayForTests = p => { lock (played) played.Add(p); };
+            ClaudeBuddySettings.ClaudeCodeEnabled = true;
+
+            void WriteLocal(string id, string state, string title) => File.WriteAllText(
+                Path.Combine(dir, id + ".txt"),
+                System.Text.Json.JsonSerializer.Serialize(new SessionStatus
+                {
+                    State = state,
+                    Title = title,
+                    Cwd = "/Users/user/project",
+                    SessionPid = Environment.ProcessId,
+                    TermProgram = "iTerm.app",
+                    Tty = "/dev/ttys004",
+                }));
+
+            WriteLocal("sess-1", "idle", title: "");
+            var manager = new SessionManager(dir);
+            manager.ScanAndUpdate(); // orb created untitled
+
+            WriteLocal("sess-1", "generating", title: "fix-login");
+            manager.ScanAndUpdate(); // now titled — SoundKey must have followed
+
+            var windows = (Dictionary<string, OrbWindow>)typeof(SessionManager)
+                .GetField("_windows", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                .GetValue(manager)!;
+            var window = windows["sess-1"];
+
+            var expectedKey = SessionManager.SoundKeyFor(new SessionStatus
+            {
+                Source = SessionSource.ClaudeCode, Cwd = "/Users/user/project", Title = "fix-login",
+            }, "sess-1");
+            Assert.Equal(expectedKey, window.SoundKey);
+
+            // What the menu's "Off" click does — set directly, since this
+            // case is about what the scan does with the override once it
+            // exists, not about the menu's own click handling (covered
+            // elsewhere in this file).
+            ClaudeBuddySettings.SetOrbTurnSound(window.SoundKey, "off", null);
+
+            WriteLocal("sess-1", "idle", title: "fix-login"); // generating -> idle: Finished
+            manager.ScanAndUpdate();
+
+            // Playback is a background Task.Run now (QA round 2's other
+            // fix), so give it a moment to have run if it was going to.
+            Thread.Sleep(500);
+            lock (played) Assert.Empty(played);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { /* best effort */ }
+        }
+    }
+
+    // The migration case QA round 2 asked for by name: the new key already
+    // carries its own override — a second run of the same now-titled
+    // session that had already had a choice made under this exact key.
+    // Migrating the old key's override on top would silently throw that
+    // choice away, so RefreshSoundKey leaves both alone rather than
+    // guessing which one the user meant to keep.
+    [AvaloniaFact]
+    public void RefreshSoundKeyDoesNotOverwriteAnExistingOverrideUnderTheNewKey()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        var cwd = "/Users/user/project-" + Guid.NewGuid();
+
+        orb.UpdateFrom(new SessionStatus { State = "idle", Cwd = cwd, Title = "" });
+        var oldKey = orb.SoundKey;
+        _clearedKeys.Add(oldKey);
+        ClaudeBuddySettings.SetOrbTurnSound(oldKey, "off", null);
+
+        var newKey = SessionManager.SoundKeyFor(
+            new SessionStatus { State = "idle", Cwd = cwd, Title = "claude-buddy" }, orb.SessionId);
+        _clearedKeys.Add(newKey);
+        ClaudeBuddySettings.SetOrbTurnSound(newKey, "Ping", null);
+
+        orb.UpdateFrom(new SessionStatus { State = "idle", Cwd = cwd, Title = "claude-buddy" });
+
+        Assert.Equal(newKey, orb.SoundKey);
+        Assert.Equal("Ping", ClaudeBuddySettings.OrbTurnSoundFor(newKey)?.Finished);
+        Assert.Equal("off", ClaudeBuddySettings.OrbTurnSoundFor(oldKey)?.Finished);
     }
 }

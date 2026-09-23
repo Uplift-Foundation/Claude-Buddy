@@ -30,26 +30,56 @@ namespace ClaudeBuddy.Tests;
 // does in production — the assertions below ask the same catalogue the
 // production code asks, so they hold on both this machine and the CI
 // runner's regardless of which sounds either one actually has installed.
+//
+// QA round 2/3 (HIGH): PreviewSound now debounces through a
+// DispatcherTimer before handing off to a background Task.Run — see that
+// method's own comment for why a real Task.Delay-based first draft of this
+// caused genuine test-case-cleanup failures in two unrelated suites. No
+// case here ever waits on the real 250ms tick; SettingsWindow.
+// FlushPendingPreviewForTests fires it immediately, the same seam
+// ClaudeBuddySettings.FlushPendingSave plays for its own debounced write,
+// and SettingsDeferredTimerTests is the sibling suite proving that shape.
+// What still needs a wait afterward is the Task.Run itself — WaitForPreview
+// Async below, adapted from TurnSoundScanTests.WaitForChimeAsync.
 [Collection("Settings")]
 public class SoundSettingsRowTests : IDisposable
 {
     private readonly bool _wasEnabled = ClaudeBuddySettings.TurnSoundsEnabled;
     private readonly string? _wasFinished = ClaudeBuddySettings.TurnFinishedSound;
     private readonly string? _wasAttention = ClaudeBuddySettings.NeedsAttentionSound;
+    private readonly object _lock = new();
     private readonly List<string> _played = new();
+    private readonly List<string> _tempFiles = new();
+    private TaskCompletionSource<bool>? _playSignal;
 
     public SoundSettingsRowTests()
     {
-        ChimePlayer.PlayForTests = path => _played.Add(path);
+        ChimePlayer.PlayForTests = path =>
+        {
+            lock (_lock)
+            {
+                _played.Add(path);
+                _playSignal?.TrySetResult(true);
+            }
+        };
     }
 
     public void Dispose()
     {
+        // Defensive: flush whatever is still pending before this instance's
+        // ChimePlayer.PlayForTests seam is torn down, so a test body that
+        // forgot to flush can never leave a live DispatcherTimer armed for
+        // some later, unrelated test to trip over.
+        SettingsWindow.FlushPendingPreviewForTests();
         ChimePlayer.PlayForTests = null;
         SettingsWindow.ChooseSoundFileForTests = null;
         ClaudeBuddySettings.TurnSoundsEnabled = _wasEnabled;
         ClaudeBuddySettings.TurnFinishedSound = _wasFinished;
         ClaudeBuddySettings.NeedsAttentionSound = _wasAttention;
+        foreach (var path in _tempFiles)
+        {
+            try { File.Delete(path); } catch { /* best effort */ }
+        }
     }
 
     private static SettingsWindow NewWindow()
@@ -63,6 +93,41 @@ public class SoundSettingsRowTests : IDisposable
 
     private static List<string> SystemSounds() => SystemSoundCatalog.List(
         SystemSoundCatalog.DefaultDirectory, SystemSoundCatalog.DefaultExtensions);
+
+    // A real file on disk — SystemSoundCatalog.Resolve checks File.Exists
+    // for an absolute path, so a path that doesn't actually exist resolves
+    // to null and PreviewSound never reaches ChimePlayer.Play at all. QA
+    // round 2 found exactly that: the original choose-file test pointed at
+    // a made-up path, which meant "preview once" was never actually
+    // exercised by it, only "wrote the setting" was.
+    private string NewRealTempFile()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "cb-sound-picker-" + Guid.NewGuid() + ".wav");
+        File.WriteAllBytes(path, Array.Empty<byte>());
+        _tempFiles.Add(path);
+        return path;
+    }
+
+    // Adapted from TurnSoundScanTests.WaitForChimeAsync: checks for an
+    // already-landed play first (the seam can fire before this is even
+    // called), otherwise arms a signal and waits up to five seconds —
+    // generous against ChimePlayer's own five-second cap plus scheduling
+    // slack, and still fails a genuine regression fast rather than hanging
+    // CI. Callers flush the debounce timer first (FlushPendingPreviewForTests)
+    // — this only ever waits for the Task.Run PlayPendingPreview hands off
+    // to actually call the seam, never for the 250ms debounce itself.
+    private async Task WaitForPreviewAsync()
+    {
+        TaskCompletionSource<bool> signal;
+        lock (_lock)
+        {
+            if (_played.Count > 0) return;
+            signal = _playSignal = new TaskCompletionSource<bool>();
+        }
+
+        var winner = await Task.WhenAny(signal.Task, Task.Delay(TimeSpan.FromSeconds(5)));
+        Assert.True(winner == signal.Task, "Timed out waiting for a preview to play in the background.");
+    }
 
     // --- SoundChoices, the list both the settings pickers and the orb's
     // Sound submenu build from ---
@@ -183,6 +248,7 @@ public class SoundSettingsRowTests : IDisposable
         combo.SelectedIndex = 1; // "Off"
 
         Assert.Equal("off", ClaudeBuddySettings.TurnFinishedSound);
+        SettingsWindow.FlushPendingPreviewForTests(); // a safe no-op: nothing armed the timer
         Assert.Empty(_played);
     }
 
@@ -195,11 +261,12 @@ public class SoundSettingsRowTests : IDisposable
         combo.SelectedIndex = 2; // "Vibe summary"
 
         Assert.Equal("summary", ClaudeBuddySettings.TurnFinishedSound);
+        SettingsWindow.FlushPendingPreviewForTests();
         Assert.Empty(_played);
     }
 
     [AvaloniaFact]
-    public void ChoosingBackToDefaultWritesNull()
+    public async Task ChoosingBackToDefaultWritesNull()
     {
         ClaudeBuddySettings.TurnFinishedSound = "off";
         var combo = SettingsWindow.TurnFinishedSoundPicker();
@@ -208,10 +275,18 @@ public class SoundSettingsRowTests : IDisposable
         combo.SelectedIndex = 0; // "Default (Glass)"
 
         Assert.Null(ClaudeBuddySettings.TurnFinishedSound);
+
+        SettingsWindow.FlushPendingPreviewForTests();
+        if (SystemSoundCatalog.Resolve(
+                SystemSoundCatalog.DefaultFinishedSoundName, SystemSoundCatalog.DefaultDirectory,
+                SystemSoundCatalog.DefaultExtensions) is not null)
+        {
+            await WaitForPreviewAsync();
+        }
     }
 
     [AvaloniaFact]
-    public void ChoosingASystemSoundWritesItsNameAndPreviewsItOnce()
+    public async Task ChoosingASystemSoundWritesItsNameAndPreviewsItOnce()
     {
         var systemSounds = SystemSounds();
         if (systemSounds.Count == 0) return; // nothing installed on this runner to assert against
@@ -224,6 +299,9 @@ public class SoundSettingsRowTests : IDisposable
 
         Assert.Equal(systemSounds[0], ClaudeBuddySettings.NeedsAttentionSound);
 
+        SettingsWindow.FlushPendingPreviewForTests();
+        await WaitForPreviewAsync();
+
         var expectedPath = SystemSoundCatalog.Resolve(
             systemSounds[0], SystemSoundCatalog.DefaultDirectory, SystemSoundCatalog.DefaultExtensions);
         Assert.Equal(new[] { expectedPath }, _played);
@@ -232,12 +310,9 @@ public class SoundSettingsRowTests : IDisposable
     // --- Choose file… ---
 
     [AvaloniaFact]
-    public void ChoosingChooseFileWritesThePickedPathAndSelectsItByName()
+    public async Task ChoosingChooseFileWritesThePickedPathSelectsItByNameAndPreviewsItOnce()
     {
-        var picked = OperatingSystem.IsWindows()
-            ? @"C:\Users\me\Music\custom-chime.wav"
-            : "/Users/me/custom-chime.wav";
-
+        var picked = NewRealTempFile();
         SettingsWindow.ChooseSoundFileForTests = () => Task.FromResult<string?>(picked);
 
         ClaudeBuddySettings.TurnFinishedSound = null;
@@ -251,6 +326,13 @@ public class SoundSettingsRowTests : IDisposable
 
         var reselected = ((IEnumerable<string>)combo.ItemsSource!).ToList();
         Assert.Equal(Path.GetFileName(picked), reselected[combo.SelectedIndex]);
+
+        // The point QA round 2 raised: a made-up path resolves to null and
+        // PreviewSound never reaches ChimePlayer.Play, so this is a real
+        // file precisely so this assertion means something.
+        SettingsWindow.FlushPendingPreviewForTests();
+        await WaitForPreviewAsync();
+        Assert.Equal(new[] { picked }, _played);
     }
 
     [AvaloniaFact]
@@ -268,6 +350,7 @@ public class SoundSettingsRowTests : IDisposable
 
         Assert.Equal("off", ClaudeBuddySettings.TurnFinishedSound);
         Assert.Equal(offIndex, combo.SelectedIndex);
+        SettingsWindow.FlushPendingPreviewForTests();
         Assert.Empty(_played);
     }
 
@@ -293,10 +376,104 @@ public class SoundSettingsRowTests : IDisposable
         Assert.Null(result);
     }
 
+    // --- overlapping previews (QA round 3) ---
+    //
+    // "Moving previews off the UI thread must still give exactly one
+    // preview per choice. Fast keyboard arrowing must never stack
+    // overlapping previews: each new preview stops the last one."
+    // PreviewSound now debounces through a DispatcherTimer (see its own
+    // comment on why not a stop-the-last-one call, which ChimePlayer cannot
+    // do yet): every call restarts the same timer, so only the last of a
+    // fast burst is still pending once anything actually flushes or the
+    // real tick fires — the earlier ones are never played at all, not
+    // played and then silenced.
+
+    [AvaloniaFact]
+    public async Task PreviewSoundCancelsAnEarlierStillPendingPreview()
+    {
+        var systemSounds = SystemSounds();
+        if (systemSounds.Count < 2) return; // need two distinct choices to arrow between
+
+        SettingsWindow.PreviewSound(systemSounds[0], systemSounds[0]);
+        SettingsWindow.PreviewSound(systemSounds[1], systemSounds[1]);
+
+        // One flush, because there is only ever one pending preview to
+        // flush — the first call's request was overwritten, not queued
+        // alongside the second's, so there is nothing left over for a
+        // second flush or a wait to find.
+        SettingsWindow.FlushPendingPreviewForTests();
+        await WaitForPreviewAsync();
+
+        var expectedPath = SystemSoundCatalog.Resolve(
+            systemSounds[1], SystemSoundCatalog.DefaultDirectory, SystemSoundCatalog.DefaultExtensions);
+        Assert.Equal(new[] { expectedPath }, _played);
+    }
+
+    // The same guard, reached the way a user actually reaches it — arrowing
+    // through the real picker rather than calling PreviewSound directly.
+    [AvaloniaFact]
+    public async Task RapidArrowingThroughThePickerPreviewsOnlyTheSoundItSettlesOn()
+    {
+        var systemSounds = SystemSounds();
+        if (systemSounds.Count < 2) return; // need two distinct choices to arrow between
+
+        ClaudeBuddySettings.NeedsAttentionSound = null;
+        var combo = SettingsWindow.NeedsAttentionSoundPicker();
+        var items = ((IEnumerable<string>)combo.ItemsSource!).ToList();
+
+        // Three selections in immediate succession — a burst of arrow-key
+        // steps, none of which waits for the last one's debounce.
+        combo.SelectedIndex = items.IndexOf(systemSounds[0]);
+        combo.SelectedIndex = items.IndexOf(systemSounds[1]);
+        combo.SelectedIndex = items.IndexOf(systemSounds[0]);
+
+        Assert.Equal(systemSounds[0], ClaudeBuddySettings.NeedsAttentionSound);
+
+        SettingsWindow.FlushPendingPreviewForTests();
+        await WaitForPreviewAsync();
+
+        var expectedPath = SystemSoundCatalog.Resolve(
+            systemSounds[0], SystemSoundCatalog.DefaultDirectory, SystemSoundCatalog.DefaultExtensions);
+        Assert.Equal(new[] { expectedPath }, _played);
+    }
+
+    // The other half of "exactly one preview per choice": settling on ONE
+    // choice, with no burst at all, still plays it exactly once — the
+    // debounce is not a rate limiter that could also eat a deliberate,
+    // solitary selection.
+    [AvaloniaFact]
+    public async Task ASingleDeliberateSelectionStillPreviewsExactlyOnce()
+    {
+        var systemSounds = SystemSounds();
+        if (systemSounds.Count == 0) return; // nothing installed on this runner to assert against
+
+        SettingsWindow.PreviewSound(systemSounds[0], systemSounds[0]);
+
+        SettingsWindow.FlushPendingPreviewForTests();
+        await WaitForPreviewAsync();
+
+        var expectedPath = SystemSoundCatalog.Resolve(
+            systemSounds[0], SystemSoundCatalog.DefaultDirectory, SystemSoundCatalog.DefaultExtensions);
+        Assert.Equal(new[] { expectedPath }, _played);
+    }
+
+    // FlushPendingPreviewForTests' own guard: calling it with nothing armed
+    // — the common case, since most cases above call it defensively even
+    // when nothing was going to play — must stay a no-op rather than throw
+    // on a null timer or play something stale.
+    [AvaloniaFact]
+    public void FlushingWithNothingPendingIsASafeNoOp()
+    {
+        SettingsWindow.FlushPendingPreviewForTests();
+        SettingsWindow.FlushPendingPreviewForTests();
+
+        Assert.Empty(_played);
+    }
+
     // --- the preview button ---
 
     [AvaloniaFact]
-    public void ThePreviewButtonReplaysWhateverIsCurrentlySelected()
+    public async Task ThePreviewButtonReplaysWhateverIsCurrentlySelected()
     {
         var systemSounds = SystemSounds();
         if (systemSounds.Count == 0) return; // nothing installed on this runner to assert against
@@ -305,6 +482,8 @@ public class SoundSettingsRowTests : IDisposable
         var button = (Button)window.PreviewButton(() => systemSounds[0], "Glass");
 
         button.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+        SettingsWindow.FlushPendingPreviewForTests();
+        await WaitForPreviewAsync();
 
         var expectedPath = SystemSoundCatalog.Resolve(
             systemSounds[0], SystemSoundCatalog.DefaultDirectory, SystemSoundCatalog.DefaultExtensions);
@@ -317,6 +496,22 @@ public class SoundSettingsRowTests : IDisposable
         SettingsWindow.PreviewSound("off", "Glass");
         SettingsWindow.PreviewSound("summary", "Glass");
 
+        SettingsWindow.FlushPendingPreviewForTests();
+        Assert.Empty(_played);
+    }
+
+    // The other silent path: a real (non-off, non-summary) setting that
+    // SystemSoundCatalog.Resolve simply can't turn into a file — a system
+    // sound removed since it was chosen, or a hand-edited settings value.
+    // Distinct from the off/summary case above: this returns from
+    // PreviewSound's *second* early return, after Resolve has already run,
+    // rather than skipping Resolve entirely.
+    [AvaloniaFact]
+    public void PreviewSoundIsSilentForAnUnresolvableSetting()
+    {
+        SettingsWindow.PreviewSound("NotARealSoundName", "Glass");
+
+        SettingsWindow.FlushPendingPreviewForTests();
         Assert.Empty(_played);
     }
 
@@ -345,16 +540,51 @@ public class SoundSettingsRowTests : IDisposable
     }
 
     [AvaloniaFact]
-    public void PreviewSoundResolvesTheDefaultWhenGivenNull()
+    public async Task PreviewSoundResolvesTheDefaultWhenGivenNull()
     {
         var systemSounds = SystemSounds();
         if (systemSounds.Count == 0) return; // nothing installed on this runner to assert against
 
         SettingsWindow.PreviewSound(null, systemSounds[0]);
+        SettingsWindow.FlushPendingPreviewForTests();
+        await WaitForPreviewAsync();
 
         var expectedPath = SystemSoundCatalog.Resolve(
             systemSounds[0], SystemSoundCatalog.DefaultDirectory, SystemSoundCatalog.DefaultExtensions);
         Assert.Equal(new[] { expectedPath }, _played);
+    }
+
+    // QA round 2 (HIGH): PreviewSound used to call ChimePlayer.Play
+    // synchronously, straight from SelectionChanged and the ▶ click's
+    // handler — both on the Avalonia UI thread — so arrowing through the
+    // picker froze the whole settings window for about 2.4s per step, the
+    // length of a short system chime. Measured the same way
+    // TurnSoundScanTests.AChimeIsNeverPlayedOnTheUiThread measures the scan
+    // side of the identical bug: the seam fires exactly where the real
+    // ChimePlayer.Play would run, so the thread it fires on is the thread a
+    // real process wait would have blocked. Flushed rather than waited on a
+    // real tick, for the reason every other case in this file is.
+    [AvaloniaFact]
+    public async Task APreviewNeverPlaysOnTheUiThread()
+    {
+        var systemSounds = SystemSounds();
+        if (systemSounds.Count == 0) return; // nothing installed on this runner to assert against
+
+        var onUiThread = new List<bool>();
+        var signal = new TaskCompletionSource<bool>();
+        ChimePlayer.PlayForTests = _ =>
+        {
+            onUiThread.Add(Dispatcher.UIThread.CheckAccess());
+            signal.TrySetResult(true);
+        };
+
+        SettingsWindow.PreviewSound(systemSounds[0], systemSounds[0]);
+        SettingsWindow.FlushPendingPreviewForTests();
+
+        await Task.WhenAny(signal.Task, Task.Delay(TimeSpan.FromSeconds(5)));
+
+        var single = Assert.Single(onUiThread);
+        Assert.False(single, "PreviewSound ran ChimePlayer.Play on the UI thread; the real call blocks it for up to 5 s");
     }
 
     // --- the master switch and the row list ---
@@ -395,7 +625,7 @@ public class SoundSettingsRowTests : IDisposable
     // arguments) but never invoked anywhere, which line coverage cannot
     // distinguish from "covered" without a case that clicks the real button.
     [AvaloniaFact]
-    public void TheFinishedRowsPreviewButtonReadsTheLiveFinishedSetting()
+    public async Task TheFinishedRowsPreviewButtonReadsTheLiveFinishedSetting()
     {
         var systemSounds = SystemSounds();
         if (systemSounds.Count == 0) return; // nothing installed on this runner to assert against
@@ -406,6 +636,8 @@ public class SoundSettingsRowTests : IDisposable
 
         var button = rows[1].GetLogicalDescendants().OfType<Button>().Single();
         button.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+        SettingsWindow.FlushPendingPreviewForTests();
+        await WaitForPreviewAsync();
 
         var expectedPath = SystemSoundCatalog.Resolve(
             systemSounds[0], SystemSoundCatalog.DefaultDirectory, SystemSoundCatalog.DefaultExtensions);
@@ -413,7 +645,7 @@ public class SoundSettingsRowTests : IDisposable
     }
 
     [AvaloniaFact]
-    public void TheAttentionRowsPreviewButtonReadsTheLiveAttentionSetting()
+    public async Task TheAttentionRowsPreviewButtonReadsTheLiveAttentionSetting()
     {
         var systemSounds = SystemSounds();
         if (systemSounds.Count == 0) return; // nothing installed on this runner to assert against
@@ -424,6 +656,8 @@ public class SoundSettingsRowTests : IDisposable
 
         var button = rows[2].GetLogicalDescendants().OfType<Button>().Single();
         button.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+        SettingsWindow.FlushPendingPreviewForTests();
+        await WaitForPreviewAsync();
 
         var expectedPath = SystemSoundCatalog.Resolve(
             systemSounds[0], SystemSoundCatalog.DefaultDirectory, SystemSoundCatalog.DefaultExtensions);
