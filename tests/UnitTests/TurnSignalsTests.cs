@@ -68,13 +68,21 @@ public class TurnSignalsClassifyTests
         Assert.Equal(TurnSignal.None, TurnSignals.Classify(previous, "ended"));
     }
 
-    // The negative control for the Finished rule: only generating→idle counts.
-    // Without this, a Classify that answered Finished for every arrival at
-    // idle would pass the first test above too.
+    // QA (CB-167) traced the actual hook wiring rather than assuming this:
+    // tools/install-macos-hooks.sh and tools/install-grok-hooks.sh both wire
+    // only SessionStart/UserPromptSubmit/PreToolUse/Stop/SessionEnd/
+    // Notification — no PostToolUse — so nothing re-asserts "generating"
+    // once a permission prompt is approved. If that approved tool is the
+    // last thing the turn does, the status file goes waiting→idle directly
+    // on Stop, and the original generating-only rule silently never chimed
+    // for it. This was "waiting→idle is not Finished" until that was
+    // measured; it is the opposite now, and the arm's own comment in
+    // TurnSignals.cs has the rest of the story, including why Codex is
+    // unaffected either way.
     [Fact]
-    public void WaitingToIdleIsNotFinished()
+    public void WaitingToIdleIsFinished()
     {
-        Assert.Equal(TurnSignal.None, TurnSignals.Classify("waiting", "idle"));
+        Assert.Equal(TurnSignal.Finished, TurnSignals.Classify("waiting", "idle"));
     }
 
     [Fact]

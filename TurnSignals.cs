@@ -51,8 +51,22 @@ namespace ClaudeBuddy
             // finished turns that happened before the app was even running.
             if (previous is null) return TurnSignal.None;
 
-            if (string.Equals(previous, GeneratingState, StringComparison.Ordinal)
-                && string.Equals(next, IdleState, StringComparison.Ordinal))
+            // QA (CB-167) traced the hook wiring rather than assuming it:
+            // tools/install-macos-hooks.sh and tools/install-grok-hooks.sh
+            // both map only SessionStart/UserPromptSubmit/PreToolUse/Stop/
+            // SessionEnd/Notification — there is no PostToolUse entry, so
+            // nothing re-asserts "generating" once a permission prompt is
+            // approved. If that approved tool is the last thing the turn
+            // does, the status file goes straight from waiting to idle on
+            // Stop, and the original generating-only rule silently never
+            // chimed for it. Codex is the one CLI unaffected — its own
+            // installer (tools/install-codex-hooks.sh) *does* wire
+            // PostToolUse to "generating", so a Codex turn always passes
+            // through generating again before Stop and this arm is simply
+            // never reached for it; adding waiting here costs Codex nothing.
+            if (string.Equals(next, IdleState, StringComparison.Ordinal)
+                && (string.Equals(previous, GeneratingState, StringComparison.Ordinal)
+                    || string.Equals(previous, WaitingState, StringComparison.Ordinal)))
             {
                 return TurnSignal.Finished;
             }
