@@ -28,12 +28,78 @@ namespace ClaudeBuddy
     {
         internal static readonly TimeSpan MaxDuration = TimeSpan.FromSeconds(5);
 
+        // Named rather than a literal repeated in two places, and public
+        // enough for a test to reference it without duplicating the string.
+        internal const string ChimeEnvVar = "CLAUDEBUDDY_CHIME";
+
+        // QA (CB-167): the whole Windows script, as a value rather than
+        // built inline inside Play() — that is what lets
+        // WindowsStartInfoFor below be asserted on without a Windows
+        // machine to run it on. Two things are deliberate about its shape.
+        // First, the path is read back only through $env: and is never
+        // interpolated into this string — see WindowsStartInfoFor's own
+        // comment for what that closes. Second, the empty-variable guard
+        // comes before anything else: a bug that ever calls this with
+        // nothing to play (the C# side already only calls Play with a
+        // resolved path, but the script is its own contract) exits loudly
+        // with a real error instead of either doing nothing silently or
+        // leaving Media.SoundPlayer's own opaque failure as the only sign
+        // anything went wrong.
+        internal const string WindowsScript =
+            "if ([string]::IsNullOrEmpty($env:CLAUDEBUDDY_CHIME)) { " +
+            "Write-Error 'CLAUDEBUDDY_CHIME is not set'; exit 1 }; " +
+            "(New-Object Media.SoundPlayer $env:CLAUDEBUDDY_CHIME).PlaySync()";
+
         // The seam. A scan-level test can assert exactly which path was
         // decided on without a sound card, a process, or even /usr/bin/afplay
         // existing on the runner — the same pattern as
         // SpeechRequest.UtteranceForTests and SpeechSummary.SummarizerForTests.
         // Set and cleared by the test, never by production code.
         internal static Action<string>? PlayForTests;
+
+        // QA (CB-167): the process currently playing, if there is one.
+        // Tracked so Cancel below — called once, from the app's own Quit
+        // path — can stop it, the same guarantee OrbWindow's Closed handler
+        // already gives TextToSpeech's process. Nothing but Play (setting
+        // it) and Cancel (reading and clearing it) touches this.
+        private static Process? _playing;
+        private static readonly object PlayingGate = new();
+
+        // Builds the Windows ProcessStartInfo on its own, callable and
+        // assertable from a test even though Play itself is excluded from
+        // coverage. The path never appears in ArgumentList or in
+        // WindowsScript — it only ever reaches PowerShell through the
+        // environment, which is what makes this safe with any character a
+        // filesystem allows a path to contain. The interpolated version
+        // this replaced escaped a bare U+0027 apostrophe by doubling it, but
+        // PowerShell's tokenizer also accepts the Unicode "smart" quotes
+        // U+2018 through U+201B as string delimiters — a path containing
+        // one of those (a OneDrive folder renamed with a curly quote, a
+        // copy-pasted file name) could close the quoted string early and run
+        // whatever followed as a second command. A leading '-' is the other
+        // shape QA asked this be checked against: because the path is a
+        // variable's *value*, substituted after PowerShell has already
+        // parsed $env:CLAUDEBUDDY_CHIME as one positional argument token,
+        // the runtime value is never re-parsed as a flag the way a literal
+        // "-something" written directly in the script text could be.
+        // TextToSpeech's own PowerShell voice-name escaping has the
+        // identical smart-quote hole and is deliberately left alone here —
+        // out of scope for this fix, tracked as its own bug.
+        internal static ProcessStartInfo WindowsStartInfoFor(string path)
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "powershell",
+                ArgumentList = { "-NoProfile", "-Command", WindowsScript },
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+
+            startInfo.EnvironmentVariables[ChimeEnvVar] = path;
+            return startInfo;
+        }
 
         // Excluded from coverage along with everything it calls: this starts
         // a real audio subprocess and blocks the calling thread on it for up
@@ -71,53 +137,27 @@ namespace ClaudeBuddy
             }
             else if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             {
-                // QA (CB-167): not interpolated into the command line at
-                // all, even quoted. A single-quote escape only guards
-                // against U+0027 — PowerShell's tokenizer also accepts the
-                // Unicode "smart" apostrophes U+2018 through U+201B as
-                // string delimiters, so a path containing one of those
-                // (a OneDrive folder renamed with a curly quote, a
-                // copy-pasted file name) would close the string early and
-                // let whatever followed run as a second command. Passed
-                // through the environment instead, where PowerShell never
-                // tokenizes it as script text, and read back as a literal
-                // value with $env:. TextToSpeech's own PowerShell voice-name
-                // escaping has the identical hole and is deliberately left
-                // alone here — out of scope for this fix, tracked as its own
-                // bug.
-                proc = new Process
-                {
-                    StartInfo = new ProcessStartInfo
-                    {
-                        FileName = "powershell",
-                        ArgumentList =
-                        {
-                            "-NoProfile", "-Command",
-                            "(New-Object Media.SoundPlayer $env:CLAUDEBUDDY_CHIME).PlaySync()"
-                        },
-                        UseShellExecute = false,
-                        CreateNoWindow = true,
-                        RedirectStandardOutput = true,
-                        RedirectStandardError = true
-                    }
-                };
-                proc.StartInfo.EnvironmentVariables["CLAUDEBUDDY_CHIME"] = path;
+                proc = new Process { StartInfo = WindowsStartInfoFor(path) };
             }
             else
             {
                 return;
             }
 
+            lock (PlayingGate) _playing = proc;
+
             try
             {
                 if (!proc.Start())
                 {
+                    ClearIfCurrent(proc);
                     proc.Dispose();
                     return;
                 }
             }
             catch
             {
+                ClearIfCurrent(proc);
                 proc.Dispose();
                 return;
             }
@@ -131,8 +171,42 @@ namespace ClaudeBuddy
             }
             finally
             {
+                ClearIfCurrent(proc);
                 proc.Dispose();
             }
+        }
+
+        // Only clears the tracked process if it is still the one this call
+        // started — Cancel can have already claimed and cleared it
+        // concurrently (a KillTree in flight while this finally block also
+        // runs), and a later Play's own process must never be nulled out by
+        // an earlier one's cleanup racing behind it.
+        [ExcludeFromCodeCoverage]
+        private static void ClearIfCurrent(Process proc)
+        {
+            lock (PlayingGate)
+            {
+                if (ReferenceEquals(_playing, proc)) _playing = null;
+            }
+        }
+
+        // QA (CB-167): the app's own Quit path (TrayController.Shutdown)
+        // calls this so a chime still mid-playback does not keep the
+        // machine making noise once the app itself is gone — a sudden
+        // SIGKILL or a crash cannot be caught here, the same limit
+        // TextToSpeech.Cancel already lives with, but an ordinary Quit now
+        // can be.
+        [ExcludeFromCodeCoverage]
+        internal static void Cancel()
+        {
+            Process? victim;
+            lock (PlayingGate)
+            {
+                victim = _playing;
+                _playing = null;
+            }
+
+            if (victim is not null) KillTree(victim);
         }
 
         // Copied from TextToSpeech.KillTree rather than shared with it,

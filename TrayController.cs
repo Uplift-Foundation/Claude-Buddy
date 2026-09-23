@@ -312,6 +312,17 @@ namespace ClaudeBuddy
         private static void Shutdown(IClassicDesktopStyleApplicationLifetime desktop)
         {
             GlobalHotkeys.Stop();
+
+            // QA (CB-167): a chime can still be mid-playback (up to its 5 s
+            // cap) at the moment Quit is chosen, and closing every orb
+            // window here does for TextToSpeech's own process only what
+            // each window's own Closed handler already arranges — nothing
+            // does the same for ChimePlayer's, since a chime is not tied to
+            // any one window's lifecycle. This is the one place a graceful
+            // Quit can reach every path this app might have a child process
+            // running on.
+            ChimePlayer.Cancel();
+
             desktop.Shutdown();
         }
 

@@ -1,0 +1,89 @@
+using Xunit;
+
+namespace ClaudeBuddy.Tests;
+
+// QA (CB-167): ChimePlayer.Play itself is [ExcludeFromCodeCoverage] — it
+// starts a real audio subprocess — but WindowsStartInfoFor and WindowsScript
+// are pure enough to assert on directly, which is what actually proves the
+// smart-quote injection QA found cannot come back: the path is never
+// interpolated into script text, only ever passed through the environment,
+// so no escaping question about its contents is even reachable.
+public class ChimePlayerTests
+{
+    [Theory]
+    // The straight apostrophe the original interpolated version escaped by
+    // doubling.
+    [InlineData(@"C:\Users\warre\Music\it's a chime.wav")]
+    // The Unicode "smart" apostrophes PowerShell's tokenizer also accepts
+    // as string delimiters — the actual injection QA found, since the old
+    // code only escaped U+0027.
+    [InlineData("C:\\Users\\warre\\Music\\chime\u2018s.wav")]
+    [InlineData("C:\\Users\\warre\\Music\\chime\u2019s.wav")]
+    [InlineData("C:\\Users\\warre\\Music\\chime\u201As.wav")]
+    [InlineData("C:\\Users\\warre\\Music\\chime\u201Bs.wav")]
+    // A leading dash — the shape a PowerShell parameter name has, which
+    // parameter binding could only ever misread if this were literal script
+    // text rather than a variable's runtime value.
+    [InlineData(@"-weirdly-named-chime.wav")]
+    // Spaces, for good measure — the case every quoting scheme has to get
+    // right first.
+    [InlineData(@"C:\Users\warre\My Sounds\chime with spaces.wav")]
+    public void WindowsStartInfoFor_PassesThePathThroughTheEnvironmentUnchanged(string path)
+    {
+        var startInfo = ChimePlayer.WindowsStartInfoFor(path);
+
+        Assert.Equal(path, startInfo.EnvironmentVariables[ChimePlayer.ChimeEnvVar]);
+    }
+
+    // The negative control every one of the cases above actually depends
+    // on: no matter what the path contains, the script text handed to
+    // powershell.exe is the same fixed string, because the path never
+    // reaches it. A version that still interpolated somewhere would fail
+    // this even if the individual escaping happened to be correct.
+    [Theory]
+    [InlineData(@"C:\Users\warre\it's a chime.wav")]
+    [InlineData("C:\\Users\\warre\\chime\u2019s.wav")]
+    [InlineData(@"-leading-dash.wav")]
+    public void WindowsStartInfoFor_TheScriptTextNeverChangesWithThePath(string path)
+    {
+        var withThisPath = ChimePlayer.WindowsStartInfoFor(path);
+        var withAnotherPath = ChimePlayer.WindowsStartInfoFor(@"C:\Windows\Media\Glass.wav");
+
+        Assert.Equal(
+            withAnotherPath.ArgumentList[2],
+            withThisPath.ArgumentList[2]);
+        Assert.DoesNotContain(path, withThisPath.ArgumentList[2]);
+    }
+
+    [Fact]
+    public void WindowsStartInfoFor_LaunchesPowershellNoProfile()
+    {
+        var startInfo = ChimePlayer.WindowsStartInfoFor(@"C:\Windows\Media\Glass.wav");
+
+        Assert.Equal("powershell", startInfo.FileName);
+        Assert.Equal("-NoProfile", startInfo.ArgumentList[0]);
+        Assert.Equal("-Command", startInfo.ArgumentList[1]);
+    }
+
+    // QA (CB-167): "if the variable is empty, the script must exit with an
+    // error, not play silently." Asserted against the actual script text
+    // rather than merely trusted, since this is the one guarantee that has
+    // to hold even if something upstream ever calls Play with nothing to
+    // give it.
+    [Fact]
+    public void WindowsScript_GuardsAgainstAnEmptyEnvironmentVariable()
+    {
+        Assert.Contains("IsNullOrEmpty($env:" + ChimePlayer.ChimeEnvVar + ")", ChimePlayer.WindowsScript);
+        Assert.Contains("exit 1", ChimePlayer.WindowsScript);
+    }
+
+    // The path only ever appears via $env:, never as a literal — the actual
+    // mechanism that makes every case above true, checked once directly on
+    // the constant itself rather than only inferred from the parameterised
+    // cases.
+    [Fact]
+    public void WindowsScript_ReadsThePathOnlyThroughTheEnvironment()
+    {
+        Assert.Contains("$env:" + ChimePlayer.ChimeEnvVar, ChimePlayer.WindowsScript);
+    }
+}
