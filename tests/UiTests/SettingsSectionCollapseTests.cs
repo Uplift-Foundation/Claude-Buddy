@@ -29,7 +29,7 @@ public class SettingsSectionCollapseTests
     private static readonly string[] AllIds =
     {
         "orbs", "orb-click", "auto-organize", "orb-colours", "chat-panel",
-        "voice", "claude-code", "codex", "grok", "openclaw", "claude-cloud",
+        "voice", "sounds", "claude-code", "codex", "grok", "openclaw", "claude-cloud",
         "peer-link", "claude-desktop"
     };
 
@@ -264,6 +264,6 @@ public class SettingsSectionCollapseTests
         Assert.Equal(shouldClose, SettingsWindow.ShouldCloseOnKeyDown(key, modifiers));
 
     [AvaloniaFact]
-    public void AllThirteenIdsAreDistinct() =>
+    public void AllFourteenIdsAreDistinct() =>
         Assert.Equal(AllIds.Length, AllIds.Distinct().Count());
 }

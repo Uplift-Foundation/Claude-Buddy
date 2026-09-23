@@ -26,7 +26,7 @@ public class SettingsSectionTests
     private static readonly string[] ExpectedIds =
     {
         "orbs", "orb-click", "auto-organize", "orb-colours", "chat-panel",
-        "voice", "claude-code", "codex", "grok", "openclaw", "claude-cloud",
+        "voice", "sounds", "claude-code", "codex", "grok", "openclaw", "claude-cloud",
         "peer-link", "claude-desktop"
     };
 
