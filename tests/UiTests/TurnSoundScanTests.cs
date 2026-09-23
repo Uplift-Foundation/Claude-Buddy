@@ -142,6 +142,24 @@ public class TurnSoundScanTests : IDisposable
         Assert.Single(_played);
     }
 
+    // A real permission prompt appearing, not just a baseline being absent
+    // of one — this is what exercises TurnSounds.Snapshot's
+    // ResolveAttentionSound closure over a real ScanAndUpdate() rather than
+    // only ResolveFinishedSound, which the generating→idle cases above
+    // already cover on their own.
+    [AvaloniaFact]
+    public void GeneratingToWaitingPlaysTheAttentionChime()
+    {
+        using var scratch = new Scratch();
+        scratch.Write("session-a", state: "generating");
+        var manager = Scan(scratch);
+
+        scratch.Write("session-a", state: "waiting");
+        manager.ScanAndUpdate();
+
+        Assert.Single(_played);
+    }
+
     // --- startup burst ---
 
     [AvaloniaFact]
@@ -210,5 +228,41 @@ public class TurnSoundScanTests : IDisposable
         manager.ScanAndUpdate();
 
         Assert.Empty(_played);
+    }
+
+    // --- vibe summary ---
+
+    // The end-to-end path TurnSoundPolicyTests and TurnSummarySpeechTests
+    // each cover half of: a real scan decides Summary, SessionManager's
+    // callback finds the real OrbWindow for the session, and
+    // OrbWindow.SpeakTurnSummary reads its real transcript and speaks it —
+    // no chime anywhere in this case, which is the assertion that proves the
+    // Summary branch ran rather than silently falling back to one.
+    [AvaloniaFact]
+    public void ATurnFinishedSetToSummarySpeaksTheSessionsLastTurnRatherThanChiming()
+    {
+        ClaudeBuddySettings.TurnFinishedSound = "summary";
+
+        var spoken = (string?)null;
+        SpeechRequest.UtteranceForTests = (text, _, _) => spoken = text;
+        try
+        {
+            using var scratch = new Scratch();
+            const string AssistantSaid =
+                """{"type":"assistant","uuid":"a1","timestamp":"2026-08-16T10:00:09Z","message":{"role":"assistant","content":[{"type":"text","text":"Fixed the nested-team case."}]}}""";
+            var transcriptPath = scratch.WriteTranscript("session-a", AssistantSaid);
+            scratch.Write("session-a", state: "generating", transcriptPath: transcriptPath);
+            var manager = Scan(scratch);
+
+            scratch.Write("session-a", state: "idle", transcriptPath: transcriptPath);
+            manager.ScanAndUpdate();
+
+            Assert.Empty(_played);
+            Assert.Equal("Fixed the nested-team case.", spoken);
+        }
+        finally
+        {
+            SpeechRequest.UtteranceForTests = null;
+        }
     }
 }

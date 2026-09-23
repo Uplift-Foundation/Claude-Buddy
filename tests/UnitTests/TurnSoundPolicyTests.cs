@@ -56,6 +56,23 @@ public class TurnSoundPolicyTests
         Assert.Equal(SoundActionKind.Silent, result.Kind);
     }
 
+    // A non-empty list that still has no winner in it — distinct from the
+    // empty-list case above, which returns before Winner() is ever called.
+    // SessionManager never actually builds a list like this (it only adds
+    // an event when the signal isn't None), but Decide is a pure function
+    // reasoned about on its own terms, and this is the input shape that
+    // proves Winner() returning null is handled rather than merely never
+    // exercised.
+    [Fact]
+    public void ASignalListOfOnlyNoneNeverFindsAWinner()
+    {
+        var events = new[] { new TurnSoundEvent(TurnSignal.None, "key-a", "session-a") };
+
+        var result = TurnSoundPolicy.Decide(events, Snapshot(), Now, LongAgo, speechBusy: false);
+
+        Assert.Equal(SoundActionKind.Silent, result.Kind);
+    }
+
     [Fact]
     public void MasterOffSilencesEverythingRegardlessOfSignals()
     {
@@ -195,6 +212,56 @@ public class TurnSoundPolicyTests
             defaultFinished: "global-default",
             overrides: overrides,
             resolveFinished: setting => { seenSetting = setting; return "/x.aiff"; });
+
+        TurnSoundPolicy.Decide(events, settings, Now, LongAgo, speechBusy: false);
+
+        Assert.Equal("global-default", seenSetting);
+    }
+
+    // The attention-side mirror of AnOverrideBeatsTheGlobalDefault — the
+    // ternary that picks between the two fields has to be proven on both
+    // arms, not just the Finished one every other case here happens to use.
+    [Fact]
+    public void AnOverrideBeatsTheGlobalDefaultForAttentionToo()
+    {
+        var events = new[] { Attention("key-a", "session-a") };
+        var overrides = new Dictionary<string, ClaudeBuddySettings.OrbTurnSound>
+        {
+            ["key-a"] = new ClaudeBuddySettings.OrbTurnSound(Finished: null, Attention: "custom-ping"),
+        };
+
+        string? seenSetting = null;
+        var settings = Snapshot(
+            defaultAttention: "global-default",
+            overrides: overrides,
+            resolveAttention: setting =>
+            {
+                seenSetting = setting;
+                return "/sounds/" + setting + ".aiff";
+            });
+
+        var result = TurnSoundPolicy.Decide(events, settings, Now, LongAgo, speechBusy: false);
+
+        Assert.Equal("custom-ping", seenSetting);
+        Assert.Equal("/sounds/custom-ping.aiff", result.Path);
+    }
+
+    // And the same pairing the Finished side gets: an override that only
+    // names Finished leaves Attention on the global default.
+    [Fact]
+    public void AnOverrideOfOnlyFinishedLeavesAttentionOnTheGlobalDefault()
+    {
+        var events = new[] { Attention("key-a", "session-a") };
+        var overrides = new Dictionary<string, ClaudeBuddySettings.OrbTurnSound>
+        {
+            ["key-a"] = new ClaudeBuddySettings.OrbTurnSound(Finished: "custom-glass", Attention: null),
+        };
+
+        string? seenSetting = null;
+        var settings = Snapshot(
+            defaultAttention: "global-default",
+            overrides: overrides,
+            resolveAttention: setting => { seenSetting = setting; return "/x.aiff"; });
 
         TurnSoundPolicy.Decide(events, settings, Now, LongAgo, speechBusy: false);
 

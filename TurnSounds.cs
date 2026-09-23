@@ -43,6 +43,13 @@ namespace ClaudeBuddy
             var decision = TurnSoundPolicy.Decide(
                 events, Snapshot(), moment, _lastPlayed, TextToSpeech.IsSpeaking);
 
+            // No case for Silent: a switch statement (unlike a switch
+            // expression) is already a no-op for any value nothing matches,
+            // and Silent is the only one left once Chime and Summary are
+            // spoken for — so a third arm here would be dead code asking to
+            // be covered for no reason, not a safety net. If SoundActionKind
+            // ever grows a fourth member, the right fix is a case for it,
+            // not a default that silently swallows something new.
             switch (decision.Kind)
             {
                 case SoundActionKind.Chime:
@@ -53,10 +60,6 @@ namespace ClaudeBuddy
                 case SoundActionKind.Summary:
                     _lastPlayed = moment;
                     speakTurnSummary(decision.SessionId!);
-                    break;
-
-                case SoundActionKind.Silent:
-                default:
                     break;
             }
         }

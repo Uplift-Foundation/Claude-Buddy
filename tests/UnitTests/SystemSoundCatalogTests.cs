@@ -35,6 +35,18 @@ public class SystemSoundCatalogTests : IDisposable
         Assert.Empty(SystemSoundCatalog.List(missing, new[] { ".aiff" }));
     }
 
+    // The other half of the guard's short-circuit OR: a null or empty
+    // directory argument never reaches Directory.Exists at all. Without
+    // this, only the "non-empty but doesn't exist" arm above and the
+    // "exists" arm every other case below exercises would ever run.
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public void ListOfAnEmptyDirectoryArgumentIsEmptyRatherThanThrowing(string? directory)
+    {
+        Assert.Empty(SystemSoundCatalog.List(directory!, new[] { ".aiff" }));
+    }
+
     [Fact]
     public void ListReturnsNamesWithoutTheirExtension()
     {
