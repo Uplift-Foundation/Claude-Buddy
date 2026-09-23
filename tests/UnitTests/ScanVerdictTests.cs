@@ -237,6 +237,26 @@ public class ScanVerdictTests
     // "idle" for a status this version has never heard of — so a shape change on
     // the server must not be able to reintroduce the expiry by arriving as a
     // word the rule does not recognise.
+    //
+    // **The `generating` arm is a tripwire, and it is not redundant with the
+    // idle case above — do not delete it as a duplicate.** Before CB-182 that
+    // state had its own protection: JudgeLiveness carried
+    // `(Source == OpenClaw || Source == ClaudeCloud) && State == "generating"`,
+    // and the ClaudeCloud half of that disjunct is what kept a cloud session
+    // mid-answer on screen. CB-182's blanket exemption dominates it on every
+    // path, so the disjunct became unreachable and was removed rather than left
+    // in a live predicate reading as a live rule.
+    //
+    // That removal is right, and it leaves the two changes load-bearing for
+    // each other. `generating` now has no protection of its own: it passes here
+    // for the blanket reason, not the `generating` reason. So if anyone ever
+    // narrows or removes the blanket cloud exemption — wanting some cloud
+    // retention after all, say — this arm is what fails, and it fails for
+    // precisely the case that must not regress silently: a cloud session
+    // actively generating, expiring mid-turn, which SessionManager's own
+    // comment names as the state where hiding an orb is worst. Restoring the
+    // `generating` protection is the fix if that ever goes red; deleting the
+    // arm is not.
     [Theory]
     [InlineData("idle")]
     [InlineData("generating")]
