@@ -1815,6 +1815,44 @@ namespace ClaudeBuddy
             Dispatcher.UIThread.Post(() => SpeechRequest.Speak(text, SessionId));
         }
 
+        // CB-167's "vibe summary" turn-finished sound. TurnSounds.Deliver
+        // calls this through a callback SessionManager hands it, once the
+        // scan has already decided this orb's turn just finished and that
+        // summary is what should be spoken for it — everything upstream of
+        // this point (coalescing, the rate limit, the busy-speech fallback to
+        // an ordinary chime) has already happened, so this has nothing left
+        // to decide except *which text*.
+        //
+        // Deliberately not OnSpeakClicked with a flag bolted on: that method
+        // opens with "if already speaking, cancel" because it is a button a
+        // user toggles, and a scan-driven summary is not a button press —
+        // nothing here should ever stop speech that is already in progress on
+        // this orb's own say-so. TurnSoundPolicy's speechBusy check is what
+        // keeps this from being called at all while something else is
+        // talking; this method's job starts after that question is settled.
+        internal void SpeakTurnSummary()
+        {
+            if (_lastStatus?.Source == SessionSource.OpenClaw)
+            {
+                _ = SpeakTurnSummaryRemoteAsync();
+                return;
+            }
+
+            var text = FindSpeakableText();
+            if (text is null) return;
+            SpeechRequest.SpeakTurnSummary(text, SessionId);
+        }
+
+        internal async Task SpeakTurnSummaryRemoteAsync()
+        {
+            var title = _lastStatus?.Title ?? "";
+            var text = await OpenClawSessions.LastAssistantTextAsync(SessionId, title);
+
+            if (string.IsNullOrWhiteSpace(text)) return;
+
+            Dispatcher.UIThread.Post(() => SpeechRequest.SpeakTurnSummary(text, SessionId));
+        }
+
         // Called by SessionManager when speech starts, changes phase or stops.
         public void SetFlyoutSpeakState(TextToSpeech.SpeakState state) =>
             _flyout?.SetSpeakState(state);
