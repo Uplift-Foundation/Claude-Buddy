@@ -1,6 +1,7 @@
 using System.Reflection;
 using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
+using Avalonia.LogicalTree;
 using Avalonia.Threading;
 using Xunit;
 
@@ -329,5 +330,50 @@ public class SoundSettingsRowTests : IDisposable
         var window = NewWindow();
 
         Assert.Equal(3, window.SoundRows().Length);
+    }
+
+    // SoundRows() wires each row's preview button to a getter closing over
+    // the *live* setting (`() => ClaudeBuddySettings.TurnFinishedSound`,
+    // not a snapshot taken when the row was built) — unlike
+    // ThePreviewButtonReplaysWhateverIsCurrentlySelected above, which drives
+    // PreviewButton directly with its own throwaway getter and so never
+    // actually calls either of SoundRows' two real ones. Found by
+    // tools/coverage.sh: both closures were built (SoundRows() runs them as
+    // arguments) but never invoked anywhere, which line coverage cannot
+    // distinguish from "covered" without a case that clicks the real button.
+    [AvaloniaFact]
+    public void TheFinishedRowsPreviewButtonReadsTheLiveFinishedSetting()
+    {
+        var systemSounds = SystemSounds();
+        if (systemSounds.Count == 0) return; // nothing installed on this runner to assert against
+
+        ClaudeBuddySettings.TurnFinishedSound = systemSounds[0];
+        var window = NewWindow();
+        var rows = window.SoundRows();
+
+        var button = rows[1].GetLogicalDescendants().OfType<Button>().Single();
+        button.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+
+        var expectedPath = SystemSoundCatalog.Resolve(
+            systemSounds[0], SystemSoundCatalog.DefaultDirectory, SystemSoundCatalog.DefaultExtensions);
+        Assert.Equal(new[] { expectedPath }, _played);
+    }
+
+    [AvaloniaFact]
+    public void TheAttentionRowsPreviewButtonReadsTheLiveAttentionSetting()
+    {
+        var systemSounds = SystemSounds();
+        if (systemSounds.Count == 0) return; // nothing installed on this runner to assert against
+
+        ClaudeBuddySettings.NeedsAttentionSound = systemSounds[0];
+        var window = NewWindow();
+        var rows = window.SoundRows();
+
+        var button = rows[2].GetLogicalDescendants().OfType<Button>().Single();
+        button.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+
+        var expectedPath = SystemSoundCatalog.Resolve(
+            systemSounds[0], SystemSoundCatalog.DefaultDirectory, SystemSoundCatalog.DefaultExtensions);
+        Assert.Equal(new[] { expectedPath }, _played);
     }
 }
