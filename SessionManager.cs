@@ -3504,6 +3504,14 @@ namespace ClaudeBuddy
         {
             var key = PositionKeyFor(status, window.SessionId);
             window.PositionKey = key;
+
+            // Set alongside PositionKey rather than gated behind the same
+            // early return below — a sound override is useful even for a
+            // session with no stable position key (nothing to pin), since
+            // SoundKeyFor's fallback (the session id, or the id plus agent
+            // name) is still a real, if run-scoped, identity.
+            window.SoundKey = SoundKeyFor(status, window.SessionId);
+
             if (string.IsNullOrEmpty(key)) return;
 
             // A sibling session in the same directory already sits there;

@@ -68,6 +68,16 @@
                           Header="Reset this session to idle"
                           ToolTip.Tip="Changes this orb's displayed state only; the next hook event may update it again."
                           Click="ResetIdle_Click"/>
+                <!-- CB-167's per-orb sound override. Both submenus start
+                     empty and are (re)built in SessionMenu_Opening rather
+                     than here or in UpdateFrom — listing the system sound
+                     drawer means reading the disk, and Opening is the one
+                     moment that actually costs something, same reasoning as
+                     ApplyEndSessionGuard just above. -->
+                <MenuItem x:Name="SoundMenuItem" Header="Sound">
+                    <MenuItem x:Name="SoundFinishedMenuItem" Header="When a turn finishes"/>
+                    <MenuItem x:Name="SoundAttentionMenuItem" Header="When it needs you"/>
+                </MenuItem>
                 <!-- The `claude agents` roster, for the orbs it lists. Above
                      the two lifecycle items because it is the harmless one of
                      the three, and hidden rather than greyed for the same

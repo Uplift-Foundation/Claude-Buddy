@@ -2275,6 +2275,17 @@ namespace ClaudeBuddy
         // to remember it against.
         public string PositionKey { get; set; } = "";
 
+        // CB-167's key for a per-orb sound override (SessionManager.SoundKeyFor),
+        // cached here the same way PositionKey is and set alongside it in
+        // RestoreOrbPosition. Not PositionKey itself: SoundKeyFor appends the
+        // agent name to close the one gap PositionKeyFor leaves open — two
+        // team members sharing a cwd and an auto-generated title, which is
+        // fine for a shared *position* but wrong for a sound override, where
+        // muting one teammate would silently mute the other. Read by the
+        // Sound submenu on Opening; empty until an orb's first scan sets it,
+        // same as PositionKey.
+        public string SoundKey { get; set; } = "";
+
         // True once the user has placed this orb by hand, whether in this run or
         // in an earlier one.
         public bool IsPinned { get; private set; }
@@ -2667,10 +2678,108 @@ namespace ClaudeBuddy
         [ExcludeFromCodeCoverage]
         internal void SessionMenu_Opening(object? sender, System.ComponentModel.CancelEventArgs e)
         {
+            // Ahead of the manager-null guard below, and unconditionally —
+            // the Sound submenus have nothing to do with DependentsOf and
+            // should still populate for a test or a standalone window that
+            // never made a SessionManager current.
+            RebuildSoundSubmenus();
+
             var manager = SessionManager.Instance;
             if (manager is null) return;
 
             ApplyEndSessionGuard(manager.DependentsOf(SessionId));
+        }
+
+        // internal so a test can drive it directly rather than through the
+        // real ContextMenu.Opening event, which needs a shown window with a
+        // working popup — the same reason ApplyEndSessionGuard above is
+        // exercised the same way.
+        //
+        // Rebuilt from scratch on every open rather than cached: the disk
+        // listing and the saved override can both have changed since this
+        // orb's menu was last shown (a file picked from another orb, a
+        // system sound removed), and a MenuItem tree is cheap enough to
+        // throw away and redo that caching it would only optimise a cost
+        // this doesn't have.
+        internal void RebuildSoundSubmenus()
+        {
+            var over = ClaudeBuddySettings.OrbTurnSoundFor(SoundKey);
+
+            BuildSoundSubmenu(SoundFinishedMenuItem, over?.Finished,
+                SystemSoundCatalog.DefaultFinishedSoundName, includeSummary: true,
+                SetFinishedSoundOverride);
+
+            BuildSoundSubmenu(SoundAttentionMenuItem, over?.Attention,
+                SystemSoundCatalog.DefaultAttentionSoundName, includeSummary: false,
+                SetAttentionSoundOverride);
+        }
+
+        // The same Default/Off/[Vibe summary]/system sounds/Choose file…
+        // list SettingsWindow's pickers offer, reused rather than
+        // reimplemented — SettingsWindow.SoundChoices' own comment says why
+        // a second copy of this list is exactly the kind of drift CB-153's
+        // doubled colour switch already cost this project once.
+        //
+        // MenuItemToggleType.CheckBox rather than a "✓ " text prefix on the
+        // active item's Header: CB-173 is an open bug about a font glyph
+        // rendering as a colour emoji on Windows for the settings-disclosure
+        // chevron, and a checkmark character is exactly that kind of small,
+        // easy-to-miss-in-review glyph. The toggle check Avalonia draws for
+        // CheckBox is template chrome, not a font lookup, so it can't have
+        // that problem.
+        private void BuildSoundSubmenu(
+            MenuItem parent, string? current, string defaultName, bool includeSummary, Action<string?> write)
+        {
+            parent.Items.Clear();
+
+            foreach (var (label, value) in SettingsWindow.SoundChoices(current, defaultName, includeSummary))
+            {
+                if (value == SettingsWindow.ChooseFileValue)
+                {
+                    var chooseItem = new MenuItem { Header = label };
+
+                    // async void: a MenuItem's Click has nowhere to return a
+                    // Task to, the same reason SettingsWindow.SoundPicker's
+                    // own SelectionChanged handler is. A cancelled pick
+                    // (null) leaves the override exactly as it was — there
+                    // is no combo selection to revert here, unlike the
+                    // settings picker, since a context menu simply closes
+                    // rather than sitting on a stale choice.
+                    chooseItem.Click += async (_, _) =>
+                    {
+                        var path = await SettingsWindow.ChooseSoundFile(this);
+                        if (path is not null) write(path);
+                    };
+
+                    parent.Items.Add(chooseItem);
+                    continue;
+                }
+
+                var item = new MenuItem
+                {
+                    Header = label,
+                    ToggleType = MenuItemToggleType.CheckBox,
+                    IsChecked = value == current
+                };
+                item.Click += (_, _) => write(value);
+                parent.Items.Add(item);
+            }
+        }
+
+        // Reads the other trigger's current override so writing one never
+        // clobbers the other — ClaudeBuddySettings.SetOrbTurnSound takes
+        // both fields together, and OrbTurnSound has no "leave unchanged"
+        // value of its own to pass instead.
+        private void SetFinishedSoundOverride(string? value)
+        {
+            var over = ClaudeBuddySettings.OrbTurnSoundFor(SoundKey);
+            ClaudeBuddySettings.SetOrbTurnSound(SoundKey, value, over?.Attention);
+        }
+
+        private void SetAttentionSoundOverride(string? value)
+        {
+            var over = ClaudeBuddySettings.OrbTurnSoundFor(SoundKey);
+            ClaudeBuddySettings.SetOrbTurnSound(SoundKey, over?.Finished, value);
         }
 
         // The row that says what it will do, or why it will not.
