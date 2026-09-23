@@ -543,4 +543,101 @@ public class TurnSoundScanTests : IDisposable
         await Task.Delay(TimeSpan.FromSeconds(2.5));
         Assert.Single(_played);
     }
+
+    // QA round 2, finding 5, folded in from Marguerite's demonstrating test
+    // (Cb167QaRound2UiTests.ADeferredAttentionIsDroppedWhenItsSessionIsResetBeforeItFires,
+    // worktree cb-wt-turn-sounds-qa2). Same shape as
+    // ResettingTheSessionThePendingSignalBelongsToCancelsIt above, but
+    // asserts on the actual sound *path* rather than only a count — the
+    // count-only assertion could not tell "the Ping never played" apart
+    // from "the Ping played but something else also failed to," and
+    // finding 5's fix touches exactly which event survives fire-time
+    // validation, not just how many chimes land. session-b needs its own
+    // real, live pid (a genuine /bin/sleep subprocess) rather than the
+    // cli:"codex" trick the other two-session cases above use — two status
+    // files sharing one pid would make every WriteLocal-equivalent call a
+    // fresh Superseded baseline instead of a state change on the same orb.
+    [AvaloniaFact]
+    public async Task ADeferredAttentionIsDroppedWhenItsSessionIsResetBeforeItFires()
+    {
+        var attention = Path.Combine(Path.GetTempPath(), "cb-turnsound-attention-" + Guid.NewGuid() + ".aiff");
+        File.WriteAllText(attention, "");
+        try
+        {
+            ClaudeBuddySettings.NeedsAttentionSound = attention;
+
+            using var scratch = new Scratch();
+            using var other = System.Diagnostics.Process.Start("/bin/sleep", "30")!;
+            try
+            {
+                var bPid = other.Id;
+                scratch.Write("session-a", state: "generating");
+                scratch.Write("session-b", state: "generating", pid: bPid);
+                var manager = Scan(scratch);
+
+                scratch.Write("session-a", state: "idle");
+                manager.ScanAndUpdate(); // A finishes live: Glass now, gap opens
+                await WaitForChimeAsync();
+                Assert.Single(_played);
+
+                scratch.Write("session-b", state: "waiting", pid: bPid);
+                manager.ScanAndUpdate(); // B's prompt: inside the gap, deferred
+
+                manager.ResetSessionToIdle("session-b"); // the user clears B before it fires
+
+                await Task.Delay(TimeSpan.FromSeconds(3));
+            }
+            finally
+            {
+                try { other.Kill(); } catch { }
+            }
+
+            lock (_lock)
+            {
+                Assert.Contains(
+                    SystemSoundCatalog.Resolve(SystemSoundCatalog.DefaultFinishedSoundName,
+                        SystemSoundCatalog.DefaultDirectory, SystemSoundCatalog.DefaultExtensions),
+                    _played); // the setup really did chime for A
+                Assert.DoesNotContain(attention, _played);
+            }
+        }
+        finally
+        {
+            try { File.Delete(attention); } catch { }
+        }
+    }
+
+    // The positive control the test above needs, and the only scan-level
+    // case that lets a deferred event reach FirePending's real fire time
+    // through SessionManager's own currentStateFor wiring untouched — every
+    // other case here either plays live (currentStateFor is never invoked
+    // at all) or has its pending event reactively cancelled first (Settled
+    // or Pruned), so currentStateFor's "the tracker still has this session,
+    // and it says waiting" arm has nothing else that reaches it. B's status
+    // file is left exactly as written; nothing resets or removes it before
+    // the real ~2 s gap closes.
+    [AvaloniaFact]
+    public async Task ADeferredAttentionLeftUntouchedStillPlaysOnceItsOwnGapOpens()
+    {
+        using var scratch = new Scratch();
+        scratch.Write("session-a", state: "generating");
+        scratch.Write("session-b", state: "generating", cli: "codex");
+        var manager = Scan(scratch);
+
+        scratch.Write("session-a", state: "idle");
+        manager.ScanAndUpdate(); // A finishes live: Glass now, gap opens
+        await WaitForChimeAsync();
+        Assert.Single(_played);
+
+        scratch.Write("session-b", state: "waiting", cli: "codex");
+        manager.ScanAndUpdate(); // B's prompt: inside the gap, deferred
+
+        // Baseline supplied explicitly, the same reason
+        // AManualResetOfAnUnrelatedSessionDoesNotCancelThisSessionsPendingSignal
+        // does: one chime has already played, so this waits for a genuinely
+        // second one rather than being satisfied by the first all over
+        // again.
+        await WaitForChimeAsync(baseline: 1);
+        Assert.Equal(2, _played.Count);
+    }
 }

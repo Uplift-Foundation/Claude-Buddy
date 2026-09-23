@@ -2608,13 +2608,27 @@ namespace ClaudeBuddy
             // thread at the same moment a live scan mutates it is exactly
             // the kind of race that would show up once in a great while and
             // be unreproducible.
+            //
+            // currentStateFor (QA round 2, finding 5) exists for the same
+            // reason: a deferred event's session may have moved on — reset,
+            // pruned, or an attention resolved some way other than the
+            // reactive Cancel calls above catch — by the time TurnSounds'
+            // timer actually fires, and this is how FirePending asks "does
+            // that still hold" instead of trusting whatever was true when
+            // the event was first deferred. TurnSounds only ever calls this
+            // off its own timer thread, never the UI thread, so it dispatches
+            // the same way the summary callback above does — synchronously
+            // here rather than awaited, since FirePending's validation loop
+            // is itself synchronous and a Dictionary this scan owns is not
+            // safe to read from a second thread without going through it.
             TurnSounds.Deliver(turnSoundEvents, async id =>
             {
                 var window = await Dispatcher.UIThread.InvokeAsync(
                     () => _windows.TryGetValue(id, out var w) ? w : null);
                 if (window is null) return false;
                 return await window.SpeakTurnSummaryAsync().ConfigureAwait(false);
-            }, now);
+            }, currentStateFor: id => Dispatcher.UIThread.Invoke(
+                () => _statuses.TryGetValue(id, out var s) ? s.State : null), now: now);
 
             // After the removal pass, so an orb has already gone before its file
             // does and the two never disagree on screen. Inside the scan rather

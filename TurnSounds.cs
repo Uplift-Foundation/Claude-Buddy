@@ -5,16 +5,16 @@ namespace ClaudeBuddy
     // The one call SessionManager makes at the end of a scan to turn whatever
     // TurnSignalTracker noticed into an actual sound.
     //
-    // Everything that decides *whether* to make a noise lives in
-    // TurnSoundPolicy, pure and covered by its own tests with no clock but
-    // the one it is handed. This class is the seam between that decision and
-    // the world: it reads the settings the decision needs, remembers when
-    // this app last actually made a sound, holds the one pending signal a
-    // deferred decision leaves waiting on the rate limit, and carries out
-    // whichever of Silent/Chime/Summary came back. Kept this thin on purpose
-    // — a bug in "should this play" belongs in a pure function with a name,
-    // not folded into the one place that also touches a settings file, a
-    // timer and a speaker.
+    // Everything that decides *whether* to make a noise for one scan's worth
+    // of signals lives in TurnSoundPolicy, pure and covered by its own tests
+    // with no clock but the one it is handed. This class is the seam between
+    // that decision and the world: it reads the settings the decision needs,
+    // remembers when this app last actually made a sound, holds whichever
+    // signals are still genuinely waiting on the rate limit, and carries out
+    // whichever of Silent/Chime/Summary the survivors resolve to once the
+    // gap opens. Kept this thin on purpose — a bug in "should this play"
+    // belongs in a pure function with a name, not folded into the one place
+    // that also touches a settings file, a timer and a speaker.
     internal static class TurnSounds
     {
         private static readonly object Gate = new();
@@ -26,16 +26,30 @@ namespace ClaudeBuddy
         // (TurnSignalTracker already owns that half).
         private static DateTime _lastPlayed = DateTime.MinValue;
 
-        // QA's fix for the drop-not-defer bug: the one signal currently
-        // waiting out the rate limit, and the timer that will play it. One
-        // slot rather than a queue — a later, higher-or-equal-ranked signal
-        // replaces whatever is here wholesale, which is what "later signals
-        // re-coalesce into it" means. A pending Chime action carries its own
-        // path; a pending Summary action carries the session id and needs
-        // `_pendingSpeak` to actually reach the orb, the same callback
-        // Deliver itself was handed.
-        private static SoundAction? _pending;
+        // QA round 2: every deferred event still genuinely waiting on the
+        // gap, not just the single latest one. One slot was never enough —
+        // it let a later, lower-ranked decision silently erase an earlier,
+        // still-valid one (finding 3: a pending attention replaced by a
+        // later finished), and it had nowhere to keep a *second* attention
+        // from a different session once one was already pending, which is
+        // exactly the shape "two prompts land inside one gap and coalesce
+        // into a single Ping" (round 3c) needs: if the session this slot
+        // currently remembers gets Settled or Pruned, the other one must
+        // still be there to fall back to. A session's own newer signal
+        // replaces its own older entry; it never displaces a different
+        // session's.
+        private static readonly List<TurnSoundEvent> _pendingEvents = new();
         private static Func<string, Task<bool>>? _pendingSpeak;
+
+        // QA round 2 (finding 5): asked again at fire time, not trusted from
+        // whenever each event was first deferred — a session id in, its
+        // current tracked state out, or null if the tracker no longer holds
+        // it at all. SessionManager supplies this from _statuses; null
+        // (the default) means "don't ask," which is what every case that
+        // doesn't care about this validation, including most of this
+        // file's own tests, gets for free.
+        private static Func<string, string?>? _pendingCurrentStateFor;
+
         private static Timer? _pendingTimer;
 
         // QA (CB-167): playback is chained onto this rather than fired
@@ -60,32 +74,31 @@ namespace ClaudeBuddy
             lock (Gate)
             {
                 _lastPlayed = DateTime.MinValue;
-                _pending = null;
-                _pendingSpeak = null;
-                _pendingTimer?.Dispose();
-                _pendingTimer = null;
+                ClearPendingLocked();
                 _chimeChain = Task.CompletedTask;
             }
         }
 
-        // QA (CB-167): called from a session's own removal — pruned from
-        // the scan (a husk, backgrounded or genuinely gone) or Settled by a
-        // manual reset — so a deferred signal for that exact session can
-        // never fire late for an orb that has already stopped meaning
-        // anything by the time its two seconds are up. Ignored for any
-        // other session's pending signal, since the one still-relevant
-        // pending slot is the only thing here.
+        // QA (CB-167), reworked in round 2 for the event-list model: called
+        // from a session's own removal — pruned from the scan (a husk,
+        // backgrounded or genuinely gone) or Settled by a manual reset — so
+        // a deferred signal for that exact session can never fire late for
+        // an orb that has already stopped meaning anything. Removes only
+        // that session's own entries; a different session's pending event,
+        // coalesced into the same wait, survives untouched (round 3c) — the
+        // timer is only actually cancelled once nothing valid is left.
         internal static void CancelPendingFor(string sessionId)
         {
             lock (Gate)
             {
-                if (_pending?.SessionId == sessionId) ClearPendingLocked();
+                _pendingEvents.RemoveAll(e => e.SessionId == sessionId);
+                if (_pendingEvents.Count == 0) ClearPendingLocked();
             }
         }
 
         // The Prune-shaped version of the same guard: whatever the scan no
         // longer sees this pass is exactly what Prune is about to drop from
-        // the tracker, and a pending signal for any of them is stale for the
+        // the tracker, and a pending event for any of them is stale for the
         // identical reason. Called with the same `seen` set
         // ScanAndUpdateCore already built, so this costs nothing extra to
         // compute.
@@ -93,7 +106,8 @@ namespace ClaudeBuddy
         {
             lock (Gate)
             {
-                if (_pending is { } pending && !seen.Contains(pending.SessionId!)) ClearPendingLocked();
+                _pendingEvents.RemoveAll(e => !seen.Contains(e.SessionId));
+                if (_pendingEvents.Count == 0) ClearPendingLocked();
             }
         }
 
@@ -104,70 +118,96 @@ namespace ClaudeBuddy
         // "not an orb kind with a transcript" actually gets decided.
         // TurnSoundPolicy never sees any of this; it only ever names the
         // winning session id.
+        //
+        // `currentStateFor` is QA round 2's fire-time re-validation hook —
+        // optional, and null (the default) for any caller that doesn't need
+        // FirePending to re-check a pending attention's session against its
+        // live tracked state before playing it.
+        //
+        // `now` keeps its position as the third, positional argument on
+        // purpose — every existing call site (production and test) already
+        // passes it that way, and `currentStateFor` is the newer, optional
+        // addition, so it goes last rather than forcing every one of those
+        // call sites to switch to named arguments just to keep compiling.
         internal static void Deliver(
             IReadOnlyList<TurnSoundEvent> events,
             Func<string, Task<bool>> trySpeakTurnSummary,
-            DateTime? now = null)
+            DateTime? now = null,
+            Func<string, string?>? currentStateFor = null)
         {
             if (events.Count == 0) return;
 
             var moment = now ?? DateTime.UtcNow;
-            var decision = TurnSoundPolicy.Decide(
-                events, Snapshot(), moment, LastPlayed, TextToSpeech.IsSpeaking);
+            SoundAction decision;
 
-            if (decision.Kind == SoundActionKind.Silent) return;
-
-            if (decision.IsDeferred)
+            // QA round 2 (finding 6): Decide reads _lastPlayed to ask
+            // whether the gap is still closed, and FirePending — running on
+            // the timer's own thread — can be resolving and stamping at the
+            // same real moment. Reading a decision and then, separately,
+            // acting on it is a classic check-then-act race once a second
+            // thread can also write the thing that was checked; deciding
+            // and (for a live Chime, which is certain to play) stamping now
+            // both happen under the one lock below, so nothing else can
+            // write _lastPlayed in between.
+            lock (Gate)
             {
-                SchedulePending(decision, trySpeakTurnSummary);
-                return;
-            }
+                decision = TurnSoundPolicy.Decide(events, Snapshot(), moment, _lastPlayed, TextToSpeech.IsSpeaking);
 
-            // A live decision — the rate limit is open — supersedes
-            // anything still waiting out an earlier gap. Without this, a
-            // deferred chime whose timer hasn't fired yet could go off right
-            // alongside this one, playing a sound that was only ever
-            // supposed to happen once twice.
-            ClearPending();
+                if (decision.Kind == SoundActionKind.Silent) return;
+
+                if (decision.IsDeferred)
+                {
+                    SchedulePendingLocked(
+                        decision.SourceEvent!.Value, decision.PlayAt!.Value, trySpeakTurnSummary, currentStateFor);
+                    return;
+                }
+
+                // QA round 2 (finding 3): a live decision never touches
+                // _pendingEvents — the old ClearPending() call here used to
+                // wipe out a still-genuinely-pending attention the moment
+                // any unrelated live decision arrived. A live decision and
+                // whatever is still waiting on its own gap are unrelated;
+                // both get to happen.
+                //
+                // A live Chime is certain to play, so it is stamped right
+                // here. A live Summary is not — whether anything is
+                // actually said depends on trySpeakTurnSummary's answer,
+                // not known synchronously — so it keeps stamping later, in
+                // SpeakSummaryOrFallbackAsync, once that answer is in.
+                if (decision.Kind == SoundActionKind.Chime) _lastPlayed = moment;
+            }
 
             Execute(decision, moment, trySpeakTurnSummary);
         }
 
-        private static DateTime LastPlayed { get { lock (Gate) return _lastPlayed; } }
-
-        private static void SchedulePending(SoundAction decision, Func<string, Task<bool>> trySpeakTurnSummary)
+        // Callable only while already holding Gate.
+        private static void SchedulePendingLocked(
+            TurnSoundEvent winningEvent, DateTime playAt,
+            Func<string, Task<bool>> trySpeakTurnSummary, Func<string, string?>? currentStateFor)
         {
-            lock (Gate)
-            {
-                _pending = decision;
-                _pendingSpeak = trySpeakTurnSummary;
+            _pendingEvents.RemoveAll(e => e.SessionId == winningEvent.SessionId);
+            _pendingEvents.Add(winningEvent);
+            _pendingSpeak = trySpeakTurnSummary;
+            _pendingCurrentStateFor = currentStateFor;
 
-                var delay = decision.PlayAt!.Value - DateTime.UtcNow;
-                if (delay < TimeSpan.Zero) delay = TimeSpan.Zero;
+            var delay = playAt - DateTime.UtcNow;
+            if (delay < TimeSpan.Zero) delay = TimeSpan.Zero;
 
-                // Replaces whatever was armed rather than stacking a second
-                // timer beside it — one pending slot, one timer, always.
-                _pendingTimer?.Dispose();
-                _pendingTimer = new Timer(_ => FirePending(), null, delay, Timeout.InfiniteTimeSpan);
-            }
+            // Re-armed on every call rather than left alone when one is
+            // already running — harmless, since every event contributing to
+            // one pending window shares the same PlayAt (they were all
+            // deferred against the same _lastPlayed), and simpler than
+            // reasoning about when it would be safe to skip.
+            _pendingTimer?.Dispose();
+            _pendingTimer = new Timer(_ => FirePending(), null, delay, Timeout.InfiniteTimeSpan);
         }
 
-        private static void ClearPending()
-        {
-            lock (Gate) ClearPendingLocked();
-        }
-
-        // The shared body every clearing path uses, callable only while
-        // already holding Gate — CancelPendingFor and
-        // CancelPendingUnlessSeen both check a condition and clear
-        // atomically with it, which a lock-then-call-the-locking-version
-        // shape cannot do without either double-locking (fine here, since
-        // .NET locks are reentrant, but confusing to read) or duplicating
-        // this body.
+        // Callable only while already holding Gate.
         private static void ClearPendingLocked()
         {
-            _pending = null;
+            _pendingEvents.Clear();
             _pendingSpeak = null;
+            _pendingCurrentStateFor = null;
             _pendingTimer?.Dispose();
             _pendingTimer = null;
         }
@@ -177,21 +217,83 @@ namespace ClaudeBuddy
         // would from a live Deliver call.
         private static void FirePending()
         {
-            SoundAction? action;
+            List<TurnSoundEvent> events;
             Func<string, Task<bool>>? speak;
+            Func<string, string?>? currentStateFor;
             lock (Gate)
             {
-                action = _pending;
+                events = new List<TurnSoundEvent>(_pendingEvents);
                 speak = _pendingSpeak;
-                _pending = null;
-                _pendingSpeak = null;
-                _pendingTimer?.Dispose();
-                _pendingTimer = null;
+                currentStateFor = _pendingCurrentStateFor;
+                ClearPendingLocked();
             }
 
-            if (action is null || speak is null) return;
+            if (events.Count == 0 || speak is null) return;
 
-            Execute(action, DateTime.UtcNow, speak);
+            // QA round 2 (finding 5, round 3c): re-validated now, against
+            // live state, not trusted from whenever each event was first
+            // deferred. A session the tracker no longer holds at all
+            // (pruned, or the status file simply gone) drops out entirely.
+            // An attention whose session has since moved off "waiting" by
+            // some path other than the explicit Settle/Prune calls above —
+            // the prompt was answered normally, mid-gap, before this timer
+            // ever fired — drops out too; CancelPendingFor only catches a
+            // *manual* reset, not an ordinary approval. Two attentions from
+            // different sessions, coalesced into this one wait, are checked
+            // independently: only once every contributing event has failed
+            // this does nothing play.
+            var valid = new List<TurnSoundEvent>(events.Count);
+            foreach (var ev in events)
+            {
+                if (currentStateFor is not null)
+                {
+                    var state = currentStateFor(ev.SessionId);
+                    if (state is null) continue;
+
+                    if (ev.Signal == TurnSignal.NeedsAttention
+                        && !string.Equals(state, "waiting", StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+                }
+
+                valid.Add(ev);
+            }
+
+            if (valid.Count == 0) return;
+
+            var settings = Snapshot();
+
+            // QA round 2 (finding 4): sampled now, not carried over from
+            // whatever it was when this was first deferred — the plan's own
+            // rule is that a summary never interrupts speech already
+            // playing, and speech that started *during* the gap is exactly
+            // as "already playing" as speech that started before it.
+            var speechBusy = TextToSpeech.IsSpeaking;
+
+            // The same ranking Decide itself uses, re-run over whoever
+            // survived the filter above: attention outranks finished, and
+            // within one rank the first survivor (scan order, preserved by
+            // the list) keeps winning.
+            SoundAction? best = null;
+            var bestIsAttention = false;
+
+            foreach (var ev in valid)
+            {
+                var resolved = TurnSoundPolicy.ResolveOne(ev, settings, speechBusy);
+                if (resolved.Kind == SoundActionKind.Silent) continue;
+
+                var isAttention = ev.Signal == TurnSignal.NeedsAttention;
+                if (best is null || (isAttention && !bestIsAttention))
+                {
+                    best = resolved;
+                    bestIsAttention = isAttention;
+                }
+            }
+
+            if (best is not { } chosen) return;
+
+            Execute(chosen, DateTime.UtcNow, speak);
         }
 
         // Carries out a decision that is ready to play right now — never
@@ -215,11 +317,14 @@ namespace ClaudeBuddy
 
         private static void PlayChimeInBackground(string path, DateTime moment)
         {
-            // Stamped immediately: once a Chime decision is being carried
-            // out, it is certain to play (ChimePlayer's own failure modes —
-            // a process that won't start — were already true before this
-            // fix and are not this fix's business). The summary path below
-            // is the one that has to wait and see.
+            // Stamped here too, harmlessly redundant with Deliver's own
+            // upfront stamp for the live path — FirePending's callers never
+            // stamp beforehand, so this is the only place that call chain
+            // gets one at all. Once a Chime decision is being carried out,
+            // it is certain to play (ChimePlayer's own failure modes — a
+            // process that won't start — were already true before this fix
+            // and are not this fix's business). The summary path below is
+            // the one that has to wait and see.
             lock (Gate) _lastPlayed = moment;
 
             EnqueueChime(path);
@@ -289,6 +394,10 @@ namespace ClaudeBuddy
         // Read once per scan rather than once per event — the settings file
         // does not change mid-scan, and TurnSoundPolicy.Decide only ever
         // needs one snapshot regardless of how many sessions signalled.
+        // FirePending calls this again at fire time rather than reusing
+        // whatever Snapshot said when an event was first deferred, for the
+        // identical reason it re-samples speechBusy: settings, like speech
+        // state, can have moved on in the meantime.
         //
         // The two resolver closures are where "null means the platform
         // default" actually gets resolved into a name: SystemSoundCatalog

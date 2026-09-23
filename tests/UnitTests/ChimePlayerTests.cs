@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Xunit;
 
 namespace ClaudeBuddy.Tests;
@@ -85,5 +86,50 @@ public class ChimePlayerTests
     public void WindowsScript_ReadsThePathOnlyThroughTheEnvironment()
     {
         Assert.Contains("$env:" + ChimePlayer.ChimeEnvVar, ChimePlayer.WindowsScript);
+    }
+
+    // Round 3(d): a Settings preview and the summary-fallback chime both
+    // call ChimePlayer.Play directly, and can be running at the same time
+    // as an ordinary scan chime — none of them serialized against any of
+    // the others. A single Process? slot (pre-round-2) could only ever
+    // remember one of them, so StopAll on Quit would kill whichever "won"
+    // that slot and leave the other still making noise; _live is a set for
+    // exactly this reason. This proves the set, not the audio: two real
+    // processes, registered through the same Add path Play itself uses
+    // (TrackForTests — PlayForTests bypasses that machinery entirely, since
+    // there is no real process behind a substituted chime to track), are
+    // BOTH still killed by one StopAll call. Neither process plays any
+    // audio — a harmless, long-running command stands in for "still mid-
+    // playback when Quit happens," which is all StopAll actually cares
+    // about killing.
+    [Fact]
+    public void StopAllKillsEveryConcurrentlyTrackedProcessNotJustOne()
+    {
+        using var a = StartLongRunningProcessForTests();
+        using var b = StartLongRunningProcessForTests();
+        ChimePlayer.TrackForTests(a);
+        ChimePlayer.TrackForTests(b);
+
+        Assert.False(a.HasExited);
+        Assert.False(b.HasExited);
+
+        ChimePlayer.StopAll();
+
+        Assert.True(a.WaitForExit(3000), "the first tracked process was not killed by StopAll");
+        Assert.True(b.WaitForExit(3000), "the second tracked process was not killed by StopAll");
+    }
+
+    private static Process StartLongRunningProcessForTests()
+    {
+        var startInfo = OperatingSystem.IsWindows()
+            ? new ProcessStartInfo("cmd.exe") { ArgumentList = { "/c", "ping -n 30 127.0.0.1 >NUL" } }
+            : new ProcessStartInfo("/bin/sleep") { ArgumentList = { "30" } };
+
+        startInfo.UseShellExecute = false;
+        startInfo.CreateNoWindow = true;
+        startInfo.RedirectStandardOutput = true;
+        startInfo.RedirectStandardError = true;
+
+        return Process.Start(startInfo)!;
     }
 }

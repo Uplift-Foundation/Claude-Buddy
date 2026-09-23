@@ -20,7 +20,8 @@ namespace ClaudeBuddy
     // deferred chime is still, fundamentally, a chime, and every caller that
     // only cares "is this audible" reads Kind exactly as before.
     internal sealed record SoundAction(
-        SoundActionKind Kind, string? Path = null, string? SessionId = null, DateTime? PlayAt = null)
+        SoundActionKind Kind, string? Path = null, string? SessionId = null, DateTime? PlayAt = null,
+        TurnSoundEvent? SourceEvent = null)
     {
         internal static readonly SoundAction Silent = new(SoundActionKind.Silent);
 
@@ -95,6 +96,7 @@ namespace ClaudeBuddy
             // audible is eligible to be the winner at all.
             SoundAction? best = null;
             var bestIsAttention = false;
+            TurnSoundEvent? bestEvent = null;
 
             foreach (var signal in signals)
             {
@@ -118,10 +120,20 @@ namespace ClaudeBuddy
                 {
                     best = resolved;
                     bestIsAttention = isAttention;
+                    bestEvent = signal;
                 }
             }
 
             if (best is not { } chosen) return SoundAction.Silent;
+
+            // QA round 2: the raw winning event travels with the decision
+            // now, not just its already-resolved Path/SessionId. TurnSounds
+            // needs it to accumulate a deferred winner into its own pending
+            // list rather than only ever remembering the single latest one —
+            // see TurnSounds' own header comment on why one slot was never
+            // enough once two different sessions can each have something
+            // genuinely still waiting on the same gap.
+            chosen = chosen with { SourceEvent = bestEvent };
 
             // Inside the rate limit: defer rather than drop. The earlier
             // version returned Silent here, and because TurnSignalTracker
@@ -135,9 +147,7 @@ namespace ClaudeBuddy
             if (now - lastPlayed < MinimumGap)
             {
                 var playAt = lastPlayed + MinimumGap;
-                return chosen.Kind == SoundActionKind.Summary
-                    ? SoundAction.Summary(chosen.SessionId!, playAt)
-                    : SoundAction.Chime(chosen.SessionId!, chosen.Path!, playAt);
+                return chosen with { PlayAt = playAt };
             }
 
             return chosen;
@@ -149,7 +159,13 @@ namespace ClaudeBuddy
         // a real path. This is exactly what the pre-QA version of Decide did
         // to its single already-chosen winner — now run per candidate,
         // before any winner is chosen, which is the fix.
-        private static SoundAction ResolveOne(TurnSoundEvent ev, SoundSettingsSnapshot settings, bool speechBusy)
+        //
+        // Internal rather than private as of QA round 2: TurnSounds.
+        // FirePending re-runs this at fire time, over whichever pending
+        // events survive Settle/Prune/no-longer-waiting filtering, with a
+        // freshly-read speechBusy — the same logic, asked again rather than
+        // trusted from when it was first deferred.
+        internal static SoundAction ResolveOne(TurnSoundEvent ev, SoundSettingsSnapshot settings, bool speechBusy)
         {
             var isAttention = ev.Signal == TurnSignal.NeedsAttention;
             var over = settings.OverrideFor(ev.SoundKey);

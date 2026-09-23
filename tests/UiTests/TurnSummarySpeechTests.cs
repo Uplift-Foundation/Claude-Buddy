@@ -271,6 +271,21 @@ public class TurnSummarySpeechTests : IDisposable
         }
     }
 
+    // QA round 2, finding 7: SpeakTurnSummaryRemoteAsync's own null-status
+    // arm, the sibling of ANeverInitialisedOrbReportsNothingSpokenRatherThanThrowing
+    // above but for the remote path specifically — `_lastStatus?.Title ?? ""`
+    // has never seen `_lastStatus` itself be null, only a non-null status
+    // with a real title. An orb SessionManager has created but not yet run
+    // an UpdateFrom against is exactly the theoretical-today, real-tomorrow
+    // shape the comment on that test already names.
+    [AvaloniaFact]
+    public async Task ANeverInitialisedOrbsRemotePathUsesAnEmptyTitleRatherThanThrowing()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+
+        Assert.False(await orb.SpeakTurnSummaryRemoteAsync());
+    }
+
     // SpeakTurnSummaryRemoteAsync driven directly and awaited, the same
     // pattern OrbWindowSpeakTests uses for SpeakRemoteAsync: a real
     // (in-memory) history entry found synchronously, so

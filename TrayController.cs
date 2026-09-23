@@ -313,15 +313,17 @@ namespace ClaudeBuddy
         {
             GlobalHotkeys.Stop();
 
-            // QA (CB-167): a chime can still be mid-playback (up to its 5 s
-            // cap) at the moment Quit is chosen, and closing every orb
-            // window here does for TextToSpeech's own process only what
-            // each window's own Closed handler already arranges — nothing
-            // does the same for ChimePlayer's, since a chime is not tied to
-            // any one window's lifecycle. This is the one place a graceful
-            // Quit can reach every path this app might have a child process
-            // running on.
-            ChimePlayer.Cancel();
+            // QA (CB-167), round 2 finding 6: a chime can still be
+            // mid-playback (up to its 5 s cap) at the moment Quit is chosen,
+            // and closing every orb window here does for TextToSpeech's own
+            // process only what each window's own Closed handler already
+            // arranges — nothing does the same for ChimePlayer's, since a
+            // chime is not tied to any one window's lifecycle. StopAll kills
+            // every process Play has running, not just a scan chime — a
+            // Settings preview and the summary-fallback chime both call
+            // Play too, and this is the one place a graceful Quit can reach
+            // every path this app might have a child process running on.
+            ChimePlayer.StopAll();
 
             desktop.Shutdown();
         }

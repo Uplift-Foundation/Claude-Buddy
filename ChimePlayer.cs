@@ -8,6 +8,12 @@ namespace ClaudeBuddy
     // process of its own — never TextToSpeech's tracked process, and never
     // stoppable by the same Cancel() a speak button reaches for.
     //
+    // Play is the single entry point every caller in this app uses to make
+    // any kind of chime — a scan chime via TurnSounds, a Settings preview,
+    // the summary-fallback chime, whichever — so tracking every live
+    // process centrally here, rather than in whichever caller happened to
+    // start it, is what lets StopAll below mean all of them at once.
+    //
     // That separation is not tidiness. A chime and a spoken reply are allowed
     // to overlap by design — TurnSoundPolicy's busy-speech fallback exists
     // for the one case that would be jarring (a vibe summary cutting in on
@@ -57,12 +63,36 @@ namespace ClaudeBuddy
         // Set and cleared by the test, never by production code.
         internal static Action<string>? PlayForTests;
 
-        // QA (CB-167): the process currently playing, if there is one.
-        // Tracked so Cancel below — called once, from the app's own Quit
-        // path — can stop it, the same guarantee OrbWindow's Closed handler
-        // already gives TextToSpeech's process. Nothing but Play (setting
-        // it) and Cancel (reading and clearing it) touches this.
-        private static Process? _playing;
+        // Round 3(d): a second test seam, distinct from PlayForTests above.
+        // PlayForTests returns before Play ever reaches the process-
+        // tracking code at all — there is no real process behind a
+        // substituted chime for it to track — so it has nothing to offer a
+        // test of StopAll's own new behaviour: that it kills every
+        // concurrently-tracked process, not just one. This registers a real
+        // process through the exact same Add path Play uses, so a test can
+        // hand it something harmless and long-running (never real audio)
+        // and prove StopAll actually kills it.
+        internal static void TrackForTests(Process proc)
+        {
+            lock (PlayingGate) _live.Add(proc);
+        }
+
+        // QA (CB-167), reworked in round 2 (finding 6): every process this
+        // class currently has running, not just one. A single Process?
+        // slot was only ever correct while every caller funnelled through
+        // TurnSounds' own _chimeChain, which serialises scan chimes so
+        // there is never more than one in flight — but Play is the shared
+        // entry point for every kind of chime this app makes, and two of
+        // them do not go through that chain at all: a Settings preview
+        // (SettingsWindow.cs) fires directly off a UI click, and the
+        // summary-fallback chime (TurnSounds.SpeakSummaryOrFallbackAsync)
+        // can start while an unrelated scan chime is still mid-playback on
+        // the chain. A single slot silently dropped tracking of whichever
+        // one wasn't "current" — StopAll on Quit would kill one process and
+        // leave the other one making noise. A set is what actually holds
+        // "everything Play is running right now," so StopAll can mean all
+        // of it regardless of which caller started which process.
+        private static readonly HashSet<Process> _live = new();
         private static readonly object PlayingGate = new();
 
         // Builds the Windows ProcessStartInfo on its own, callable and
@@ -144,7 +174,7 @@ namespace ClaudeBuddy
                 return;
             }
 
-            lock (PlayingGate) _playing = proc;
+            lock (PlayingGate) _live.Add(proc);
 
             try
             {
@@ -176,37 +206,37 @@ namespace ClaudeBuddy
             }
         }
 
-        // Only clears the tracked process if it is still the one this call
-        // started — Cancel can have already claimed and cleared it
-        // concurrently (a KillTree in flight while this finally block also
-        // runs), and a later Play's own process must never be nulled out by
-        // an earlier one's cleanup racing behind it.
+        // Removing from a set rather than nulling a slot means this is safe
+        // to call once per process regardless of how many others are still
+        // live at the same moment — no "only the current one" ambiguity to
+        // get wrong the way a single Process? slot had.
         [ExcludeFromCodeCoverage]
         private static void ClearIfCurrent(Process proc)
         {
-            lock (PlayingGate)
-            {
-                if (ReferenceEquals(_playing, proc)) _playing = null;
-            }
+            lock (PlayingGate) _live.Remove(proc);
         }
 
-        // QA (CB-167): the app's own Quit path (TrayController.Shutdown)
-        // calls this so a chime still mid-playback does not keep the
-        // machine making noise once the app itself is gone — a sudden
-        // SIGKILL or a crash cannot be caught here, the same limit
-        // TextToSpeech.Cancel already lives with, but an ordinary Quit now
-        // can be.
+        // QA (CB-167), renamed in round 2 (finding 6) from Cancel to StopAll
+        // to say what it now actually does: every process Play currently has
+        // running, not one. Still reached from the same place — the app's
+        // own Quit path, TrayController.Shutdown — so a chime still
+        // mid-playback (a scan chime, a Settings preview, the
+        // summary-fallback chime, whichever) does not keep the machine
+        // making noise once the app itself is gone. A sudden SIGKILL or a
+        // crash cannot be caught here, the same limit TextToSpeech.Cancel
+        // already lives with, but an ordinary Quit now can be, for all of
+        // them at once.
         [ExcludeFromCodeCoverage]
-        internal static void Cancel()
+        internal static void StopAll()
         {
-            Process? victim;
+            Process[] victims;
             lock (PlayingGate)
             {
-                victim = _playing;
-                _playing = null;
+                victims = _live.ToArray();
+                _live.Clear();
             }
 
-            if (victim is not null) KillTree(victim);
+            foreach (var victim in victims) KillTree(victim);
         }
 
         // Copied from TextToSpeech.KillTree rather than shared with it,
