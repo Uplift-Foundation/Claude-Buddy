@@ -7,17 +7,30 @@ namespace ClaudeBuddy
     // TurnSoundPolicy never sees a SessionStatus.
     internal readonly record struct TurnSoundEvent(TurnSignal Signal, string SoundKey, string SessionId);
 
-    // The three things this feature can do, and nothing it can't: a chime is
-    // a file to hand ChimePlayer, a summary names the session whose last turn
-    // gets spoken, and Silent is not "an error" — it is the answer on most
-    // scans, since most scans have nothing to say.
+    // The two things this feature can actually make happen, and Silent,
+    // which is the answer on most scans since most scans have nothing to
+    // say.
     internal enum SoundActionKind { Silent, Chime, Summary }
 
-    internal sealed record SoundAction(SoundActionKind Kind, string? Path = null, string? SessionId = null)
+    // PlayAt is what QA's fix for the drop-not-defer bug lives in: null
+    // means "play this now," and a value means "the rate limit is still
+    // closed — this is what plays once it opens." Kind still says WHAT will
+    // eventually play; PlayAt only ever says WHEN. Keeping the same Kind
+    // for both cases (rather than a fourth enum member) is deliberate — a
+    // deferred chime is still, fundamentally, a chime, and every caller that
+    // only cares "is this audible" reads Kind exactly as before.
+    internal sealed record SoundAction(
+        SoundActionKind Kind, string? Path = null, string? SessionId = null, DateTime? PlayAt = null)
     {
         internal static readonly SoundAction Silent = new(SoundActionKind.Silent);
-        internal static SoundAction Chime(string path) => new(SoundActionKind.Chime, Path: path);
-        internal static SoundAction Summary(string sessionId) => new(SoundActionKind.Summary, SessionId: sessionId);
+
+        internal static SoundAction Chime(string path, DateTime? playAt = null) =>
+            new(SoundActionKind.Chime, Path: path, PlayAt: playAt);
+
+        internal static SoundAction Summary(string sessionId, DateTime? playAt = null) =>
+            new(SoundActionKind.Summary, SessionId: sessionId, PlayAt: playAt);
+
+        internal bool IsDeferred => PlayAt is not null;
     }
 
     // Everything this decision needs to know about what the user has asked
@@ -64,18 +77,77 @@ namespace ClaudeBuddy
             if (signals.Count == 0) return SoundAction.Silent;
             if (!settings.MasterEnabled) return SoundAction.Silent;
 
-            // Coalesced: one sound per scan, ever, and attention outranks a
-            // turn finishing — someone waiting on a permission prompt matters
-            // more than someone being told a different orb is done. The
-            // losing signals are simply not looked at again; there is no
-            // queue for them to sit in.
-            var winner = Winner(signals);
-            if (winner is not { } found) return SoundAction.Silent;
+            // QA (CB-167) found the bug in doing this the other way around:
+            // an earlier version picked the highest-ranked *signal* first
+            // and only afterwards asked whether it resolved to anything
+            // audible. That let a muted orb's NeedsAttention "win" the
+            // coalescing and then evaporate against its own "off" override,
+            // silencing a second orb's perfectly audible Finished chime in
+            // the very same scan — the muted orb was never a candidate to
+            // win, but nothing checked that before crowning it. So every
+            // signal is resolved first — off, missing file, a real chime, or
+            // a summary — and only a signal that resolves to something
+            // audible is eligible to be the winner at all.
+            SoundAction? best = null;
+            var bestIsAttention = false;
 
-            if (now - lastPlayed < MinimumGap) return SoundAction.Silent;
+            foreach (var signal in signals)
+            {
+                // Defensive rather than load-bearing: SessionManager only
+                // ever adds a signal that isn't None, but Decide is reasoned
+                // about as a pure function on its own terms, and a None
+                // signal must never accidentally resolve as if it were a
+                // Finished one just because it shares that branch's "not
+                // attention" shape below.
+                if (signal.Signal == TurnSignal.None) continue;
 
-            var isAttention = found.Signal == TurnSignal.NeedsAttention;
-            var over = settings.OverrideFor(found.SoundKey);
+                var resolved = ResolveOne(signal, settings, speechBusy);
+                if (resolved.Kind == SoundActionKind.Silent) continue;
+
+                var isAttention = signal.Signal == TurnSignal.NeedsAttention;
+
+                // Attention outranks Finished regardless of scan order;
+                // within one rank, the first audible signal observed keeps
+                // winning over a later one of the same rank.
+                if (best is null || (isAttention && !bestIsAttention))
+                {
+                    best = resolved;
+                    bestIsAttention = isAttention;
+                }
+            }
+
+            if (best is not { } chosen) return SoundAction.Silent;
+
+            // Inside the rate limit: defer rather than drop. The earlier
+            // version returned Silent here, and because TurnSignalTracker
+            // never re-raises an unchanged state, a signal born inside the
+            // gap had no later scan that would ever produce it again — an
+            // orb that started waiting 1.5s after another orb's chime simply
+            // never got its Ping, for as long as it sat there. Holding the
+            // winner until the gap opens, and letting a later scan's winner
+            // replace it, is what "coalesced" is supposed to mean — not just
+            // within one scan, but across the whole time the app is quiet.
+            if (now - lastPlayed < MinimumGap)
+            {
+                var playAt = lastPlayed + MinimumGap;
+                return chosen.Kind == SoundActionKind.Summary
+                    ? SoundAction.Summary(chosen.SessionId!, playAt)
+                    : SoundAction.Chime(chosen.Path!, playAt);
+            }
+
+            return chosen;
+        }
+
+        // What one signal resolves to on its own, with no knowledge of any
+        // other signal in the scan: override or default, "off", "summary"
+        // (turn-finished only, and only when speech isn't already busy), or
+        // a real path. This is exactly what the pre-QA version of Decide did
+        // to its single already-chosen winner — now run per candidate,
+        // before any winner is chosen, which is the fix.
+        private static SoundAction ResolveOne(TurnSoundEvent ev, SoundSettingsSnapshot settings, bool speechBusy)
+        {
+            var isAttention = ev.Signal == TurnSignal.NeedsAttention;
+            var over = settings.OverrideFor(ev.SoundKey);
             var setting = isAttention
                 ? over?.Attention ?? settings.DefaultAttentionSetting
                 : over?.Finished ?? settings.DefaultFinishedSetting;
@@ -95,23 +167,11 @@ namespace ClaudeBuddy
                 // who never asked for speech gets every time.
                 return speechBusy
                     ? ChimeOrSilent(settings.ResolveFinishedSound(null))
-                    : SoundAction.Summary(found.SessionId);
+                    : SoundAction.Summary(ev.SessionId);
             }
 
             var resolve = isAttention ? settings.ResolveAttentionSound : settings.ResolveFinishedSound;
             return ChimeOrSilent(resolve(setting));
-        }
-
-        private static TurnSoundEvent? Winner(IReadOnlyList<TurnSoundEvent> signals)
-        {
-            TurnSoundEvent? finished = null;
-            foreach (var signal in signals)
-            {
-                if (signal.Signal == TurnSignal.NeedsAttention) return signal;
-                if (signal.Signal == TurnSignal.Finished) finished ??= signal;
-            }
-
-            return finished;
         }
 
         private static SoundAction ChimeOrSilent(string? path) =>

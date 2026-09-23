@@ -134,21 +134,110 @@ public class TurnSoundPolicyTests
         Assert.Equal("/sounds/attention.aiff", result.Path);
     }
 
+    // QA (CB-167): coalescing used to pick the highest-ranked *signal*
+    // before asking whether it resolved to anything — so orb A's attention
+    // could be muted for itself and still "win" the scan, evaporate against
+    // its own "off" override, and take orb B's perfectly audible Finished
+    // chime down with it. A muted signal must never be a candidate to win
+    // at all.
+    [Fact]
+    public void AnOrbMutedForAttentionDoesNotSilenceAnotherOrbsFinishedChimeInTheSameScan()
+    {
+        var overrides = new Dictionary<string, ClaudeBuddySettings.OrbTurnSound>
+        {
+            ["key-a"] = new(Finished: null, Attention: "off"),
+        };
+        var events = new[]
+        {
+            new TurnSoundEvent(TurnSignal.NeedsAttention, "key-a", "session-a"),
+            new TurnSoundEvent(TurnSignal.Finished, "key-b", "session-b"),
+        };
+
+        var result = TurnSoundPolicy.Decide(events, Snapshot(overrides: overrides), Now, LongAgo, speechBusy: false);
+
+        Assert.Equal(SoundActionKind.Chime, result.Kind);
+    }
+
+    // Same defect, finished-only: the first finished orb is muted, the
+    // second is not. One chime is still owed — coalescing within one rank
+    // has to skip a muted candidate the same way it does across ranks.
+    [Fact]
+    public void AMutedFirstFinishedOrbDoesNotSilenceASecondAudibleOne()
+    {
+        var overrides = new Dictionary<string, ClaudeBuddySettings.OrbTurnSound>
+        {
+            ["key-a"] = new(Finished: "off", Attention: null),
+        };
+        var events = new[]
+        {
+            new TurnSoundEvent(TurnSignal.Finished, "key-a", "session-a"),
+            new TurnSoundEvent(TurnSignal.Finished, "key-b", "session-b"),
+        };
+
+        var result = TurnSoundPolicy.Decide(events, Snapshot(overrides: overrides), Now, LongAgo, speechBusy: false);
+
+        Assert.Equal(SoundActionKind.Chime, result.Kind);
+    }
+
     // --- the rate limit ---
 
+    // QA (CB-167): a signal inside the gap used to return plain Silent, and
+    // because TurnSignalTracker never re-raises an unchanged state, nothing
+    // would ever ask again — an orb that started waiting 1.5s after another
+    // orb's chime simply never got its Ping, for as long as it sat there.
+    // The fix defers rather than drops: still Chime (or Summary), with
+    // PlayAt set to when the gap actually opens, so a caller can tell "play
+    // this now" from "hold this until then" without a new Kind to check.
     [Fact]
-    public void WithinTheGapSinceTheLastSoundIsSilentEvenThoughItWouldOtherwiseChime()
+    public void WithinTheGapTheSignalIsDeferredRatherThanDropped()
     {
         var events = new[] { Finished() };
         var lastPlayed = Now - TimeSpan.FromSeconds(1);
 
         var result = TurnSoundPolicy.Decide(events, Snapshot(), Now, lastPlayed, speechBusy: false);
 
-        Assert.Equal(SoundActionKind.Silent, result.Kind);
+        Assert.Equal(SoundActionKind.Chime, result.Kind);
+        Assert.True(result.IsDeferred);
+        Assert.Equal(lastPlayed + TurnSoundPolicy.MinimumGap, result.PlayAt);
+    }
+
+    // The negative control for the case above: a deferred action still
+    // carries the same path an immediate one would, so a caller that only
+    // reads Kind and Path (and ignores PlayAt) gets the right sound either
+    // way.
+    [Fact]
+    public void ADeferredChimeStillNamesTheSamePathAnImmediateOneWould()
+    {
+        var events = new[] { Finished() };
+        var settings = Snapshot(resolveFinished: _ => "/sounds/glass.aiff");
+
+        var immediate = TurnSoundPolicy.Decide(events, settings, Now, LongAgo, speechBusy: false);
+        var deferred = TurnSoundPolicy.Decide(
+            events, settings, Now, Now - TimeSpan.FromSeconds(1), speechBusy: false);
+
+        Assert.False(immediate.IsDeferred);
+        Assert.True(deferred.IsDeferred);
+        Assert.Equal(immediate.Path, deferred.Path);
+    }
+
+    // A summary decided inside the gap defers the same way a chime does —
+    // and carries the session id a deferred summary needs, not a path.
+    [Fact]
+    public void ASummaryInsideTheGapDefersWithTheSessionIdIntact()
+    {
+        var events = new[] { Finished("key-a", "session-a") };
+        var settings = Snapshot(defaultFinished: "summary");
+        var lastPlayed = Now - TimeSpan.FromSeconds(1);
+
+        var result = TurnSoundPolicy.Decide(events, settings, Now, lastPlayed, speechBusy: false);
+
+        Assert.Equal(SoundActionKind.Summary, result.Kind);
+        Assert.True(result.IsDeferred);
+        Assert.Equal("session-a", result.SessionId);
     }
 
     [Fact]
-    public void ExactlyTheGapIsNoLongerSilent()
+    public void ExactlyTheGapIsNoLongerDeferred()
     {
         var events = new[] { Finished() };
         var lastPlayed = Now - TurnSoundPolicy.MinimumGap;
@@ -156,16 +245,61 @@ public class TurnSoundPolicyTests
         var result = TurnSoundPolicy.Decide(events, Snapshot(), Now, lastPlayed, speechBusy: false);
 
         Assert.Equal(SoundActionKind.Chime, result.Kind);
+        Assert.False(result.IsDeferred);
     }
 
     [Fact]
-    public void WellPastTheGapChimes()
+    public void WellPastTheGapChimesImmediately()
     {
         var events = new[] { Finished() };
 
         var result = TurnSoundPolicy.Decide(events, Snapshot(), Now, LongAgo, speechBusy: false);
 
         Assert.Equal(SoundActionKind.Chime, result.Kind);
+        Assert.False(result.IsDeferred);
+    }
+
+    // QA's own demonstrating case: the tracker and policy driven exactly as
+    // SessionManager drives them, scan by scan, over real wall-clock gaps.
+    // Orb A finishes (Glass) 2s after the baseline scan. 1.5s later, orb B —
+    // a genuinely new transition, not a repeat — hits a permission prompt,
+    // landing inside the gap. Session b then sits at "waiting" for the rest
+    // of the run, so no later scan ever re-raises the signal (waiting→
+    // waiting is None) — the only chance for B's Ping is the one Decide
+    // call 3.5s in, and it must not come back Silent.
+    [Fact]
+    public void ANeedsAttentionThatLandsInsideTheGapIsEventuallyPlayed()
+    {
+        var tracker = new TurnSignalTracker();
+        var settings = Snapshot();
+        var lastPlayed = LongAgo;
+        var played = new List<(DateTime At, TurnSignal Winner)>();
+
+        void ScanAt(DateTime now, params (string Id, string State)[] sessions)
+        {
+            var events = new List<TurnSoundEvent>();
+            foreach (var (id, state) in sessions)
+            {
+                var s = tracker.Observe(id, state);
+                if (s != TurnSignal.None) events.Add(new TurnSoundEvent(s, "key-" + id, id));
+            }
+            tracker.Prune(sessions.Select(x => x.Id).ToHashSet());
+            var d = TurnSoundPolicy.Decide(events, settings, now, lastPlayed, speechBusy: false);
+            if (d.Kind != SoundActionKind.Silent)
+            {
+                lastPlayed = now;
+                played.Add((now, events.Any(e => e.Signal == TurnSignal.NeedsAttention)
+                    ? TurnSignal.NeedsAttention : TurnSignal.Finished));
+            }
+        }
+
+        ScanAt(Now,                  ("a", "generating"), ("b", "generating")); // baseline
+        ScanAt(Now.AddSeconds(2.0),  ("a", "idle"),       ("b", "generating")); // Glass
+        ScanAt(Now.AddSeconds(3.5),  ("a", "idle"),       ("b", "waiting"));    // inside the gap — deferred, not dropped
+        ScanAt(Now.AddSeconds(5.5),  ("a", "idle"),       ("b", "waiting"));
+        ScanAt(Now.AddSeconds(60),   ("a", "idle"),       ("b", "waiting"));    // a minute later, still waiting
+
+        Assert.Contains(played, p => p.Winner == TurnSignal.NeedsAttention);
     }
 
     // --- override vs default ---
