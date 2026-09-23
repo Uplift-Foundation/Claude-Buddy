@@ -2,8 +2,15 @@ using System.Reflection;
 using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
 using Avalonia.LogicalTree;
+using Avalonia.Media;
+using Avalonia.Styling;
 using Avalonia.Threading;
 using Xunit;
+// Not `using Avalonia.Controls.Shapes;` — System.IO.Path is already in scope
+// via this project's global usings, and Avalonia.Controls.Shapes.Path would
+// collide with it on the bare name. SettingsWindow.cs itself sidesteps this
+// the same way, with a `Shapes` alias; this file just spells the type out.
+using ShapesPath = Avalonia.Controls.Shapes.Path;
 
 namespace ClaudeBuddy.Tests;
 
@@ -264,6 +271,28 @@ public class SoundSettingsRowTests : IDisposable
         Assert.Empty(_played);
     }
 
+    // --- ChooseSoundFile's own branch (not SoundPicker's) ---
+
+    // With no test seam set — the ordinary case for every case above except
+    // the two that set one — ChooseSoundFile falls through to
+    // PickSoundFileAsync, which is [ExcludeFromCodeCoverage] because it
+    // opens a real OS dialog. That exclusion covers PickSoundFileAsync's own
+    // body, not the ternary in ChooseSoundFile that decides to call it, so
+    // this is the case that reaches it: a Control with no TopLevel (never
+    // attached to a shown window) makes TopLevel.GetTopLevel return null,
+    // which PickSoundFileAsync's own first line already handles by
+    // returning null — no dialog opens, nothing hangs.
+    [AvaloniaFact]
+    public async Task ChooseSoundFileFallsThroughToTheRealPickerWhenNoSeamIsSet()
+    {
+        Assert.Null(SettingsWindow.ChooseSoundFileForTests);
+
+        var unattached = new ComboBox();
+        var result = await SettingsWindow.ChooseSoundFile(unattached);
+
+        Assert.Null(result);
+    }
+
     // --- the preview button ---
 
     [AvaloniaFact]
@@ -289,6 +318,30 @@ public class SoundSettingsRowTests : IDisposable
         SettingsWindow.PreviewSound("summary", "Glass");
 
         Assert.Empty(_played);
+    }
+
+    // PlayGlyph's own branch: a drawn triangle rather than the "▶" text
+    // glyph it replaces (see that method's own comment on CB-173), coloured
+    // off IsDark the same way CardBackground/Hairline a few hundred lines up
+    // already are. Two windows rather than one with its theme flipped
+    // partway through: ActualThemeVariantChanged triggers a full Rebuild()
+    // in the constructor, which would tear down whichever button this test
+    // built first — a fresh window per theme sidesteps that entirely rather
+    // than fighting it.
+    [AvaloniaTheory]
+    [InlineData(false, "#FF000000")]
+    [InlineData(true, "#FFFFFFFF")]
+    public void ThePreviewGlyphIsColouredForTheWindowsTheme(bool dark, string expectedHex)
+    {
+        var window = NewWindow();
+        window.RequestedThemeVariant = dark ? ThemeVariant.Dark : ThemeVariant.Light;
+        Dispatcher.UIThread.RunJobs();
+
+        var button = (Button)window.PreviewButton(() => null, "Glass");
+        var glyph = Assert.IsType<ShapesPath>(button.Content);
+        var fill = Assert.IsType<SolidColorBrush>(glyph.Fill);
+
+        Assert.Equal(Color.Parse(expectedHex), fill.Color);
     }
 
     [AvaloniaFact]
