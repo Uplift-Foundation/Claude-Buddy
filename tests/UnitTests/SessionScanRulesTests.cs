@@ -478,6 +478,63 @@ public class SessionScanRulesTests
         Assert.Equal("", SessionManager.PositionKeyFor(status, "id-1"));
     }
 
+    // --- SoundKeyFor (CB-167) -------------------------------------------------
+
+    [Fact]
+    public void SoundKeyFor_WithNoAgentNameIsExactlyThePositionKey()
+    {
+        var status = new SessionStatus
+        {
+            Source = SessionSource.ClaudeCode, Cwd = "/Users/user/project", Title = "build"
+        };
+
+        Assert.Equal(
+            SessionManager.PositionKeyFor(status, "id-1"),
+            SessionManager.SoundKeyFor(status, "id-1"));
+    }
+
+    // The gap PositionKeyFor leaves open on purpose: two agents on one team
+    // sharing a cwd and an auto-generated title collide under it, which is
+    // fine for a stacked orb position and wrong for "mute this one agent"
+    // silently muting a teammate too.
+    [Fact]
+    public void SoundKeyFor_TeamMembersSharingACwdAndTitleGetDistinctKeys()
+    {
+        var first = new SessionStatus
+        {
+            Source = SessionSource.ClaudeCode, Cwd = "/Users/user/project", Title = "build",
+            Agent = "engineer-a"
+        };
+        var second = new SessionStatus
+        {
+            Source = SessionSource.ClaudeCode, Cwd = "/Users/user/project", Title = "build",
+            Agent = "engineer-b"
+        };
+
+        // Same PositionKey — this is the collision SoundKeyFor exists to fix.
+        Assert.Equal(
+            SessionManager.PositionKeyFor(first, "id-1"),
+            SessionManager.PositionKeyFor(second, "id-2"));
+
+        Assert.NotEqual(
+            SessionManager.SoundKeyFor(first, "id-1"),
+            SessionManager.SoundKeyFor(second, "id-2"));
+    }
+
+    // An untitled local session keys on its own session id (CB-10), so its
+    // sound override — like its position — lasts only as long as that
+    // session. Named as a known limit in the plan rather than fixed here.
+    [Fact]
+    public void SoundKeyFor_UntitledSessionKeysOnItsOwnSessionId()
+    {
+        var status = new SessionStatus
+        {
+            Source = SessionSource.ClaudeCode, Cwd = "/Users/user/project", Title = ""
+        };
+
+        Assert.Equal("id-9", SessionManager.SoundKeyFor(status, "id-9"));
+    }
+
     // --- GatherTeams ---------------------------------------------------------
     //
     // The stacking order the tray menu reads top-to-bottom and the orbs are

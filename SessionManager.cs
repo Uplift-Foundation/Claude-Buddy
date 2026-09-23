@@ -473,6 +473,14 @@ namespace ClaudeBuddy
         private readonly Dictionary<string, SessionStatus> _statuses = new();
         private readonly List<string> _order = new(); // stable stacking order
 
+        // CB-167's memory of what state each session was last seen in, so the
+        // scan can tell a turn actually finishing from a poll that simply
+        // found the same idle orb again. Per manager rather than static for
+        // the identical reason SweepGrace is: a test that scans a session
+        // through generating → idle must not have that transition also
+        // observed by some other test's tracker running in the same process.
+        private readonly TurnSignalTracker _turnSignals = new();
+
         private TrayController? _tray;
 
         // Orbs can be hidden from the tray menu; sessions keep being tracked
@@ -1924,6 +1932,13 @@ namespace ClaudeBuddy
             var seen = new HashSet<string>();
             bool setChanged = false;
 
+            // What CB-167's tracker noticed this pass. Collected rather than
+            // acted on inline, because the decision is coalesced across the
+            // whole scan — four orbs finishing at once is one sound, not
+            // four — so nothing plays until every session in this pass has
+            // been observed.
+            var turnSoundEvents = new List<TurnSoundEvent>();
+
             // Which files a persona could be written in, per working directory,
             // for the length of this one pass. Local rather than a field on
             // purpose: building the list is pure string work over a path walk —
@@ -2490,6 +2505,21 @@ namespace ClaudeBuddy
                 // persona changed.
                 ApplyPersona(sessionId, status, candidatesByCwd);
 
+                // Immediately before the dictionary is overwritten, so the
+                // tracker is comparing against exactly the state this
+                // session was in on the previous tick — the same
+                // TryGetValue(_statuses, ...) above is reading, just for a
+                // different question. After the liveness and reachability
+                // continues above, which is what makes CB-167's "husks can't
+                // chime" guarantee true by construction: a session that
+                // never reaches this line is never observed at all.
+                var turnSignal = _turnSignals.Observe(sessionId, status.State);
+                if (turnSignal != TurnSignal.None)
+                {
+                    turnSoundEvents.Add(new TurnSoundEvent(
+                        turnSignal, SoundKeyFor(status, sessionId), sessionId));
+                }
+
                 _statuses[sessionId] = status;
 
                 var isNew = !_windows.TryGetValue(sessionId, out var window);
@@ -2544,6 +2574,23 @@ namespace ClaudeBuddy
                 LocalPersonas.Forget(id);
                 PeerPersonas.Forget(id);
             }
+
+            // Drops anything this pass never saw, so a session that vanished
+            // mid-generation and comes back later starts from a baseline
+            // rather than being compared against whatever it was doing when
+            // it dropped out of sight. After the removal pass above rather
+            // than before it, though the two do not actually interact: this
+            // just keeps every "after the loop, once" step grouped together.
+            _turnSignals.Prune(seen);
+
+            // One sound for the whole pass, decided from everything the loop
+            // above noticed. The callback is how this reaches an orb without
+            // TurnSounds ever holding a window reference of its own — see its
+            // own header comment.
+            TurnSounds.Deliver(turnSoundEvents, id =>
+            {
+                if (_windows.TryGetValue(id, out var window)) window.SpeakTurnSummary();
+            }, now);
 
             // After the removal pass, so an orb has already gone before its file
             // does and the two never disagree on screen. Inside the scan rather
@@ -3430,6 +3477,29 @@ namespace ClaudeBuddy
         internal static string DirectoryKeyFor(SessionStatus status) =>
             string.IsNullOrEmpty(status.Cwd) ? "" : status.Cwd.TrimEnd('\\', '/');
 
+        // CB-167's per-orb key for turn sounds. Built on PositionKeyFor
+        // rather than invented fresh, because PositionKeyFor is already this
+        // app's answer to "which agent is this across scans and restarts" —
+        // it carries the CB-10 fix for an untitled session keying on its own
+        // id, and reusing it means a sound override and a pinned position
+        // agree about which orb they are talking about, the same way
+        // ChatPanelSizes already agrees with OrbPositions.
+        //
+        // The one gap PositionKeyFor leaves open is team members: two agents
+        // sharing one cwd and one auto-generated title collide under it,
+        // which is fine for a *position* — stacking rules already handle two
+        // orbs wanting one slot — but wrong for a sound override, where
+        // "make agent A quiet" silently muting agent B too is a real
+        // correctness bug, not a cosmetic one. Appending the agent name (set
+        // from AgentTeam membership earlier in the scan, before this is ever
+        // called) closes that gap without touching PositionKeyFor itself,
+        // since nothing about orb placement cares which teammate it is.
+        internal static string SoundKeyFor(SessionStatus status, string sessionId)
+        {
+            var key = PositionKeyFor(status, sessionId);
+            return string.IsNullOrEmpty(status.Agent) ? key : key + "\n" + status.Agent;
+        }
+
         private void RestoreOrbPosition(OrbWindow window, SessionStatus status)
         {
             var key = PositionKeyFor(status, window.SessionId);
@@ -3637,6 +3707,13 @@ namespace ClaudeBuddy
             catch { }
 
             _statuses[sessionId] = reset;
+
+            // Silent, not Observe: a manual reset is a person clearing a
+            // stuck orb, not a turn finishing, and the tracker has to agree
+            // or the next real scan would find "idle" already on record and
+            // never notice the actual generating → idle transition that
+            // follows. See TurnSignalTracker.Settle's own comment.
+            _turnSignals.Settle(sessionId, "idle");
 
             if (_windows.TryGetValue(sessionId, out var window))
             {
