@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
@@ -22,5 +23,68 @@ public class OpenClawStartConversationTests
 
         Assert.Null(session);
         Assert.Equal("not connected to the gateway", failure);
+    }
+}
+
+// OpenClawSessions.ParseCreateResult: what StartConversationAsync makes of
+// the gateway's own response to sessions.create, pulled out so a malformed
+// reply is a decision this can drive directly with a hand-built JsonElement
+// rather than something only reachable behind a real socket (QA, CB-168,
+// rowan-achterberg).
+public class OpenClawParseCreateResultTests
+{
+    private static JsonElement ParseJson(string json) => JsonDocument.Parse(json).RootElement;
+
+    [Fact]
+    public void ASuccessfulResponseReturnsTheKeyAndNoFailure()
+    {
+        var (key, failure) = OpenClawSessions.ParseCreateResult(
+            ParseJson("""{"ok":true,"key":"agent:main:dashboard:abc-123"}"""));
+
+        Assert.Equal("agent:main:dashboard:abc-123", key);
+        Assert.Null(failure);
+    }
+
+    [Fact]
+    public void AMissingKeyPropertyIsAFailure()
+    {
+        var (key, failure) = OpenClawSessions.ParseCreateResult(ParseJson("""{"ok":true}"""));
+
+        Assert.Null(key);
+        Assert.Equal("gateway didn't return a session key", failure);
+    }
+
+    // A malformed reply — the gateway's own contract says `key` is a
+    // string, but nothing stops a future protocol version, a bug on the
+    // gateway side, or a hand-typed `raw` probe call from handing this a
+    // number or an object instead.
+    [Fact]
+    public void AKeyOfTheWrongJsonTypeIsAFailure()
+    {
+        var (key, failure) = OpenClawSessions.ParseCreateResult(
+            ParseJson("""{"ok":true,"key":12345}"""));
+
+        Assert.Null(key);
+        Assert.Equal("gateway didn't return a session key", failure);
+    }
+
+    [Fact]
+    public void AnEmptyStringKeyIsAFailure()
+    {
+        var (key, failure) = OpenClawSessions.ParseCreateResult(
+            ParseJson("""{"ok":true,"key":""}"""));
+
+        Assert.Null(key);
+        Assert.Equal("gateway returned an empty session key", failure);
+    }
+
+    [Fact]
+    public void AWhitespaceOnlyKeyIsAFailure()
+    {
+        var (key, failure) = OpenClawSessions.ParseCreateResult(
+            ParseJson("""{"ok":true,"key":"   "}"""));
+
+        Assert.Null(key);
+        Assert.Equal("gateway returned an empty session key", failure);
     }
 }
