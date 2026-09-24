@@ -999,6 +999,22 @@ would be worse than no button. That parsing has a test suite of its own
 (`dotnet run --project tests/TranscriptTests`) whose fixtures are transcribed
 from real captures.
 
+## Starting a new chat
+
+Start a fresh conversation without opening a terminal by hand first, from the tray's **New chat…** item or an orb's right-click menu.
+
+An orb's context menu offers **New chat here**, shown only for a local CLI's orb (Claude Code, Codex or Grok — a gateway orb has no local binary to relaunch), and opens the dialog pre-filled with that orb's own CLI and folder.
+
+The dialog itself lists whichever local CLIs it can find on this machine — right now that's Claude Code, Codex and Grok, checked fresh every time the dialog opens so installing one and reopening the dialog picks it up without restarting the app — plus a folder to start it in, offered as a combo of recently-used folders with a **Browse…** button for anywhere else.
+
+A CLI shows up disabled, with a reason, when it can't be found on PATH or in its usual install locations — the same install locations `ClaudeBinary`, `CodexBinary` and `GrokBinary` already check for everything else in this app.
+
+A CLI can also be enabled but carry a warning instead: this means the binary was found but its Claude Buddy hook isn't installed, so **Start** will open a real terminal running it, but no orb will appear until the hook is wired up (Settings → the CLI's own section, or `install-hooks.sh`/`.ps1` from a terminal).
+
+That's the same rule every orb in this app already depends on: an orb is drawn from a status file the CLI's own hook writes, so a CLI running with no hook installed is genuinely running and genuinely invisible to Claude Buddy at the same time.
+
+OpenClaw is not one of the CLIs this dialog offers yet — starting a conversation with a gateway agent is a separate piece of the same feature, landing on its own once it's built.
+
 ## Global hotkeys
 
 **Ctrl+Alt+H** hides or shows every orb, from anywhere — the same toggle as
