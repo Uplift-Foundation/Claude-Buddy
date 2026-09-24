@@ -110,6 +110,20 @@ public class NewChatWindowScreenshots
         window.StartButton.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
         ScreenshotHelper.Flush();
 
+        // A screenshot is only checked by eye — this is the assertion that
+        // would have settled, in one run, whether a failed Start ever
+        // touches the row list: all four rows still present, still in the
+        // same enabled state, after the click. BuildCliList only ever runs
+        // once (from the constructor), so this should be inert by
+        // construction, but "should be" is exactly the gap a capture alone
+        // can't close.
+        var radios = window.CliList.Children.OfType<RadioButton>().ToList();
+        Assert.Equal(4, radios.Count);
+        Assert.Equal(3, radios.Count(r => r.Tag is NewChatCli));
+        Assert.Single(radios, r => Equals(r.Tag, NewChatWindow.OpenClawTag));
+        Assert.All(radios.Where(r => r.Tag is NewChatCli), r => Assert.True(r.IsEnabled));
+        Assert.False(radios.Single(r => Equals(r.Tag, NewChatWindow.OpenClawTag)).IsEnabled);
+
         ScreenshotHelper.CaptureAlreadyShown(window, "new-chat-window-launch-error.png");
 
         ClearSeams();
