@@ -262,6 +262,10 @@ namespace ClaudeBuddy
 
             menu.Add(new NativeMenuItemSeparator());
 
+            var newChatItem = new NativeMenuItem("New chat…");
+            newChatItem.Click += (_, _) => OpenNewChat();
+            menu.Add(newChatItem);
+
             var settingsItem = new NativeMenuItem("Settings…");
             settingsItem.Click += (_, _) => OpenSettings();
             menu.Add(settingsItem);
@@ -331,6 +335,23 @@ namespace ClaudeBuddy
         // is the call site, and calling it would do all of that for real.
         [ExcludeFromCodeCoverage]
         internal static void OpenSettings() => SettingsWindow.Toggle();
+
+        // Excluded from coverage for the same reason OpenSettings is:
+        // NewChatWindow.Toggle follows the same singleton-window pattern
+        // (MacOSActivation.SetRegular, Activate, a real window shown and
+        // given key), so calling it for real is not something a headless
+        // test run should do. TrayMenuTests checks the item exists and its
+        // label, and stops there — the same split OpenSettings already has.
+        //
+        // TODO(CB-168): wire to NewChatWindow.Toggle() once that window
+        // lands — it needs the launch-core types (NewChatCli et al.) from
+        // feature/start-new-chat-launch, merged in after that branch pushes.
+        // The menu item exists now so the tray shape and its tests don't
+        // wait on that dependency.
+        [ExcludeFromCodeCoverage]
+        internal static void OpenNewChat()
+        {
+        }
 
         // Excluded from coverage: starts a relay, which is a live Claude Code
         // session in a tmux pane on another machine — and that costs the person
