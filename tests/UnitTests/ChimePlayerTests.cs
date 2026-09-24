@@ -451,14 +451,6 @@ public class ChimePlayerTests
         }
     }
 
-    // QA round 5, finding 2: Play tracked a process in _live before
-    // Start() actually ran, the same shape PlayOnePreview already fixed
-    // in round 4. Reproduced statistically, the same way the finding was
-    // originally measured (racing two real threads many times) rather
-    // than forced — Play has no seam to pause it at the exact instant
-    // between TryStart and the tracking lock, so a real race across many
-    // trials is the honest way to show this closed rather than merely
-    // argued closed.
     // QA round 6, F1 (CB-167): sweeps a second PlayPreview across the
     // first one's spawn. Landing while the worker is still inside
     // BuildProcess/TryStart used to find nothing tracked to kill, so the
@@ -518,6 +510,62 @@ public class ChimePlayerTests
         }
 
         Assert.True(misses.Count == 0, "first preview survived a second request at: " + string.Join(", ", misses));
+    }
+
+    // QA round 7, F3 (CB-167): the other half of F1. Cutting the first
+    // preview off is only right if the newest request then plays; with the
+    // superseded read forced to true, the F1 test above still passed while
+    // nothing played at all. This one fails on that mutant at every delay.
+    [Fact]
+    public void TheNewestPreviewStillPlaysWhenItLandsDuringTheFirstsSpawn()
+    {
+        if (!OperatingSystem.IsMacOS()) return;
+        var dir = Path.Combine(Path.GetTempPath(), "cb-chime-r7-" + Guid.NewGuid());
+        Directory.CreateDirectory(dir);
+        var silent = new List<string>();
+        try
+        {
+            ChimePlayer.PlayForTests = null;
+            for (var delayUs = 0; delayUs <= 30000; delayUs += 1000)
+            {
+                var first = WriteSilentWav(Path.Combine(dir, $"a{delayUs}.wav"), 3);
+                var second = WriteSilentWav(Path.Combine(dir, $"b{delayUs}.wav"), 3);
+                var before = Process.GetProcessesByName("afplay").Select(p => p.Id).ToHashSet();
+
+                var sw = Stopwatch.StartNew();
+                ChimePlayer.PlayPreview(first);
+                while (sw.Elapsed.TotalMilliseconds * 1000 < delayUs) Thread.SpinWait(50);
+                ChimePlayer.PlayPreview(second);
+
+                Process? secondProc = null;
+                var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+                while (DateTime.UtcNow < deadline && secondProc is null)
+                {
+                    secondProc = Process.GetProcessesByName("afplay")
+                        .Where(p => !before.Contains(p.Id))
+                        .FirstOrDefault(p => ArgsOf(p.Id).Contains(second));
+                    Thread.Sleep(2);
+                }
+
+                // Still playing 700 ms after it appeared = it was allowed to play.
+                if (secondProc is null || secondProc.WaitForExit(700)) silent.Add($"{delayUs / 1000}ms");
+
+                ChimePlayer.StopAll();
+                ChimePlayer.ResetStoppedForTests();
+                var quiet = DateTime.UtcNow + TimeSpan.FromSeconds(4);
+                while (DateTime.UtcNow < quiet && Process.GetProcessesByName("afplay").Any(p => !before.Contains(p.Id)))
+                    Thread.Sleep(20);
+                Thread.Sleep(50);
+            }
+        }
+        finally
+        {
+            ChimePlayer.PlayForTests = null;
+            ChimePlayer.StopAll();
+            ChimePlayer.ResetStoppedForTests();
+            try { Directory.Delete(dir, true); } catch { }
+        }
+        Assert.True(silent.Count == 0, "newest preview never played (or was cut off) at: " + string.Join(", ", silent));
     }
 
     // QA round 6, F2 (CB-167): replaces a test that could not fail — a
