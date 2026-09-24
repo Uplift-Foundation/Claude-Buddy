@@ -473,6 +473,14 @@ namespace ClaudeBuddy
         private readonly Dictionary<string, SessionStatus> _statuses = new();
         private readonly List<string> _order = new(); // stable stacking order
 
+        // CB-167's memory of what state each session was last seen in, so the
+        // scan can tell a turn actually finishing from a poll that simply
+        // found the same idle orb again. Per manager rather than static for
+        // the identical reason SweepGrace is: a test that scans a session
+        // through generating → idle must not have that transition also
+        // observed by some other test's tracker running in the same process.
+        private readonly TurnSignalTracker _turnSignals = new();
+
         private TrayController? _tray;
 
         // Orbs can be hidden from the tray menu; sessions keep being tracked
@@ -1924,6 +1932,13 @@ namespace ClaudeBuddy
             var seen = new HashSet<string>();
             bool setChanged = false;
 
+            // What CB-167's tracker noticed this pass. Collected rather than
+            // acted on inline, because the decision is coalesced across the
+            // whole scan — four orbs finishing at once is one sound, not
+            // four — so nothing plays until every session in this pass has
+            // been observed.
+            var turnSoundEvents = new List<TurnSoundEvent>();
+
             // Which files a persona could be written in, per working directory,
             // for the length of this one pass. Local rather than a field on
             // purpose: building the list is pure string work over a path walk —
@@ -2490,6 +2505,21 @@ namespace ClaudeBuddy
                 // persona changed.
                 ApplyPersona(sessionId, status, candidatesByCwd);
 
+                // Immediately before the dictionary is overwritten, so the
+                // tracker is comparing against exactly the state this
+                // session was in on the previous tick — the same
+                // TryGetValue(_statuses, ...) above is reading, just for a
+                // different question. After the liveness and reachability
+                // continues above, which is what makes CB-167's "husks can't
+                // chime" guarantee true by construction: a session that
+                // never reaches this line is never observed at all.
+                var turnSignal = _turnSignals.Observe(sessionId, status.State);
+                if (turnSignal != TurnSignal.None)
+                {
+                    turnSoundEvents.Add(new TurnSoundEvent(
+                        turnSignal, SoundKeyFor(status, sessionId), sessionId));
+                }
+
                 _statuses[sessionId] = status;
 
                 var isNew = !_windows.TryGetValue(sessionId, out var window);
@@ -2544,6 +2574,61 @@ namespace ClaudeBuddy
                 LocalPersonas.Forget(id);
                 PeerPersonas.Forget(id);
             }
+
+            // Drops anything this pass never saw, so a session that vanished
+            // mid-generation and comes back later starts from a baseline
+            // rather than being compared against whatever it was doing when
+            // it dropped out of sight. After the removal pass above rather
+            // than before it, though the two do not actually interact: this
+            // just keeps every "after the loop, once" step grouped together.
+            _turnSignals.Prune(seen);
+
+            // QA (CB-167): a deferred signal still waiting out the rate
+            // limit for a session that has just dropped out of `seen` — a
+            // backgrounded husk, one genuinely gone — must not fire once its
+            // two seconds are up. The signal was real when it was raised,
+            // but by the time the timer would fire the session it was about
+            // is no longer one the scan is willing to say anything about.
+            TurnSounds.CancelPendingUnlessSeen(seen);
+
+            // One sound for the whole pass, decided from everything the loop
+            // above noticed. The callback is how this reaches an orb without
+            // TurnSounds ever holding a window reference of its own — see its
+            // own header comment. Async and bool-returning (QA, CB-167): the
+            // window is the only thing that can say whether it actually had
+            // something to speak, and TurnSounds needs that answer, off this
+            // thread, to decide whether to fall back to a chime.
+            //
+            // The dictionary lookup itself goes through Dispatcher.UIThread.
+            // InvokeAsync rather than reading _windows directly, because this
+            // callback is not always called from the UI thread: a deferred
+            // decision (the rate-limit gap was still closed) fires later off
+            // TurnSounds' own timer, and _windows is otherwise only ever
+            // touched from the scan itself. Reading it from a background
+            // thread at the same moment a live scan mutates it is exactly
+            // the kind of race that would show up once in a great while and
+            // be unreproducible.
+            //
+            // currentStateFor (QA round 2, finding 5) exists for the same
+            // reason: a deferred event's session may have moved on — reset,
+            // pruned, or an attention resolved some way other than the
+            // reactive Cancel calls above catch — by the time TurnSounds'
+            // timer actually fires, and this is how FirePending asks "does
+            // that still hold" instead of trusting whatever was true when
+            // the event was first deferred. TurnSounds only ever calls this
+            // off its own timer thread, never the UI thread, so it dispatches
+            // the same way the summary callback above does — synchronously
+            // here rather than awaited, since FirePending's validation loop
+            // is itself synchronous and a Dictionary this scan owns is not
+            // safe to read from a second thread without going through it.
+            TurnSounds.Deliver(turnSoundEvents, async id =>
+            {
+                var window = await Dispatcher.UIThread.InvokeAsync(
+                    () => _windows.TryGetValue(id, out var w) ? w : null);
+                if (window is null) return false;
+                return await window.SpeakTurnSummaryAsync().ConfigureAwait(false);
+            }, currentStateFor: id => Dispatcher.UIThread.Invoke(
+                () => _statuses.TryGetValue(id, out var s) ? s.State : null), now: now);
 
             // After the removal pass, so an orb has already gone before its file
             // does and the two never disagree on screen. Inside the scan rather
@@ -3430,10 +3515,59 @@ namespace ClaudeBuddy
         internal static string DirectoryKeyFor(SessionStatus status) =>
             string.IsNullOrEmpty(status.Cwd) ? "" : status.Cwd.TrimEnd('\\', '/');
 
+        // CB-167's per-orb key for turn sounds. Built on PositionKeyFor
+        // rather than invented fresh, because PositionKeyFor is already this
+        // app's answer to "which agent is this across scans and restarts" —
+        // it carries the CB-10 fix for an untitled session keying on its own
+        // id, and reusing it means a sound override and a pinned position
+        // agree about which orb they are talking about, the same way
+        // ChatPanelSizes already agrees with OrbPositions.
+        //
+        // The one gap PositionKeyFor leaves open is team members: two agents
+        // sharing one cwd and one auto-generated title collide under it,
+        // which is fine for a *position* — stacking rules already handle two
+        // orbs wanting one slot — but wrong for a sound override, where
+        // "make agent A quiet" silently muting agent B too is a real
+        // correctness bug, not a cosmetic one. Appending the agent name (set
+        // from AgentTeam membership earlier in the scan, before this is ever
+        // called) closes that gap without touching PositionKeyFor itself,
+        // since nothing about orb placement cares which teammate it is.
+        internal static string SoundKeyFor(SessionStatus status, string sessionId)
+        {
+            var key = PositionKeyFor(status, sessionId);
+
+            // QA (CB-167): an empty PositionKeyFor is a deliberate "no key"
+            // — a local session with no cwd, per PositionKeyFor's own early
+            // return — and the accessors on ClaudeBuddySettings already read
+            // an empty key as "no override, don't bother looking." Appending
+            // the agent name onto that empty string used to turn it into
+            // "\n<agent>", a real, non-empty key with no cwd in it at all —
+            // shared by every session anywhere naming that same agent, in
+            // every project. Muting one teammate would have silently muted
+            // them everywhere. Staying empty whenever PositionKeyFor does is
+            // what keeps this a per-orb key rather than a per-agent-name one.
+            if (key.Length == 0 || string.IsNullOrEmpty(status.Agent)) return key;
+
+            return key + "\n" + status.Agent;
+        }
+
         private void RestoreOrbPosition(OrbWindow window, SessionStatus status)
         {
             var key = PositionKeyFor(status, window.SessionId);
             window.PositionKey = key;
+
+            // window.SoundKey is no longer set here. QA round 2 (HIGH):
+            // SoundKeyFor depends on Title, which can arrive after this
+            // method's one-time call (RestoreOrbPosition only runs for a
+            // brand-new orb) — an untitled session keys on its own id until
+            // Claude Code names it, so a value set only here would go stale
+            // the moment a title showed up. OrbWindow.UpdateFrom now
+            // recomputes it on every poll instead, and this same status
+            // already reached UpdateFrom before this method ever runs
+            // (SessionManager.cs's per-session loop calls UpdateFrom first),
+            // so window.SoundKey is already correct by the time execution
+            // gets here.
+
             if (string.IsNullOrEmpty(key)) return;
 
             // A sibling session in the same directory already sits there;
@@ -3637,6 +3771,20 @@ namespace ClaudeBuddy
             catch { }
 
             _statuses[sessionId] = reset;
+
+            // Silent, not Observe: a manual reset is a person clearing a
+            // stuck orb, not a turn finishing, and the tracker has to agree
+            // or the next real scan would find "idle" already on record and
+            // never notice the actual generating → idle transition that
+            // follows. See TurnSignalTracker.Settle's own comment.
+            _turnSignals.Settle(sessionId, "idle");
+
+            // QA (CB-167): the same silence Settle just gave the tracker
+            // applies to a sound still waiting on this session — a person
+            // clearing a stuck orb should not have it ding a couple of
+            // seconds later for a turn they just told the app to forget
+            // about.
+            TurnSounds.CancelPendingFor(sessionId);
 
             if (_windows.TryGetValue(sessionId, out var window))
             {

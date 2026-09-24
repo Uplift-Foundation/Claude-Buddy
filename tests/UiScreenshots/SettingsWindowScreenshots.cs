@@ -192,6 +192,43 @@ public class SettingsWindowScreenshots
         }
     }
 
+    // CB-167's Sounds group, captured with a non-default value saved so the
+    // capture shows the picker holding a real choice rather than its initial
+    // "Default (…)" state — the same reason SpeechGroupShowsTheSpeakScopePicker
+    // seeds a non-default mode before capturing.
+    //
+    // No platform gate, same reasoning as PeerLinkGroupShowsThePairingControls:
+    // the system-sound list differs between the two rids (aiff names on macOS,
+    // wav names on Windows), but the row itself — the switch, both pickers,
+    // both preview buttons — is identical code on both, so a reviewer comparing
+    // the two captures should see the same shape with different sound names in
+    // it, not a platform gate.
+    [AvaloniaFact]
+    public void SoundsGroupShowsThePickers()
+    {
+        var wasFinished = ClaudeBuddySettings.TurnFinishedSound;
+        try
+        {
+            ClaudeBuddySettings.TurnFinishedSound = "off";
+
+            var ctor = typeof(SettingsWindow).GetConstructor(
+                BindingFlags.NonPublic | BindingFlags.Instance,
+                types: Type.EmptyTypes)
+                ?? throw new MissingMethodException("SettingsWindow", ".ctor()");
+
+            var window = (Avalonia.Controls.Window)ctor.Invoke(null);
+
+            window.Show();
+            ScreenshotHelper.Flush();
+
+            CaptureGroup(window, "When a turn finishes", "Sounds", "settings-sounds-group.png");
+        }
+        finally
+        {
+            ClaudeBuddySettings.TurnFinishedSound = wasFinished;
+        }
+    }
+
     // The direct link's card, switched on, so the pairing controls are in frame.
     //
     // **Unlike every other scenario in this file, this one has no platform

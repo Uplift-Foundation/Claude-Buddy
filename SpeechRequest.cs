@@ -92,6 +92,32 @@ namespace ClaudeBuddy
             _ = SpeakSummaryAsync(plan.Text!, sessionId, request);
         }
 
+        // CB-167's vibe-summary turn sound: OrbWindow.SpeakTurnSummary calls
+        // this instead of Speak above. Always SpeakScope.Summary regardless
+        // of what the user has the speak button's own scope set to —
+        // choosing "Vibe summary" as an orb's finished sound is itself the
+        // request for a summary, and the global preference for the whole
+        // reply would otherwise silently turn every finished-turn sound back
+        // into a five-minute reading for anyone who has that set to Full.
+        // SpeechPlan.For's short-reply rule still applies underneath it: a
+        // reply already under the threshold is spoken in full rather than
+        // sent on a round trip that would buy nothing.
+        internal static void SpeakTurnSummary(string? reply, string? sessionId)
+        {
+            var plan = SpeechPlan.For(reply, SpeakScope.Summary);
+            if (plan.Silent) return;
+
+            var request = NextRequest();
+
+            if (!plan.NeedsSummary)
+            {
+                Utter(plan.Text!, sessionId);
+                return;
+            }
+
+            _ = SpeakSummaryAsync(plan.Text!, sessionId, request, SpeechSummaryKind.TurnFinished);
+        }
+
         // The summary leg, which is the one with a wait in it.
         //
         // The hourglass goes up before the round trip rather than after, because
@@ -106,13 +132,17 @@ namespace ClaudeBuddy
         internal static Task SpeakSummaryAsync(string reply, string? sessionId) =>
             SpeakSummaryAsync(reply, sessionId, NextRequest());
 
-        internal static async Task SpeakSummaryAsync(string reply, string? sessionId, int request)
+        internal static Task SpeakSummaryAsync(string reply, string? sessionId, int request) =>
+            SpeakSummaryAsync(reply, sessionId, request, SpeechSummaryKind.Reply);
+
+        internal static async Task SpeakSummaryAsync(
+            string reply, string? sessionId, int request, SpeechSummaryKind kind)
         {
             var stop = TextToSpeech.StopGeneration;
 
             TextToSpeech.Enter(TextToSpeech.SpeakState.Preparing);
 
-            var text = await SpeechSummary.SummarizeOrSayWhyAsync(reply).ConfigureAwait(true);
+            var text = await SpeechSummary.SummarizeOrSayWhyAsync(reply, kind).ConfigureAwait(true);
 
             // Either the user asked for silence while the summariser was running,
             // or a newer speak request replaced this one. Both mean speaking now

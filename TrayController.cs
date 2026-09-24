@@ -312,6 +312,16 @@ namespace ClaudeBuddy
         private static void Shutdown(IClassicDesktopStyleApplicationLifetime desktop)
         {
             GlobalHotkeys.Stop();
+
+            // QA (CB-167) round 3, finding 5: the ChimePlayer.StopAll call
+            // that used to live here moved to App.OnFrameworkInitializationCompleted's
+            // desktop.Exit handler, because this Shutdown was only ever the
+            // tray menu's own Quit — the orb menu's "Exit Claude Buddy" and
+            // the OS's Cmd-Q both call desktop.Shutdown() directly and never
+            // ran through here, so either one used to leave a chime
+            // orphaned. Exit fires for every path that ends in
+            // desktop.Shutdown(), this one included, so nothing is lost by
+            // no longer calling it from this one call site specifically.
             desktop.Shutdown();
         }
 

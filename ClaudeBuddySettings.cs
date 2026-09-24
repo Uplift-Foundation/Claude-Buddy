@@ -81,6 +81,7 @@ namespace ClaudeBuddy
             "speakCommand", "speakCommandArgs",
             "speakVoicesCommand", "speakVoicesCommandArgs", "speakCommandVoice", "speakEngine",
             "speakScope",
+            "turnSoundsEnabled", "turnFinishedSound", "needsAttentionSound", "orbTurnSounds",
             "orbColors", "claudeCodeProfileDirs", "codexHomes", "grokHomes", "profiles", "orbPositions",
             "collapsedSettingsSections",
             "chatPanelSizes", "pinnedChatPanels", "arrangeAnchor", "chatTextScale",
@@ -165,6 +166,17 @@ namespace ClaudeBuddy
         // a resize drag lands on fractions, and the panel's own Min/MaxWidth are
         // doubles it gets clamped against.
         internal sealed record PanelSize(double Width, double Height);
+
+        // One orb's override of the two turn-sound defaults, keyed the same
+        // way OrbPositions and ChatPanelSizes are — see SessionManager's
+        // SoundKeyFor. Either field null means "use the global default for
+        // that trigger", the same reading null gets everywhere else in this
+        // file; both null is not a value worth keeping an entry for, which is
+        // why the accessors below remove the whole entry rather than storing
+        // it. A field holding "off" is a real, distinct choice from null —
+        // the override turns that trigger off for this orb specifically,
+        // which is different from the orb simply not overriding it.
+        internal sealed record OrbTurnSound(string? Finished, string? Attention);
 
         internal sealed class ProfileSettings
         {
@@ -533,6 +545,25 @@ namespace ClaudeBuddy
             // be replaced rather than extended.
             public string? SpeakScope { get; set; }
 
+            // The master switch for CB-167's turn sounds, on by default: a
+            // sound that plays only after the user has found and flipped a
+            // setting would miss the entire point of an ambient cue, which is
+            // to tell you something before you go looking.
+            public bool TurnSoundsEnabled { get; set; } = true;
+
+            // null = the platform default (Glass / Windows Notify Messaging),
+            // "off", "summary", a system-sound name, or an absolute path. See
+            // SystemSoundCatalog.Resolve and TurnSoundPolicy for how each of
+            // those is turned into an actual sound.
+            public string? TurnFinishedSound { get; set; }
+
+            // Same shape as TurnFinishedSound, minus "summary" — a vibe
+            // summary is offered for a turn finishing, never for a permission
+            // prompt, so this field has no value that means it. A hand-edited
+            // file that sets one anyway is not specially rejected; it simply
+            // fails to resolve to a sound the same way a deleted file would.
+            public string? NeedsAttentionSound { get; set; }
+
             // Which of those names is selected. A fourth voice key rather than
             // reusing SpeakVoice or NeuralVoice for the same reason those two are
             // separate: the name spaces have nothing in common, and a value left
@@ -573,6 +604,14 @@ namespace ClaudeBuddy
             // an agent's panel and its orb agree about what counts as the same
             // agent, rather than drifting apart on a retitle.
             public Dictionary<string, PanelSize> ChatPanelSizes { get; init; } =
+                new(StringComparer.OrdinalIgnoreCase);
+
+            // Per-orb overrides of the two turn-sound defaults, keyed by
+            // SessionManager.SoundKeyFor exactly the way ChatPanelSizes above
+            // is keyed by PositionKeyFor — case-insensitive for the same
+            // Windows-path reason. An orb with no entry here uses the global
+            // default for both triggers.
+            public Dictionary<string, OrbTurnSound> OrbTurnSounds { get; init; } =
                 new(StringComparer.OrdinalIgnoreCase);
 
             // CB-111: which chat panels were pinned when the app last quit,
@@ -766,6 +805,66 @@ namespace ClaudeBuddy
                 Save();
             }
         }
+
+        // ---- turn sounds (CB-167) --------------------------------------------
+
+        public static bool TurnSoundsEnabled
+        {
+            get { Load(); lock (Gate) return _model.TurnSoundsEnabled; }
+            set { Load(); lock (Gate) _model.TurnSoundsEnabled = value; Save(); }
+        }
+
+        public static string? TurnFinishedSound
+        {
+            get { Load(); lock (Gate) return _model.TurnFinishedSound; }
+            set { Load(); lock (Gate) _model.TurnFinishedSound = value; Save(); }
+        }
+
+        public static string? NeedsAttentionSound
+        {
+            get { Load(); lock (Gate) return _model.NeedsAttentionSound; }
+            set { Load(); lock (Gate) _model.NeedsAttentionSound = value; Save(); }
+        }
+
+        // Null when this orb has never had either trigger overridden — the
+        // same "absent means default" reading ChatPanelSizeFor gives for a
+        // panel nobody has resized.
+        internal static OrbTurnSound? OrbTurnSoundFor(string key)
+        {
+            if (string.IsNullOrEmpty(key)) return null;
+
+            Load();
+            lock (Gate) return _model.OrbTurnSounds.GetValueOrDefault(key);
+        }
+
+        // Both null removes the entry rather than storing an override that
+        // overrides nothing — the same rule ChatPanelSizes' neighbours don't
+        // need because a size and a pin are never "both absent" in a way
+        // worth naming, but two independently nullable fields are.
+        internal static void SetOrbTurnSound(string key, string? finished, string? attention)
+        {
+            if (string.IsNullOrEmpty(key)) return;
+
+            Load();
+            lock (Gate)
+            {
+                if (finished is null && attention is null)
+                {
+                    _model.OrbTurnSounds.Remove(key);
+                }
+                else
+                {
+                    _model.OrbTurnSounds[key] = new OrbTurnSound(finished, attention);
+                }
+            }
+
+            Save();
+        }
+
+        // The common case of the above — "this orb goes back to the global
+        // default for both triggers" — named so a caller doing that doesn't
+        // have to spell out SetOrbTurnSound(key, null, null) to mean it.
+        internal static void ClearOrbTurnSound(string key) => SetOrbTurnSound(key, null, null);
 
         // Turning this on or off takes effect immediately rather than at the
         // next launch: SessionManager asks OpenClawSessions for a snapshot every
@@ -1577,7 +1676,10 @@ namespace ClaudeBuddy
                         SpeakVoicesCommand = Text(root["speakVoicesCommand"]),
                         SpeakCommandVoice = Text(root["speakCommandVoice"]),
                         SpeakEngine = Text(root["speakEngine"]),
-                        SpeakScope = Text(root["speakScope"])
+                        SpeakScope = Text(root["speakScope"]),
+                        TurnSoundsEnabled = Bool(root["turnSoundsEnabled"], true),
+                        TurnFinishedSound = Text(root["turnFinishedSound"]),
+                        NeedsAttentionSound = Text(root["needsAttentionSound"])
                     };
 
                     // Same shape as claudeCodeProfileDirs below: read as an array
@@ -1727,6 +1829,26 @@ namespace ClaudeBuddy
                         }
                     }
 
+                    if (root["orbTurnSounds"] is JsonObject turnSounds)
+                    {
+                        foreach (var (key, node) in turnSounds)
+                        {
+                            if (node is not JsonObject entry) continue;
+
+                            var finished = Text(entry["finished"]);
+                            var attention = Text(entry["attention"]);
+
+                            // Both sides null is not an override worth
+                            // keeping — the same rule SetOrbTurnSound applies
+                            // on the way in, restated here for a file that
+                            // reached this shape by hand rather than through
+                            // that accessor.
+                            if (finished is null && attention is null) continue;
+
+                            model.OrbTurnSounds[key] = new OrbTurnSound(finished, attention);
+                        }
+                    }
+
                     if (root["pinnedChatPanels"] is JsonObject pinned)
                     {
                         // Number(), not GetValue<int>() the way orbPositions
@@ -1862,6 +1984,19 @@ namespace ClaudeBuddy
                 ? number
                 : null;
 
+        // The same defence again, for a bool — written for turnSoundsEnabled
+        // specifically (QA, CB-167). `root["turnSoundsEnabled"]?.GetValue
+        // <bool>()` reaching a hand-edited `"turnSoundsEnabled": "yes"` (or
+        // any non-bool JSON value) throws, and that throw lands in Load's one
+        // catch that replaces the *entire* model with defaults — a brand new
+        // key costing someone every profile name and dragged orb position
+        // over one bad value is exactly the hole Text() and Number() above
+        // were already written to close for every other type. A fallback
+        // rather than null because every other bool setting in this file
+        // defaults to a concrete value too, and turnSoundsEnabled's is true.
+        private static bool Bool(JsonNode? node, bool fallback) =>
+            node is JsonValue value && value.TryGetValue<bool>(out var result) ? result : fallback;
+
         // Test seam: this class is static, so it caches _model and _loaded for
         // the life of the process. A test that points CLAUDE_BUDDY_SETTINGS_DIR
         // at a fresh directory between cases still needs this to make that
@@ -1920,6 +2055,16 @@ namespace ClaudeBuddy
                         {
                             ["width"] = size.Width,
                             ["height"] = size.Height
+                        };
+                    }
+
+                    var turnSounds = new JsonObject();
+                    foreach (var (key, sound) in _model.OrbTurnSounds)
+                    {
+                        turnSounds[key] = new JsonObject
+                        {
+                            ["finished"] = sound.Finished,
+                            ["attention"] = sound.Attention
                         };
                     }
 
@@ -2035,6 +2180,9 @@ namespace ClaudeBuddy
                         ["speakCommandVoice"] = _model.SpeakCommandVoice,
                         ["speakEngine"] = _model.SpeakEngine,
                         ["speakScope"] = _model.SpeakScope,
+                        ["turnSoundsEnabled"] = _model.TurnSoundsEnabled,
+                        ["turnFinishedSound"] = _model.TurnFinishedSound,
+                        ["needsAttentionSound"] = _model.NeedsAttentionSound,
                         // Grouped rather than three top-level keys: it reads as
                         // one setting in the file the way it reads as one card in
                         // the window. A null entry — which is what a colour left
@@ -2053,6 +2201,7 @@ namespace ClaudeBuddy
                         ["profiles"] = profiles,
                         ["orbPositions"] = positions,
                         ["chatPanelSizes"] = panelSizes,
+                        ["orbTurnSounds"] = turnSounds,
                         ["pinnedChatPanels"] = pinnedChatPanels,
                         ["arrangeAnchor"] = arrangeAnchor
                     };

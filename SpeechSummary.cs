@@ -88,6 +88,16 @@ namespace ClaudeBuddy
     // direct API call: the CLI is already authenticated, and UsagePoller has
     // established the pattern of spawning it for an account-scoped answer rather
     // than this app ever holding a token.
+    // Which of two things is being summarised. A reply's summary answers
+    // "what did the assistant just say"; a turn-finished summary answers a
+    // different question — "what did the session just do, and what's next"
+    // — which is CB-167's vibe-summary sound rather than CB-165's speak
+    // button. Kept as a parameter on the existing methods rather than a
+    // second parallel class, because everything downstream of the prompt —
+    // cleaning, the failure sentence, the subprocess plumbing, the timeout —
+    // is identical for both; only the instruction sent to the model differs.
+    internal enum SpeechSummaryKind { Reply, TurnFinished }
+
     internal static class SpeechSummary
     {
         // Haiku, explicitly. The job is compression, not reasoning, and the
@@ -111,18 +121,32 @@ namespace ClaudeBuddy
         // instruction is blunt about form because the output is spoken, not
         // read: a preamble ("Here's a summary:") is three wasted seconds of
         // audio, and markdown is read aloud as punctuation.
-        internal static string Prompt(string reply)
+        internal static string Prompt(string reply, SpeechSummaryKind kind = SpeechSummaryKind.Reply)
         {
             var source = reply.Length > MaxSourceChars
                 ? reply[..MaxSourceChars]
                 : reply;
 
-            return "Summarise the following assistant reply in two or three sentences, "
-                + "for someone who will hear it read aloud rather than read it.\n\n"
-                + "Say what was done or found, not what the reply is about. "
-                + "No preamble, no heading, no markdown, no bullet points, no code. "
-                + "Plain sentences only.\n\n"
-                + "----\n" + source;
+            // The turn-finished variant asks a forward-looking question a
+            // reply summary never does. A reply summary describes something
+            // that already happened and is being read back; a turn-finished
+            // summary is the ambient cue CB-167 plays instead of a chime, and
+            // "what's next" is what makes it worth listening to over a
+            // Glass sound — it can tell you whether you need to come back.
+            return kind == SpeechSummaryKind.TurnFinished
+                ? "Summarise what was just done and what's next, in one to three "
+                    + "sentences, for someone who will hear it read aloud rather than "
+                    + "read it.\n\n"
+                    + "Say what changed and what to expect next, not what the reply is "
+                    + "about. No preamble, no heading, no markdown, no bullet points, "
+                    + "no code. Plain sentences only.\n\n"
+                    + "----\n" + source
+                : "Summarise the following assistant reply in two or three sentences, "
+                    + "for someone who will hear it read aloud rather than read it.\n\n"
+                    + "Say what was done or found, not what the reply is about. "
+                    + "No preamble, no heading, no markdown, no bullet points, no code. "
+                    + "Plain sentences only.\n\n"
+                    + "----\n" + source;
         }
 
         // Model output is not a summary until the preamble it was told not to
@@ -197,10 +221,15 @@ namespace ClaudeBuddy
         // ever spawning a CLI; null means the real one.
         internal static Func<string, Task<string?>>? SummarizerForTests;
 
-        internal static Task<string?> SummarizeAsync(string reply)
+        // `kind` only ever changes what RunAsync sends as the prompt — the
+        // seam itself stays kind-agnostic, because a test driving it has
+        // already decided what comes back and does not need to know which
+        // question would have produced it. Reply is the default so every
+        // existing caller of the one-argument shape is unchanged.
+        internal static Task<string?> SummarizeAsync(string reply, SpeechSummaryKind kind = SpeechSummaryKind.Reply)
         {
             var seam = SummarizerForTests;
-            return seam is not null ? seam(reply) : RunAsync(reply);
+            return seam is not null ? seam(reply) : RunAsync(reply, kind);
         }
 
         // Everything the summary leg decides, with the utterance left to the
@@ -212,11 +241,14 @@ namespace ClaudeBuddy
         // summariser does not work" is actually pinned.
         //
         // Never returns null. A failure is a different sentence, not silence.
-        internal static async Task<string> SummarizeOrSayWhyAsync(string reply)
+        internal static Task<string> SummarizeOrSayWhyAsync(string reply) =>
+            SummarizeOrSayWhyAsync(reply, SpeechSummaryKind.Reply);
+
+        internal static async Task<string> SummarizeOrSayWhyAsync(string reply, SpeechSummaryKind kind)
         {
             try
             {
-                var summary = await SummarizeAsync(reply).ConfigureAwait(true);
+                var summary = await SummarizeAsync(reply, kind).ConfigureAwait(true);
                 return string.IsNullOrWhiteSpace(summary) ? Unavailable : summary;
             }
             catch (Exception ex)
@@ -286,7 +318,7 @@ namespace ClaudeBuddy
         // carries, and running it in a test would make a real billed request on
         // the developer's own account.
         [ExcludeFromCodeCoverage]
-        private static async Task<string?> RunAsync(string reply)
+        private static async Task<string?> RunAsync(string reply, SpeechSummaryKind kind)
         {
             var claude = ClaudeBinary.Path;
             if (claude is null) return null;
@@ -308,7 +340,7 @@ namespace ClaudeBuddy
 
                 try
                 {
-                    await proc.StandardInput.WriteAsync(Prompt(reply)).ConfigureAwait(false);
+                    await proc.StandardInput.WriteAsync(Prompt(reply, kind)).ConfigureAwait(false);
                     proc.StandardInput.Close();
 
                     var stdout = proc.StandardOutput.ReadToEndAsync();
