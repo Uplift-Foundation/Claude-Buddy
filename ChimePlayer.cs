@@ -198,7 +198,22 @@ namespace ClaudeBuddy
             var proc = BuildProcess(path);
             if (proc is null) return null;
 
-            if (!TryStart(proc))
+            return FinishStarting(proc, TryStart(proc));
+        }
+
+        // What StartProcess does with TryStart's real answer — pulled out so
+        // a test can drive both outcomes (started, and failed-to-start)
+        // without a real OS process launch. TryStart itself is the only
+        // remaining line here that needs the real OS (see its own
+        // exclusion); everything this method decides from its answer is
+        // ordinary code. Takes the already-built Process rather than a path,
+        // so a test can hand it a plain, never-started `new Process()` —
+        // RealChimeProcess's own constructor only stores the reference, it
+        // never touches Process.Id (which throws before Start) — and assert
+        // on the failure branch without disposing anything real.
+        internal static IChimeProcess? FinishStarting(Process proc, bool started)
+        {
+            if (!started)
             {
                 proc.Dispose();
                 return null;
@@ -217,14 +232,12 @@ namespace ClaudeBuddy
         // hand it something harmless and long-running (never real audio)
         // and prove StopAll actually kills it.
         //
-        // CB-168: overloaded rather than replaced. The Process overload
-        // keeps ChimePlayerIntegrationTests' real-process tests working
-        // unchanged; the IChimeProcess overload is what ChimePlayerTests'
-        // fake-based logic tests use instead, so a fake never has to be
-        // smuggled through a real System.Diagnostics.Process just to reach
-        // the same tracking path.
-        internal static void TrackForTests(Process proc) => TrackForTests(new RealChimeProcess(proc));
-
+        // CB-168: the Process-typed overload this used to have alongside
+        // the IChimeProcess one below is gone — ChimePlayerIntegrationTests
+        // never called it (it builds real processes through StartProcess
+        // itself, not this seam), and nothing else did either. A test seam
+        // with zero callers is clutter with a comment attached, not
+        // coverage.
         internal static void TrackForTests(IChimeProcess proc)
         {
             lock (PlayingGate) _live.Add(proc);
@@ -305,12 +318,8 @@ namespace ClaudeBuddy
         // and can then prove that registering a second one kills the
         // first — see ChimePlayerTests.
         //
-        // CB-168: overloaded the same way TrackForTests was, for the same
-        // reason — real-process integration tests keep the Process overload,
-        // fake-based logic tests use the IChimeProcess one directly.
-        internal static void SetCurrentPreviewForTests(Process next) =>
-            KillPreviousAndTrackNewPreview(new RealChimeProcess(next));
-
+        // CB-168: the Process-typed overload this used to have is gone, for
+        // the same reason TrackForTests' was — zero callers, real or test.
         internal static void SetCurrentPreviewForTests(IChimeProcess next) =>
             KillPreviousAndTrackNewPreview(next);
 

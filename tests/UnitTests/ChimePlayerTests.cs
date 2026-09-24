@@ -455,4 +455,108 @@ public class ChimePlayerTests
             ChimePlayer.ResetStoppedForTests();
         }
     }
+
+    // CB-168 coverage round: the historically riskiest race in this file —
+    // Round 5, finding 2's own comment on Play names it directly, and
+    // PlayOnePreview has the same shape (Round 4, item 2). StartProcess's
+    // seam is the only place a test can land this: the factory stands in
+    // for "the moment Start just returned," so calling StopAll from inside
+    // it is exactly a StopAll landing in the real ~20ms window between a
+    // real process starting and this method's own tracking — with no wall
+    // clock needed to hit it, since the factory always runs synchronously
+    // inside StartProcess, before Play's own re-check.
+    [Fact]
+    public void PlayKillsTheProcessIfStopAllLandsBetweenStartAndTracking()
+    {
+        try
+        {
+            var fake = new FakeChimeProcess();
+            ChimePlayer.PlayForTests = null; // the real path, not the seam
+            ChimePlayer.ProcessFactoryForTests = _ =>
+            {
+                ChimePlayer.StopAll();
+                return fake;
+            };
+
+            ChimePlayer.Play("/System/Library/Sounds/Glass.aiff");
+
+            Assert.True(fake.Killed,
+                "a chime whose StopAll race landed right after Start was never killed");
+        }
+        finally
+        {
+            ChimePlayer.ProcessFactoryForTests = null;
+            ChimePlayer.ResetStoppedForTests();
+        }
+    }
+
+    // PlayOnePreview's own version of the race above — driven through the
+    // real PlayPreview -> RunPreviewWorker -> PlayOnePreview path (not
+    // SetCurrentPreviewForTests' direct call), the same distinction
+    // PlayPreviewEndToEndDrivesTheRealWorkerAgainstAFake exists to cover.
+    // The only wait is for the background worker task to reach the
+    // factory call and, past it, Kill() — ordinary async handoff, never OS
+    // process teardown, since a fake's Kill()/WaitForExit() are both
+    // synchronous.
+    [Fact]
+    public async Task PlayPreviewKillsTheProcessIfStopAllLandsBetweenStartAndTracking()
+    {
+        try
+        {
+            var fake = new FakeChimeProcess();
+            ChimePlayer.PlayForTests = null;
+            ChimePlayer.ProcessFactoryForTests = _ =>
+            {
+                ChimePlayer.StopAll();
+                return fake;
+            };
+
+            ChimePlayer.PlayPreview("does-not-matter.wav");
+
+            var deadline = DateTime.UtcNow.AddSeconds(5);
+            while (fake.KillCallCount == 0 && DateTime.UtcNow < deadline)
+            {
+                await Task.Delay(5);
+            }
+
+            Assert.True(fake.Killed,
+                "a preview whose StopAll race landed right after Start was never killed");
+        }
+        finally
+        {
+            ChimePlayer.PlayForTests = null;
+            ChimePlayer.ProcessFactoryForTests = null;
+            ChimePlayer.ResetStoppedForTests();
+        }
+    }
+
+    // FinishStarting: the decision StartProcess makes from TryStart's real
+    // answer, pulled out so both outcomes are provable without a real OS
+    // process launch (TryStart itself stays excluded — see its own
+    // comment). A plain, never-started Process is safe to hand this either
+    // way: RealChimeProcess's constructor only stores the reference, and
+    // Process.Dispose() on an object that was built but never started is
+    // an ordinary, safe no-op.
+    [Fact]
+    public void FinishStartingDisposesAndReturnsNullWhenStartFailed()
+    {
+        // Not wrapped in `using` — FinishStarting(proc, false) is the one
+        // disposing it, which is the behaviour this test asserts.
+        var proc = new Process();
+
+        var result = ChimePlayer.FinishStarting(proc, started: false);
+
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public void FinishStartingWrapsTheProcessWhenStartSucceeded()
+    {
+        var proc = new Process();
+
+        var result = ChimePlayer.FinishStarting(proc, started: true);
+
+        Assert.NotNull(result);
+        result.Dispose();
+    }
 }
