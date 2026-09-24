@@ -272,6 +272,40 @@ public class TurnSoundsTests : IDisposable
         Assert.Equal(2, played.Count);
     }
 
+    // A chime still queued on the chain when ResetForTests runs must not
+    // play into whichever test installs its seam next. The first chime
+    // holds the chain open inside the seam; the second, decided well past
+    // the 2 s gap, queues behind it; a reset lands while it waits. Once the
+    // first is released, the second has to drop itself rather than reach
+    // ChimePlayer.Play. This is the leak CI hit on macOS, where
+    // CancelPendingForADifferentSessionLeavesTheRealPendingSignalAlone
+    // counted an earlier test's Glass as its own.
+    [Fact]
+    public async Task AChimeStillQueuedWhenTheTestStateIsResetNeverPlays()
+    {
+        var played = new System.Collections.Generic.List<string>();
+        using var holdFirst = new ManualResetEventSlim();
+        var firstStarted = new TaskCompletionSource<bool>();
+        ChimePlayer.PlayForTests = path =>
+        {
+            lock (played) played.Add(path);
+            if (firstStarted.TrySetResult(true)) holdFirst.Wait(TimeSpan.FromSeconds(5));
+        };
+
+        ClaudeBuddySettings.TurnSoundsEnabled = true;
+        ClaudeBuddySettings.TurnFinishedSound = null;
+
+        TurnSounds.Deliver(new[] { Finished("key-a", "session-a") }, NoSummary, Past);
+        Assert.True(await Task.WhenAny(firstStarted.Task, Task.Delay(TimeSpan.FromSeconds(2))) == firstStarted.Task);
+
+        TurnSounds.Deliver(new[] { Finished("key-b", "session-b") }, NoSummary, Past.AddSeconds(10));
+        TurnSounds.ResetForTests();
+        holdFirst.Set();
+
+        await Task.Delay(TimeSpan.FromMilliseconds(500));
+        lock (played) Assert.Single(played);
+    }
+
     // The Prune-shaped guard: a session missing from `seen` (a husk the
     // scan just dropped) loses its pending signal the same way a Settled
     // one does.

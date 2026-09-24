@@ -65,6 +65,19 @@ namespace ClaudeBuddy
         // whatever thread scheduled it.
         private static Task _chimeChain = Task.CompletedTask;
 
+        // Bumped only by ResetForTests. Replacing _chimeChain and disposing
+        // the timer there does not stop work that is already queued: a
+        // continuation on the old chain, a timer callback already running,
+        // or a summary fallback still awaiting its answer carries on, and
+        // reaches ChimePlayer.Play (and so whichever test's PlayForTests
+        // seam is installed by then) after the reset. CI caught exactly
+        // that: CancelPendingForADifferentSessionLeavesTheRealPendingSignalAlone
+        // saw two Glass chimes where it had caused one. Every such piece of
+        // work captures the generation it was started under and drops
+        // itself if a reset has happened since. Production never resets, so
+        // this never changes what a user hears.
+        private static int _generation;
+
         // Test seam: a scan-level test wants a clean rate-limit clock and no
         // timer left armed from a previous case, without sleeping two real
         // seconds to clear either — the same reason
@@ -76,6 +89,7 @@ namespace ClaudeBuddy
                 _lastPlayed = DateTime.MinValue;
                 ClearPendingLocked();
                 _chimeChain = Task.CompletedTask;
+                _generation++;
             }
         }
 
@@ -139,6 +153,7 @@ namespace ClaudeBuddy
 
             var moment = now ?? DateTime.UtcNow;
             SoundAction decision;
+            int generation;
 
             // QA round 2 (finding 6): Decide reads _lastPlayed to ask
             // whether the gap is still closed, and FirePending — running on
@@ -151,6 +166,7 @@ namespace ClaudeBuddy
             // write _lastPlayed in between.
             lock (Gate)
             {
+                generation = _generation;
                 decision = TurnSoundPolicy.Decide(events, Snapshot(), moment, _lastPlayed, TextToSpeech.IsSpeaking);
 
                 if (decision.Kind == SoundActionKind.Silent) return;
@@ -189,7 +205,7 @@ namespace ClaudeBuddy
                 if (decision.Kind == SoundActionKind.Chime) _lastPlayed = moment;
             }
 
-            Execute(decision, moment, trySpeakTurnSummary);
+            Execute(decision, moment, trySpeakTurnSummary, generation);
         }
 
         // Callable only while already holding Gate. `events` is the whole
@@ -242,8 +258,13 @@ namespace ClaudeBuddy
             List<TurnSoundEvent> events;
             Func<string, Task<bool>>? speak;
             Func<string, string?>? currentStateFor;
+            int generation;
             lock (Gate)
             {
+                // Read with the events it belongs to: a reset after this
+                // point is caught by EnqueueChime's own check, and a reset
+                // before it has already emptied _pendingEvents.
+                generation = _generation;
                 events = new List<TurnSoundEvent>(_pendingEvents);
                 speak = _pendingSpeak;
                 currentStateFor = _pendingCurrentStateFor;
@@ -324,7 +345,7 @@ namespace ClaudeBuddy
 
             if (best is not { } chosen) return;
 
-            Execute(chosen, DateTime.UtcNow, trySpeak);
+            Execute(chosen, DateTime.UtcNow, trySpeak, generation);
         }
 
         // Carries out a decision that is ready to play right now — never
@@ -334,19 +355,19 @@ namespace ClaudeBuddy
         // that nothing may block it. Exceptions are caught and logged rather
         // than thrown, the same reason SpeechSummary.SummarizeOrSayWhyAsync
         // turns a throw into a sentence instead of letting it escape.
-        private static void Execute(SoundAction decision, DateTime moment, Func<string, Task<bool>> trySpeakTurnSummary)
+        private static void Execute(SoundAction decision, DateTime moment, Func<string, Task<bool>> trySpeakTurnSummary, int generation)
         {
             if (decision.Kind == SoundActionKind.Summary)
             {
-                _ = SpeakSummaryOrFallbackAsync(decision.SessionId!, moment, trySpeakTurnSummary);
+                _ = SpeakSummaryOrFallbackAsync(decision.SessionId!, moment, trySpeakTurnSummary, generation);
             }
             else
             {
-                PlayChimeInBackground(decision.Path!, moment);
+                PlayChimeInBackground(decision.Path!, moment, generation);
             }
         }
 
-        private static void PlayChimeInBackground(string path, DateTime moment)
+        private static void PlayChimeInBackground(string path, DateTime moment, int generation)
         {
             // Stamped here too, harmlessly redundant with Deliver's own
             // upfront stamp for the live path — FirePending's callers never
@@ -358,7 +379,7 @@ namespace ClaudeBuddy
             // the one that has to wait and see.
             lock (Gate) _lastPlayed = moment;
 
-            EnqueueChime(path);
+            EnqueueChime(path, generation);
         }
 
         // Every real chime — the direct path here and the vibe-summary
@@ -367,12 +388,17 @@ namespace ClaudeBuddy
         // starting while an unrelated orb's chime is still mid-playback
         // would be exactly the same rattle two ordinary chimes landing
         // close together would be.
-        private static void EnqueueChime(string path)
+        private static void EnqueueChime(string path, int generation)
         {
             lock (Gate)
             {
                 _chimeChain = _chimeChain.ContinueWith(_ =>
                 {
+                    lock (Gate)
+                    {
+                        if (generation != _generation) return;
+                    }
+
                     try
                     {
                         ChimePlayer.Play(path);
@@ -394,7 +420,7 @@ namespace ClaudeBuddy
         // answer before touching it, unlike the chime path above, which
         // already knows it will play the moment it is called.
         private static async Task SpeakSummaryOrFallbackAsync(
-            string sessionId, DateTime moment, Func<string, Task<bool>> trySpeakTurnSummary)
+            string sessionId, DateTime moment, Func<string, Task<bool>> trySpeakTurnSummary, int generation)
         {
             try
             {
@@ -414,7 +440,7 @@ namespace ClaudeBuddy
                 if (fallback is null) return;   // even the platform default is missing on this machine
 
                 lock (Gate) _lastPlayed = moment;
-                EnqueueChime(fallback);
+                EnqueueChime(fallback, generation);
             }
             catch (Exception ex)
             {
