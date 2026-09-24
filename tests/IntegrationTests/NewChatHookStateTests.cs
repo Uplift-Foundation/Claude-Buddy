@@ -100,6 +100,16 @@ namespace ClaudeBuddy.Tests
             Assert.Equal(Path.Combine(home, ".codex"), dir);
         }
 
+        // The `_ => null` arm — unreachable through anything this file's own
+        // callers pass (NewChatAvailability.AllClis only ever hands this the
+        // three real values), but real code all the same, and a cast out of
+        // the defined range is what reaches it.
+        [Fact]
+        public void AnUndefinedCliHasNoBaseDirectory()
+        {
+            Assert.Null(NewChatHookState.BaseDirectoryFor((NewChatCli)99, Path.Combine(_root, "home")));
+        }
+
         // --- IsInstalled: the file that actually decides it ---------------
 
         [Fact]

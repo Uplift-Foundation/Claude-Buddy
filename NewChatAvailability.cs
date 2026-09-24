@@ -67,7 +67,16 @@ namespace ClaudeBuddy
         // CLI on PATH and a real hook installed to see a disabled row.
         internal static Func<IReadOnlyList<NewChatOption>>? CurrentForTests;
 
-        private static string? RealLocate(NewChatCli cli) => cli switch
+        // internal rather than private so a test can reach the `_ => null`
+        // arm directly with an out-of-range cast — AllClis only ever hands
+        // this three real values, so that arm is otherwise unreachable from
+        // any call this file itself makes. The three real arms still only
+        // get their coverage through Current()'s own real-filesystem calls,
+        // which is the one part of this method that has to touch the OS at
+        // all; the default arm needs none of that, which is what makes it
+        // worth testing on its own rather than folding it into RealLaunch's
+        // style of whole-method exclusion.
+        internal static string? RealLocate(NewChatCli cli) => cli switch
         {
             NewChatCli.ClaudeCode => ClaudeBinary.Locate(),
             NewChatCli.Codex => CodexBinary.Locate(),
