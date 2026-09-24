@@ -553,7 +553,7 @@ public class TurnSoundScanTests : IDisposable
     // from "the Ping played but something else also failed to," and
     // finding 5's fix touches exactly which event survives fire-time
     // validation, not just how many chimes land. session-b needs its own
-    // real, live pid (a genuine /bin/sleep subprocess) rather than the
+    // real, live pid (a genuine harmless subprocess — /bin/sleep, or cmd running ping on Windows, which has no /bin/sleep) rather than the
     // cli:"codex" trick the other two-session cases above use — two status
     // files sharing one pid would make every WriteLocal-equivalent call a
     // fresh Superseded baseline instead of a state change on the same orb.
@@ -567,7 +567,7 @@ public class TurnSoundScanTests : IDisposable
             ClaudeBuddySettings.NeedsAttentionSound = attention;
 
             using var scratch = new Scratch();
-            using var other = System.Diagnostics.Process.Start("/bin/sleep", "30")!;
+            using var other = StartLongRunningProcess();
             try
             {
                 var bPid = other.Id;
@@ -589,7 +589,7 @@ public class TurnSoundScanTests : IDisposable
             }
             finally
             {
-                try { other.Kill(); } catch { }
+                try { other.Kill(entireProcessTree: true); } catch { }
             }
 
             lock (_lock)
@@ -639,5 +639,19 @@ public class TurnSoundScanTests : IDisposable
         // again.
         await WaitForChimeAsync(baseline: 1);
         Assert.Equal(2, _played.Count);
+    }
+
+    // Same shape as ChimePlayerTests' helper: a real, harmless process that
+    // stays alive long enough to own a pid. /bin/sleep does not exist on
+    // Windows, which is how this test failed on the win-x64 leg.
+    private static System.Diagnostics.Process StartLongRunningProcess()
+    {
+        var startInfo = OperatingSystem.IsWindows()
+            ? new System.Diagnostics.ProcessStartInfo("cmd.exe") { ArgumentList = { "/c", "ping -n 30 127.0.0.1 >NUL" } }
+            : new System.Diagnostics.ProcessStartInfo("/bin/sleep") { ArgumentList = { "30" } };
+
+        startInfo.UseShellExecute = false;
+        startInfo.CreateNoWindow = true;
+        return System.Diagnostics.Process.Start(startInfo)!;
     }
 }
