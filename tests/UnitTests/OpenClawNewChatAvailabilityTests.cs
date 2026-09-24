@@ -63,7 +63,7 @@ public class OpenClawNewChatAvailabilityTests
     [Fact]
     public void NoGatewayNamesItself()
     {
-        Assert.Equal("no gateway configured", OpenClawNewChat.ReasonFor(OpenClawNewChatAvailability.NoGateway));
+        Assert.Equal("No gateway configured.", OpenClawNewChat.ReasonFor(OpenClawNewChatAvailability.NoGateway));
     }
 
     [Fact]
@@ -71,5 +71,18 @@ public class OpenClawNewChatAvailabilityTests
     {
         var reason = OpenClawNewChat.ReasonFor(OpenClawNewChatAvailability.ReplyDisabled);
         Assert.Contains("Allow replying to agents", reason);
+    }
+
+    // Sentence case with a closing full stop, matching the three local
+    // CLIs' own disabled reasons — CB-168's dialog states every reason
+    // directly on screen now, not only in a tooltip, so the four rows need
+    // to read consistently beside each other.
+    [Theory]
+    [InlineData(OpenClawNewChatAvailability.NoGateway)]
+    [InlineData(OpenClawNewChatAvailability.ReplyDisabled)]
+    public void EveryDisabledReasonEndsWithAFullStop(OpenClawNewChatAvailability availability)
+    {
+        var reason = OpenClawNewChat.ReasonFor(availability);
+        Assert.EndsWith(".", reason);
     }
 }

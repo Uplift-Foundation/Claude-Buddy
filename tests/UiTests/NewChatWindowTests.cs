@@ -367,11 +367,11 @@ public class NewChatWindowTests : IDisposable
 
         var row = window.CliList.Children.OfType<RadioButton>().Single(r => (string)r.Content! == "OpenClaw");
         Assert.False(row.IsEnabled);
-        Assert.Equal("turn on \"Allow replying to agents\" in Settings", ToolTip.GetTip(row));
+        Assert.Equal("Turn on \"Allow replying to agents\" in Settings.", ToolTip.GetTip(row));
 
         var reasonText = window.ReasonTextFor(NewChatWindow.OpenClawTag);
         Assert.NotNull(reasonText);
-        Assert.Equal("turn on \"Allow replying to agents\" in Settings", reasonText!.Text);
+        Assert.Equal("Turn on \"Allow replying to agents\" in Settings.", reasonText!.Text);
         Assert.True(reasonText.IsVisible);
     }
 

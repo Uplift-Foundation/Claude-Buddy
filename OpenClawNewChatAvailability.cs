@@ -40,13 +40,17 @@ namespace ClaudeBuddy
         }
 
         // What the disabled radio item's subtitle says. Null for Ready, since
-        // a live entry has nothing to explain.
+        // a live entry has nothing to explain. Sentence case with a closing
+        // full stop, the same as the three local CLIs' own disabled reasons
+        // (NewChatAvailability.NotFoundReasonSuffix) — CB-168's dialog now
+        // states every reason on screen, not only in a tooltip, so the four
+        // rows' reasons need to read consistently next to each other.
         public static string? ReasonFor(OpenClawNewChatAvailability availability) =>
             availability switch
             {
-                OpenClawNewChatAvailability.NoGateway => "no gateway configured",
+                OpenClawNewChatAvailability.NoGateway => "No gateway configured.",
                 OpenClawNewChatAvailability.ReplyDisabled =>
-                    "turn on \"Allow replying to agents\" in Settings",
+                    "Turn on \"Allow replying to agents\" in Settings.",
                 _ => null
             };
     }
