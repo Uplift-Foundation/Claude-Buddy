@@ -1,5 +1,6 @@
 using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
+using Avalonia.Input;
 using Avalonia.Threading;
 using Xunit;
 
@@ -51,6 +52,30 @@ public class SpeakScopeUiTests : IDisposable
     private static OrbWindow NewOrb() => new(Guid.NewGuid().ToString());
 
     private static void Flush() => Dispatcher.UIThread.RunJobs();
+
+    // Takes down a directly-constructed panel for good, the same way
+    // ChatPanelPinTests' own Dissolve does — through the close button, since
+    // a panel built with `new ChatPanel()` has no session id for
+    // ChatPanel.CloseFor to find it by, and pinning first is what makes
+    // Dismiss() actually remove it from the static registry rather than
+    // merely hide it (see ChatPanel.Dismiss's own comment: an unpinned panel
+    // is the one every future OpenFor reuses, so hiding it is deliberate —
+    // but that means a panel this class built and never bound would
+    // otherwise sit in the registry forever, silently outliving every test
+    // that runs after this one).
+    private static void DissolveDirect(ChatPanel panel)
+    {
+        panel.TogglePin();
+
+        var pointer = new Pointer(Pointer.GetNextFreeId(), PointerType.Mouse, isPrimary: true);
+        var args = new PointerPressedEventArgs(
+            panel.CloseButton, pointer, panel, new Avalonia.Point(1, 1), 0,
+            new PointerPointProperties(RawInputModifiers.LeftMouseButton, PointerUpdateKind.LeftButtonPressed),
+            KeyModifiers.None, 1);
+
+        panel.CloseButton.RaiseEvent(args);
+        Flush();
+    }
 
     // Long enough that summary mode will not short-circuit it. Built from the
     // threshold rather than a literal so it cannot drift away from the rule.
@@ -515,10 +540,27 @@ public class SpeakScopeUiTests : IDisposable
         ClaudeBuddySettings.SpeakScope = SpeakScope.Full;
         CaptureUtterances();
 
-        new ChatPanel().SpeakLatest();
-        Flush();
+        var panel = new ChatPanel();
 
-        Assert.Null(_spoken);
+        try
+        {
+            panel.SpeakLatest();
+            Flush();
+
+            Assert.Null(_spoken);
+        }
+        finally
+        {
+            // Unbound and unpinned, this panel would otherwise sit in
+            // ChatPanel's static registry forever — see DissolveDirect's own
+            // comment. Confirmed as the cause of a flaky
+            // ChatPanelPinTests.IsOpenForFindsAPinnedPanelToo failure that
+            // reproduced deterministically (even with test parallelism fully
+            // disabled) once whatever panel normally sits ahead of this one
+            // in the registry got consumed elsewhere, revealing this leak as
+            // the "no panel is unpinned" check's answer (CB-168).
+            DissolveDirect(panel);
+        }
     }
 
     // The summary leg is started rather than awaited — the button returns while
