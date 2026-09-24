@@ -65,41 +65,128 @@ public class ChimePlayerTests
     // margin on a machine running several sibling worktrees' full test
     // suites at once).
     //
-    // GenerousWaitMs bounds how long any of these waits can block before
-    // the test gives up on them — a hang-guard, not the pass/fail
-    // decision, and larger than any contention this machine has shown
-    // could exhaust while a real kill or spawn was actually in flight.
-    private const int GenerousWaitMs = 10_000;
-
     // A silent wav's own duration is written from this, wherever the test
     // needs "long enough that MaxDuration, not the file, is the ceiling" —
     // see the class header comment above for why that matters.
-    private static readonly double CeilingMs = ChimePlayer.MaxDuration.TotalMilliseconds + 1_000;
-    private static readonly double SurvivedThresholdMs = ChimePlayer.MaxDuration.TotalMilliseconds - 1_000;
+    // QA (team-lead, CB-168 round 3): measured directly under this
+    // machine's heaviest observed load — a full `dotnet test
+    // tests/UnitTests` run, thousands of tests contending for the same
+    // cores — a genuinely correct kill took 5014ms, 14ms *past*
+    // MaxDuration's nominal 5000ms. That is not reap delay after the kill
+    // signal; it is the kill signal itself: StopAll's own KillEverythingLive
+    // call runs on an ordinary managed thread, and under sufficiently
+    // extreme contention that thread can be starved of CPU time for
+    // seconds before it ever reaches KillTree, the same way KillTree's own
+    // OS-level teardown can be delayed once it does run. MaxDuration is a
+    // real ceiling for how long *this app* will wait before its own
+    // fallback intervenes, but that fallback is itself an ordinary
+    // Process.WaitForExit(ms) call subject to the identical scheduling
+    // pressure — so it is not a hard bound the machine's scheduler is
+    // obligated to respect, only the nominal one. The margins below both
+    // sides of it accordingly: comfortable headroom *past* MaxDuration for
+    // the kill signal itself to still land late and be correct, and a
+    // wav written long enough past that for "truly never killed" to
+    // remain a distinct, later outcome.
+    private static readonly double CeilingMs = ChimePlayer.MaxDuration.TotalMilliseconds + 3_000;
+    private static readonly double SurvivedThresholdMs = ChimePlayer.MaxDuration.TotalMilliseconds + 1_500;
 
-    // Waits, generously and load-independently, for `subject` to actually
-    // exit, and reports how long that took relative to `raceStartedAt` —
-    // the moment the caller's own race actually began, not Process.Start,
-    // which can itself be delayed by the same contention this exists to
-    // tolerate. Never leaves `subject` running past the call: a survivor
-    // this reports as "not prompt" is killed here rather than left for a
-    // later iteration's `before` snapshot to trip over.
+    // QA (rowan-achterberg / team-lead, CB-168 round 2): the first version
+    // of this fix made the healthy path itself slow — about 3m05s for this
+    // class, up from a few seconds — because every wait here ran to a
+    // 10-second ceiling regardless of whether the condition it was waiting
+    // for had already been met. Measured directly (temporary
+    // instrumentation, since reverted) rather than guessed at: the actual
+    // cost was FindAfplayByArgument's discovery loop burning its full
+    // ceiling in roughly 25 of 31 iterations of
+    // ASecondPreviewLandingDuringTheFirstsSpawnStillCutsItOff — not
+    // because discovery was slow, but because in the *healthy*, correct
+    // case the first preview is routinely killed by the interleaving
+    // before it ever becomes visible at all, so "not found" is the normal
+    // outcome there, not a load symptom to wait out.
+    //
+    // The fix is two constants instead of one, because discovery and
+    // teardown are genuinely different kinds of asynchrony:
+    //
+    // - A fresh process becoming visible in the process table happens as
+    //   soon as the kernel registers the fork(), well before exec() or the
+    //   audio itself starts — fast even under heavy contention, and
+    //   DiscoveryWaitMs only needs to be generous relative to *that*, not
+    //   to a kill's teardown. Where a caller expects the target to
+    //   reliably exist (ChoosingANewSoundCutsOffThePreviewAlreadyPlaying,
+    //   which deliberately waits for genuine steady-state playback first;
+    //   TheNewestPreviewStillPlaysWhenItLandsDuringTheFirstsSpawn's newest,
+    //   nothing-supersedes-it request), this is what actually distinguishes
+    //   "load delayed it" from "gave up too early." Where not finding it at
+    //   all is an expected, common, and *fast* outcome
+    //   (ASecondPreviewLandingDuringTheFirstsSpawnStillCutsItOff's first
+    //   preview, raced against its own spawn), the same constant would
+    //   have meant waiting out the ceiling on every such iteration for no
+    //   reason — which is exactly what happened.
+    // - Teardown after a real kill signal is the slower, genuinely load-
+    //   sensitive asynchrony this fix's first pass was written for —
+    //   SurvivedThresholdMs is still the pass/fail decision (comfortably
+    //   under MaxDuration's cap, comfortably over any reap delay measured),
+    //   and ExitPollDeadlineMs is only a margin past it: once elapsed time
+    //   already exceeds SurvivedThresholdMs the outcome is decided, so
+    //   there is nothing to gain from polling further, only latency to
+    //   lose on the rare failing iteration.
+    private const int DiscoveryWaitMs = 2_000;
+
+    // QA (team-lead, CB-168 round 2): a third constant, smaller still,
+    // for a discovery that is expected to *often come up empty* even in
+    // the healthy case — ASecondPreviewLandingDuringTheFirstsSpawnStillCutsItOff's
+    // own search for the first preview's process, which the interleaving
+    // under test frequently kills before it ever becomes visible at all.
+    // DiscoveryWaitMs is generous because the caller expects the target to
+    // reliably exist (ChoosingANewSoundCutsOffThePreviewAlreadyPlaying,
+    // TheNewestPreviewStillPlaysWhenItLandsDuringTheFirstsSpawn's newest
+    // request) — spending that same 2s on every iteration where "not
+    // found" is the normal, fast, healthy answer is exactly the mistake
+    // this round of the fix corrects. A process that does exist becomes
+    // visible within single-digit milliseconds of Process.Start even under
+    // this file's own measured contention; 300ms is ample headroom above
+    // that without paying seconds for the common absent case.
+    private const int BestEffortDiscoveryWaitMs = 300;
+
+    private static readonly int ExitPollDeadlineMs = (int)SurvivedThresholdMs + 1_000;
+
+    // Polls `subject.HasExited` directly rather than a single blocking
+    // Process.WaitForExit(ms) call — a foreign process handle (one this
+    // test obtained via Process.GetProcessesByName rather than the
+    // Process object that actually called Start()) is not guaranteed the
+    // same prompt, event-driven wakeup a self-started child gets, so this
+    // returns the moment the condition is actually true instead of
+    // whatever granularity that fallback path happens to poll at. Reports
+    // how long that took relative to `raceStartedAt` — the moment the
+    // caller's own race actually began, not Process.Start, which can
+    // itself be delayed by contention. Never leaves `subject` running past
+    // the call: a survivor this reports is killed here rather than left
+    // for a later iteration's `before` snapshot to trip over.
     private static double ElapsedMsUntilExit(Process subject, Stopwatch raceStartedAt)
     {
-        subject.WaitForExit(GenerousWaitMs);
+        var deadline = Stopwatch.StartNew();
+        while (!subject.HasExited && deadline.ElapsedMilliseconds < ExitPollDeadlineMs)
+        {
+            Thread.Sleep(5);
+        }
+
         var elapsedMs = raceStartedAt.Elapsed.TotalMilliseconds;
         if (!subject.HasExited) { try { subject.Kill(); } catch { } }
         return elapsedMs;
     }
 
-    // The generous, load-independent replacement for "poll for up to a
-    // short fixed deadline" wherever a test needs to find a newly-spawned
-    // afplay process by its command-line argument — the same asynchronous-
-    // spawn reasoning as the class header comment, applied to discovery
-    // instead of teardown.
-    private static Process? FindAfplayByArgument(HashSet<int> before, string argument)
+    // Finds a newly-spawned afplay process by its command-line argument,
+    // generous only relative to spawn-visibility latency (see the class
+    // header comment on why that is a smaller number than teardown's own
+    // margin), and returning null promptly the moment `deadlineMs` passes
+    // rather than only after chasing a much longer one. `deadlineMs` is
+    // the caller's own choice between DiscoveryWaitMs (the target is
+    // expected to reliably exist) and BestEffortDiscoveryWaitMs (not
+    // finding one is itself a common, healthy outcome) — see each
+    // constant's own comment.
+    private static Process? FindAfplayByArgument(HashSet<int> before, string argument, int deadlineMs)
     {
-        var deadline = DateTime.UtcNow + TimeSpan.FromMilliseconds(GenerousWaitMs);
+        var deadline = DateTime.UtcNow + TimeSpan.FromMilliseconds(deadlineMs);
         while (DateTime.UtcNow < deadline)
         {
             foreach (var p in Process.GetProcessesByName("afplay").Where(x => !before.Contains(x.Id)))
@@ -501,6 +588,7 @@ public class ChimePlayerTests
         {
             var first = WriteSilentWav(Path.Combine(dir, "first.wav"), CeilingMs / 1000.0);
             var second = WriteSilentWav(Path.Combine(dir, "second.wav"), CeilingMs / 1000.0);
+            var before = Process.GetProcessesByName("afplay").Select(p => p.Id).ToHashSet();
 
             ChimePlayer.PlayForTests = null; // the real path — see the comment above
             ChimePlayer.PlayPreview(first);
@@ -509,23 +597,32 @@ public class ChimePlayerTests
             // queued) before the second request lands — this is what
             // makes _previewWorkerRunning true and _currentPreview
             // non-null at the same time, the exact state the regression
-            // needed to reproduce. Generous rather than a short fixed
-            // deadline for the same reason as the class header comment:
-            // a fresh process becoming visible in the table is itself
-            // asynchronous and can be delayed by contention.
-            Process? firstAfplay = null;
-            var findDeadline = DateTime.UtcNow + TimeSpan.FromMilliseconds(GenerousWaitMs);
-            while (DateTime.UtcNow < findDeadline)
-            {
-                var candidates = Process.GetProcessesByName("afplay");
-                if (candidates.Length > 0)
-                {
-                    firstAfplay = candidates[0];
-                    break;
-                }
-
-                Thread.Sleep(20);
-            }
+            // needed to reproduce. DiscoveryWaitMs rather than a short
+            // fixed deadline for the same reason as the class header
+            // comment: a fresh process becoming visible in the table is
+            // itself asynchronous and can be delayed by contention — this
+            // is the "expected to reliably exist" case that constant is
+            // for, unlike ASecondPreviewLandingDuringTheFirstsSpawn
+            // StillCutsItOff's own discovery, where not finding one is the
+            // common, fast, healthy outcome.
+            //
+            // QA (felix-marchetti / team-lead, CB-168 round 3): this used
+            // to grab Process.GetProcessesByName("afplay")[0] with no
+            // filtering at all — the only discovery in this file that
+            // didn't check against a `before` snapshot. Harmless on a
+            // quiet machine (there is only ever one afplay: ours), but
+            // under real full-suite load with several worktrees' own
+            // ChimePlayerTests potentially running afplay at the same
+            // moment, `[0]` could be a completely unrelated process — a
+            // sibling worktree's, or a stale one from an earlier iteration
+            // already mid-exit — which is exactly what a failure at 29ms
+            // elapsed with "not actually still playing" looks like: the
+            // wrong process's HasExited, not this test's own. Routed
+            // through the same before-snapshot-plus-argument-match
+            // FindAfplayByArgument every other discovery in this file
+            // already uses, which cannot pick up anything but this
+            // iteration's own `first`.
+            var firstAfplay = FindAfplayByArgument(before, first, DiscoveryWaitMs);
 
             Assert.NotNull(firstAfplay);
             Assert.False(firstAfplay!.HasExited, "the first preview was not actually still playing when the second request was made");
@@ -581,7 +678,7 @@ public class ChimePlayerTests
                 var swSecond = Stopwatch.StartNew();
                 ChimePlayer.PlayPreview(second);
 
-                var firstProc = FindAfplayByArgument(before, first);
+                var firstProc = FindAfplayByArgument(before, first, BestEffortDiscoveryWaitMs);
                 if (firstProc is not null)
                 {
                     var elapsedMs = ElapsedMsUntilExit(firstProc, swSecond);
@@ -590,7 +687,11 @@ public class ChimePlayerTests
 
                 ChimePlayer.StopAll();
                 ChimePlayer.ResetStoppedForTests();
-                var quiet = DateTime.UtcNow + TimeSpan.FromMilliseconds(GenerousWaitMs);
+                // Confirming teardown of whatever StopAll just killed —
+                // the same asynchrony ElapsedMsUntilExit's own comment
+                // describes, so it shares that deadline rather than
+                // discovery's shorter one.
+                var quiet = DateTime.UtcNow + TimeSpan.FromMilliseconds(ExitPollDeadlineMs);
                 while (DateTime.UtcNow < quiet &&
                        Process.GetProcessesByName("afplay").Any(p => !before.Contains(p.Id)))
                     Thread.Sleep(20);
@@ -643,14 +744,33 @@ public class ChimePlayerTests
                 while (sw.Elapsed.TotalMilliseconds * 1000 < delayUs) Thread.SpinWait(50);
                 ChimePlayer.PlayPreview(second);
 
-                var secondProc = FindAfplayByArgument(before, second);
+                var secondProc = FindAfplayByArgument(before, second, DiscoveryWaitMs);
 
-                // Still playing 700 ms after it appeared = it was allowed to play.
-                if (secondProc is null || secondProc.WaitForExit(700)) silent.Add($"{delayUs / 1000}ms");
+                // QA (team-lead, CB-168 round 2): a positive check that it
+                // is alive *at the moment of the check*, not "it stayed
+                // alive for N seconds" — WaitForExit(ms) on a foreign
+                // process handle is not a reliable way to ask "is this
+                // still running", the same reasoning ElapsedMsUntilExit's
+                // own comment gives for polling HasExited directly instead.
+                // Waiting first and then reading HasExited once is a real
+                // point-in-time answer regardless of that handle's own
+                // wakeup behaviour.
+                bool stillPlaying;
+                if (secondProc is null)
+                {
+                    stillPlaying = false;
+                }
+                else
+                {
+                    Thread.Sleep(700);
+                    stillPlaying = !secondProc.HasExited;
+                }
+
+                if (!stillPlaying) silent.Add($"{delayUs / 1000}ms");
 
                 ChimePlayer.StopAll();
                 ChimePlayer.ResetStoppedForTests();
-                var quiet = DateTime.UtcNow + TimeSpan.FromMilliseconds(GenerousWaitMs);
+                var quiet = DateTime.UtcNow + TimeSpan.FromMilliseconds(ExitPollDeadlineMs);
                 while (DateTime.UtcNow < quiet && Process.GetProcessesByName("afplay").Any(p => !before.Contains(p.Id)))
                     Thread.Sleep(20);
                 Thread.Sleep(50);
@@ -704,8 +824,15 @@ public class ChimePlayerTests
 
                 // Ground truth for the thread: how long from the chime's own
                 // start until Play() actually returned, not whether it
-                // returned inside an arbitrary short window.
-                t.Join(GenerousWaitMs);
+                // returned inside an arbitrary short window. A real .NET
+                // Thread.Join wakes up promptly on completion (unlike a
+                // foreign process handle's WaitForExit — see
+                // ElapsedMsUntilExit's comment), so a single bounded join
+                // is fine here; ExitPollDeadlineMs bounds it for the same
+                // reason it bounds everything else in this file — once
+                // elapsed time already exceeds SurvivedThresholdMs the
+                // outcome is decided.
+                t.Join(ExitPollDeadlineMs);
                 var threadElapsedMs = sw.Elapsed.TotalMilliseconds;
                 if (threadElapsedMs > SurvivedThresholdMs)
                 {
