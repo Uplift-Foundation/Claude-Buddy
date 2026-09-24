@@ -68,6 +68,36 @@ namespace ClaudeBuddy
                 // exits via the context menu.
                 desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
 
+                // QA round 3 (CB-167), finding 5: TrayController.Shutdown
+                // (the tray menu's own Quit) used to be the only place that
+                // called ChimePlayer.StopAll, so the orb menu's own "Exit
+                // Claude Buddy" (OrbWindow.Exit_Click) and the OS's Cmd-Q
+                // both skipped it — either one could leave a chime still
+                // mid-playback after the app itself was gone. Every one of
+                // those paths ends the same way, by calling this lifetime's
+                // own Shutdown(), which is what fires Exit — so wiring the
+                // stop here once covers all of them by construction, rather
+                // than by remembering to add the call at every call site
+                // that can end the app.
+                //
+                // ShutdownRequested is wired too, round 4: Cmd-Q on macOS
+                // reaches the app through the OS's own Quit handling before
+                // Exit does, and Exit alone was not confirmed to fire on
+                // that specific path without a real Mac to drive it through.
+                // Calling StopAll from both costs nothing extra — it is
+                // idempotent (an empty _live the second time is a no-op) —
+                // and ShutdownRequested's own Cancel is never touched here,
+                // so a cancelled quit is unaffected either way.
+                //
+                // This whole method only ever runs under a real desktop
+                // lifetime (see its own header comment on why it is excluded
+                // from coverage entirely), so both lines are excluded along
+                // with it rather than tested directly; ChimePlayer.StopAll's
+                // own real-process test is what proves the call itself does
+                // what it claims.
+                desktop.Exit += (_, _) => ChimePlayer.StopAll();
+                desktop.ShutdownRequested += (_, _) => ChimePlayer.StopAll();
+
                 new SessionManager().Start();
 
                 // Hide/show orbs (and room for more — see HotkeyRegistry) from

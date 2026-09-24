@@ -759,4 +759,152 @@ public class TurnSoundsTests : IDisposable
             releaseCallback.TrySetResult(true);
         }
     }
+
+    // QA round 3, finding 1, folded in from Marguerite's demonstrating test
+    // (Cb167QaRound3DeliverTests.TwoPromptsInOneScanInsideTheGapStillPingWhenTheWinnerIsAnswered,
+    // worktree cb-wt-turn-sounds-qa3): two prompts land in the SAME scan,
+    // both inside the gap — b and d. Decide picks one winner (b) to be the
+    // decision's own Kind/Path/PlayAt, and on 5370ac56 that meant only b
+    // itself ever got remembered in the pending list; d, coalesced into the
+    // very same scan, was never recorded anywhere. b then gets answered
+    // (its tracked state moves off "waiting") before the timer fires, and
+    // with nothing else on record, nothing plays at all — d's own,
+    // perfectly valid Ping is lost along with the winner's. The fix pends
+    // every non-None event from the scan, not just Decide's winner, and
+    // lets FirePending's own re-rank sort out who actually plays.
+    [Fact]
+    public async Task TwoPromptsInOneScanInsideTheGapStillPingWhenTheWinnerIsAnswered()
+    {
+        var played = new List<string>();
+        ChimePlayer.PlayForTests = path => { lock (played) played.Add(path); };
+
+        ClaudeBuddySettings.TurnSoundsEnabled = true;
+        ClaudeBuddySettings.TurnFinishedSound = null;
+        ClaudeBuddySettings.NeedsAttentionSound = null;
+
+        var t0 = DateTime.UtcNow;
+        TurnSounds.Deliver(new[] { Finished("key-a", "session-a") }, NoSummary, t0); // opens the gap
+
+        // b and d arrive together, in one scan, both inside the gap.
+        TurnSounds.Deliver(
+            new[] { NeedsAttention("key-b", "session-b"), NeedsAttention("key-d", "session-d") },
+            NoSummary, t0.AddSeconds(0.5),
+            currentStateFor: id => id == "session-b" ? "generating" : "waiting"); // b answered, d still waiting
+
+        await Task.Delay(TimeSpan.FromSeconds(3));
+
+        lock (played)
+        {
+            Assert.Contains(
+                SystemSoundCatalog.Resolve(SystemSoundCatalog.DefaultAttentionSoundName,
+                    SystemSoundCatalog.DefaultDirectory, SystemSoundCatalog.DefaultExtensions),
+                played); // d's Ping, even though b (the scan's own winner) was answered first
+        }
+    }
+
+    // QA round 3, finding 1's other half, folded in from Marguerite's
+    // demonstrating test (Cb167QaRound3DeliverTests.AFinishCoalescedBehind-
+    // AnAnsweredPromptStillChimes): a finish (c) and a prompt (b) land in
+    // the same scan, both inside the gap. Attention outranks Finished, so
+    // Decide's winner is b — and on 5370ac56 that meant c's own Finished
+    // signal, coalesced into the same scan, was never pended at all. b gets
+    // answered before the timer fires, and c's chime — never recorded
+    // anywhere — is gone along with it.
+    [Fact]
+    public async Task AFinishCoalescedBehindAnAnsweredPromptStillChimes()
+    {
+        var played = new List<string>();
+        ChimePlayer.PlayForTests = path => { lock (played) played.Add(path); };
+
+        ClaudeBuddySettings.TurnSoundsEnabled = true;
+        ClaudeBuddySettings.TurnFinishedSound = null;
+        ClaudeBuddySettings.NeedsAttentionSound = null;
+
+        var t0 = DateTime.UtcNow;
+        TurnSounds.Deliver(new[] { Finished("key-a", "session-a") }, NoSummary, t0); // opens the gap
+
+        // c (finished) and b (attention) arrive together, in one scan, both
+        // inside the gap; b outranks c as Decide's own winner.
+        TurnSounds.Deliver(
+            new[] { Finished("key-c", "session-c"), NeedsAttention("key-b", "session-b") },
+            NoSummary, t0.AddSeconds(0.5),
+            currentStateFor: id => id == "session-b" ? "generating" : "idle"); // b answered, c just known
+
+        await Task.Delay(TimeSpan.FromSeconds(3));
+
+        var finishedSound = SystemSoundCatalog.Resolve(SystemSoundCatalog.DefaultFinishedSoundName,
+            SystemSoundCatalog.DefaultDirectory, SystemSoundCatalog.DefaultExtensions);
+        lock (played)
+        {
+            // A's own live Glass, plus c's — the coalescing winner (b)
+            // being answered must never have carried c down with it.
+            Assert.Equal(2, played.Count(p => p == finishedSound));
+        }
+    }
+
+    // Round 4, pre-built for round 5: pending the whole scan (finding 1's
+    // fix, above) must never turn one scan into two sounds. FirePending's
+    // ranking picks exactly one `best` and calls Execute once — this proves
+    // that holds now that a scan's *coalesced siblings* are pended too, not
+    // just its winner, since that is exactly the change that could have
+    // made two valid survivors both play instead of one being chosen.
+    [Fact]
+    public async Task TwoValidCoalescedEventsFromOneScanStillProduceOnlyOneSound()
+    {
+        var played = new List<string>();
+        ChimePlayer.PlayForTests = path => { lock (played) played.Add(path); };
+
+        ClaudeBuddySettings.TurnSoundsEnabled = true;
+        ClaudeBuddySettings.TurnFinishedSound = null;
+        ClaudeBuddySettings.NeedsAttentionSound = null;
+
+        var t0 = DateTime.UtcNow;
+        TurnSounds.Deliver(new[] { Finished("key-a", "session-a") }, NoSummary, t0); // opens the gap
+
+        // b and d, together in one scan, both still genuinely waiting at
+        // fire time — neither answered, neither cancelled.
+        TurnSounds.Deliver(
+            new[] { NeedsAttention("key-b", "session-b"), NeedsAttention("key-d", "session-d") },
+            NoSummary, t0.AddSeconds(0.5), currentStateFor: _ => "waiting");
+
+        await Task.Delay(TimeSpan.FromSeconds(3));
+
+        // A's live Glass, plus exactly one Ping — never two.
+        lock (played) Assert.Equal(2, played.Count);
+    }
+
+    // The other half: a scan whose events are ALL answered prompts by fire
+    // time must play nothing at all, not fall through to playing one of
+    // them anyway. Distinct from ACoalescedAttentionPlaysNothingWhenBoth-
+    // OfItsSessionsAreCancelled above, which drops both reactively via
+    // CancelPendingFor before FirePending's validation loop ever runs this
+    // scan's events through currentStateFor at all; this is the same
+    // "every survivor invalid" outcome reached purely through the
+    // currentStateFor arm, the shape an ordinary pair of approvals inside
+    // one gap actually takes.
+    [Fact]
+    public async Task AScanWhoseEventsAreAllAnsweredPromptsPlaysNothing()
+    {
+        var played = new List<string>();
+        ChimePlayer.PlayForTests = path => { lock (played) played.Add(path); };
+
+        ClaudeBuddySettings.TurnSoundsEnabled = true;
+        ClaudeBuddySettings.TurnFinishedSound = null;
+        ClaudeBuddySettings.NeedsAttentionSound = null;
+
+        var t0 = DateTime.UtcNow;
+        TurnSounds.Deliver(new[] { Finished("key-a", "session-a") }, NoSummary, t0); // opens the gap
+
+        // b and d, together in one scan, BOTH answered by fire time.
+        TurnSounds.Deliver(
+            new[] { NeedsAttention("key-b", "session-b"), NeedsAttention("key-d", "session-d") },
+            NoSummary, t0.AddSeconds(0.5),
+            currentStateFor: _ => "generating"); // neither is "waiting" any more
+
+        await Task.Delay(TimeSpan.FromSeconds(3));
+
+        // Just A's own live Glass — nothing from a scan with nothing left
+        // valid in it.
+        lock (played) Assert.Single(played);
+    }
 }

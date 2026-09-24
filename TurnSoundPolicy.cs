@@ -20,8 +20,7 @@ namespace ClaudeBuddy
     // deferred chime is still, fundamentally, a chime, and every caller that
     // only cares "is this audible" reads Kind exactly as before.
     internal sealed record SoundAction(
-        SoundActionKind Kind, string? Path = null, string? SessionId = null, DateTime? PlayAt = null,
-        TurnSoundEvent? SourceEvent = null)
+        SoundActionKind Kind, string? Path = null, string? SessionId = null, DateTime? PlayAt = null)
     {
         internal static readonly SoundAction Silent = new(SoundActionKind.Silent);
 
@@ -96,7 +95,6 @@ namespace ClaudeBuddy
             // audible is eligible to be the winner at all.
             SoundAction? best = null;
             var bestIsAttention = false;
-            TurnSoundEvent? bestEvent = null;
 
             foreach (var signal in signals)
             {
@@ -120,20 +118,10 @@ namespace ClaudeBuddy
                 {
                     best = resolved;
                     bestIsAttention = isAttention;
-                    bestEvent = signal;
                 }
             }
 
             if (best is not { } chosen) return SoundAction.Silent;
-
-            // QA round 2: the raw winning event travels with the decision
-            // now, not just its already-resolved Path/SessionId. TurnSounds
-            // needs it to accumulate a deferred winner into its own pending
-            // list rather than only ever remembering the single latest one —
-            // see TurnSounds' own header comment on why one slot was never
-            // enough once two different sessions can each have something
-            // genuinely still waiting on the same gap.
-            chosen = chosen with { SourceEvent = bestEvent };
 
             // Inside the rate limit: defer rather than drop. The earlier
             // version returned Silent here, and because TurnSignalTracker

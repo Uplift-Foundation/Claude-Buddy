@@ -9,6 +9,17 @@ namespace ClaudeBuddy.Tests;
 // smart-quote injection QA found cannot come back: the path is never
 // interpolated into script text, only ever passed through the environment,
 // so no escaping question about its contents is even reachable.
+//
+// [Collection("Settings")] as of round 4: _stopped (like _live before it)
+// is a process-wide static, and TurnSoundsTests — in the same collection —
+// exercises ChimePlayer.Play through the exact same seam. Without sharing
+// a collection, xUnit is free to run the two classes' tests in parallel
+// within this assembly, and a StopAll call from one could make an
+// unrelated Play call in the other silently no-op mid-test. Each test that
+// calls StopAll also resets the flag itself in a finally block, which
+// covers running order within the collection; sharing the collection is
+// what covers the two classes never overlapping in time at all.
+[Collection("Settings")]
 public class ChimePlayerTests
 {
     [Theory]
@@ -105,18 +116,59 @@ public class ChimePlayerTests
     [Fact]
     public void StopAllKillsEveryConcurrentlyTrackedProcessNotJustOne()
     {
-        using var a = StartLongRunningProcessForTests();
-        using var b = StartLongRunningProcessForTests();
-        ChimePlayer.TrackForTests(a);
-        ChimePlayer.TrackForTests(b);
+        try
+        {
+            using var a = StartLongRunningProcessForTests();
+            using var b = StartLongRunningProcessForTests();
+            ChimePlayer.TrackForTests(a);
+            ChimePlayer.TrackForTests(b);
 
-        Assert.False(a.HasExited);
-        Assert.False(b.HasExited);
+            Assert.False(a.HasExited);
+            Assert.False(b.HasExited);
 
-        ChimePlayer.StopAll();
+            ChimePlayer.StopAll();
 
-        Assert.True(a.WaitForExit(3000), "the first tracked process was not killed by StopAll");
-        Assert.True(b.WaitForExit(3000), "the second tracked process was not killed by StopAll");
+            Assert.True(a.WaitForExit(3000), "the first tracked process was not killed by StopAll");
+            Assert.True(b.WaitForExit(3000), "the second tracked process was not killed by StopAll");
+        }
+        finally
+        {
+            // StopAll also sets the round-4 _stopped flag — reset it so a
+            // later test's ordinary Play call is not silently a no-op.
+            ChimePlayer.ResetStoppedForTests();
+        }
+    }
+
+    // Round 4 (CB-167): once StopAll has run, nothing may start a new
+    // chime — a chime already chained behind the stop (TurnSounds' own
+    // _chimeChain, or a FirePending timer that happens to fire during the
+    // app's own unwind) starting a fresh process right after StopAll just
+    // killed every existing one would leave the app making noise after
+    // Quit, which is the exact bug finding 5 fixed for the reactive case
+    // and this closes for the "one more queued behind it" case. Driven
+    // through the same PlayForTests seam every other Play test uses, per
+    // Play's own comment on why the _stopped check sits ahead of that seam
+    // rather than beside it.
+    [Fact]
+    public void PlayIsANoOpOnceStopAllHasRun()
+    {
+        try
+        {
+            var played = new List<string>();
+            ChimePlayer.PlayForTests = p => { lock (played) played.Add(p); };
+
+            ChimePlayer.StopAll(); // nothing tracked yet — just flips _stopped
+            Assert.True(ChimePlayer.IsStopped);
+
+            ChimePlayer.Play("/System/Library/Sounds/Glass.aiff");
+
+            lock (played) Assert.Empty(played); // the seam itself was never reached
+        }
+        finally
+        {
+            ChimePlayer.PlayForTests = null;
+            ChimePlayer.ResetStoppedForTests();
+        }
     }
 
     // QA round 3, finding 4 (LOW): stepping through the Settings sound

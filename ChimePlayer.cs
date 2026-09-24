@@ -147,6 +147,28 @@ namespace ClaudeBuddy
         internal static void SetCurrentPreviewForTests(Process next) =>
             KillPreviousAndTrackNewPreview(next);
 
+        // Round 4 (CB-167): once StopAll has run, this class must never
+        // start anything new — a chime already queued behind it (TurnSounds'
+        // own _chimeChain, or a FirePending timer that happens to fire
+        // during the app's own unwind) starting a fresh process right after
+        // StopAll just killed every existing one would defeat the entire
+        // point of finding 5/round 3(d): the app would still be making
+        // noise after Quit. Sticky for the rest of the process's life by
+        // design — there is no "un-stop" in production, only
+        // ResetStoppedForTests below.
+        private static bool _stopped;
+
+        // Its own property, kept out of Play's own exclusion, so this one
+        // guard is measured directly rather than folded into a method that
+        // starts a real subprocess and cannot be run under coverage.
+        internal static bool IsStopped { get { lock (PlayingGate) return _stopped; } }
+
+        // Test seam: _stopped is deliberately sticky in production, but a
+        // test suite runs many cases in one process, and the next test's
+        // Play calls must not silently no-op forever just because an
+        // earlier test proved StopAll works.
+        internal static void ResetStoppedForTests() { lock (PlayingGate) _stopped = false; }
+
         // Builds the Windows ProcessStartInfo on its own, callable and
         // assertable from a test even though Play itself is excluded from
         // coverage. The path never appears in ArgumentList or in
@@ -194,6 +216,12 @@ namespace ClaudeBuddy
         [ExcludeFromCodeCoverage]
         internal static void Play(string path)
         {
+            // Round 4: checked first, ahead of the test seam too — a test
+            // proving "Play is a no-op once stopped" has to see that
+            // through the same seam every other Play test uses, not a
+            // separate code path that only exists for this one guard.
+            if (IsStopped) return;
+
             var seam = PlayForTests;
             if (seam is not null)
             {
@@ -219,6 +247,14 @@ namespace ClaudeBuddy
         [ExcludeFromCodeCoverage]
         internal static void PlayPreview(string path)
         {
+            // Round 4: the preview channel is exactly the kind of "queued
+            // chime" that must not start anything once StopAll has run —
+            // it holds its own request behind a lock the same way
+            // TurnSounds' _chimeChain holds a scan chime, and a request
+            // queued (or already sitting queued) during the app's own
+            // unwind must not still spawn a fresh process afterward.
+            if (IsStopped) return;
+
             lock (PlayingGate)
             {
                 _nextPreviewPath = path;
@@ -272,6 +308,14 @@ namespace ClaudeBuddy
         [ExcludeFromCodeCoverage]
         private static void PlayOnePreview(string path)
         {
+            // Round 4: the actual chokepoint, mirroring Play()'s own check —
+            // a request can already be queued (PlayPreview's own check above
+            // only catches a request arriving after the stop, not one still
+            // sitting in _nextPreviewPath from just before it) and the
+            // worker picking it up after StopAll must not start a process
+            // for it regardless.
+            if (IsStopped) return;
+
             var seam = PlayForTests;
             if (seam is not null)
             {
@@ -374,6 +418,12 @@ namespace ClaudeBuddy
             Process[] victims;
             lock (PlayingGate)
             {
+                // Round 4: set under the same lock as the snapshot-and-clear
+                // below, so nothing racing Play can observe _live already
+                // emptied but _stopped not yet true (which would let a
+                // concurrent Play start a process StopAll has already
+                // finished sweeping).
+                _stopped = true;
                 victims = _live.ToArray();
                 _live.Clear();
             }

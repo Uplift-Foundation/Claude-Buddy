@@ -157,8 +157,20 @@ namespace ClaudeBuddy
 
                 if (decision.IsDeferred)
                 {
-                    SchedulePendingLocked(
-                        decision.SourceEvent!.Value, decision.PlayAt!.Value, trySpeakTurnSummary, currentStateFor);
+                    // QA round 3, finding 1: every non-None event from this
+                    // scan is pended, not just the one Decide picked as the
+                    // winner. Pending only the winner lost the others for
+                    // good — two prompts landing in the same scan inside
+                    // the gap coalesced down to Decide's single choice, so
+                    // if that one got answered before its timer fired, the
+                    // other had no record anywhere to fall back to and
+                    // never Pinged; the same held for a finish sharing a
+                    // scan with a prompt that outranked it. FirePending
+                    // already re-ranks whatever is still valid at fire
+                    // time, so pending the whole scan and trusting that
+                    // re-rank is what actually lets a coalesced sibling
+                    // survive the winner being answered.
+                    SchedulePendingLocked(events, decision.PlayAt!.Value, trySpeakTurnSummary, currentStateFor);
                     return;
                 }
 
@@ -180,13 +192,23 @@ namespace ClaudeBuddy
             Execute(decision, moment, trySpeakTurnSummary);
         }
 
-        // Callable only while already holding Gate.
+        // Callable only while already holding Gate. `events` is the whole
+        // scan's worth, not just Decide's winner — a session's own newer
+        // signal still replaces its own older entry (a scan never reports
+        // two signals for the same session, so this only ever matters
+        // across separate Deliver calls), and every other session's own
+        // entry is left alone, same as before.
         private static void SchedulePendingLocked(
-            TurnSoundEvent winningEvent, DateTime playAt,
+            IReadOnlyList<TurnSoundEvent> events, DateTime playAt,
             Func<string, Task<bool>> trySpeakTurnSummary, Func<string, string?>? currentStateFor)
         {
-            _pendingEvents.RemoveAll(e => e.SessionId == winningEvent.SessionId);
-            _pendingEvents.Add(winningEvent);
+            foreach (var ev in events)
+            {
+                if (ev.Signal == TurnSignal.None) continue;
+                _pendingEvents.RemoveAll(e => e.SessionId == ev.SessionId);
+                _pendingEvents.Add(ev);
+            }
+
             _pendingSpeak = trySpeakTurnSummary;
             _pendingCurrentStateFor = currentStateFor;
 
@@ -228,7 +250,16 @@ namespace ClaudeBuddy
                 ClearPendingLocked();
             }
 
-            if (events.Count == 0 || speak is null) return;
+            // QA round 3: `speak is null` was never a real second condition
+            // here — _pendingSpeak is set in SchedulePendingLocked and
+            // cleared in ClearPendingLocked in the same breath as
+            // _pendingEvents, so it is never null while events is non-empty.
+            // The only genuine race this guard has to cover is a timer
+            // callback already in flight losing a race to a concurrent
+            // CancelPendingFor/CancelPendingUnlessSeen that empties the list
+            // (and disposes this very timer) first.
+            if (events.Count == 0) return;
+            var trySpeak = speak!;
 
             // QA round 2 (finding 5, round 3c): re-validated now, against
             // live state, not trusted from whenever each event was first
@@ -293,7 +324,7 @@ namespace ClaudeBuddy
 
             if (best is not { } chosen) return;
 
-            Execute(chosen, DateTime.UtcNow, speak);
+            Execute(chosen, DateTime.UtcNow, trySpeak);
         }
 
         // Carries out a decision that is ready to play right now — never
