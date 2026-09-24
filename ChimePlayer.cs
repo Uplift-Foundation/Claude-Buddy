@@ -120,6 +120,21 @@ namespace ClaudeBuddy
         private static bool _previewWorkerRunning;
         private static Process? _currentPreview;
 
+        // Round 5(a): a single ordered chain, the same idea TurnSounds'
+        // own _chimeChain already uses for scan chimes. Item 3's fix moved
+        // PlayPreview's kill off the UI thread by dispatching it as its
+        // own fire-and-forget task, separate from whatever task starts the
+        // worker — two independent tasks with no guaranteed order between
+        // them, which is exactly the shape that could let a new preview's
+        // process start before the old one's kill had even been issued,
+        // stacking playback again the way round 3(4) already fixed once.
+        // Chaining both onto one sequence makes "the old kill happens
+        // before the new worker starts" literal: each continuation only
+        // begins once the previous one has completed, and TaskScheduler.
+        // Default keeps every link off whatever thread queued it — the UI
+        // thread included.
+        private static Task _previewChain = Task.CompletedTask;
+
         // The one place that both kills a preview already playing and
         // records its replacement, so PlayOnePreview's production path and
         // SetCurrentPreviewForTests below can share it rather than risk the
@@ -281,20 +296,32 @@ namespace ClaudeBuddy
             // and KillTree, on Windows, runs taskkill and can wait up to
             // 3 s for it. The lock below only ever swaps state (which
             // process is the victim, whether the worker needs starting);
-            // the actual kill is dispatched to a background task so the
-            // UI thread is never the one waiting on it.
-            Process? victim;
-            bool startWorker;
+            // the actual kill happens on _previewChain, never on this
+            // thread.
+            //
+            // Round 5(a): the kill and (when needed) the worker start are
+            // chained onto _previewChain in that order, rather than each
+            // being its own independent Task.Run — so the worker is
+            // guaranteed not to begin until the old victim's kill has run
+            // to completion, closing the reordering gap two unrelated
+            // fire-and-forget tasks would otherwise leave open.
             lock (PlayingGate)
             {
                 _nextPreviewPath = path;
-                victim = _currentPreview;
-                startWorker = !_previewWorkerRunning;
+                var victim = _currentPreview;
+                var startWorker = !_previewWorkerRunning;
                 _previewWorkerRunning = true;
-            }
 
-            if (victim is not null) _ = Task.Run(() => KillTree(victim));
-            if (startWorker) _ = Task.Run(RunPreviewWorker);
+                if (victim is not null)
+                {
+                    _previewChain = _previewChain.ContinueWith(_ => KillTree(victim), TaskScheduler.Default);
+                }
+
+                if (startWorker)
+                {
+                    _previewChain = _previewChain.ContinueWith(_ => RunPreviewWorker(), TaskScheduler.Default);
+                }
+            }
         }
 
         // The worker: picks up whichever path is currently the most

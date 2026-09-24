@@ -337,6 +337,34 @@ public class ChimePlayerTests
         Assert.False(ChimePlayer.IsStopped, "a cancellable shutdown must not set the sticky stopped flag");
     }
 
+    // Round 5(b): App.axaml.cs wires desktop.Exit to StopAll and
+    // desktop.ShutdownRequested to KillCurrentlyPlayingForCancellableShutdown
+    // — two different methods precisely because they must behave
+    // differently. This is StopAll's own half of that contract, in one
+    // test rather than split across the two that already exist
+    // (StopAllKillsEveryConcurrentlyTrackedProcessNotJustOne, which never
+    // checks IsStopped, and PlayIsANoOpOnceStopAllHasRun, which never
+    // tracks a live process): a real process is both killed AND the flag
+    // is set, together, the way Exit actually needs both to be true.
+    [Fact]
+    public void StopAllKillsALiveProcessAndSetsStopped()
+    {
+        try
+        {
+            using var proc = StartLongRunningProcessForTests();
+            ChimePlayer.TrackForTests(proc);
+
+            ChimePlayer.StopAll();
+
+            Assert.True(proc.WaitForExit(3000), "StopAll did not kill the tracked process");
+            Assert.True(ChimePlayer.IsStopped, "StopAll (the Exit path) must set the sticky stopped flag");
+        }
+        finally
+        {
+            ChimePlayer.ResetStoppedForTests();
+        }
+    }
+
     private static Process StartLongRunningProcessForTests()
     {
         var startInfo = OperatingSystem.IsWindows()

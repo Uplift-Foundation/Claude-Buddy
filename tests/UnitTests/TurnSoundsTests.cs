@@ -907,4 +907,106 @@ public class TurnSoundsTests : IDisposable
         // valid in it.
         lock (played) Assert.Single(played);
     }
+
+    // QA round 4, folded in from Marguerite's regression tests (worktree
+    // cb-wt-turn-sounds-qa4, read-only reference, not written to): a
+    // richer version of round 3's own coalescing check — four events in
+    // ONE deferred scan (two finished, two attention), two of the four
+    // answered by fire time. Exactly one sound plays, and it is the
+    // survivor with the higher rank, not merely "a" survivor.
+    [Fact]
+    public async Task ADeferredScanOfSeveralEventsPlaysExactlyOneSoundAndItIsTheAttention()
+    {
+        var played = new List<string>();
+        ChimePlayer.PlayForTests = path => { lock (played) played.Add(path); };
+
+        ClaudeBuddySettings.TurnSoundsEnabled = true;
+        ClaudeBuddySettings.TurnFinishedSound = null;
+        ClaudeBuddySettings.NeedsAttentionSound = null;
+
+        var t0 = DateTime.UtcNow;
+        TurnSounds.Deliver(new[] { Finished("key-a", "session-a") }, NoSummary, t0); // opens the gap
+
+        TurnSounds.Deliver(
+            new[]
+            {
+                Finished("key-c", "session-c"), NeedsAttention("key-b", "session-b"),
+                NeedsAttention("key-d", "session-d"), Finished("key-e", "session-e"),
+            },
+            NoSummary, t0.AddSeconds(0.5),
+            currentStateFor: id => id is "session-b" or "session-d" ? "waiting" : "idle");
+
+        await Task.Delay(TimeSpan.FromSeconds(3));
+
+        var attentionSound = SystemSoundCatalog.Resolve(SystemSoundCatalog.DefaultAttentionSoundName,
+            SystemSoundCatalog.DefaultDirectory, SystemSoundCatalog.DefaultExtensions);
+        lock (played)
+        {
+            Assert.Equal(2, played.Count); // A's own live Glass, then exactly one for the deferred scan
+            Assert.Equal(attentionSound, played[1]);
+        }
+    }
+
+    // QA round 4, folded in from the same worktree: the same shape as
+    // AScanWhoseEventsAreAllAnsweredPromptsPlaysNothing above, kept as its
+    // own regression test since it is Marguerite's own literal repro
+    // rather than a case I wrote independently.
+    [Fact]
+    public async Task ADeferredScanOfOnlyAnsweredPromptsPlaysNothing()
+    {
+        var played = new List<string>();
+        ChimePlayer.PlayForTests = path => { lock (played) played.Add(path); };
+
+        ClaudeBuddySettings.TurnSoundsEnabled = true;
+        ClaudeBuddySettings.TurnFinishedSound = null;
+        ClaudeBuddySettings.NeedsAttentionSound = null;
+
+        var t0 = DateTime.UtcNow;
+        TurnSounds.Deliver(new[] { Finished("key-a", "session-a") }, NoSummary, t0); // opens the gap
+
+        TurnSounds.Deliver(
+            new[] { NeedsAttention("key-b", "session-b"), NeedsAttention("key-d", "session-d") },
+            NoSummary, t0.AddSeconds(0.5), currentStateFor: _ => "generating");
+
+        await Task.Delay(TimeSpan.FromSeconds(3));
+
+        lock (played) Assert.Single(played);
+    }
+
+    // QA round 4, folded in from the same worktree: a pending sound firing
+    // and a live one from the very next regular scan — landing only
+    // milliseconds after the pending timer, since a real scan runs on its
+    // own cadence independent of when FirePending happens to fire — must
+    // never land closer together than the rate limit itself. Proves
+    // FirePending's own Execute call stamps _lastPlayed for real, so the
+    // very next live Deliver sees a recent stamp and defers rather than
+    // doubling up.
+    [Fact]
+    public async Task APendingSoundAndALiveOneAreNotPlayedInsideOneGap()
+    {
+        var played = new List<(DateTime At, string Path)>();
+        ChimePlayer.PlayForTests = path => { lock (played) played.Add((DateTime.UtcNow, path)); };
+
+        ClaudeBuddySettings.TurnSoundsEnabled = true;
+        ClaudeBuddySettings.TurnFinishedSound = null;
+        ClaudeBuddySettings.NeedsAttentionSound = null;
+
+        var t0 = DateTime.UtcNow;
+        TurnSounds.Deliver(new[] { Finished("key-a", "session-a") }, NoSummary, t0);
+        TurnSounds.Deliver(
+            new[] { NeedsAttention("key-b", "session-b") }, NoSummary, t0.AddSeconds(0.5),
+            currentStateFor: _ => "waiting"); // pending, fires at roughly t0+2 (real time)
+
+        await Task.Delay(TimeSpan.FromSeconds(2.05));
+        TurnSounds.Deliver(new[] { Finished("key-c", "session-c") }, NoSummary, DateTime.UtcNow); // the next regular scan
+        await Task.Delay(TimeSpan.FromSeconds(1));
+
+        List<DateTime> starts;
+        lock (played) starts = played.Select(p => p.At).OrderBy(t => t).ToList();
+        for (var i = 1; i < starts.Count; i++)
+        {
+            Assert.True(starts[i] - starts[i - 1] >= TimeSpan.FromSeconds(1.9),
+                $"sounds {i} and {i + 1} started {(starts[i] - starts[i - 1]).TotalMilliseconds:F0} ms apart");
+        }
+    }
 }
