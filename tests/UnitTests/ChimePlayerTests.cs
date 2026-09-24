@@ -190,22 +190,31 @@ public class ChimePlayerTests
     [Fact]
     public void PlayPreviewKillsTheLivePreviewProcessBeforeTrackingTheNext()
     {
-        using var first = StartLongRunningProcessForTests();
-        using var second = StartLongRunningProcessForTests();
+        try
+        {
+            using var first = StartLongRunningProcessForTests();
+            using var second = StartLongRunningProcessForTests();
 
-        ChimePlayer.SetCurrentPreviewForTests(first);
-        Assert.False(first.HasExited);
+            ChimePlayer.SetCurrentPreviewForTests(first);
+            Assert.False(first.HasExited);
 
-        ChimePlayer.SetCurrentPreviewForTests(second);
+            ChimePlayer.SetCurrentPreviewForTests(second);
 
-        Assert.True(first.WaitForExit(3000), "the previous preview process was not killed when a new one started");
-        Assert.False(second.HasExited);
+            Assert.True(first.WaitForExit(3000), "the previous preview process was not killed when a new one started");
+            Assert.False(second.HasExited);
 
-        // And still reachable by StopAll, same as any other tracked chime
-        // — the fix's other half named explicitly: "the process must still
-        // be tracked in _live so StopAll covers it."
-        ChimePlayer.StopAll();
-        Assert.True(second.WaitForExit(3000), "StopAll did not reach the tracked preview process");
+            // And still reachable by StopAll, same as any other tracked chime
+            // — the fix's other half named explicitly: "the process must still
+            // be tracked in _live so StopAll covers it."
+            ChimePlayer.StopAll();
+            Assert.True(second.WaitForExit(3000), "StopAll did not reach the tracked preview process");
+        }
+        finally
+        {
+            // Round 4: StopAll also sets _stopped — reset it so a later
+            // test's ordinary Play/PlayPreview call is not silently a no-op.
+            ChimePlayer.ResetStoppedForTests();
+        }
     }
 
     // Round 4: the preview channel's kill-then-replace logic is scoped to
@@ -219,20 +228,29 @@ public class ChimePlayerTests
     [Fact]
     public void PlayPreviewNeverKillsAConcurrentScanChime()
     {
-        using var scanChime = StartLongRunningProcessForTests();
-        ChimePlayer.TrackForTests(scanChime); // registered the way an ordinary Play() call tracks a scan chime — never as the current preview
+        try
+        {
+            using var scanChime = StartLongRunningProcessForTests();
+            ChimePlayer.TrackForTests(scanChime); // registered the way an ordinary Play() call tracks a scan chime — never as the current preview
 
-        using var preview = StartLongRunningProcessForTests();
-        ChimePlayer.SetCurrentPreviewForTests(preview);
+            using var preview = StartLongRunningProcessForTests();
+            ChimePlayer.SetCurrentPreviewForTests(preview);
 
-        Assert.False(scanChime.HasExited, "starting a preview killed an unrelated scan chime");
-        Assert.False(preview.HasExited);
+            Assert.False(scanChime.HasExited, "starting a preview killed an unrelated scan chime");
+            Assert.False(preview.HasExited);
 
-        // Both still reachable by StopAll, since both are in _live —
-        // proving the scan chime was spared, not merely untracked.
-        ChimePlayer.StopAll();
-        Assert.True(scanChime.WaitForExit(3000), "StopAll did not reach the scan chime");
-        Assert.True(preview.WaitForExit(3000), "StopAll did not reach the preview");
+            // Both still reachable by StopAll, since both are in _live —
+            // proving the scan chime was spared, not merely untracked.
+            ChimePlayer.StopAll();
+            Assert.True(scanChime.WaitForExit(3000), "StopAll did not reach the scan chime");
+            Assert.True(preview.WaitForExit(3000), "StopAll did not reach the preview");
+        }
+        finally
+        {
+            // Round 4: StopAll also sets _stopped — reset it so a later
+            // test's ordinary Play/PlayPreview call is not silently a no-op.
+            ChimePlayer.ResetStoppedForTests();
+        }
     }
 
     private static Process StartLongRunningProcessForTests()
