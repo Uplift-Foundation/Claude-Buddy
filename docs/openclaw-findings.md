@@ -707,3 +707,155 @@ a machine on a private network with no route to it from outside, and it is
 load-bearing in examples about peer discovery and multi-machine behaviour —
 including the mkcert issuer strings quoted earlier in this file. Left alone for
 the same cost/benefit reason.
+
+## CB-168: starting a new conversation — confirmed working
+
+Asked because CB-168 needs to know, before building a picker, whether the
+OpenClaw arm of "start a new chat" is possible at all. Measured against the
+same live gateway (OpenClaw 2026.9.2 at time of this probe — the `dist/`
+filenames below carry that version's hashes, not 2026.7.1-2's), from this
+Mac's own already-paired device (`fa8df53b…`, `operator.read` +
+`operator.write`, the scope the app already requests when "Allow replying to
+agents" is on).
+
+**The probe first had to be made to compile again.** `ClaudeBuddySettings.cs`
+grew a reference to `SpeakScope` (the turn-sounds feature, landed after the
+Sep 6 fix that added `ChatZoom`/`StatusDirectory` to this same csproj's
+compile list). Same shape as that fix: `SpeakScope` is a two-value enum in
+`SpeechSummary.cs`, but that file also pulls in `ClaudeBinary` and
+`InternalSessions`, so the enum is restated in `Shims.cs` rather than the
+whole file compiled in. `tools/openclaw-probe/OpenClawProbe.csproj` and
+`Shims.cs` both changed; no other file did.
+
+**Also confirmed, incidentally: this Mac's own terminal can reach the
+gateway.** `dotnet run --project tools/openclaw-probe` connected and returned
+real data on the first attempt, no `EHOSTUNREACH`, no `--restart` needed for
+Local Network — CLAUDE.md's "the terminal lacks the grant" note evidently
+doesn't hold universally on this machine at this time; not chased further, it
+made everything below reachable from here without ssh.
+
+### There is a dedicated `sessions.create`, and it needs only `operator.write`
+
+Read straight from the gateway's own `dist/method-scopes-*.js` on the gateway
+host (`avatar.internal`, ssh alias `mini`) — the declared policy, not a
+reimplementation of it:
+
+```js
+function resolveSessionsCreateRequiredScope(params) {
+  if (!isRecord(params)) return "operator.write";
+  if (params.incognito === true || typeof params.key === "string" && isIncognitoSessionKey(params.key)
+      || typeof params.parentSessionKey === "string" && isIncognitoSessionKey(params.parentSessionKey)
+      || Object.hasOwn(params, "execNode") || Object.hasOwn(params, "toolOverrides")
+      || params.permissionMode === "full") return "operator.admin";
+  return "operator.write";
+}
+```
+
+So an ordinary create — no incognito, no `execNode`/`toolOverrides`, no full
+permission mode — needs exactly the scope this app already requests when
+replying is on. `SessionsCreateParamsSchema` (`src-BiL5aQto.js`) makes `key`
+*and* `agentId` both optional, so **`{agentId: "main"}` alone is a valid
+call** — this is the "or with `agentId` and no key" half of the plan's
+question, and it is the one that matters: no message required, and no
+pre-existing session key to invent.
+
+**Verified live, not just read from source**, via `tools/openclaw-probe raw`:
+
+```
+$ dotnet run --project tools/openclaw-probe -- raw sessions.create \
+    '{"agentId":"main","label":"CB-168 probe — please ignore"}'
+{
+  "ok": true,
+  "key": "agent:main:dashboard:b4a6ca53-9197-4ebe-b811-776b82cc3027",
+  "sessionId": "71032889-…",
+  "runStarted": false,
+  ...
+}
+```
+
+`sessions.list` (a second, independent call) then returned that exact key —
+the positive half of the pair. `runStarted: false` and no message sent means
+this created an inert conversation shell, not a turn: exactly the shape
+CB-168 needs, since the dialog itself takes no prompt and the first thing the
+user does after Start is send a message into an already-existing key.
+
+**Negative control**, on the *same* device and the *same* method — flipping
+one param instead of swapping credentials, which is the safer probe (see
+below for why a second credential wasn't used):
+
+```
+$ dotnet run --project tools/openclaw-probe -- raw sessions.create \
+    '{"agentId":"main","incognito":true,"label":"CB-168 negative control — should be refused"}'
+OpenClawRequestException: missing scope: operator.admin
+```
+
+Refused exactly as the source predicts: this device holds `operator.write`
+but not `operator.admin`, and the gateway's dynamic scope check catches the
+`incognito` flag and demands the higher scope, live, not just in the
+declaration. That is the paired positive/negative this file's own rules ask
+for, sourced from one device and one method, which is what makes it a clean
+pair rather than "two different things happened to both come out as
+expected."
+
+**Cleanup used `sessions.patch{archived:true}` then `sessions.delete
+{archivedOnly:true}`, both at `operator.write`** — a plain `sessions.delete`
+on a non-archived session demands `operator.admin` (`resolveSessionsDeleteRequiredScope`
+returns `operator.admin` unless `archivedOnly` is already true *and* every
+other field is in a small write-safe set), so archive-then-delete is the
+scope-appropriate cleanup path for a device that can create sessions but
+isn't an admin. Verified: the throwaway session no longer appears in
+`sessions.list` afterward.
+
+### `chat.send` on a brand-new key also creates the session, no `sessions.create` first
+
+Tested separately, since the plan asked about this path too: `chat.send`
+with `sessionKey: "agent:main:dashboard:cb168-freshkey-test"` — a key that
+had never been created — succeeded (`{"status":"started"}`) without a prior
+`sessions.create` call, and the key then showed up in `sessions.list`. So
+either path works: a dedicated create call, or just sending into an unseen
+key. **`sessions.create` is still the better fit for this feature**, because
+it needs no message (the dialog has no prompt field) and creates an inert
+shell rather than kicking off a real agent turn — the `chat.send` route
+necessarily starts a run the moment it's called, which is a heavier and
+noisier way to get the same "a key now exists" outcome. This throwaway key
+was cleaned up the same way (archive, then delete).
+
+**One correction to CLAUDE.md's own worked example for this ticket**, made
+honestly rather than silently: it named `agent:<id>:<new-surface>` as the
+fresh-key shape to test. The real gateway generates its own key on
+`sessions.create` (`agent:main:dashboard:<uuid>` above) rather than accepting
+a caller-chosen surface name; a caller-supplied `key` is accepted too (per
+the schema) but wasn't the shape exercised here, since the auto-generated
+one is what `OpenClawSessions.StartConversation` will actually receive back
+and bind to.
+
+### Why no second credential was used for the negative control
+
+The original plan asked for "the same call with Buddy's read-only
+credential" refused. This gateway already has such a device paired
+(`gateway-client` at IP matching the gateway host itself, `operator.read`
+only) — but its private key lives with whatever client paired it, not with
+this one, so it can't be impersonated. The alternative — generating a fresh
+device identity in a scratch settings directory, using the same gateway
+token, and getting it approved on the live gateway to manufacture a
+read-only credential — was attempted and stopped: it would have created a
+new permanent entry in this production gateway's paired-device table (nine
+real agents, real Discord conversations, real cron jobs behind it) purely to
+prove a point the source and the params-based negative control above already
+prove. The `incognito`-flag control above tests the same enforcement
+mechanism (`authorizeOperatorScopesForRequiredScope`, live, against a real
+refusal) without that side effect, so it was preferred instead.
+
+### What this settles for CB-168 Phase 2
+
+- **Build it.** `OpenClawSessions.StartConversation(agentId)` should call
+  `sessions.create({agentId})`, bind a `ChatPanel` to the returned `key`, and
+  let the first user message go through the existing `chat.send` path
+  unchanged — nothing about sending into an already-created key is new.
+- Needs `operator.write`, exactly as the plan assumed: disabled with "turn on
+  Allow replying to agents" when `OpenClawReplyEnabled` is off, "no gateway
+  configured" when there isn't one. No new scope request, no new pairing.
+- `agents.list` (already used elsewhere in this file) is confirmed as the
+  source for the picker's agent list — `defaultId: "main"` on this gateway,
+  eight agents total, names distinct from ids (`main` → Lilibeth, `kubernetes`
+  → Amber, etc., same shape already documented above).
