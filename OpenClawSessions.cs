@@ -1580,6 +1580,25 @@ namespace ClaudeBuddy
             }
         }
 
+        // QA (CB-168, rowan-achterberg): what to make of the gateway's own
+        // response to sessions.create, kept separate from the request that
+        // produces it so a malformed reply is a decision a test can drive
+        // directly rather than something only reachable behind a real
+        // socket. No network, no static state — a hand-built JsonElement is
+        // enough to exercise every branch.
+        internal static (string? Key, string? Failure) ParseCreateResult(JsonElement res)
+        {
+            if (!res.TryGetProperty("key", out var keyEl) || keyEl.ValueKind != JsonValueKind.String)
+            {
+                return (null, "gateway didn't return a session key");
+            }
+
+            var key = keyEl.GetString();
+            return string.IsNullOrWhiteSpace(key)
+                ? (null, "gateway returned an empty session key")
+                : (key, null);
+        }
+
         // CB-168: starts a brand-new conversation with an agent, for the
         // new-chat dialog's OpenClaw slot. Calls sessions.create({agentId})
         // rather than chat.send with an invented key — both were measured to
@@ -1597,7 +1616,17 @@ namespace ClaudeBuddy
         // already has between the network call and the settings gate in
         // front of it.
         //
-        // Excluded from coverage: creates a session on a real gateway.
+        // QA (CB-168, rowan-achterberg): the three decisions that used to
+        // live in here unreachably (malformed key type, empty key, and the
+        // exception-message passthrough) now live in ParseCreateResult
+        // above, tested directly with a hand-built JsonElement — this
+        // method stays excluded as a whole because the one thing left in
+        // it that actually needs a real gateway is the await itself, and
+        // there is no seam here (OpenClawGateway is a concrete socket
+        // wrapper, not an interface) to split that line out on its own the
+        // way ChimePlayer.cs's TryStart/KillTree do for a real process
+        // spawn. Excluded from coverage: creates a session on a real
+        // gateway.
         [ExcludeFromCodeCoverage]
         public static async Task<(IRemoteChatSession? Session, string? Failure)> StartConversationAsync(
             string agentId, CancellationToken ct)
@@ -1614,15 +1643,10 @@ namespace ClaudeBuddy
                     ["agentId"] = agentId
                 }, ct);
 
-                if (!res.TryGetProperty("key", out var keyEl) || keyEl.ValueKind != JsonValueKind.String)
-                {
-                    return (null, "gateway didn't return a session key");
-                }
-
-                var key = keyEl.GetString();
-                if (string.IsNullOrWhiteSpace(key)) return (null, "gateway returned an empty session key");
-
-                return (ChatFor("openclaw:" + key, AgentNameOf(agentId)), null);
+                var (key, failure) = ParseCreateResult(res);
+                return failure is not null
+                    ? (null, failure)
+                    : (ChatFor("openclaw:" + key, AgentNameOf(agentId)), null);
             }
             catch (Exception ex)
             {
