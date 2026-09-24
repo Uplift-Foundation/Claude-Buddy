@@ -108,5 +108,11 @@ internal static class TestBootstrap
         {
             Environment.SetEnvironmentVariable("CLAUDE_BUDDY_NO_RELAY", "1");
         }
+
+        // CB-168: no test in this assembly, including one nobody has
+        // written yet, may reach a real speech engine or chime process — see
+        // TextToSpeech.SilenceForTests and ChimePlayer.SilenceForTests.
+        TextToSpeech.SilenceForTests = true;
+        ChimePlayer.SilenceForTests = true;
     }
 }

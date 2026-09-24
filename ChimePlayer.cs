@@ -172,10 +172,28 @@ namespace ClaudeBuddy
         // RealChimeProcess.
         internal static Func<string, IChimeProcess?>? ProcessFactoryForTests;
 
+        // CB-168: the real-process boundary, guarded the same way and for
+        // the same reason as TextToSpeech.SilenceForTests — see that
+        // field's own comment. Placed here, after ProcessFactoryForTests
+        // rather than at Play/PlayOnePreview's own entry points, because
+        // StartProcess is now the one place either of them actually reaches
+        // BuildProcess/TryStart — a fake-based ChimePlayerTests case that
+        // sets ProcessFactoryForTests never gets here at all, so this only
+        // silences the path nothing has opted into. Every test assembly's
+        // TestBootstrap sets this true; ChimePlayerIntegrationTests' two
+        // genuinely real-afplay tests opt back in explicitly (silent WAVs,
+        // same as ChimePlayerTests' own real-path cases did before this
+        // class grew a fake seam).
+        //
+        // Defaults false: production code never sets this.
+        internal static bool SilenceForTests;
+
         private static IChimeProcess? StartProcess(string path)
         {
             var factory = ProcessFactoryForTests;
             if (factory is not null) return factory(path);
+
+            if (SilenceForTests) return null;
 
             var proc = BuildProcess(path);
             if (proc is null) return null;

@@ -118,14 +118,30 @@ public class OrbWindowSpeakTests
     // SpeakRemoteAsync driven directly and awaited, covering the rest of it:
     // a real (in-memory) history entry found synchronously, so
     // LastAssistantTextAsync returns without its own 20x100ms poll loop, and
-    // the Dispatcher.UIThread.Post(...) line actually runs — scheduling, not
-    // executing, the excluded Speak() call.
+    // the Dispatcher.UIThread.Post(...) line actually runs and is then
+    // pumped within this same test, so the posted SpeechRequest.Speak call
+    // executes here rather than sitting queued.
+    //
+    // CB-168: the comment this replaced said the posted call "sits queued
+    // and unexecuted for the rest of the test" — true only until some other
+    // test's own Dispatcher.UIThread.RunJobs() pumped the same shared
+    // dispatcher, at which point it *did* run, with no seam set, straight
+    // through to a real TextToSpeech.Speak — which is exactly what made
+    // Warren's speakers say "hello from the agent" days and tests later.
+    // TextToSpeech.SilenceForTests now makes that impossible regardless of
+    // when the posted job runs, but this test additionally pumps the
+    // dispatcher and sets UtteranceForTests itself, so it asserts what it
+    // actually scheduled instead of merely not making noise.
     [AvaloniaFact]
     public async System.Threading.Tasks.Task SpeakRemoteAsyncFindsARealHistoryEntryAndSchedulesTheRead()
     {
         var wasEnabled = ClaudeBuddySettings.OpenClawEnabled;
         var agent = "nova" + Guid.NewGuid().ToString("N")[..8];
         var sessionId = $"openclaw:agent:{agent}:discord:channel:1";
+
+        var uttered = new List<(string Text, TextToSpeech.VoiceOption? Voice, double? Rate)>();
+        SpeechRequest.UtteranceForTests = (text, voice, rate) => uttered.Add((text, voice, rate));
+
         try
         {
             ClaudeBuddySettings.OpenClawEnabled = true;
@@ -141,9 +157,18 @@ public class OrbWindowSpeakTests
             orb.UpdateFrom(new SessionStatus { Source = SessionSource.OpenClaw, State = "idle", Title = "Nova" });
 
             await orb.SpeakRemoteAsync();
+
+            // Runs the posted SpeechRequest.Speak call within this test,
+            // rather than leaving it queued for whichever test happens to
+            // pump the shared dispatcher next.
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+
+            Assert.Single(uttered);
+            Assert.Equal("hello from the agent", uttered[0].Text);
         }
         finally
         {
+            SpeechRequest.UtteranceForTests = null;
             ClaudeBuddySettings.OpenClawEnabled = wasEnabled;
         }
     }

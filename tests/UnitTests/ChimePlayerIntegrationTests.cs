@@ -48,6 +48,15 @@ public class ChimePlayerIntegrationTests
 
             ChimePlayer.PlayForTests = null;
             ChimePlayer.ProcessFactoryForTests = null;
+
+            // CB-168: SilenceForTests is on process-wide for every test
+            // assembly (see TestBootstrap), and StartProcess checks it right
+            // after the ProcessFactoryForTests seam — this test just cleared
+            // that seam specifically to reach the real BuildProcess/TryStart
+            // path RealChimeProcess.Kill's OS-facing half depends on, so it
+            // has to clear this guard too, or Play would return before ever
+            // starting a real afplay at all.
+            ChimePlayer.SilenceForTests = false;
             var t = new Thread(() => ChimePlayer.Play(path)) { IsBackground = true };
             t.Start();
 
@@ -63,6 +72,7 @@ public class ChimePlayerIntegrationTests
         }
         finally
         {
+            ChimePlayer.SilenceForTests = true;
             ChimePlayer.StopAll();
             ChimePlayer.ResetStoppedForTests();
             try { Directory.Delete(dir, true); } catch { }
@@ -84,6 +94,7 @@ public class ChimePlayerIntegrationTests
 
             ChimePlayer.PlayForTests = null;
             ChimePlayer.ProcessFactoryForTests = null;
+            ChimePlayer.SilenceForTests = false; // CB-168: needed to reach BuildProcess/TryStart at all
             ChimePlayer.PlayPreview(first);
 
             var firstProc = FindAfplayByArgument(before, first, 10_000);
@@ -97,6 +108,7 @@ public class ChimePlayerIntegrationTests
         finally
         {
             ChimePlayer.PlayForTests = null;
+            ChimePlayer.SilenceForTests = true;
             ChimePlayer.StopAll();
             ChimePlayer.ResetStoppedForTests();
             WaitForNoPreviewWorker();

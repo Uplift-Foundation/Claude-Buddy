@@ -270,6 +270,41 @@ public class ChimePlayerTests
         }
     }
 
+    // CB-168: the guard every test assembly's TestBootstrap turns on,
+    // proved the same way PlayNeverBuildsAProcessOnceStopAllHasRun proves
+    // _stopped above, but by timing rather than a factory-call count —
+    // StartProcess's real branch (BuildProcess/TryStart) has no seam of its
+    // own for SilenceForTests to be observed through other than the wall
+    // clock, since the whole point of the guard is to stop *before*
+    // building anything a test could otherwise inspect. A real afplay
+    // spawn-and-run takes meaningfully longer than an immediate return
+    // does, the same reasoning PlayNeverStartsARealProcessOnceStopAllHasRun
+    // used before this class grew a fake seam.
+    //
+    // Deliberately leaves both PlayForTests and ProcessFactoryForTests
+    // null: this is the shape every OTHER test file in the suite
+    // (TurnSoundsTests, OrbSoundSubmenuTests, and the rest) actually calls
+    // Play looking like — no seam of its own, guard left on by
+    // TestBootstrap — so this proves the shape those tests already rely
+    // on, not the one this file's own real-path cases opt out of.
+    [Fact]
+    public void SilenceForTestsStopsPlayBeforeItStartsARealProcess()
+    {
+        Assert.True(ChimePlayer.SilenceForTests, "expected TestBootstrap to have already turned this on");
+
+        // Set explicitly rather than trusted from whatever the previous
+        // test in this file left behind.
+        ChimePlayer.PlayForTests = null;
+        ChimePlayer.ProcessFactoryForTests = null;
+
+        var sw = Stopwatch.StartNew();
+        ChimePlayer.Play("/System/Library/Sounds/Glass.aiff");
+        sw.Stop();
+
+        Assert.True(sw.ElapsedMilliseconds < 200,
+            $"Play took {sw.ElapsedMilliseconds}ms — it should have bailed on the guard, before ever starting a process");
+    }
+
     // Replaces PlayPreviewKillsTheLivePreviewProcessBeforeTrackingTheNext's
     // old real-process version. The order log is what proves the sequence
     // KillPreviousAndTrackNewPreview's own comment describes — the previous

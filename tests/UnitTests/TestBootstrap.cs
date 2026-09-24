@@ -50,6 +50,15 @@ internal static class TestBootstrap
         // broken and nobody could tell — the call was dormant only because the
         // relay it started always failed. See RemoteControlSessions.StartsBlocked.
         Environment.SetEnvironmentVariable("CLAUDE_BUDDY_NO_RELAY", "1");
+
+        // CB-168: no test in this assembly, including one nobody has
+        // written yet, may reach a real speech engine or chime process — see
+        // TextToSpeech.SilenceForTests and ChimePlayer.SilenceForTests for
+        // why this has to be a process-wide guard rather than trusted to
+        // every call site remembering its own seam.
+        TextToSpeech.SilenceForTests = true;
+        ChimePlayer.SilenceForTests = true;
+
         ClaudeBuddySettings.ReloadForTests();
     }
 }

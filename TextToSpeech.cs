@@ -35,6 +35,27 @@ namespace ClaudeBuddy
         private static Process? _speaking;
         private static readonly object Gate = new();
 
+        // CB-168: the actual audio boundary, guarded process-wide rather than
+        // trusted to every call site remembering to set a seam of its own.
+        // Every test assembly's TestBootstrap sets this true in a
+        // [ModuleInitializer] — before any test, including one nobody has
+        // written yet, can reach a real `say`/SAPI/Kokoro process. It exists
+        // because SpeechRequest.UtteranceForTests is a seam a *caller* has to
+        // remember to set, and two tests (OrbWindowSpeakTests.
+        // SpeakRemoteAsyncFindsARealHistoryEntryAndSchedulesTheRead,
+        // TurnSummarySpeechTests.SpeakTurnSummaryRemoteAsyncFindsARealHistory
+        // EntryAndSchedulesTheRead) reached this method via a
+        // Dispatcher.UIThread.Post(...) they never awaited — the posted job
+        // ran later, on whichever unrelated test next pumped the dispatcher,
+        // by which point the seam that test itself might have set was long
+        // gone. A per-caller seam cannot close that; a boundary this one
+        // guard sits in front of can, regardless of how the call got here or
+        // which test happens to be running when it arrives.
+        //
+        // Defaults false: production code never sets this, so the app itself
+        // is never silenced by a line that exists only for the test suite.
+        internal static bool SilenceForTests;
+
         private static List<string>? _cachedVoices;
         private static List<VoiceOption>? _cachedOptions;
 
@@ -658,6 +679,12 @@ namespace ClaudeBuddy
         public static void Speak(string text, string? voice = null, bool forceSystemVoice = false,
             SpeakEngine? forceEngine = null, double? rate = null)
         {
+            // The guard, first thing, ahead of even Cancel(): a silenced call
+            // has no side effects at all, not even stopping whatever a real
+            // (non-test) utterance elsewhere might be doing. See
+            // SilenceForTests' own comment on why this exists.
+            if (SilenceForTests) return;
+
             Cancel();
 
             if (string.IsNullOrWhiteSpace(text)) return;
