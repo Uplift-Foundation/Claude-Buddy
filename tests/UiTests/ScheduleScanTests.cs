@@ -126,6 +126,26 @@ public class ScheduleScanTests
         Assert.Null(manager.OrbFor("session-unknown"));
     }
 
+    // CB-168: NewChatWindow's folder combo (RecentFolders.Merge) and its
+    // orb-appeared watch (NewChatOrbWatch) both want the live scan's
+    // statuses, but every NewChatWindow test reaches them through
+    // CurrentStatusesForTests — AllStatuses itself was never proven against
+    // a real scan. Same shape as the OrbFor test above: a copy keyed by
+    // session id, matching what a real scan actually found.
+    [AvaloniaFact]
+    public async Task AllStatusesReturnsACopyOfWhatTheScanFound()
+    {
+        using var scratch = new Scratch();
+        scratch.Write("session-a", state: "waiting");
+        var manager = Manager(scratch);
+
+        await manager.ScheduleScan();
+
+        var all = manager.AllStatuses;
+        Assert.True(all.ContainsKey("session-a"));
+        Assert.Equal("waiting", all["session-a"].State);
+    }
+
     // The re-entrancy guard: a second ScheduleScan while the first is still
     // reading disk must not start a second read on top of it — CB-106's own
     // finding was that heavy *ambient* disk contention is what turns an
