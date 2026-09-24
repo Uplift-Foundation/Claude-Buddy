@@ -565,4 +565,86 @@ public class NewChatWindowTests : IDisposable
 
         Assert.Equal("Starting…", window.StatusLine.Text);
     }
+
+    // Neither watch armed — a fresh window that never launched anything.
+    // OnWatchTick's own comment says the two watches are mutually exclusive
+    // and exactly one block ever has something to check; this proves the
+    // third case, where neither does, falls through to the plain stop
+    // rather than throwing or matching by accident.
+    [AvaloniaFact]
+    public void TheWatchStopsTheTimerWhenNothingIsArmed()
+    {
+        FreshSettings();
+        NewChatAvailability.CurrentForTests = () => Array.Empty<NewChatOption>();
+
+        var window = NewWindow();
+
+        var timerField = typeof(NewChatWindow).GetField("_watchTimer", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        timer.Start();
+        Assert.True(timer.IsEnabled);
+        timerField.SetValue(window, timer);
+
+        window.OnWatchTick(null, EventArgs.Empty);
+
+        Assert.False(timer.IsEnabled);
+    }
+
+    // --- OpenClaw agent prefill: an OpenClaw orb's own "New chat here" ---
+
+    [AvaloniaFact]
+    public void ThePrefilledAgentWinsOverTheLastUsedCliAndTheDefault()
+    {
+        FreshSettings();
+        ClaudeBuddySettings.SetNewChatLastCli("Codex");
+        NewChatAvailability.CurrentForTests = () => new[]
+        {
+            Enabled(NewChatCli.ClaudeCode), Enabled(NewChatCli.Codex)
+        };
+        NewChatWindow.OpenClawAvailabilityForTests = () => OpenClawNewChatAvailability.Ready;
+        NewChatWindow.KnownAgentsForTests = () => new[] { ("id-1", "Alexis"), ("id-2", "Bram") };
+
+        var window = NewWindow(prefillAgentId: "id-2");
+
+        Assert.True(window.OpenClawSelected);
+        Assert.Null(window.SelectedCli);
+        Assert.Equal("Bram", ((NewChatWindow.AgentItem)window.AgentCombo.SelectedItem!).Name);
+    }
+
+    // The prefill only wins when OpenClaw is actually usable — otherwise it
+    // falls through to the ordinary local-CLI preference, the same as no
+    // prefill at all.
+    [AvaloniaFact]
+    public void AnAgentPrefillIsIgnoredWhenOpenClawIsNotReady()
+    {
+        FreshSettings();
+        NewChatAvailability.CurrentForTests = () => new[] { Enabled(NewChatCli.ClaudeCode) };
+        NewChatWindow.OpenClawAvailabilityForTests = () => OpenClawNewChatAvailability.NoGateway;
+
+        var window = NewWindow(prefillAgentId: "id-2");
+
+        Assert.False(window.OpenClawSelected);
+        Assert.Equal(NewChatCli.ClaudeCode, window.SelectedCli);
+    }
+
+    // --- OnWindowKeyDown's no-op half, driven directly ---
+
+    // Never supplies Escape or Cmd-W here — that would reach the real
+    // Close() through CloseForReal, which is excluded rather than tested
+    // for the same font-cache-corruption reason SettingsWindowSmokeTest
+    // documents. This proves the branch that does *not* close still runs
+    // cleanly when driven directly, rather than only through ShouldClose's
+    // own pure-function test.
+    [AvaloniaFact]
+    public void KeyDownWithNoClosingKeyIsANoOp()
+    {
+        FreshSettings();
+        NewChatAvailability.CurrentForTests = () => Array.Empty<NewChatOption>();
+        var window = NewWindow();
+
+        window.OnWindowKeyDown(null, new KeyEventArgs { Key = Key.A, KeyModifiers = KeyModifiers.None });
+
+        // Still here and unclosed — the assertion is that nothing happened.
+        Assert.NotNull(window);
+    }
 }

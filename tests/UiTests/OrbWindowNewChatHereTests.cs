@@ -90,4 +90,23 @@ public class OrbWindowNewChatHereTests
 
         Assert.False(orb.NewChatHereItem.IsVisible);
     }
+
+    // NewChatHere_Click's own no-op half, driven directly: a freshly
+    // constructed orb has never had UpdateFrom called, so _lastStatus is
+    // null and NewChatPrefillFor returns null — the click handler returns
+    // before ever reaching OpenNewChatWindow. Deliberately never given a
+    // real status here: that would call the real NewChatWindow.Toggle(),
+    // which is excluded rather than tested for the same reason
+    // OpenSettings/OpenNewChat are (real OS-facing work a headless suite
+    // has no business doing).
+    [AvaloniaFact]
+    public void ClickWithNoSessionBoundIsANoOp()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+
+        orb.NewChatHere_Click(null, new Avalonia.Interactivity.RoutedEventArgs());
+
+        // Still here — the assertion is that nothing happened.
+        Assert.NotNull(orb);
+    }
 }

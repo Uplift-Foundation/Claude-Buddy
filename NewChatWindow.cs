@@ -164,7 +164,12 @@ namespace ClaudeBuddy
         internal static bool ShouldClose(Key key, KeyModifiers modifiers) =>
             key == Key.Escape || (key == Key.W && modifiers.HasFlag(KeyModifiers.Meta));
 
-        private void OnWindowKeyDown(object? sender, KeyEventArgs e)
+        // internal, not private: a test drives this directly with a
+        // non-closing key to prove the no-op half runs without ever routing
+        // through KeyDown (and without ever supplying a closing key, which
+        // would reach the real Close() below — see CloseForReal's own
+        // comment on why that's excluded rather than tested).
+        internal void OnWindowKeyDown(object? sender, KeyEventArgs e)
         {
             if (ShouldClose(e.Key, e.KeyModifiers)) CloseForReal();
         }
