@@ -145,5 +145,15 @@ namespace ClaudeBuddy.Tests
 
             Assert.Equal(3, options.Count);
         }
+
+        // RealLocate's own `_ => null` arm — unreachable through Current()
+        // itself, since AllClis only ever hands it the three real values, but
+        // real code all the same and worth pinning against a cast out of the
+        // defined range rather than left uncovered.
+        [Fact]
+        public void RealLocateAnswersNullForAnUndefinedCli()
+        {
+            Assert.Null(NewChatAvailability.RealLocate((NewChatCli)99));
+        }
     }
 }

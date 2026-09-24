@@ -32,6 +32,22 @@ namespace ClaudeBuddy.Tests
             Assert.Equal("Grok", NewChatLauncher.DisplayName(NewChatCli.Grok));
         }
 
+        // The `_ => cli.ToString()` arm — unreachable through any of this
+        // file's own callers (they only ever pass a defined NewChatCli), but
+        // real code all the same, and a cast out of the defined range is
+        // what reaches it. ToString() on an undefined enum value prints its
+        // numeric value, which is exactly the fallback worth pinning: a
+        // caller that somehow gets here still sees a number rather than a
+        // blank label or a thrown exception.
+        [Fact]
+        public void DisplayNameFallsBackToToStringForAnUndefinedCli()
+        {
+            var undefined = (NewChatCli)99;
+
+            Assert.Equal(undefined.ToString(), NewChatLauncher.DisplayName(undefined));
+            Assert.Equal("99", NewChatLauncher.DisplayName(undefined));
+        }
+
         [Fact]
         public void LaunchUsesTheTestSeamWhenOneIsInstalled()
         {
