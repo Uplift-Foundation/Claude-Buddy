@@ -410,13 +410,26 @@ namespace ClaudeBuddy
             // to completion unkilled.
             KillPreviousAndTrackNewPreview(proc);
 
+            // QA round 6, F1: a request that landed while this preview was
+            // still inside BuildProcess/TryStart found nothing tracked to
+            // kill (victim null) and the worker already running (no
+            // startWorker), so nothing cut this one off — it played its full
+            // length with the newer choice queued behind it. A non-null
+            // _nextPreviewPath once tracking is done means exactly that
+            // happened; this preview is already stale. Anything arriving
+            // after this read finds proc as _currentPreview and kills it
+            // through PlayPreview's own victim path instead. Read under the
+            // lock, killed outside it, like PlayPreview's.
+            bool superseded;
+            lock (PlayingGate) superseded = _nextPreviewPath is not null;
+
             // The other half of item 2: a stop can land in the gap between
             // Start succeeding and the tracking lock just above — checked
             // again right here, rather than trusted from whatever
             // PlayPreview's own entry check saw a moment earlier, so a
             // process that only just started is killed immediately instead
             // of being left to run its full duration.
-            if (IsStopped)
+            if (IsStopped || superseded)
             {
                 KillTree(proc);
             }
@@ -531,13 +544,13 @@ namespace ClaudeBuddy
         internal static void StopAll()
         {
             // Round 4: _stopped is set in its own lock acquisition, ahead of
-            // KillEverythingLive's separate one below — safe as two steps
-            // rather than one atomic block only because Play and
-            // PlayOnePreview (item 1) each check _stopped inside the very
-            // same lock they use to add to _live. Once this line has run,
-            // nothing can be added to _live that KillEverythingLive's own
-            // snapshot might miss; it only ever needs to sweep up whatever
-            // was already there before _stopped became true.
+            // KillEverythingLive's separate one below. That is safe as two
+            // steps because Play and PlayOnePreview each re-check IsStopped
+            // *after* adding to _live (round 5): if this line runs before
+            // their add, their re-check sees it and they kill their own
+            // process; if it runs after, KillEverythingLive's snapshot
+            // already holds that process. Either way nothing started is
+            // left running.
             lock (PlayingGate) _stopped = true;
 
             KillEverythingLive();

@@ -459,54 +459,122 @@ public class ChimePlayerTests
     // between TryStart and the tracking lock, so a real race across many
     // trials is the honest way to show this closed rather than merely
     // argued closed.
+    // QA round 6, F1 (CB-167): sweeps a second PlayPreview across the
+    // first one's spawn. Landing while the worker is still inside
+    // BuildProcess/TryStart used to find nothing tracked to kill, so the
+    // first preview played its full length; PlayOnePreview's superseded
+    // check is what cuts it off now.
     [Fact]
-    public void AStopAllRacingAChimesStartLeavesNoChimeRunning()
+    public void ASecondPreviewLandingDuringTheFirstsSpawnStillCutsItOff()
     {
         if (!OperatingSystem.IsMacOS()) return;
 
-        var dir = Path.Combine(Path.GetTempPath(), "cb-chime-race2-" + Guid.NewGuid());
+        var dir = Path.Combine(Path.GetTempPath(), "cb-chime-r6-" + Guid.NewGuid());
         Directory.CreateDirectory(dir);
+        var misses = new List<string>();
         try
         {
-            ChimePlayer.PlayForTests = null; // the real path
-
-            for (var i = 0; i < 30; i++)
+            ChimePlayer.PlayForTests = null;
+            for (var delayUs = 0; delayUs <= 30000; delayUs += 1000)
             {
-                var path = WriteSilentWav(Path.Combine(dir, $"chime-{i}.wav"), seconds: 2);
+                var first = WriteSilentWav(Path.Combine(dir, $"a{delayUs}.wav"), 3);
+                var second = WriteSilentWav(Path.Combine(dir, $"b{delayUs}.wav"), 3);
                 var before = Process.GetProcessesByName("afplay").Select(p => p.Id).ToHashSet();
 
-                var playTask = Task.Run(() => ChimePlayer.Play(path));
-                ChimePlayer.StopAll(); // racing Play's own TryStart/track sequence, as tightly as the runtime allows
+                var sw = Stopwatch.StartNew();
+                ChimePlayer.PlayPreview(first);
+                while (sw.Elapsed.TotalMilliseconds * 1000 < delayUs) Thread.SpinWait(50);
+                ChimePlayer.PlayPreview(second);
 
-                // Reset only once Play has returned: _stopped is sticky in
-                // production, and Play's post-start re-check is exactly what
-                // this race depends on, so un-sticking it while Play is still
-                // between TryStart and that check measures a state the app
-                // can never be in.
-                Assert.True(playTask.Wait(TimeSpan.FromSeconds(4)), $"iteration {i}: Play did not return");
-                ChimePlayer.ResetStoppedForTests();
-                Thread.Sleep(100); // let any process that did start actually appear
-
-                var started = Process.GetProcessesByName("afplay").Where(p => !before.Contains(p.Id)).ToList();
-                foreach (var proc in started)
+                // Find the process playing `first` by its argument.
+                Process? firstProc = null;
+                var deadline = DateTime.UtcNow + TimeSpan.FromMilliseconds(800);
+                while (DateTime.UtcNow < deadline && firstProc is null)
                 {
-                    try
+                    foreach (var p in Process.GetProcessesByName("afplay").Where(p => !before.Contains(p.Id)))
                     {
-                        Assert.True(proc.WaitForExit(500), $"iteration {i}: a chime survived a StopAll that raced its own start");
+                        if (ArgsOf(p.Id).Contains(first)) { firstProc = p; break; }
                     }
-                    finally
-                    {
-                        proc.Dispose();
-                    }
+                    Thread.Sleep(2);
                 }
+
+                if (firstProc is not null && !firstProc.WaitForExit(1500)) misses.Add($"{delayUs / 1000}ms");
+                
+                ChimePlayer.StopAll();
+                ChimePlayer.ResetStoppedForTests();
+                var quiet = DateTime.UtcNow + TimeSpan.FromSeconds(4);
+                while (DateTime.UtcNow < quiet &&
+                       Process.GetProcessesByName("afplay").Any(p => !before.Contains(p.Id)))
+                    Thread.Sleep(20);
+                Thread.Sleep(50);
             }
         }
         finally
         {
             ChimePlayer.PlayForTests = null;
+            ChimePlayer.StopAll();
             ChimePlayer.ResetStoppedForTests();
             try { Directory.Delete(dir, true); } catch { }
         }
+
+        Assert.True(misses.Count == 0, "first preview survived a second request at: " + string.Join(", ", misses));
+    }
+
+    // QA round 6, F2 (CB-167): replaces a test that could not fail — a
+    // StopAll on the test thread always beat Task.Run's start-up, so every
+    // Play returned at its entry guard and the post-track re-check was
+    // never reached (mutating it to `if (false)` still passed). Gating Play
+    // on its own thread and sweeping StopAll across its spawn makes the
+    // entry-check -> StopAll -> track interleaving actually happen, and
+    // only that re-check kills the chime there.
+    [Fact]
+    public void AStopAllSweptAcrossPlaysSpawnLeavesNoChimeRunning()
+    {
+        if (!OperatingSystem.IsMacOS()) return;
+        var dir = Path.Combine(Path.GetTempPath(), "cb-chime-r6s-" + Guid.NewGuid());
+        Directory.CreateDirectory(dir);
+        var survivors = new List<string>();
+        try
+        {
+            ChimePlayer.PlayForTests = null;
+            for (var delayUs = 0; delayUs <= 30000; delayUs += 500)
+            {
+                var path = WriteSilentWav(Path.Combine(dir, $"c{delayUs}.wav"), 3);
+                var before = Process.GetProcessesByName("afplay").Select(p => p.Id).ToHashSet();
+                using var go = new ManualResetEventSlim();
+                var t = new Thread(() => { go.Wait(); ChimePlayer.Play(path); });
+                t.Start();
+                Thread.Sleep(20);
+                var sw = Stopwatch.StartNew();
+                go.Set();
+                while (sw.Elapsed.TotalMilliseconds * 1000 < delayUs) Thread.SpinWait(20);
+                ChimePlayer.StopAll();
+                // An unkilled 3 s chime keeps Play blocked in its wait; a killed
+                // one (or one never started) returns in well under a second.
+                if (!t.Join(1000)) { survivors.Add($"{delayUs}us"); t.Join(5000); }
+                ChimePlayer.ResetStoppedForTests();
+                Thread.Sleep(60);
+                foreach (var p in Process.GetProcessesByName("afplay").Where(p => !before.Contains(p.Id)))
+                {
+                    if (!p.WaitForExit(300)) { survivors.Add($"{delayUs}us"); try { p.Kill(); } catch { } }
+                }
+            }
+        }
+        finally { ChimePlayer.StopAll(); ChimePlayer.ResetStoppedForTests(); try { Directory.Delete(dir, true); } catch { } }
+        Assert.True(survivors.Count == 0, "chime survived StopAll at: " + string.Join(", ", survivors));
+    }
+
+    private static string ArgsOf(int pid)
+    {
+        try
+        {
+            using var ps = Process.Start(new ProcessStartInfo("/bin/ps", $"-o args= -p {pid}")
+            { RedirectStandardOutput = true, UseShellExecute = false })!;
+            var s = ps.StandardOutput.ReadToEnd();
+            ps.WaitForExit();
+            return s;
+        }
+        catch { return ""; }
     }
 
     // Gives a leftover preview worker (from a test that intentionally
