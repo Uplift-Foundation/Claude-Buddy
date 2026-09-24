@@ -414,12 +414,12 @@ namespace ClaudeBuddy
             EndSessionItem.IsVisible = SessionPresence.CanEndSession(status);
 
             // CB-168: a local-CLI orb pre-fills the dialog with its own cwd
-            // and CLI. OpenClaw's arm is ines-carvalho's — this is the hook
-            // point for her to extend once the agent picker slot lands;
-            // until then an OpenClaw orb simply doesn't offer the item,
-            // rather than offering one that opens with nothing useful
-            // pre-filled.
-            NewChatHereItem.IsVisible = status.IsLocalCli;
+            // and CLI; an OpenClaw orb pre-fills the dialog's agent picker
+            // with its own agent (NewChatPrefillFor, via
+            // OpenClawSessions.AgentIdOf). A remote-control or Claude-Cloud
+            // orb offers neither — there's no local CLI to relaunch and no
+            // OpenClaw agent to point at.
+            NewChatHereItem.IsVisible = status.IsLocalCli || status.Source == SessionSource.OpenClaw;
 
             // Back to the plain wording on every pass, so a refusal explained
             // once does not outlive the thing it was about. A husk whose job has
@@ -2711,8 +2711,18 @@ namespace ClaudeBuddy
         // ever opening a real NewChatWindow. NewChatOrbWatch.CliOf is shared
         // with the dialog's own "did an orb appear" watch, so the two never
         // map a session's CLI differently.
-        internal static (NewChatCli? Cli, string Cwd)? NewChatPrefillFor(SessionStatus? status) =>
-            status is null ? null : (NewChatOrbWatch.CliOf(status.Source), status.Cwd);
+        //
+        // sessionId is a separate parameter rather than read off status,
+        // because OpenClawSessions.AgentIdOf parses the session *id*
+        // ("openclaw:agent:<id>:<surface>"), not anything SessionStatus
+        // itself carries — the same reason SessionManager.OrbFor keys off
+        // ids rather than statuses.
+        internal static (NewChatCli? Cli, string Cwd, string? AgentId)? NewChatPrefillFor(
+            SessionStatus? status, string sessionId) =>
+            status is null
+                ? null
+                : (NewChatOrbWatch.CliOf(status.Source), status.Cwd,
+                    status.Source == SessionSource.OpenClaw ? OpenClawSessions.AgentIdOf(sessionId) : null);
 
         // CB-168: opens NewChatWindow pre-filled per NewChatPrefillFor
         // above. Excluded from coverage the same way OpenSettings is —
@@ -2721,12 +2731,13 @@ namespace ClaudeBuddy
         // handler, so the prefill mapping above stays covered.
         internal void NewChatHere_Click(object? sender, RoutedEventArgs e)
         {
-            if (NewChatPrefillFor(_lastStatus) is not { } prefill) return;
-            OpenNewChatWindow(prefill.Cli, prefill.Cwd);
+            if (NewChatPrefillFor(_lastStatus, SessionId) is not { } prefill) return;
+            OpenNewChatWindow(prefill.Cli, prefill.Cwd, prefill.AgentId);
         }
 
         [ExcludeFromCodeCoverage]
-        private static void OpenNewChatWindow(NewChatCli? cli, string cwd) => NewChatWindow.Toggle(cli, cwd);
+        private static void OpenNewChatWindow(NewChatCli? cli, string cwd, string? agentId) =>
+            NewChatWindow.Toggle(cli, cwd, agentId);
 
         // What is running underneath this session, asked once, as the menu
         // opens — CB-26.

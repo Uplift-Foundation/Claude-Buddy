@@ -27,6 +27,10 @@ public class NewChatWindowTests : IDisposable
         NewChatLauncher.LaunchForTests = null;
         NewChatWindow.CurrentStatusesForTests = null;
         NewChatWindow.ChooseFolderForTests = null;
+        NewChatWindow.OpenClawAvailabilityForTests = null;
+        NewChatWindow.KnownAgentsForTests = null;
+        NewChatWindow.StartOpenClawConversationForTests = null;
+        NewChatWindow.OrbForTests = null;
     }
 
     private static void FreshSettings()
@@ -43,14 +47,15 @@ public class NewChatWindowTests : IDisposable
     private static NewChatOption Disabled(NewChatCli cli, string reason) =>
         new(cli, Enabled: false, Reason: reason, Warning: null);
 
-    private static NewChatWindow NewWindow(NewChatCli? prefillCli = null, string? prefillCwd = null)
+    private static NewChatWindow NewWindow(
+        NewChatCli? prefillCli = null, string? prefillCwd = null, string? prefillAgentId = null)
     {
         var ctor = typeof(NewChatWindow).GetConstructor(
             BindingFlags.NonPublic | BindingFlags.Instance,
-            types: new[] { typeof(NewChatCli?), typeof(string) })
-            ?? throw new MissingMethodException("NewChatWindow", ".ctor(NewChatCli?, string)");
+            types: new[] { typeof(NewChatCli?), typeof(string), typeof(string) })
+            ?? throw new MissingMethodException("NewChatWindow", ".ctor(NewChatCli?, string, string)");
 
-        return (NewChatWindow)ctor.Invoke(new object?[] { prefillCli, prefillCwd });
+        return (NewChatWindow)ctor.Invoke(new object?[] { prefillCli, prefillCwd, prefillAgentId });
     }
 
     private static void Flush()
@@ -89,7 +94,10 @@ public class NewChatWindowTests : IDisposable
 
         var window = NewWindow();
 
-        var radios = window.CliList.Children.OfType<RadioButton>().ToList();
+        // Local rows only — the CLI list always carries a fourth, OpenClaw
+        // row alongside these three; OpenClawRowTests below cover it.
+        var radios = window.CliList.Children.OfType<RadioButton>()
+            .Where(r => r.Tag is NewChatCli).ToList();
         Assert.Equal(3, radios.Count);
         Assert.All(radios, r => Assert.True(r.IsEnabled));
     }
@@ -109,7 +117,7 @@ public class NewChatWindowTests : IDisposable
         var window = NewWindow();
 
         var codexRow = window.CliList.Children.OfType<RadioButton>()
-            .Single(r => (NewChatCli)r.Tag! == NewChatCli.Codex);
+            .Single(r => r.Tag is NewChatCli cli && cli == NewChatCli.Codex);
 
         Assert.False(codexRow.IsEnabled);
         Assert.Equal(reason, ToolTip.GetTip(codexRow));
@@ -124,7 +132,7 @@ public class NewChatWindowTests : IDisposable
 
         var window = NewWindow();
 
-        var row = window.CliList.Children.OfType<RadioButton>().Single();
+        var row = window.CliList.Children.OfType<RadioButton>().Single(r => r.Tag is NewChatCli);
         Assert.Equal(warning, ToolTip.GetTip(row));
     }
 
@@ -325,5 +333,214 @@ public class NewChatWindowTests : IDisposable
     public void AnUnrelatedKeyDoesNotClose()
     {
         Assert.False(NewChatWindow.ShouldClose(Key.A, KeyModifiers.None));
+    }
+
+    // --- OpenClaw row ---
+
+    private static FakeChatSession OpenClawFake(string sessionId = "openclaw:abc123") =>
+        new(null) { SessionId = sessionId, DisplayName = "Fake OpenClaw" };
+
+    [AvaloniaFact]
+    public void TheOpenClawRowIsDisabledWithItsReasonWhenNotReady()
+    {
+        FreshSettings();
+        NewChatAvailability.CurrentForTests = () => Array.Empty<NewChatOption>();
+        NewChatWindow.OpenClawAvailabilityForTests = () => OpenClawNewChatAvailability.ReplyDisabled;
+
+        var window = NewWindow();
+
+        var row = window.CliList.Children.OfType<RadioButton>().Single(r => (string)r.Content! == "OpenClaw");
+        Assert.False(row.IsEnabled);
+        Assert.Equal("turn on \"Allow replying to agents\" in Settings", ToolTip.GetTip(row));
+    }
+
+    [AvaloniaFact]
+    public void TheOpenClawRowIsEnabledWhenReady()
+    {
+        FreshSettings();
+        NewChatAvailability.CurrentForTests = () => Array.Empty<NewChatOption>();
+        NewChatWindow.OpenClawAvailabilityForTests = () => OpenClawNewChatAvailability.Ready;
+
+        var window = NewWindow();
+
+        var row = window.CliList.Children.OfType<RadioButton>().Single(r => (string)r.Content! == "OpenClaw");
+        Assert.True(row.IsEnabled);
+    }
+
+    // With no local CLI usable at all, OpenClaw (if ready) is the fallback
+    // selection — the dialog never opens with nothing chosen when it has at
+    // least one usable option.
+    [AvaloniaFact]
+    public void OpenClawIsSelectedWhenNoLocalCliIsUsable()
+    {
+        FreshSettings();
+        NewChatAvailability.CurrentForTests = () => Array.Empty<NewChatOption>();
+        NewChatWindow.OpenClawAvailabilityForTests = () => OpenClawNewChatAvailability.Ready;
+        NewChatWindow.KnownAgentsForTests = () => Array.Empty<(string, string)>();
+
+        var window = NewWindow();
+
+        Assert.True(window.OpenClawSelected);
+        Assert.Null(window.SelectedCli);
+    }
+
+    // A local CLI, when usable, still wins over OpenClaw by default — the
+    // fourth row is a fallback, not a preference.
+    [AvaloniaFact]
+    public void ALocalCliIsPreferredOverOpenClawWhenBothAreUsable()
+    {
+        FreshSettings();
+        NewChatAvailability.CurrentForTests = () => new[] { Enabled(NewChatCli.ClaudeCode) };
+        NewChatWindow.OpenClawAvailabilityForTests = () => OpenClawNewChatAvailability.Ready;
+
+        var window = NewWindow();
+
+        Assert.False(window.OpenClawSelected);
+        Assert.Equal(NewChatCli.ClaudeCode, window.SelectedCli);
+    }
+
+    [AvaloniaFact]
+    public void SelectingOpenClawShowsTheAgentSectionAndHidesTheFolderSection()
+    {
+        FreshSettings();
+        NewChatAvailability.CurrentForTests = () => new[] { Enabled(NewChatCli.ClaudeCode) };
+        NewChatWindow.OpenClawAvailabilityForTests = () => OpenClawNewChatAvailability.Ready;
+        NewChatWindow.KnownAgentsForTests = () => new[] { ("id-1", "Alexis") };
+
+        var window = NewWindow();
+        Assert.True(window.FolderSection.IsVisible);
+        Assert.False(window.AgentSection.IsVisible);
+
+        var openClawRow = window.CliList.Children.OfType<RadioButton>().Single(r => (string)r.Content! == "OpenClaw");
+        openClawRow.IsChecked = true;
+
+        Assert.False(window.FolderSection.IsVisible);
+        Assert.True(window.AgentSection.IsVisible);
+        Assert.True(window.OpenClawSelected);
+    }
+
+    [AvaloniaFact]
+    public void TheAgentComboIsPopulatedFromKnownAgentsSortedAsGiven()
+    {
+        FreshSettings();
+        NewChatAvailability.CurrentForTests = () => Array.Empty<NewChatOption>();
+        NewChatWindow.OpenClawAvailabilityForTests = () => OpenClawNewChatAvailability.Ready;
+        NewChatWindow.KnownAgentsForTests = () => new[] { ("id-1", "Alexis"), ("id-2", "Bram") };
+
+        var window = NewWindow();
+
+        var items = window.AgentCombo.ItemsSource!.Cast<NewChatWindow.AgentItem>().ToList();
+        Assert.Equal(new[] { "Alexis", "Bram" }, items.Select(i => i.Name));
+        Assert.Equal("Alexis", ((NewChatWindow.AgentItem)window.AgentCombo.SelectedItem!).Name);
+    }
+
+    [AvaloniaFact]
+    public void StartOpenClawWithNoAgentChosenSaysSoAndDoesNotCallTheSeam()
+    {
+        FreshSettings();
+        NewChatAvailability.CurrentForTests = () => Array.Empty<NewChatOption>();
+        NewChatWindow.OpenClawAvailabilityForTests = () => OpenClawNewChatAvailability.Ready;
+        NewChatWindow.KnownAgentsForTests = () => Array.Empty<(string, string)>();
+        var called = false;
+        NewChatWindow.StartOpenClawConversationForTests = (_, _) =>
+        {
+            called = true;
+            return Task.FromResult<(IRemoteChatSession?, string?)>((null, null));
+        };
+
+        var window = NewWindow();
+        Click(window.StartButton);
+
+        Assert.False(called);
+        Assert.Equal("Choose an agent first.", window.StatusLine.Text);
+    }
+
+    [AvaloniaFact]
+    public void StartOpenClawRendersAFailureMessageFromTheFakeSeam()
+    {
+        FreshSettings();
+        NewChatAvailability.CurrentForTests = () => Array.Empty<NewChatOption>();
+        NewChatWindow.OpenClawAvailabilityForTests = () => OpenClawNewChatAvailability.Ready;
+        NewChatWindow.KnownAgentsForTests = () => new[] { ("id-1", "Alexis") };
+        NewChatWindow.StartOpenClawConversationForTests = (_, _) =>
+            Task.FromResult<(IRemoteChatSession?, string?)>((null, "not connected to the gateway"));
+
+        var window = NewWindow();
+        Click(window.StartButton);
+
+        Assert.Equal("not connected to the gateway", window.StatusLine.Text);
+        Assert.True(window.StartButton.IsEnabled);
+    }
+
+    [AvaloniaFact]
+    public void ASuccessfulOpenClawStartShowsTheAgentNameAndArmsTheWatch()
+    {
+        FreshSettings();
+        NewChatAvailability.CurrentForTests = () => Array.Empty<NewChatOption>();
+        NewChatWindow.OpenClawAvailabilityForTests = () => OpenClawNewChatAvailability.Ready;
+        NewChatWindow.KnownAgentsForTests = () => new[] { ("id-1", "Alexis") };
+        var fake = OpenClawFake();
+        NewChatWindow.StartOpenClawConversationForTests = (agentId, _) =>
+        {
+            Assert.Equal("id-1", agentId);
+            return Task.FromResult<(IRemoteChatSession?, string?)>((fake, null));
+        };
+
+        var window = NewWindow();
+        Click(window.StartButton);
+
+        Assert.Equal("Conversation started with Alexis. Waiting for its orb…", window.StatusLine.Text);
+    }
+
+    // --- the OpenClaw watch tick, driven directly ---
+
+    [AvaloniaFact]
+    public void TheOpenClawWatchOpensAChatPanelOnceTheScanBuildsTheOrb()
+    {
+        FreshSettings();
+        NewChatAvailability.CurrentForTests = () => Array.Empty<NewChatOption>();
+        var fake = OpenClawFake("openclaw:watch-match");
+        var orb = new OrbWindow(fake.SessionId);
+        NewChatWindow.OrbForTests = id => id == fake.SessionId ? orb : null;
+
+        var window = NewWindow();
+        window.ArmOpenClawWatchForTests(fake, DateTime.UtcNow.AddSeconds(20));
+        window.OnWatchTick(null, EventArgs.Empty);
+
+        Assert.Equal("Its orb should be on screen.", window.StatusLine.Text);
+        Assert.True(ChatPanel.IsOpenFor(fake.SessionId));
+
+        ChatPanel.CloseFor(fake.SessionId);
+    }
+
+    [AvaloniaFact]
+    public void TheOpenClawWatchSaysSoOnceTheDeadlinePassesWithNoOrb()
+    {
+        FreshSettings();
+        NewChatAvailability.CurrentForTests = () => Array.Empty<NewChatOption>();
+        NewChatWindow.OrbForTests = _ => null;
+        var fake = OpenClawFake();
+
+        var window = NewWindow();
+        window.ArmOpenClawWatchForTests(fake, DateTime.UtcNow.AddSeconds(-1));
+        window.OnWatchTick(null, EventArgs.Empty);
+
+        Assert.Equal("Conversation created; no orb yet — check your gateway connection.", window.StatusLine.Text);
+    }
+
+    [AvaloniaFact]
+    public void TheOpenClawWatchKeepsQuietBeforeTheDeadlineWithNoOrb()
+    {
+        FreshSettings();
+        NewChatAvailability.CurrentForTests = () => Array.Empty<NewChatOption>();
+        NewChatWindow.OrbForTests = _ => null;
+        var fake = OpenClawFake();
+
+        var window = NewWindow();
+        window.ArmOpenClawWatchForTests(fake, DateTime.UtcNow.AddSeconds(20));
+        window.StatusLine.Text = "Starting…";
+        window.OnWatchTick(null, EventArgs.Empty);
+
+        Assert.Equal("Starting…", window.StatusLine.Text);
     }
 }

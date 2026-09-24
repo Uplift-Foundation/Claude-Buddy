@@ -3,8 +3,9 @@ using Xunit;
 
 namespace ClaudeBuddy.Tests;
 
-// CB-168: the orb context menu's "New chat here" item — visible only for a
-// local-CLI orb, and what it would pre-fill the dialog with.
+// CB-168: the orb context menu's "New chat here" item — visible for a
+// local-CLI orb or an OpenClaw orb, and what it would pre-fill the dialog
+// with in each case.
 //
 // [Collection("Settings")]: constructing an OrbWindow reads a colour setting
 // in a field initializer — see SettingsCollection.cs.
@@ -19,7 +20,7 @@ public class OrbWindowNewChatHereTests
     [Fact]
     public void NoStatusMeansNoPrefill()
     {
-        Assert.Null(OrbWindow.NewChatPrefillFor(null));
+        Assert.Null(OrbWindow.NewChatPrefillFor(null, "any-id"));
     }
 
     [Theory]
@@ -28,44 +29,64 @@ public class OrbWindowNewChatHereTests
     [InlineData(SessionSource.Grok)]
     public void ALocalSessionPrefillsItsOwnCliAndCwd(SessionSource source)
     {
-        var prefill = OrbWindow.NewChatPrefillFor(Status(source, "/repo/mine"));
+        var prefill = OrbWindow.NewChatPrefillFor(Status(source, "/repo/mine"), "session-id");
 
         Assert.NotNull(prefill);
         Assert.Equal(NewChatOrbWatch.CliOf(source), prefill.Value.Cli);
         Assert.Equal("/repo/mine", prefill.Value.Cwd);
+        Assert.Null(prefill.Value.AgentId);
     }
 
-    // A non-local session (OpenClaw, remote-control) prefills a null CLI —
-    // there's no local CLI to pick — but still carries the cwd through
-    // rather than refusing outright. Only IsLocalCli decides whether the
-    // menu item is even shown; this stays a total function either way.
+    // An OpenClaw session prefills a null CLI — there's no local CLI to pick
+    // — but carries the agent id parsed out of the session's own key instead
+    // (OpenClawSessions.AgentIdOf's "openclaw:agent:<id>:<surface>" shape,
+    // confirmed against a real gateway in docs/openclaw-findings.md).
     [Fact]
-    public void ANonLocalSessionPrefillsANullCli()
+    public void AnOpenClawSessionPrefillsItsOwnAgentIdAndNoCli()
     {
-        var prefill = OrbWindow.NewChatPrefillFor(Status(SessionSource.OpenClaw));
+        var prefill = OrbWindow.NewChatPrefillFor(
+            Status(SessionSource.OpenClaw), "openclaw:agent:main:dashboard:abc123");
 
         Assert.NotNull(prefill);
         Assert.Null(prefill.Value.Cli);
+        Assert.Equal("main", prefill.Value.AgentId);
+    }
+
+    // A non-local, non-OpenClaw session (remote-control, Claude Cloud)
+    // prefills nothing useful — there's no local CLI and no OpenClaw agent —
+    // but this stays a total function rather than refusing outright; only
+    // the menu item's own visibility (IsLocalCli || OpenClaw) decides
+    // whether this is ever called for one.
+    [Fact]
+    public void ARemoteControlSessionPrefillsNeitherACliNorAnAgent()
+    {
+        var prefill = OrbWindow.NewChatPrefillFor(Status(SessionSource.RemoteControl), "session-id");
+
+        Assert.NotNull(prefill);
+        Assert.Null(prefill.Value.Cli);
+        Assert.Null(prefill.Value.AgentId);
     }
 
     // --- the menu item's own visibility, via UpdateFrom ---
 
-    [AvaloniaFact]
-    public void TheItemIsVisibleForEveryLocalCli()
+    [AvaloniaTheory]
+    [InlineData(SessionSource.ClaudeCode)]
+    [InlineData(SessionSource.Codex)]
+    [InlineData(SessionSource.Grok)]
+    [InlineData(SessionSource.OpenClaw)]
+    public void TheItemIsVisibleForEveryLocalCliAndOpenClaw(SessionSource source)
     {
         var orb = new OrbWindow(Guid.NewGuid().ToString());
-        orb.UpdateFrom(Status(SessionSource.ClaudeCode));
+        orb.UpdateFrom(Status(source));
 
         Assert.True(orb.NewChatHereItem.IsVisible);
     }
 
-    [AvaloniaTheory]
-    [InlineData(SessionSource.OpenClaw)]
-    [InlineData(SessionSource.RemoteControl)]
-    public void TheItemIsHiddenForNonLocalSources(SessionSource source)
+    [AvaloniaFact]
+    public void TheItemIsHiddenForRemoteControl()
     {
         var orb = new OrbWindow(Guid.NewGuid().ToString());
-        orb.UpdateFrom(Status(source));
+        orb.UpdateFrom(Status(SessionSource.RemoteControl));
 
         Assert.False(orb.NewChatHereItem.IsVisible);
     }

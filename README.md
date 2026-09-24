@@ -1003,7 +1003,7 @@ from real captures.
 
 Start a fresh conversation without opening a terminal by hand first, from the tray's **New chat…** item or an orb's right-click menu.
 
-An orb's context menu offers **New chat here**, shown only for a local CLI's orb (Claude Code, Codex or Grok — a gateway orb has no local binary to relaunch), and opens the dialog pre-filled with that orb's own CLI and folder.
+An orb's context menu offers **New chat here**, shown for a local CLI's orb (Claude Code, Codex or Grok) or an OpenClaw orb, and opens the dialog already pointed at that orb's own conversation: a local CLI's orb pre-fills its CLI and folder, and an OpenClaw orb pre-fills the OpenClaw row with that orb's own agent already selected in the picker. It's hidden for anything else — a remote-control orb's session lives on another machine, so there's nothing local or gateway-side to relaunch it from here.
 
 The dialog lists four entries: Claude Code, Codex, Grok, and OpenClaw.
 
