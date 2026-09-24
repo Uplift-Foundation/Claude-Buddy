@@ -156,6 +156,33 @@ public class ChimePlayerTests
         Assert.True(second.WaitForExit(3000), "StopAll did not reach the tracked preview process");
     }
 
+    // Round 4: the preview channel's kill-then-replace logic is scoped to
+    // _currentPreview specifically, not to "whatever is in _live" — a scan
+    // chime (or the summary-fallback chime) is tracked in _live too
+    // (TrackForTests registers it exactly the way Play() does) but is
+    // never assigned to _currentPreview, so starting a preview while one
+    // is playing must leave it alone. Killing a scan chime because someone
+    // opened Settings and arrowed through the sound picker would be a
+    // second, worse bug than the one this channel was built to fix.
+    [Fact]
+    public void PlayPreviewNeverKillsAConcurrentScanChime()
+    {
+        using var scanChime = StartLongRunningProcessForTests();
+        ChimePlayer.TrackForTests(scanChime); // registered the way an ordinary Play() call tracks a scan chime — never as the current preview
+
+        using var preview = StartLongRunningProcessForTests();
+        ChimePlayer.SetCurrentPreviewForTests(preview);
+
+        Assert.False(scanChime.HasExited, "starting a preview killed an unrelated scan chime");
+        Assert.False(preview.HasExited);
+
+        // Both still reachable by StopAll, since both are in _live —
+        // proving the scan chime was spared, not merely untracked.
+        ChimePlayer.StopAll();
+        Assert.True(scanChime.WaitForExit(3000), "StopAll did not reach the scan chime");
+        Assert.True(preview.WaitForExit(3000), "StopAll did not reach the preview");
+    }
+
     private static Process StartLongRunningProcessForTests()
     {
         var startInfo = OperatingSystem.IsWindows()
