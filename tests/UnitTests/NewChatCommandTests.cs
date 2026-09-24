@@ -80,6 +80,73 @@ namespace ClaudeBuddy.Tests
             Assert.Equal(new[] { "/k", @"C:\Users\me\.local\bin\codex.cmd" }, start.ArgumentList);
         }
 
+        // Grok, in Windows Terminal mode, with both an npm-style .cmd shim
+        // (GrokBinary's own comment: a real install can hand back a .cmd
+        // rather than a bare .exe) and a folder with a space in it at once —
+        // the combination the plan asked to see checked on paper rather than
+        // assumed from the other two CLIs' single-condition cases above.
+        [Fact]
+        public void WindowsTerminalLaunchWithACmdShimAndASpaceInTheFolder()
+        {
+            var start = NewChatCommand.WindowsProcessStartInfo(
+                NewChatCli.Grok, @"C:\Users\me\.grok\bin\grok.cmd", @"C:\Users\me\My Projects",
+                useWindowsTerminal: true);
+
+            Assert.NotNull(start);
+            Assert.Equal("wt.exe", start.FileName);
+            Assert.Equal(@"C:\Users\me\My Projects", start.WorkingDirectory);
+            Assert.Equal(new[]
+            {
+                "-d", @"C:\Users\me\My Projects", "cmd.exe", "/k",
+                @"C:\Users\me\.grok\bin\grok.cmd"
+            }, start.ArgumentList);
+        }
+
+        // Claude Code's own .cmd shim, in Windows Terminal mode rather than
+        // the cmd.exe fallback CmdFallbackAlsoCarriesNoVerb already covers for
+        // Codex — the wt arm never actually reads whether the exe carries an
+        // extension, but the plan asked for the case named rather than
+        // inferred from a different CLI's cmd-fallback test.
+        [Fact]
+        public void WindowsTerminalLaunchWithClaudeCodesCmdShim()
+        {
+            var start = NewChatCommand.WindowsProcessStartInfo(
+                NewChatCli.ClaudeCode, @"C:\Users\me\.local\bin\claude.cmd", @"C:\work",
+                useWindowsTerminal: true);
+
+            Assert.NotNull(start);
+            Assert.Equal(new[]
+            {
+                "-d", @"C:\work", "cmd.exe", "/k", @"C:\Users\me\.local\bin\claude.cmd"
+            }, start.ArgumentList);
+        }
+
+        // The cmd.exe fallback (no Windows Terminal installed) with a space
+        // in the folder — CmdFallbackAlsoCarriesNoVerb already covers a .cmd
+        // shim in this mode but with no space in the path; a space is the one
+        // condition that mode hadn't been checked against yet. ArgumentList
+        // carries the folder as one element regardless — .NET's own argv
+        // escaping is what keeps a space from splitting into two arguments,
+        // not anything this builder does — but the plan asked for the
+        // combination to be named as a case, not left to be true "by
+        // construction" with nothing pinning it.
+        [Fact]
+        public void CmdFallbackWithASpaceInTheFolder()
+        {
+            var start = NewChatCommand.WindowsProcessStartInfo(
+                NewChatCli.Codex, @"C:\Users\me\.local\bin\codex.cmd", @"C:\Users\me\My Projects",
+                useWindowsTerminal: false);
+
+            Assert.NotNull(start);
+            Assert.Equal(@"C:\Users\me\My Projects", start.WorkingDirectory);
+            Assert.Equal(new[] { "/k", @"C:\Users\me\.local\bin\codex.cmd" }, start.ArgumentList);
+
+            // The folder itself only reaches ArgumentList through -d in wt
+            // mode; the cmd.exe fallback carries it solely via
+            // WorkingDirectory; asserted above, kept here as the case's own
+            // point rather than folded into a different-named test.
+        }
+
         [Fact]
         public void ANullBinaryProducesNoStartInfo()
         {

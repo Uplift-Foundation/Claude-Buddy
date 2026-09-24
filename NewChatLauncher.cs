@@ -2,6 +2,16 @@ using System.Diagnostics.CodeAnalysis;
 
 namespace ClaudeBuddy
 {
+    // Which platform arm RealLaunch took, so Decide (below) can be asked about
+    // every branch as a table lookup rather than by re-running RealLaunch on a
+    // real machine of each kind.
+    internal enum NewChatPlatform
+    {
+        Windows,
+        MacOS,
+        Other
+    }
+
     // Starts one of the three local CLIs in a terminal, on a chosen folder —
     // CB-168's "start a new chat" action. No new orb plumbing is needed for
     // these three: the CLI's own installed hook writes the status file the
@@ -20,16 +30,23 @@ namespace ClaudeBuddy
 
         // The real launch: locate the binary fresh (never the cached
         // ClaudeBinary/CodexBinary/GrokBinary.Path — see NewChatAvailability
-        // for why a fresh Locate() matters here), build its command, and open
-        // a terminal on it through TerminalLauncher.
+        // for why a fresh Locate() matters here), resolve the working
+        // directory, run the real I/O for whichever platform this is, and
+        // hand every outcome to Decide, which is the only place the actual
+        // LaunchResult gets built.
         //
         // Excluded from coverage as a whole, the same way
-        // AgentTeamViewer.AttachSessionOnWindows is: every branch below either
-        // starts a real subprocess or calls into TerminalLauncher, which is
-        // itself excluded for running `ps`/tmux/osascript/wt.exe. What can be
-        // tested independently already is — NewChatCommand's quoting,
-        // NewChatAvailability's decision, DisplayName below — leaving nothing
-        // pure left uncovered inside this method.
+        // AgentTeamViewer.AttachSessionOnWindows is: every line below either
+        // starts a real subprocess, touches the real filesystem (LocateFresh,
+        // Directory.Exists), or calls into TerminalLauncher, which is itself
+        // excluded for running ps/tmux/osascript/wt.exe. QA (CB-168) flagged
+        // an earlier version of this method for folding its *decisions* —
+        // which message a NotFound/SpawnFailed/Launched outcome carries, the
+        // cwd fallback, the tmux-before-window preference — into that same
+        // excluded method, where nothing could assert a swapped message or a
+        // flipped preference. Decide and ResolveDirectory below are the fix:
+        // every decision this method makes is now a call to one of them, and
+        // both are plain functions a test can drive directly.
         [ExcludeFromCodeCoverage]
         private static LaunchResult RealLaunch(NewChatCli cli, string cwd)
         {
@@ -38,27 +55,22 @@ namespace ClaudeBuddy
 
             if (binary is null)
             {
-                return new LaunchResult(
-                    LaunchOutcome.NotFound,
-                    name + " " + NewChatAvailability.NotFoundReasonSuffix + ".");
+                return Decide(name, null, cwd, NewChatPlatform.Other, null, null, null);
             }
 
-            var directory = Directory.Exists(cwd) ? cwd : Environment.CurrentDirectory;
+            var directory = ResolveDirectory(cwd, Directory.Exists(cwd), Environment.CurrentDirectory);
 
             if (OperatingSystem.IsWindows())
             {
                 var started = TerminalLauncher.StartWindowsProcess(useWindowsTerminal =>
                     NewChatCommand.WindowsProcessStartInfo(cli, binary, directory, useWindowsTerminal));
 
-                return started
-                    ? new LaunchResult(LaunchOutcome.Launched, name + " started in " + directory + ".")
-                    : new LaunchResult(LaunchOutcome.SpawnFailed, "Couldn't open a terminal for " + name + ".");
+                return Decide(name, binary, directory, NewChatPlatform.Windows, started, null, null);
             }
 
             if (!OperatingSystem.IsMacOS())
             {
-                return new LaunchResult(
-                    LaunchOutcome.SpawnFailed, "Starting a new chat isn't supported on this platform yet.");
+                return Decide(name, binary, directory, NewChatPlatform.Other, null, null, null);
             }
 
             // "exec " so the terminal's own shell becomes the CLI rather than
@@ -70,18 +82,73 @@ namespace ClaudeBuddy
             // AgentTeamViewer.AttachSession prefers PlaceInTmux over a bare
             // window: someone who lives in tmux gets a pane inside the thing
             // they use to move between windows, rather than a window outside
-            // it.
-            if (TerminalLauncher.PlaceInTmux(command, directory) is { Length: > 0 })
+            // it. The terminal-window fallback is only even attempted when
+            // tmux didn't take the command, which is why terminalLaunched
+            // stays null rather than false on the path that never runs it —
+            // Decide treats "never tried" and "tried and failed" as the same
+            // failure, but RealLaunch itself still only opens one window.
+            var tmuxPane = TerminalLauncher.PlaceInTmux(command, directory);
+            bool? terminalLaunched = null;
+
+            if (string.IsNullOrEmpty(tmuxPane))
             {
-                return new LaunchResult(LaunchOutcome.Launched, name + " started in " + directory + ".");
+                terminalLaunched = TerminalLauncher.LaunchInTerminal(
+                    TerminalLauncher.TerminalApp(), directory, command);
             }
 
-            var launched = TerminalLauncher.LaunchInTerminal(TerminalLauncher.TerminalApp(), directory, command);
-
-            return launched
-                ? new LaunchResult(LaunchOutcome.Launched, name + " started in " + directory + ".")
-                : new LaunchResult(LaunchOutcome.SpawnFailed, "Couldn't open a terminal for " + name + ".");
+            return Decide(name, binary, directory, NewChatPlatform.MacOS, null, tmuxPane, terminalLaunched);
         }
+
+        // The working directory to actually launch into: the requested one
+        // when it's real, the process's own current directory otherwise —
+        // the same fallback AgentTeamViewer.AttachSessionOnWindows already
+        // uses for an orb whose recorded cwd no longer exists.
+        internal static string ResolveDirectory(string cwd, bool cwdExists, string currentDirectory) =>
+            cwdExists ? cwd : currentDirectory;
+
+        // Every decision behind the LaunchResult a click on Start sees: which
+        // outcome it is, and what the message says. Takes the *results* of
+        // whichever I/O RealLaunch already ran — never runs any itself — so
+        // a test can hand it every combination directly rather than needing a
+        // Windows box, a Mac, a missing binary and a dead tmux server to prove
+        // each branch is wired to the right message.
+        //
+        // windowsLaunched only means anything when platform is Windows;
+        // macTmuxPane/macTerminalLaunched only when platform is MacOS. Passing
+        // the "wrong" ones for a given platform is harmless — the switch below
+        // never reads them — which is why Decide takes all of them rather than
+        // being three separate overloads RealLaunch would have to pick between.
+        internal static LaunchResult Decide(
+            string displayName, string? binary, string directory, NewChatPlatform platform,
+            bool? windowsLaunched, string? macTmuxPane, bool? macTerminalLaunched)
+        {
+            if (binary is null)
+            {
+                return new LaunchResult(
+                    LaunchOutcome.NotFound,
+                    displayName + " " + NewChatAvailability.NotFoundReasonSuffix + ".");
+            }
+
+            return platform switch
+            {
+                NewChatPlatform.Windows => windowsLaunched == true
+                    ? Launched(displayName, directory)
+                    : SpawnFailed(displayName),
+
+                NewChatPlatform.MacOS => !string.IsNullOrEmpty(macTmuxPane) || macTerminalLaunched == true
+                    ? Launched(displayName, directory)
+                    : SpawnFailed(displayName),
+
+                _ => new LaunchResult(
+                    LaunchOutcome.SpawnFailed, "Starting a new chat isn't supported on this platform yet.")
+            };
+        }
+
+        private static LaunchResult Launched(string displayName, string directory) =>
+            new(LaunchOutcome.Launched, displayName + " started in " + directory + ".");
+
+        private static LaunchResult SpawnFailed(string displayName) =>
+            new(LaunchOutcome.SpawnFailed, "Couldn't open a terminal for " + displayName + ".");
 
         [ExcludeFromCodeCoverage]
         private static string? LocateFresh(NewChatCli cli) => cli switch

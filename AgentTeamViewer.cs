@@ -885,20 +885,14 @@ namespace ClaudeBuddy
         // Finder it gets the bare system one — and unlike a session's status
         // file there's no recorded location to start from here, so this is the
         // same candidate list TerminalFocuser falls back to.
-        // Excluded from coverage: probes the filesystem for a tmux binary.
+        //
+        // Moved to TerminalLauncher.ResolveTmux for CB-168 (QA caught the two
+        // copies going byte-identical rather than being the same method — the
+        // first fix to one would have silently left the other stale). Kept as
+        // a one-line forwarder so ViewingPane and AttachTmuxSocket below don't
+        // change.
         [ExcludeFromCodeCoverage]
-        private static string? ResolveTmux()
-        {
-            string[] candidates =
-            {
-                "/opt/homebrew/bin/tmux",
-                "/usr/local/bin/tmux",
-                "/usr/bin/tmux",
-                "/opt/local/bin/tmux"
-            };
-
-            return candidates.FirstOrDefault(File.Exists);
-        }
+        private static string? ResolveTmux() => TerminalLauncher.ResolveTmux();
 
         // Whichever terminal is already running, so the viewer opens where the
         // user's other terminals are rather than waking a second app. Ordered
