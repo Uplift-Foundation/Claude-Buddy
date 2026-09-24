@@ -460,13 +460,28 @@ public class SoundSettingsRowTests : IDisposable
     // FlushPendingPreviewForTests' own guard: calling it with nothing armed
     // — the common case, since most cases above call it defensively even
     // when nothing was going to play — must stay a no-op rather than throw
-    // on a null timer or play something stale.
+    // on a null timer or play something stale. Both of the guard's shapes
+    // of "nothing armed": a timer that has never been created at all
+    // (reset first — see ResetPreviewDebounceForTests' own comment on why
+    // that reset has to be forced rather than merely arranged), and one
+    // that exists but is not currently running, reached immediately
+    // afterward the ordinary way.
     [AvaloniaFact]
     public void FlushingWithNothingPendingIsASafeNoOp()
     {
+        SettingsWindow.ResetPreviewDebounceForTests();
         SettingsWindow.FlushPendingPreviewForTests();
-        SettingsWindow.FlushPendingPreviewForTests();
+        Assert.Empty(_played);
 
+        SettingsWindow.FlushPendingPreviewForTests();
+        Assert.Empty(_played);
+
+        // A second consecutive reset: this time _previewTimer is guaranteed
+        // already null (the first reset just set it), covering
+        // ResetPreviewDebounceForTests' own `_previewTimer?.Stop()` null arm
+        // — the first call above could land on either arm depending on
+        // whether an earlier test in this process had already created one.
+        SettingsWindow.ResetPreviewDebounceForTests();
         Assert.Empty(_played);
     }
 

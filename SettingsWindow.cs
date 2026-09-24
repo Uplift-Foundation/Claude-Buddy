@@ -2962,6 +2962,23 @@ namespace ClaudeBuddy
             PlayPendingPreview();
         }
 
+        // internal: puts the debounce back in its pre-any-preview state.
+        // _previewTimer is a process-wide static that is created once and
+        // never reverts to null on its own, so FlushPendingPreviewForTests'
+        // `_previewTimer is null` arm is otherwise unreachable from a test
+        // the moment any other test anywhere in the process has triggered a
+        // preview first — which, given xUnit does not guarantee run order,
+        // is not a case a test can otherwise arrange to be first.
+        // ClaudeBuddySettings' identical _deferred field has the same shape
+        // and no equivalent reset; this is the local fix for it rather than
+        // leaving the arm permanently unreachable.
+        internal static void ResetPreviewDebounceForTests()
+        {
+            _previewTimer?.Stop();
+            _previewTimer = null;
+            _pendingPreviewPath = null;
+        }
+
         private static void PlayPendingPreview()
         {
             var path = _pendingPreviewPath;
