@@ -19,6 +19,26 @@ namespace ClaudeBuddy.Tests;
 // calls StopAll also resets the flag itself in a finally block, which
 // covers running order within the collection; sharing the collection is
 // what covers the two classes never overlapping in time at all.
+//
+// CB-168 (Ines, round 2 of this ticket's ChimePlayerTests work): this class
+// used to hold four tests that swept a real StopAll or a real PlayPreview
+// across the spawn of a real afplay, deciding "killed promptly" from
+// whether a Process/Thread wait returned inside a short fixed window. QA
+// measured all four flaky under real load — a genuine, correct kill can
+// take several seconds once the machine is contended, and a fixed window
+// can't tell that apart from "never happened." Rather than widen the
+// window again (the same wrong fix in a wider margin — see the class
+// header this replaced, and CLAUDE.md's "automated suite" section), the
+// thing under test (which process gets a kill request, in what order) and
+// the thing that made the old tests flaky (how long the OS takes to tear a
+// process down) are now split apart. ChimePlayer.IChimeProcess is the seam
+// that makes that possible: everything below asserts kill/track decisions
+// against FakeChimeProcess, a fake with no OS underneath it and no wall
+// clock anywhere in the assertion. What a fake cannot prove — that
+// RealChimeProcess's three OS-facing members actually do what they claim
+// against a real subprocess — is what the one or two tests in
+// ChimePlayerIntegrationTests.cs are for instead, with a generous ceiling
+// and no fine-grained timing.
 [Collection("Settings")]
 public class ChimePlayerTests
 {
@@ -118,37 +138,68 @@ public class ChimePlayerTests
         Assert.False(proc.StartInfo.UseShellExecute);
     }
 
-    // Round 3(d): a Settings preview and the summary-fallback chime both
-    // call ChimePlayer.Play directly, and can be running at the same time
-    // as an ordinary scan chime — none of them serialized against any of
-    // the others. A single Process? slot (pre-round-2) could only ever
-    // remember one of them, so StopAll on Quit would kill whichever "won"
-    // that slot and leave the other still making noise; _live is a set for
-    // exactly this reason. This proves the set, not the audio: two real
-    // processes, registered through the same Add path Play itself uses
-    // (TrackForTests — PlayForTests bypasses that machinery entirely, since
-    // there is no real process behind a substituted chime to track), are
-    // BOTH still killed by one StopAll call. Neither process plays any
-    // audio — a harmless, long-running command stands in for "still mid-
-    // playback when Quit happens," which is all StopAll actually cares
-    // about killing.
+    // A fake IChimeProcess: no OS underneath it at all. HasExited only ever
+    // becomes true via Kill() — nothing here simulates a chime finishing on
+    // its own — so WaitForExit's immediate `return HasExited` means every
+    // test below runs in the time it takes managed code to run, never the
+    // time it takes an OS process to spawn, play, or tear down. KillLog, when
+    // given, is what lets a test assert *order* ("the previous one was
+    // killed before the next one was tracked") rather than only "eventually
+    // killed" — the fake-based tests' whole point over the real-process
+    // sweeps this file used to hold.
+    private sealed class FakeChimeProcess : ChimePlayer.IChimeProcess
+    {
+        private static int _nextId;
+        private readonly List<string>? _killLog;
+        private readonly string _label;
+
+        internal FakeChimeProcess(string label = "", List<string>? killLog = null)
+        {
+            Id = System.Threading.Interlocked.Increment(ref _nextId);
+            _label = label.Length > 0 ? label : $"fake{Id}";
+            _killLog = killLog;
+        }
+
+        public int Id { get; }
+        public bool HasExited { get; private set; }
+        public bool Killed { get; private set; }
+        public int KillCallCount { get; private set; }
+
+        public bool WaitForExit(int milliseconds) => HasExited;
+
+        public void Kill()
+        {
+            Killed = true;
+            HasExited = true;
+            KillCallCount++;
+            _killLog?.Add(_label);
+        }
+
+        public void Dispose() { }
+    }
+
+    // Replaces StopAllKillsEveryConcurrentlyTrackedProcessNotJustOne's old
+    // real-process version. Proves the same thing the comment on _live
+    // always described — a set, not a slot, so StopAll reaches every
+    // concurrently-tracked chime — with no real process and no wait at all:
+    // Kill() on a fake is synchronous, so the assertion is immediate.
     [Fact]
-    public void StopAllKillsEveryConcurrentlyTrackedProcessNotJustOne()
+    public void StopAllKillsEveryConcurrentlyTrackedFakeProcess()
     {
         try
         {
-            using var a = StartLongRunningProcessForTests();
-            using var b = StartLongRunningProcessForTests();
+            var a = new FakeChimeProcess();
+            var b = new FakeChimeProcess();
             ChimePlayer.TrackForTests(a);
             ChimePlayer.TrackForTests(b);
 
-            Assert.False(a.HasExited);
-            Assert.False(b.HasExited);
+            Assert.False(a.Killed);
+            Assert.False(b.Killed);
 
             ChimePlayer.StopAll();
 
-            Assert.True(a.WaitForExit(3000), "the first tracked process was not killed by StopAll");
-            Assert.True(b.WaitForExit(3000), "the second tracked process was not killed by StopAll");
+            Assert.True(a.Killed, "the first tracked process was never asked to die");
+            Assert.True(b.Killed, "the second tracked process was never asked to die");
         }
         finally
         {
@@ -190,114 +241,131 @@ public class ChimePlayerTests
         }
     }
 
-    // QA round 3, finding 4 (LOW): stepping through the Settings sound
-    // picker at an ordinary human pace — well past the 250ms debounce,
-    // each choice its own settled request — used to start a fresh,
-    // independent ChimePlayer.Play call every time, with nothing to stop
-    // the previous one still playing underneath it. Four choices a person
-    // actually paused on sounded like four overlapping chimes.
-    //
-    // This proves the mechanism with real processes rather than the
-    // PlayForTests seam, the same reason StopAllKillsEveryConcurrently
-    // TrackedProcessNotJustOne above does: a seam has nothing real for
-    // KillTree to act on, so the only way to prove a process actually
-    // dies is to give it one. SetCurrentPreviewForTests reaches the exact
-    // kill-then-replace path PlayPreview's own production code uses
-    // (KillPreviousAndTrackNewPreview), registering each harmless,
-    // long-running process — never real audio — the same way Play() would
-    // register a real preview process.
+    // Round 4, item 2, rewritten for CB-168: the old version of this test
+    // proved "Play bails under the lock before starting a real process" by
+    // timing how fast Play() returned (< 200ms) — a real process spawn is
+    // slower than an immediate return, but that is still a wall-clock proxy
+    // for the real question. ProcessFactoryForTests answers the real
+    // question directly: with _stopped already true, StartProcess (and so
+    // the factory) must never even be called. No timing anywhere.
     [Fact]
-    public void PlayPreviewKillsTheLivePreviewProcessBeforeTrackingTheNext()
+    public void PlayNeverBuildsAProcessOnceStopAllHasRun()
     {
         try
         {
-            using var first = StartLongRunningProcessForTests();
-            using var second = StartLongRunningProcessForTests();
+            var factoryCalls = 0;
+            ChimePlayer.PlayForTests = null; // the real path, not the seam
+            ChimePlayer.ProcessFactoryForTests = _ => { factoryCalls++; return new FakeChimeProcess(); };
+
+            ChimePlayer.StopAll(); // nothing tracked yet — just flips _stopped
+
+            ChimePlayer.Play("/System/Library/Sounds/Glass.aiff");
+
+            Assert.Equal(0, factoryCalls);
+        }
+        finally
+        {
+            ChimePlayer.ProcessFactoryForTests = null;
+            ChimePlayer.ResetStoppedForTests();
+        }
+    }
+
+    // CB-168: the guard every test assembly's TestBootstrap turns on,
+    // proved the same way PlayNeverBuildsAProcessOnceStopAllHasRun proves
+    // _stopped above, but by timing rather than a factory-call count —
+    // StartProcess's real branch (BuildProcess/TryStart) has no seam of its
+    // own for SilenceForTests to be observed through other than the wall
+    // clock, since the whole point of the guard is to stop *before*
+    // building anything a test could otherwise inspect. A real afplay
+    // spawn-and-run takes meaningfully longer than an immediate return
+    // does, the same reasoning PlayNeverStartsARealProcessOnceStopAllHasRun
+    // used before this class grew a fake seam.
+    //
+    // Deliberately leaves both PlayForTests and ProcessFactoryForTests
+    // null: this is the shape every OTHER test file in the suite
+    // (TurnSoundsTests, OrbSoundSubmenuTests, and the rest) actually calls
+    // Play looking like — no seam of its own, guard left on by
+    // TestBootstrap — so this proves the shape those tests already rely
+    // on, not the one this file's own real-path cases opt out of.
+    [Fact]
+    public void SilenceForTestsStopsPlayBeforeItStartsARealProcess()
+    {
+        Assert.True(ChimePlayer.SilenceForTests, "expected TestBootstrap to have already turned this on");
+
+        // Set explicitly rather than trusted from whatever the previous
+        // test in this file left behind.
+        ChimePlayer.PlayForTests = null;
+        ChimePlayer.ProcessFactoryForTests = null;
+
+        var sw = Stopwatch.StartNew();
+        ChimePlayer.Play("/System/Library/Sounds/Glass.aiff");
+        sw.Stop();
+
+        Assert.True(sw.ElapsedMilliseconds < 200,
+            $"Play took {sw.ElapsedMilliseconds}ms — it should have bailed on the guard, before ever starting a process");
+    }
+
+    // Replaces PlayPreviewKillsTheLivePreviewProcessBeforeTrackingTheNext's
+    // old real-process version. The order log is what proves the sequence
+    // KillPreviousAndTrackNewPreview's own comment describes — the previous
+    // preview is killed, and only the previous one — rather than merely
+    // "both eventually died," which a bug that killed things in the wrong
+    // order could still pass.
+    [Fact]
+    public void PlayPreviewKillsThePreviousFakeBeforeTrackingTheNext()
+    {
+        try
+        {
+            var order = new List<string>();
+            var first = new FakeChimeProcess("first", order);
+            var second = new FakeChimeProcess("second", order);
 
             ChimePlayer.SetCurrentPreviewForTests(first);
-            Assert.False(first.HasExited);
+            Assert.False(first.Killed);
 
             ChimePlayer.SetCurrentPreviewForTests(second);
 
-            Assert.True(first.WaitForExit(3000), "the previous preview process was not killed when a new one started");
-            Assert.False(second.HasExited);
+            Assert.True(first.Killed, "the previous preview was never asked to die when a new one started");
+            Assert.False(second.Killed);
+            Assert.Equal(new[] { "first" }, order); // killed exactly once, and only the previous one
 
             // And still reachable by StopAll, same as any other tracked chime
             // — the fix's other half named explicitly: "the process must still
             // be tracked in _live so StopAll covers it."
             ChimePlayer.StopAll();
-            Assert.True(second.WaitForExit(3000), "StopAll did not reach the tracked preview process");
+            Assert.True(second.Killed, "StopAll did not reach the tracked preview process");
         }
         finally
         {
-            // Round 4: StopAll also sets _stopped — reset it so a later
-            // test's ordinary Play/PlayPreview call is not silently a no-op.
             ChimePlayer.ResetStoppedForTests();
         }
     }
 
-    // Round 4: the preview channel's kill-then-replace logic is scoped to
+    // Replaces PlayPreviewNeverKillsAConcurrentScanChime's old real-process
+    // version. The preview channel's kill-then-replace logic is scoped to
     // _currentPreview specifically, not to "whatever is in _live" — a scan
-    // chime (or the summary-fallback chime) is tracked in _live too
-    // (TrackForTests registers it exactly the way Play() does) but is
-    // never assigned to _currentPreview, so starting a preview while one
-    // is playing must leave it alone. Killing a scan chime because someone
-    // opened Settings and arrowed through the sound picker would be a
-    // second, worse bug than the one this channel was built to fix.
+    // chime is tracked in _live too (TrackForTests registers it exactly the
+    // way Play() does) but is never assigned to _currentPreview, so starting
+    // a preview while one is playing must leave it alone.
     [Fact]
-    public void PlayPreviewNeverKillsAConcurrentScanChime()
+    public void PlayPreviewNeverKillsAConcurrentFakeScanChime()
     {
         try
         {
-            using var scanChime = StartLongRunningProcessForTests();
+            var scanChime = new FakeChimeProcess();
             ChimePlayer.TrackForTests(scanChime); // registered the way an ordinary Play() call tracks a scan chime — never as the current preview
 
-            using var preview = StartLongRunningProcessForTests();
+            var preview = new FakeChimeProcess();
             ChimePlayer.SetCurrentPreviewForTests(preview);
 
-            Assert.False(scanChime.HasExited, "starting a preview killed an unrelated scan chime");
-            Assert.False(preview.HasExited);
+            Assert.False(scanChime.Killed, "starting a preview killed an unrelated scan chime");
+            Assert.False(preview.Killed);
 
             // Both still reachable by StopAll, since both are in _live —
             // proving the scan chime was spared, not merely untracked.
             ChimePlayer.StopAll();
-            Assert.True(scanChime.WaitForExit(3000), "StopAll did not reach the scan chime");
-            Assert.True(preview.WaitForExit(3000), "StopAll did not reach the preview");
-        }
-        finally
-        {
-            // Round 4: StopAll also sets _stopped — reset it so a later
-            // test's ordinary Play/PlayPreview call is not silently a no-op.
-            ChimePlayer.ResetStoppedForTests();
-        }
-    }
-
-    // Round 4, item 1: closes a real time-of-check-to-time-of-use gap —
-    // the real (non-seam) Play path used to read IsStopped, release that
-    // lock, and only then add to _live and Start; StopAll running in that
-    // exact window would find _live still empty and never learn about a
-    // process Play went on to start right afterward. The fix moved the
-    // check inside the same lock as the Add, so once _stopped is true no
-    // new process can ever be added at all. Not reproduced as an actual
-    // race here (this codebase has no seam inside the lock to pause on) —
-    // proved instead by timing: with _stopped already true before Play is
-    // called at all, the real path must bail before ever reaching
-    // BuildProcess/Start, and a real afplay spawn-and-run takes
-    // meaningfully longer than an immediate return does.
-    [Fact]
-    public void PlayNeverStartsARealProcessOnceStopAllHasRun()
-    {
-        try
-        {
-            ChimePlayer.PlayForTests = null; // the real path, not the seam
-            ChimePlayer.StopAll(); // nothing tracked yet — just flips _stopped
-
-            var sw = Stopwatch.StartNew();
-            ChimePlayer.Play("/System/Library/Sounds/Glass.aiff");
-            sw.Stop();
-
-            Assert.True(sw.ElapsedMilliseconds < 200,
-                $"Play took {sw.ElapsedMilliseconds}ms — it should have bailed under the lock, before ever starting a process");
+            Assert.True(scanChime.Killed, "StopAll did not reach the scan chime");
+            Assert.True(preview.Killed, "StopAll did not reach the preview");
         }
         finally
         {
@@ -305,37 +373,45 @@ public class ChimePlayerTests
         }
     }
 
-    // Round 4, item 2, end to end: a real "current" preview (already
-    // started, the way KillPreviousAndTrackNewPreview's own new contract
-    // requires) is killed by a real PlayPreview call, not just by
-    // SetCurrentPreviewForTests's own direct path — this is what actually
-    // exercises PlayOnePreview's new ordering (Start the new process,
-    // THEN track it and kill the old one), rather than only the
-    // already-started components PlayPreviewKillsTheLivePreviewProcess-
-    // BeforeTrackingTheNext proves in isolation.
+    // Replaces PlayPreviewEndToEndKillsARealPreviousPreview. Drives the real
+    // PlayPreview -> RunPreviewWorker -> PlayOnePreview path (not
+    // SetCurrentPreviewForTests's direct call), the same distinction the
+    // method this replaces existed to cover, but against
+    // ProcessFactoryForTests instead of a real afplay. The only wait here is
+    // for the two independent background Tasks PlayPreview's own comment
+    // describes (the kill, and the worker starting the next preview) to be
+    // scheduled — ordinary async handoff, not OS process teardown. A fake's
+    // Kill() and WaitForExit() are both synchronous, so a correctly-wired
+    // path finishes in well under the five-second deadline below; only a
+    // genuinely broken handoff would ever approach it.
     [Fact]
-    public async Task PlayPreviewEndToEndKillsARealPreviousPreview()
+    public async Task PlayPreviewEndToEndDrivesTheRealWorkerAgainstAFake()
     {
         try
         {
-            using var previous = StartLongRunningProcessForTests();
+            var previous = new FakeChimeProcess("previous");
             ChimePlayer.SetCurrentPreviewForTests(previous);
 
-            ChimePlayer.PlayForTests = null; // the real path
-            ChimePlayer.PlayPreview("/System/Library/Sounds/Ping.aiff");
+            ChimePlayer.PlayForTests = null; // the real Play/PlayOnePreview path
+            var next = new FakeChimeProcess("next");
+            ChimePlayer.ProcessFactoryForTests = _ => next;
 
-            Assert.True(previous.WaitForExit(3000),
-                "a real PlayPreview call did not kill the previous preview process");
+            ChimePlayer.PlayPreview("does-not-matter.wav");
 
-            // Give the worker a moment to reach PlayOnePreview's own
-            // tracking lock before proving StopAll can still reach whatever
-            // it started.
-            await Task.Delay(300);
-            ChimePlayer.StopAll();
+            var deadline = DateTime.UtcNow.AddSeconds(5);
+            while ((!previous.Killed || next.KillCallCount == 0) && DateTime.UtcNow < deadline)
+            {
+                await Task.Delay(5);
+            }
+
+            Assert.True(previous.Killed, "the real worker path did not kill the previous preview");
+            Assert.True(next.KillCallCount > 0, "the real worker path never reached the newly-started preview at all");
         }
         finally
         {
             ChimePlayer.PlayForTests = null;
+            ChimePlayer.ProcessFactoryForTests = null;
+            ChimePlayer.StopAll();
             ChimePlayer.ResetStoppedForTests();
         }
     }
@@ -345,14 +421,14 @@ public class ChimePlayerTests
     // asked for it is later cancelled — StopAll's own sticky contract is
     // deliberately not this method's.
     [Fact]
-    public void KillCurrentlyPlayingForCancellableShutdownKillsWithoutStickingStopped()
+    public void KillCurrentlyPlayingForCancellableShutdownKillsFakeWithoutStickingStopped()
     {
-        using var proc = StartLongRunningProcessForTests();
+        var proc = new FakeChimeProcess();
         ChimePlayer.TrackForTests(proc);
 
         ChimePlayer.KillCurrentlyPlayingForCancellableShutdown();
 
-        Assert.True(proc.WaitForExit(3000), "the tracked process was not killed");
+        Assert.True(proc.Killed, "the tracked process was not asked to die");
         Assert.False(ChimePlayer.IsStopped, "a cancellable shutdown must not set the sticky stopped flag");
     }
 
@@ -360,22 +436,18 @@ public class ChimePlayerTests
     // desktop.ShutdownRequested to KillCurrentlyPlayingForCancellableShutdown
     // — two different methods precisely because they must behave
     // differently. This is StopAll's own half of that contract, in one
-    // test rather than split across the two that already exist
-    // (StopAllKillsEveryConcurrentlyTrackedProcessNotJustOne, which never
-    // checks IsStopped, and PlayIsANoOpOnceStopAllHasRun, which never
-    // tracks a live process): a real process is both killed AND the flag
-    // is set, together, the way Exit actually needs both to be true.
+    // test rather than split across the two that already exist above.
     [Fact]
-    public void StopAllKillsALiveProcessAndSetsStopped()
+    public void StopAllKillsAFakeProcessAndSetsStopped()
     {
         try
         {
-            using var proc = StartLongRunningProcessForTests();
+            var proc = new FakeChimeProcess();
             ChimePlayer.TrackForTests(proc);
 
             ChimePlayer.StopAll();
 
-            Assert.True(proc.WaitForExit(3000), "StopAll did not kill the tracked process");
+            Assert.True(proc.Killed, "StopAll did not ask to kill the tracked process");
             Assert.True(ChimePlayer.IsStopped, "StopAll (the Exit path) must set the sticky stopped flag");
         }
         finally
@@ -384,304 +456,107 @@ public class ChimePlayerTests
         }
     }
 
-    // QA round 5, finding 1: reproduces the regression round 5(a)'s own
-    // _previewChain introduced. A silent WAV rather than a system sound —
-    // long enough (several seconds) that "still playing" is genuinely
-    // true when the second request lands, and silent so the run doesn't
-    // make noise. Drives the real PlayPreview/PlayOnePreview path, not
-    // the seam: the seam never populates _currentPreview at all (its
-    // branch inside PlayOnePreview returns before
-    // KillPreviousAndTrackNewPreview is ever reached), so it has no
-    // "victim" for the chain to have queued a kill behind in the first
-    // place — only a real process, tracked the real way, can show this.
+    // CB-168 coverage round: the historically riskiest race in this file —
+    // Round 5, finding 2's own comment on Play names it directly, and
+    // PlayOnePreview has the same shape (Round 4, item 2). StartProcess's
+    // seam is the only place a test can land this: the factory stands in
+    // for "the moment Start just returned," so calling StopAll from inside
+    // it is exactly a StopAll landing in the real ~20ms window between a
+    // real process starting and this method's own tracking — with no wall
+    // clock needed to hit it, since the factory always runs synchronously
+    // inside StartProcess, before Play's own re-check.
     [Fact]
-    public void ChoosingANewSoundCutsOffThePreviewAlreadyPlaying()
+    public void PlayKillsTheProcessIfStopAllLandsBetweenStartAndTracking()
     {
-        if (!OperatingSystem.IsMacOS()) return; // afplay is the only real target this test drives
-
-        var dir = Path.Combine(Path.GetTempPath(), "cb-chime-race1-" + Guid.NewGuid());
-        Directory.CreateDirectory(dir);
         try
         {
-            var first = WriteSilentWav(Path.Combine(dir, "first.wav"), seconds: 4);
-            var second = WriteSilentWav(Path.Combine(dir, "second.wav"), seconds: 4);
-
-            ChimePlayer.PlayForTests = null; // the real path — see the comment above
-            ChimePlayer.PlayPreview(first);
-
-            // Wait for the worker to genuinely be mid-playback (not merely
-            // queued) before the second request lands — this is what
-            // makes _previewWorkerRunning true and _currentPreview
-            // non-null at the same time, the exact state the regression
-            // needed to reproduce.
-            Process? firstAfplay = null;
-            var findDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
-            while (DateTime.UtcNow < findDeadline)
+            var fake = new FakeChimeProcess();
+            ChimePlayer.PlayForTests = null; // the real path, not the seam
+            ChimePlayer.ProcessFactoryForTests = _ =>
             {
-                var candidates = Process.GetProcessesByName("afplay");
-                if (candidates.Length > 0)
-                {
-                    firstAfplay = candidates[0];
-                    break;
-                }
+                ChimePlayer.StopAll();
+                return fake;
+            };
 
-                Thread.Sleep(20);
+            ChimePlayer.Play("/System/Library/Sounds/Glass.aiff");
+
+            Assert.True(fake.Killed,
+                "a chime whose StopAll race landed right after Start was never killed");
+        }
+        finally
+        {
+            ChimePlayer.ProcessFactoryForTests = null;
+            ChimePlayer.ResetStoppedForTests();
+        }
+    }
+
+    // PlayOnePreview's own version of the race above — driven through the
+    // real PlayPreview -> RunPreviewWorker -> PlayOnePreview path (not
+    // SetCurrentPreviewForTests' direct call), the same distinction
+    // PlayPreviewEndToEndDrivesTheRealWorkerAgainstAFake exists to cover.
+    // The only wait is for the background worker task to reach the
+    // factory call and, past it, Kill() — ordinary async handoff, never OS
+    // process teardown, since a fake's Kill()/WaitForExit() are both
+    // synchronous.
+    [Fact]
+    public async Task PlayPreviewKillsTheProcessIfStopAllLandsBetweenStartAndTracking()
+    {
+        try
+        {
+            var fake = new FakeChimeProcess();
+            ChimePlayer.PlayForTests = null;
+            ChimePlayer.ProcessFactoryForTests = _ =>
+            {
+                ChimePlayer.StopAll();
+                return fake;
+            };
+
+            ChimePlayer.PlayPreview("does-not-matter.wav");
+
+            var deadline = DateTime.UtcNow.AddSeconds(5);
+            while (fake.KillCallCount == 0 && DateTime.UtcNow < deadline)
+            {
+                await Task.Delay(5);
             }
 
-            Assert.NotNull(firstAfplay);
-            Assert.False(firstAfplay!.HasExited, "the first preview was not actually still playing when the second request was made");
-
-            ChimePlayer.PlayPreview(second);
-
-            // On 84f445a6 this took roughly the file's own duration (about
-            // 4.7s measured); on the fix (matching a123e831's two
-            // independent tasks) it takes on the order of tens of
-            // milliseconds. 1.5s is generous slack above that, and still
-            // nowhere near the 4s file duration or the 5s cap.
-            Assert.True(firstAfplay.WaitForExit(1500),
-                "the previous preview was not cut off promptly by the new one");
+            Assert.True(fake.Killed,
+                "a preview whose StopAll race landed right after Start was never killed");
         }
         finally
         {
             ChimePlayer.PlayForTests = null;
-            ChimePlayer.StopAll(); // unblocks the worker if it is still mid-wait on `second`
+            ChimePlayer.ProcessFactoryForTests = null;
             ChimePlayer.ResetStoppedForTests();
-            WaitForNoPreviewWorker();
-            try { Directory.Delete(dir, true); } catch { }
         }
     }
 
-    // QA round 6, F1 (CB-167): sweeps a second PlayPreview across the
-    // first one's spawn. Landing while the worker is still inside
-    // BuildProcess/TryStart used to find nothing tracked to kill, so the
-    // first preview played its full length; PlayOnePreview's superseded
-    // check is what cuts it off now.
+    // FinishStarting: the decision StartProcess makes from TryStart's real
+    // answer, pulled out so both outcomes are provable without a real OS
+    // process launch (TryStart itself stays excluded — see its own
+    // comment). A plain, never-started Process is safe to hand this either
+    // way: RealChimeProcess's constructor only stores the reference, and
+    // Process.Dispose() on an object that was built but never started is
+    // an ordinary, safe no-op.
     [Fact]
-    public void ASecondPreviewLandingDuringTheFirstsSpawnStillCutsItOff()
+    public void FinishStartingDisposesAndReturnsNullWhenStartFailed()
     {
-        if (!OperatingSystem.IsMacOS()) return;
+        // Not wrapped in `using` — FinishStarting(proc, false) is the one
+        // disposing it, which is the behaviour this test asserts.
+        var proc = new Process();
 
-        var dir = Path.Combine(Path.GetTempPath(), "cb-chime-r6-" + Guid.NewGuid());
-        Directory.CreateDirectory(dir);
-        var misses = new List<string>();
-        try
-        {
-            ChimePlayer.PlayForTests = null;
-            for (var delayUs = 0; delayUs <= 30000; delayUs += 1000)
-            {
-                var first = WriteSilentWav(Path.Combine(dir, $"a{delayUs}.wav"), 3);
-                var second = WriteSilentWav(Path.Combine(dir, $"b{delayUs}.wav"), 3);
-                var before = Process.GetProcessesByName("afplay").Select(p => p.Id).ToHashSet();
+        var result = ChimePlayer.FinishStarting(proc, started: false);
 
-                var sw = Stopwatch.StartNew();
-                ChimePlayer.PlayPreview(first);
-                while (sw.Elapsed.TotalMilliseconds * 1000 < delayUs) Thread.SpinWait(50);
-                ChimePlayer.PlayPreview(second);
-
-                // Find the process playing `first` by its argument.
-                Process? firstProc = null;
-                var deadline = DateTime.UtcNow + TimeSpan.FromMilliseconds(800);
-                while (DateTime.UtcNow < deadline && firstProc is null)
-                {
-                    foreach (var p in Process.GetProcessesByName("afplay").Where(p => !before.Contains(p.Id)))
-                    {
-                        if (ArgsOf(p.Id).Contains(first)) { firstProc = p; break; }
-                    }
-                    Thread.Sleep(2);
-                }
-
-                if (firstProc is not null && !firstProc.WaitForExit(1500)) misses.Add($"{delayUs / 1000}ms");
-                
-                ChimePlayer.StopAll();
-                ChimePlayer.ResetStoppedForTests();
-                var quiet = DateTime.UtcNow + TimeSpan.FromSeconds(4);
-                while (DateTime.UtcNow < quiet &&
-                       Process.GetProcessesByName("afplay").Any(p => !before.Contains(p.Id)))
-                    Thread.Sleep(20);
-                Thread.Sleep(50);
-            }
-        }
-        finally
-        {
-            ChimePlayer.PlayForTests = null;
-            ChimePlayer.StopAll();
-            ChimePlayer.ResetStoppedForTests();
-            try { Directory.Delete(dir, true); } catch { }
-        }
-
-        Assert.True(misses.Count == 0, "first preview survived a second request at: " + string.Join(", ", misses));
+        Assert.Null(result);
     }
 
-    // QA round 7, F3 (CB-167): the other half of F1. Cutting the first
-    // preview off is only right if the newest request then plays; with the
-    // superseded read forced to true, the F1 test above still passed while
-    // nothing played at all. This one fails on that mutant at every delay.
     [Fact]
-    public void TheNewestPreviewStillPlaysWhenItLandsDuringTheFirstsSpawn()
+    public void FinishStartingWrapsTheProcessWhenStartSucceeded()
     {
-        if (!OperatingSystem.IsMacOS()) return;
-        var dir = Path.Combine(Path.GetTempPath(), "cb-chime-r7-" + Guid.NewGuid());
-        Directory.CreateDirectory(dir);
-        var silent = new List<string>();
-        try
-        {
-            ChimePlayer.PlayForTests = null;
-            for (var delayUs = 0; delayUs <= 30000; delayUs += 1000)
-            {
-                var first = WriteSilentWav(Path.Combine(dir, $"a{delayUs}.wav"), 3);
-                var second = WriteSilentWav(Path.Combine(dir, $"b{delayUs}.wav"), 3);
-                var before = Process.GetProcessesByName("afplay").Select(p => p.Id).ToHashSet();
+        var proc = new Process();
 
-                var sw = Stopwatch.StartNew();
-                ChimePlayer.PlayPreview(first);
-                while (sw.Elapsed.TotalMilliseconds * 1000 < delayUs) Thread.SpinWait(50);
-                ChimePlayer.PlayPreview(second);
+        var result = ChimePlayer.FinishStarting(proc, started: true);
 
-                Process? secondProc = null;
-                var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
-                while (DateTime.UtcNow < deadline && secondProc is null)
-                {
-                    secondProc = Process.GetProcessesByName("afplay")
-                        .Where(p => !before.Contains(p.Id))
-                        .FirstOrDefault(p => ArgsOf(p.Id).Contains(second));
-                    Thread.Sleep(2);
-                }
-
-                // Still playing 700 ms after it appeared = it was allowed to play.
-                if (secondProc is null || secondProc.WaitForExit(700)) silent.Add($"{delayUs / 1000}ms");
-
-                ChimePlayer.StopAll();
-                ChimePlayer.ResetStoppedForTests();
-                var quiet = DateTime.UtcNow + TimeSpan.FromSeconds(4);
-                while (DateTime.UtcNow < quiet && Process.GetProcessesByName("afplay").Any(p => !before.Contains(p.Id)))
-                    Thread.Sleep(20);
-                Thread.Sleep(50);
-            }
-        }
-        finally
-        {
-            ChimePlayer.PlayForTests = null;
-            ChimePlayer.StopAll();
-            ChimePlayer.ResetStoppedForTests();
-            try { Directory.Delete(dir, true); } catch { }
-        }
-        Assert.True(silent.Count == 0, "newest preview never played (or was cut off) at: " + string.Join(", ", silent));
-    }
-
-    // QA round 6, F2 (CB-167): replaces a test that could not fail — a
-    // StopAll on the test thread always beat Task.Run's start-up, so every
-    // Play returned at its entry guard and the post-track re-check was
-    // never reached (mutating it to `if (false)` still passed). Gating Play
-    // on its own thread and sweeping StopAll across its spawn makes the
-    // entry-check -> StopAll -> track interleaving actually happen, and
-    // only that re-check kills the chime there.
-    [Fact]
-    public void AStopAllSweptAcrossPlaysSpawnLeavesNoChimeRunning()
-    {
-        if (!OperatingSystem.IsMacOS()) return;
-        var dir = Path.Combine(Path.GetTempPath(), "cb-chime-r6s-" + Guid.NewGuid());
-        Directory.CreateDirectory(dir);
-        var survivors = new List<string>();
-        try
-        {
-            ChimePlayer.PlayForTests = null;
-            for (var delayUs = 0; delayUs <= 30000; delayUs += 500)
-            {
-                var path = WriteSilentWav(Path.Combine(dir, $"c{delayUs}.wav"), 3);
-                var before = Process.GetProcessesByName("afplay").Select(p => p.Id).ToHashSet();
-                using var go = new ManualResetEventSlim();
-                var t = new Thread(() => { go.Wait(); ChimePlayer.Play(path); });
-                t.Start();
-                Thread.Sleep(20);
-                var sw = Stopwatch.StartNew();
-                go.Set();
-                while (sw.Elapsed.TotalMilliseconds * 1000 < delayUs) Thread.SpinWait(20);
-                ChimePlayer.StopAll();
-                // An unkilled 3 s chime keeps Play blocked in its wait; a killed
-                // one (or one never started) returns in well under a second.
-                if (!t.Join(1000)) { survivors.Add($"{delayUs}us"); t.Join(5000); }
-                ChimePlayer.ResetStoppedForTests();
-                Thread.Sleep(60);
-                foreach (var p in Process.GetProcessesByName("afplay").Where(p => !before.Contains(p.Id)))
-                {
-                    if (!p.WaitForExit(300)) { survivors.Add($"{delayUs}us"); try { p.Kill(); } catch { } }
-                }
-            }
-        }
-        finally { ChimePlayer.StopAll(); ChimePlayer.ResetStoppedForTests(); try { Directory.Delete(dir, true); } catch { } }
-        Assert.True(survivors.Count == 0, "chime survived StopAll at: " + string.Join(", ", survivors));
-    }
-
-    private static string ArgsOf(int pid)
-    {
-        try
-        {
-            using var ps = Process.Start(new ProcessStartInfo("/bin/ps", $"-o args= -p {pid}")
-            { RedirectStandardOutput = true, UseShellExecute = false })!;
-            var s = ps.StandardOutput.ReadToEnd();
-            ps.WaitForExit();
-            return s;
-        }
-        catch { return ""; }
-    }
-
-    // Gives a leftover preview worker (from a test that intentionally
-    // raced or force-stopped one) a bounded moment to notice its process
-    // died and exit its own loop, so it can never bleed into a later
-    // test's own _previewWorkerRunning/_currentPreview state.
-    private static void WaitForNoPreviewWorker()
-    {
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
-        while (DateTime.UtcNow < deadline && Process.GetProcessesByName("afplay").Length > 0)
-        {
-            Thread.Sleep(50);
-        }
-    }
-
-    // A minimal, valid, silent WAV file of the given duration — real
-    // enough for afplay to actually run it for that long, silent so the
-    // test suite makes no noise. 8kHz mono 8-bit unsigned PCM, value 128
-    // throughout (silence in that format).
-    private static string WriteSilentWav(string path, double seconds)
-    {
-        const int sampleRate = 8000;
-        var sampleCount = (int)(sampleRate * seconds);
-
-        using var stream = new FileStream(path, FileMode.Create);
-        using var writer = new BinaryWriter(stream);
-
-        writer.Write("RIFF"u8.ToArray());
-        writer.Write(36 + sampleCount);
-        writer.Write("WAVE"u8.ToArray());
-        writer.Write("fmt "u8.ToArray());
-        writer.Write(16);
-        writer.Write((short)1); // PCM
-        writer.Write((short)1); // mono
-        writer.Write(sampleRate);
-        writer.Write(sampleRate); // byte rate: 1 byte/sample * sampleRate
-        writer.Write((short)1); // block align
-        writer.Write((short)8); // bits per sample
-        writer.Write("data"u8.ToArray());
-        writer.Write(sampleCount);
-
-        var silence = new byte[sampleCount];
-        Array.Fill(silence, (byte)128);
-        writer.Write(silence);
-
-        return path;
-    }
-
-    private static Process StartLongRunningProcessForTests()
-    {
-        var startInfo = OperatingSystem.IsWindows()
-            ? new ProcessStartInfo("cmd.exe") { ArgumentList = { "/c", "ping -n 30 127.0.0.1 >NUL" } }
-            : new ProcessStartInfo("/bin/sleep") { ArgumentList = { "30" } };
-
-        startInfo.UseShellExecute = false;
-        startInfo.CreateNoWindow = true;
-        startInfo.RedirectStandardOutput = true;
-        startInfo.RedirectStandardError = true;
-
-        return Process.Start(startInfo)!;
+        Assert.NotNull(result);
+        result.Dispose();
     }
 }

@@ -102,7 +102,8 @@ namespace ClaudeBuddy
             "clickAction", "doubleClickAction", "tripleClickAction",
             "remoteControlEnabled", "remoteControlProfileDir", "remoteControlProfileDirs",
             "remoteControlIdleMinutes", "remoteControlServeOnLaunch",
-            "peerLinkEnabled", "peerLinkPort"
+            "peerLinkEnabled", "peerLinkPort",
+            "newChatRecentFolders", "newChatLastCli"
         };
 
         // JsonNode.ToJsonString(options) needs a TypeInfoResolver on the
@@ -657,6 +658,21 @@ namespace ClaudeBuddy
             // GROK_HOME extra accounts, the same shape as CodexHomes.
             public List<string> GrokHomes { get; init; } = new();
 
+            // Folders the "New chat…" dialog has launched into before, most
+            // recent first. Capped and de-duplicated by RecentFolders.Merge
+            // before it ever reaches here — this list is just what Save
+            // writes back out, the same relationship ClaudeCodeProfileDirs
+            // has to the installer's own trimming.
+            public List<string> NewChatRecentFolders { get; init; } = new();
+
+            // The CLI last chosen in the "New chat…" dialog, so reopening it
+            // starts on what was used last rather than always defaulting to
+            // the first radio option. Null means "never chosen" — the dialog
+            // picks its own first-available default in that case, the same
+            // way SpeakVoice being null means "use the platform default"
+            // rather than a stored copy of it.
+            public string? NewChatLastCli { get; set; }
+
             // Auto-organize: which shape and how much space between orbs.
             public string ArrangeShape { get; set; } = DefaultArrangeShape;
             public double ArrangeSpacing { get; set; } = DefaultArrangeSpacing;
@@ -1000,6 +1016,64 @@ namespace ClaudeBuddy
                 // second source of truth that only surfaces if the list is
                 // emptied again.
                 _model.RemoteControlProfileDir = null;
+            }
+
+            Save();
+        }
+
+        // Folders the "New chat…" dialog has launched into before, most
+        // recent first. Stored exactly as SetNewChatRecentFolders wrote it —
+        // this accessor does not itself merge in live sessions or apply the
+        // cap; that's RecentFolders.Merge's job, run by the caller before
+        // saving.
+        public static IReadOnlyList<string> NewChatRecentFolders
+        {
+            get
+            {
+                Load();
+                lock (Gate)
+                {
+                    return _model.NewChatRecentFolders.ToList();
+                }
+            }
+        }
+
+        public static void SetNewChatRecentFolders(IEnumerable<string> folders)
+        {
+            Load();
+            lock (Gate)
+            {
+                _model.NewChatRecentFolders.Clear();
+                foreach (var folder in folders)
+                {
+                    if (string.IsNullOrWhiteSpace(folder)) continue;
+                    _model.NewChatRecentFolders.Add(folder);
+                }
+            }
+
+            Save();
+        }
+
+        // The CLI last chosen in the "New chat…" dialog. Null means never
+        // chosen.
+        public static string? NewChatLastCli
+        {
+            get
+            {
+                Load();
+                lock (Gate)
+                {
+                    return _model.NewChatLastCli;
+                }
+            }
+        }
+
+        public static void SetNewChatLastCli(string? cli)
+        {
+            Load();
+            lock (Gate)
+            {
+                _model.NewChatLastCli = string.IsNullOrWhiteSpace(cli) ? null : cli;
             }
 
             Save();
@@ -1679,7 +1753,8 @@ namespace ClaudeBuddy
                         SpeakScope = Text(root["speakScope"]),
                         TurnSoundsEnabled = Bool(root["turnSoundsEnabled"], true),
                         TurnFinishedSound = Text(root["turnFinishedSound"]),
-                        NeedsAttentionSound = Text(root["needsAttentionSound"])
+                        NeedsAttentionSound = Text(root["needsAttentionSound"]),
+                        NewChatLastCli = Text(root["newChatLastCli"])
                     };
 
                     // Same shape as claudeCodeProfileDirs below: read as an array
@@ -1770,6 +1845,17 @@ namespace ClaudeBuddy
                             if (node?.GetValue<string>() is { Length: > 0 } dirName)
                             {
                                 model.GrokHomes.Add(dirName);
+                            }
+                        }
+                    }
+
+                    if (root["newChatRecentFolders"] is JsonArray recentFolders)
+                    {
+                        foreach (var node in recentFolders)
+                        {
+                            if (node?.GetValue<string>() is { Length: > 0 } folder)
+                            {
+                                model.NewChatRecentFolders.Add(folder);
                             }
                         }
                     }
@@ -2094,6 +2180,9 @@ namespace ClaudeBuddy
                     var grokHomeDirs = new JsonArray();
                     foreach (var dirName in _model.GrokHomes) grokHomeDirs.Add(dirName);
 
+                    var newChatRecentFolders = new JsonArray();
+                    foreach (var folder in _model.NewChatRecentFolders) newChatRecentFolders.Add(folder);
+
                     var speakArgs = new JsonArray();
                     foreach (var argument in _model.SpeakCommandArgs) speakArgs.Add(argument);
 
@@ -2183,6 +2272,8 @@ namespace ClaudeBuddy
                         ["turnSoundsEnabled"] = _model.TurnSoundsEnabled,
                         ["turnFinishedSound"] = _model.TurnFinishedSound,
                         ["needsAttentionSound"] = _model.NeedsAttentionSound,
+                        ["newChatRecentFolders"] = newChatRecentFolders,
+                        ["newChatLastCli"] = _model.NewChatLastCli,
                         // Grouped rather than three top-level keys: it reads as
                         // one setting in the file the way it reads as one card in
                         // the window. A null entry — which is what a colour left

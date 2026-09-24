@@ -290,13 +290,27 @@ public class TurnSummarySpeechTests : IDisposable
     // pattern OrbWindowSpeakTests uses for SpeakRemoteAsync: a real
     // (in-memory) history entry found synchronously, so
     // LastAssistantTextAsync returns without its own poll loop and the
-    // Dispatcher.UIThread.Post(...) line actually runs.
+    // Dispatcher.UIThread.Post(...) line actually runs and is then pumped
+    // within this same test, so the posted SpeechRequest.SpeakTurnSummary
+    // call executes here rather than sitting queued for whichever test
+    // pumps the shared dispatcher next.
+    //
+    // CB-168: this test (and OrbWindowSpeakTests' identically-shaped one)
+    // is what made Warren's speakers say "hello from the agent" — the
+    // posted call ran, unseamed, on a later test's own dispatcher pump.
+    // TextToSpeech.SilenceForTests now makes that impossible regardless of
+    // when it runs; this test additionally pumps and seams it here so it
+    // asserts what it actually scheduled.
     [AvaloniaFact]
     public async Task SpeakTurnSummaryRemoteAsyncFindsARealHistoryEntryAndSchedulesTheRead()
     {
         var wasEnabled = ClaudeBuddySettings.OpenClawEnabled;
         var agent = "nova" + Guid.NewGuid().ToString("N")[..8];
         var sessionId = $"openclaw:agent:{agent}:discord:channel:1";
+
+        var uttered = new List<(string Text, TextToSpeech.VoiceOption? Voice, double? Rate)>();
+        SpeechRequest.UtteranceForTests = (text, voice, rate) => uttered.Add((text, voice, rate));
+
         try
         {
             ClaudeBuddySettings.OpenClawEnabled = true;
@@ -315,9 +329,15 @@ public class TurnSummarySpeechTests : IDisposable
             });
 
             Assert.True(await orb.SpeakTurnSummaryRemoteAsync());
+
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+
+            Assert.Single(uttered);
+            Assert.Equal("hello from the agent", uttered[0].Text);
         }
         finally
         {
+            SpeechRequest.UtteranceForTests = null;
             ClaudeBuddySettings.OpenClawEnabled = wasEnabled;
         }
     }

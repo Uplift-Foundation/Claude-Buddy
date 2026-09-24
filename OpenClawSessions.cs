@@ -134,6 +134,27 @@ namespace ClaudeBuddy
             lock (Gate) return Identities.GetValueOrDefault(agentId);
         }
 
+        // Every agent this connection has heard named, for the new-chat
+        // dialog's OpenClaw picker (CB-168). Sourced from the same
+        // agents.list load that already fills AgentNames for orb titles and
+        // AgentTitles' room labels — a second request would ask the gateway
+        // something it was just told, and could disagree with the names
+        // already on screen if the two ever raced.
+        //
+        // Ordered by name rather than by id: ids are an implementation detail
+        // of somebody's config (main, kubernetes, ea-hope), and a picker
+        // sorted by them would read as arbitrary where a person expects
+        // "Alexis" to sit near "Amber".
+        public static IReadOnlyList<(string Id, string Name)> KnownAgents()
+        {
+            lock (Gate)
+            {
+                var agents = AgentNames.Select(kv => (Id: kv.Key, Name: kv.Value)).ToList();
+                agents.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase));
+                return agents;
+            }
+        }
+
         // The agent's picture for a session, already decoded and scaled. Shared
         // with the orb rather than decoded twice — the frames are immutable and
         // the cache is keyed by agent, so both surfaces draw the same objects.
@@ -1556,6 +1577,80 @@ namespace ClaudeBuddy
             if (chat is not null)
             {
                 Dispatcher.UIThread.Post(() => chat.OnAgentEvent(name, payload));
+            }
+        }
+
+        // QA (CB-168, rowan-achterberg): what to make of the gateway's own
+        // response to sessions.create, kept separate from the request that
+        // produces it so a malformed reply is a decision a test can drive
+        // directly rather than something only reachable behind a real
+        // socket. No network, no static state — a hand-built JsonElement is
+        // enough to exercise every branch.
+        internal static (string? Key, string? Failure) ParseCreateResult(JsonElement res)
+        {
+            if (!res.TryGetProperty("key", out var keyEl) || keyEl.ValueKind != JsonValueKind.String)
+            {
+                return (null, "gateway didn't return a session key");
+            }
+
+            var key = keyEl.GetString();
+            return string.IsNullOrWhiteSpace(key)
+                ? (null, "gateway returned an empty session key")
+                : (key, null);
+        }
+
+        // CB-168: starts a brand-new conversation with an agent, for the
+        // new-chat dialog's OpenClaw slot. Calls sessions.create({agentId})
+        // rather than chat.send with an invented key — both were measured to
+        // work against a real gateway (docs/openclaw-findings.md), but
+        // sessions.create needs no message and creates an inert shell, where
+        // chat.send would start a real agent turn just to make a key exist.
+        //
+        // Returns the failure as a string instead of throwing, the same
+        // shape OpenClawChatSession.SendOrFailureAsync already uses and for
+        // the same reason: an await that always faults never resumes, so the
+        // line that awaited it reads unhit in coverage even though the catch
+        // beside it runs. The caller (NewChatWindow) is expected to have
+        // already checked OpenClawNewChat.AvailabilityFor before calling
+        // this, the same division SendAsync/OpenClawChatSession.SendAsync
+        // already has between the network call and the settings gate in
+        // front of it.
+        //
+        // QA (CB-168, rowan-achterberg): the three decisions that used to
+        // live in here unreachably (malformed key type, empty key, and the
+        // exception-message passthrough) now live in ParseCreateResult
+        // above, tested directly with a hand-built JsonElement — this
+        // method stays excluded as a whole because the one thing left in
+        // it that actually needs a real gateway is the await itself, and
+        // there is no seam here (OpenClawGateway is a concrete socket
+        // wrapper, not an interface) to split that line out on its own the
+        // way ChimePlayer.cs's TryStart/KillTree do for a real process
+        // spawn. Excluded from coverage: creates a session on a real
+        // gateway.
+        [ExcludeFromCodeCoverage]
+        public static async Task<(IRemoteChatSession? Session, string? Failure)> StartConversationAsync(
+            string agentId, CancellationToken ct)
+        {
+            OpenClawGateway? gateway;
+            lock (Gate) gateway = _gateway;
+
+            if (gateway is null) return (null, "not connected to the gateway");
+
+            try
+            {
+                var res = await gateway.RequestAsync("sessions.create", new Dictionary<string, object>
+                {
+                    ["agentId"] = agentId
+                }, ct);
+
+                var (key, failure) = ParseCreateResult(res);
+                return failure is not null
+                    ? (null, failure)
+                    : (ChatFor("openclaw:" + key, AgentNameOf(agentId)), null);
+            }
+            catch (Exception ex)
+            {
+                return (null, ex.Message);
             }
         }
 

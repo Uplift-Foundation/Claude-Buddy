@@ -28,6 +28,8 @@ public class TrayMenuTests
     private const string ResetAll = "Reset all sessions to idle";
     private const string ShowOrbs = "Show orbs";
     private const string Quit = "Quit Claude Buddy";
+    private const string NewChat = "New chat…";
+    private const string Settings = "Settings…";
 
     // A sentinel nothing in Rebuild would ever add. If it is still in the menu
     // after a call, the menu was not rebuilt — which is the only way to observe
@@ -259,6 +261,25 @@ public class TrayMenuTests
 
         raise.Invoke(menu, null);
         return true;
+    }
+
+    // CB-168: "New chat…" sits just above Settings, in both the empty-tray
+    // state and with sessions running — the item is permanent chrome, not
+    // something the session list decides.
+    [AvaloniaFact]
+    public void NewChatSitsAboveSettingsWithOrWithoutSessions()
+    {
+        var tray = NewController();
+        if (tray is null) return;
+
+        var labels = Labels(MenuOf(tray));
+        Assert.Contains(NewChat, labels);
+        Assert.True(labels.IndexOf(NewChat) < labels.IndexOf(Settings));
+
+        tray.Update(new[] { Entry("id-1", title: "first") });
+        labels = Labels(MenuOf(tray));
+        Assert.Contains(NewChat, labels);
+        Assert.True(labels.IndexOf(NewChat) < labels.IndexOf(Settings));
     }
 
     // --- the two actions that ARE safe to perform ---

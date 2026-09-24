@@ -26,6 +26,19 @@ namespace ClaudeBuddy.Tests;
 // orbs are never closed (closing one corrupts a process-wide font resource shared
 // with every other headless window), and each test unbinds the panel afterwards,
 // which is the one thing that does need tearing down between cases.
+//
+// [Collection("Settings")] for the same reason every other ChatPanel* suite
+// carries it (see SettingsCollection.cs): this file's own header above already
+// says the words that explain why it needs it too — it deals in the one
+// process-wide transient panel, and "unbinds the panel afterwards" means
+// HideFor, which by design never removes a transient panel from ChatPanel's
+// static registry (see ChatPanel.Dismiss). A panel left hidden-but-registered
+// here is visible to any other class's Panels/Transient read, and without
+// this attribute this class runs in a separate parallel group from the other
+// ChatPanel suites — confirmed as the cause of a flaky
+// ChatPanelPinTests.IsOpenForFindsAPinnedPanelToo failure that only showed up
+// in the full suite, in Release, never standalone (CB-168).
+[Collection("Settings")]
 public class ChatPanelStaticApiTests : IDisposable
 {
     private readonly List<string> _toClean = new();

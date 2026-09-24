@@ -16,6 +16,19 @@ namespace ClaudeBuddy.Tests;
 //
 // The guard is two conditions, and both are tested from both sides: there has to
 // be something to scroll, and you have to be near the top of it.
+//
+// [Collection("Settings")] for the same reason every other ChatPanel* suite
+// carries it (see SettingsCollection.cs): ChatPanel.Panels is a process-wide
+// static, and OpenFor reuses whatever transient panel already exists rather
+// than always building a new one. This class opens one and only ever hides it
+// in Dispose (HideFor, which deliberately never removes a transient panel from
+// Panels — see ChatPanel.Dismiss' own comment on why), so a hidden panel from
+// here survives into whatever test runs next. Left unserialised, that panel
+// could appear mid-assertion in a different class expecting no transient panel
+// to exist yet — confirmed as the cause of a flaky
+// ChatPanelPinTests.IsOpenForFindsAPinnedPanelToo failure that only showed up
+// in the full suite, in Release, never standalone (CB-168).
+[Collection("Settings")]
 public class ChatPanelBacklogTests : IDisposable
 {
     // A session that can page, which the shared FakeChatSession deliberately
