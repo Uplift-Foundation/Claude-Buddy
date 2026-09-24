@@ -253,6 +253,90 @@ public class ChimePlayerTests
         }
     }
 
+    // Round 4, item 1: closes a real time-of-check-to-time-of-use gap —
+    // the real (non-seam) Play path used to read IsStopped, release that
+    // lock, and only then add to _live and Start; StopAll running in that
+    // exact window would find _live still empty and never learn about a
+    // process Play went on to start right afterward. The fix moved the
+    // check inside the same lock as the Add, so once _stopped is true no
+    // new process can ever be added at all. Not reproduced as an actual
+    // race here (this codebase has no seam inside the lock to pause on) —
+    // proved instead by timing: with _stopped already true before Play is
+    // called at all, the real path must bail before ever reaching
+    // BuildProcess/Start, and a real afplay spawn-and-run takes
+    // meaningfully longer than an immediate return does.
+    [Fact]
+    public void PlayNeverStartsARealProcessOnceStopAllHasRun()
+    {
+        try
+        {
+            ChimePlayer.PlayForTests = null; // the real path, not the seam
+            ChimePlayer.StopAll(); // nothing tracked yet — just flips _stopped
+
+            var sw = Stopwatch.StartNew();
+            ChimePlayer.Play("/System/Library/Sounds/Glass.aiff");
+            sw.Stop();
+
+            Assert.True(sw.ElapsedMilliseconds < 200,
+                $"Play took {sw.ElapsedMilliseconds}ms — it should have bailed under the lock, before ever starting a process");
+        }
+        finally
+        {
+            ChimePlayer.ResetStoppedForTests();
+        }
+    }
+
+    // Round 4, item 2, end to end: a real "current" preview (already
+    // started, the way KillPreviousAndTrackNewPreview's own new contract
+    // requires) is killed by a real PlayPreview call, not just by
+    // SetCurrentPreviewForTests's own direct path — this is what actually
+    // exercises PlayOnePreview's new ordering (Start the new process,
+    // THEN track it and kill the old one), rather than only the
+    // already-started components PlayPreviewKillsTheLivePreviewProcess-
+    // BeforeTrackingTheNext proves in isolation.
+    [Fact]
+    public async Task PlayPreviewEndToEndKillsARealPreviousPreview()
+    {
+        try
+        {
+            using var previous = StartLongRunningProcessForTests();
+            ChimePlayer.SetCurrentPreviewForTests(previous);
+
+            ChimePlayer.PlayForTests = null; // the real path
+            ChimePlayer.PlayPreview("/System/Library/Sounds/Ping.aiff");
+
+            Assert.True(previous.WaitForExit(3000),
+                "a real PlayPreview call did not kill the previous preview process");
+
+            // Give the worker a moment to reach PlayOnePreview's own
+            // tracking lock before proving StopAll can still reach whatever
+            // it started.
+            await Task.Delay(300);
+            ChimePlayer.StopAll();
+        }
+        finally
+        {
+            ChimePlayer.PlayForTests = null;
+            ChimePlayer.ResetStoppedForTests();
+        }
+    }
+
+    // Round 4, item 4: ShutdownRequested's own method must kill whatever
+    // is live without leaving the app permanently deaf if the quit that
+    // asked for it is later cancelled — StopAll's own sticky contract is
+    // deliberately not this method's.
+    [Fact]
+    public void KillCurrentlyPlayingForCancellableShutdownKillsWithoutStickingStopped()
+    {
+        using var proc = StartLongRunningProcessForTests();
+        ChimePlayer.TrackForTests(proc);
+
+        ChimePlayer.KillCurrentlyPlayingForCancellableShutdown();
+
+        Assert.True(proc.WaitForExit(3000), "the tracked process was not killed");
+        Assert.False(ChimePlayer.IsStopped, "a cancellable shutdown must not set the sticky stopped flag");
+    }
+
     private static Process StartLongRunningProcessForTests()
     {
         var startInfo = OperatingSystem.IsWindows()

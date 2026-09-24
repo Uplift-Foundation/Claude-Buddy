@@ -128,6 +128,13 @@ namespace ClaudeBuddy
         // exactly as it already reaches a scan chime or the summary
         // fallback — this only adds a second, earlier kill path ahead of
         // it, not a second set to keep in sync.
+        //
+        // Round 4, item 2: `next` must already have started before this is
+        // called — every real caller (PlayOnePreview) now calls this only
+        // after its own Start succeeds, and the test seam below hands it
+        // an already-started process for the same reason. `previous` is
+        // safe to KillTree here precisely because IT went through this
+        // same call, after ITS OWN Start, whenever it became current.
         private static void KillPreviousAndTrackNewPreview(Process next)
         {
             lock (PlayingGate)
@@ -216,15 +223,19 @@ namespace ClaudeBuddy
         [ExcludeFromCodeCoverage]
         internal static void Play(string path)
         {
-            // Round 4: checked first, ahead of the test seam too — a test
-            // proving "Play is a no-op once stopped" has to see that
-            // through the same seam every other Play test uses, not a
-            // separate code path that only exists for this one guard.
-            if (IsStopped) return;
-
+            // Round 4, item 1: the seam path still checks IsStopped on its
+            // own — a test proving "Play is a no-op once stopped" has to
+            // see that through the same seam every other Play test uses.
+            // The real path's own check moved below, into the same lock as
+            // _live.Add: reading IsStopped here, releasing that lock, and
+            // only then adding to _live left a real gap open — StopAll
+            // could run in between, finding _live still empty, and a
+            // process added and started right after would never be killed
+            // at all despite _stopped already being true when Play started.
             var seam = PlayForTests;
             if (seam is not null)
             {
+                if (IsStopped) return;
                 seam(path);
                 return;
             }
@@ -232,7 +243,17 @@ namespace ClaudeBuddy
             var proc = BuildProcess(path);
             if (proc is null) return;
 
-            lock (PlayingGate) _live.Add(proc);
+            lock (PlayingGate)
+            {
+                if (_stopped)
+                {
+                    proc.Dispose();
+                    return;
+                }
+
+                _live.Add(proc);
+            }
+
             RunAndWait(proc);
             ClearIfCurrent(proc);
             proc.Dispose();
@@ -255,15 +276,25 @@ namespace ClaudeBuddy
             // unwind must not still spawn a fresh process afterward.
             if (IsStopped) return;
 
+            // Round 4, item 3: PlayPreview is called straight from
+            // SettingsWindow's SelectionChanged/Click, on the UI thread —
+            // and KillTree, on Windows, runs taskkill and can wait up to
+            // 3 s for it. The lock below only ever swaps state (which
+            // process is the victim, whether the worker needs starting);
+            // the actual kill is dispatched to a background task so the
+            // UI thread is never the one waiting on it.
+            Process? victim;
+            bool startWorker;
             lock (PlayingGate)
             {
                 _nextPreviewPath = path;
-                if (_currentPreview is { } playing) KillTree(playing);
-                if (_previewWorkerRunning) return;
+                victim = _currentPreview;
+                startWorker = !_previewWorkerRunning;
                 _previewWorkerRunning = true;
             }
 
-            _ = Task.Run(RunPreviewWorker);
+            if (victim is not null) _ = Task.Run(() => KillTree(victim));
+            if (startWorker) _ = Task.Run(RunPreviewWorker);
         }
 
         // The worker: picks up whichever path is currently the most
@@ -308,17 +339,11 @@ namespace ClaudeBuddy
         [ExcludeFromCodeCoverage]
         private static void PlayOnePreview(string path)
         {
-            // Round 4: the actual chokepoint, mirroring Play()'s own check —
-            // a request can already be queued (PlayPreview's own check above
-            // only catches a request arriving after the stop, not one still
-            // sitting in _nextPreviewPath from just before it) and the
-            // worker picking it up after StopAll must not start a process
-            // for it regardless.
-            if (IsStopped) return;
-
             var seam = PlayForTests;
             if (seam is not null)
             {
+                // Round 4, item 1's seam-side check, same reasoning as Play's.
+                if (IsStopped) return;
                 seam(path);
                 return;
             }
@@ -326,8 +351,36 @@ namespace ClaudeBuddy
             var proc = BuildProcess(path);
             if (proc is null) return;
 
+            if (!TryStart(proc))
+            {
+                proc.Dispose();
+                return;
+            }
+
+            // Round 4, item 2: tracked — and the previous preview killed —
+            // only now that Start has actually succeeded. The old order
+            // called this (and so set _currentPreview, added to _live)
+            // BEFORE Start, so a KillTree landing in that exact gap read a
+            // pid off a Process that had never really started at all —
+            // Process.Id throws before Start runs, and KillTree's own catch
+            // swallows that silently, leaving the "previous" preview to run
+            // to completion unkilled.
             KillPreviousAndTrackNewPreview(proc);
-            RunAndWait(proc);
+
+            // The other half of item 2: a stop can land in the gap between
+            // Start succeeding and the tracking lock just above — checked
+            // again right here, rather than trusted from whatever
+            // PlayPreview's own entry check saw a moment earlier, so a
+            // process that only just started is killed immediately instead
+            // of being left to run its full duration.
+            if (IsStopped)
+            {
+                KillTree(proc);
+            }
+            else
+            {
+                WaitAndKillIfStillRunning(proc);
+            }
 
             lock (PlayingGate)
             {
@@ -377,15 +430,30 @@ namespace ClaudeBuddy
         [ExcludeFromCodeCoverage]
         private static void RunAndWait(Process proc)
         {
+            if (!TryStart(proc)) return;
+            WaitAndKillIfStillRunning(proc);
+        }
+
+        // Split out of RunAndWait in round 4: PlayOnePreview needs to do
+        // something (track the process, re-check _stopped) in the gap
+        // between Start succeeding and the wait beginning, which RunAndWait
+        // itself has no room for.
+        [ExcludeFromCodeCoverage]
+        private static bool TryStart(Process proc)
+        {
             try
             {
-                if (!proc.Start()) return;
+                return proc.Start();
             }
             catch
             {
-                return;
+                return false;
             }
+        }
 
+        [ExcludeFromCodeCoverage]
+        private static void WaitAndKillIfStillRunning(Process proc)
+        {
             if (!proc.WaitForExit((int)MaxDuration.TotalMilliseconds))
             {
                 KillTree(proc);
@@ -415,15 +483,41 @@ namespace ClaudeBuddy
         [ExcludeFromCodeCoverage]
         internal static void StopAll()
         {
+            // Round 4: _stopped is set in its own lock acquisition, ahead of
+            // KillEverythingLive's separate one below — safe as two steps
+            // rather than one atomic block only because Play and
+            // PlayOnePreview (item 1) each check _stopped inside the very
+            // same lock they use to add to _live. Once this line has run,
+            // nothing can be added to _live that KillEverythingLive's own
+            // snapshot might miss; it only ever needs to sweep up whatever
+            // was already there before _stopped became true.
+            lock (PlayingGate) _stopped = true;
+
+            KillEverythingLive();
+        }
+
+        // Round 4, item 4: the app's desktop.ShutdownRequested handler
+        // calls this instead of StopAll. ShutdownRequested fires for a
+        // quit that can still be cancelled — the event's own Cancel
+        // property, or macOS refusing for a reason of its own — unlike
+        // Exit, which fires only once shutdown is genuinely proceeding.
+        // Killing whatever is currently playing is still the right thing
+        // to do here: the user asked to quit, and a chime shouldn't
+        // outlive that choice even if the app itself does. But setting the
+        // sticky _stopped flag would leave a *cancelled* quit permanently
+        // deaf for the rest of the process's life — silencing every chime
+        // from then on for a quit that never actually happened — which is
+        // wrong in a way StopAll's own sticky contract is not: only a
+        // shutdown that actually goes through may make that call.
+        [ExcludeFromCodeCoverage]
+        internal static void KillCurrentlyPlayingForCancellableShutdown() => KillEverythingLive();
+
+        [ExcludeFromCodeCoverage]
+        private static void KillEverythingLive()
+        {
             Process[] victims;
             lock (PlayingGate)
             {
-                // Round 4: set under the same lock as the snapshot-and-clear
-                // below, so nothing racing Play can observe _live already
-                // emptied but _stopped not yet true (which would let a
-                // concurrent Play start a process StopAll has already
-                // finished sweeping).
-                _stopped = true;
                 victims = _live.ToArray();
                 _live.Clear();
             }

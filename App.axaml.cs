@@ -84,19 +84,28 @@ namespace ClaudeBuddy
                 // reaches the app through the OS's own Quit handling before
                 // Exit does, and Exit alone was not confirmed to fire on
                 // that specific path without a real Mac to drive it through.
-                // Calling StopAll from both costs nothing extra — it is
-                // idempotent (an empty _live the second time is a no-op) —
-                // and ShutdownRequested's own Cancel is never touched here,
-                // so a cancelled quit is unaffected either way.
+                // It calls a different method, though (round 4, item 4) —
+                // ShutdownRequested fires for a quit that can still be
+                // cancelled (its own Cancel property, or the OS refusing for
+                // a reason of its own), and StopAll's _stopped flag is
+                // sticky for the rest of the process's life by design. Wiring
+                // StopAll itself here would leave a *cancelled* quit
+                // permanently deaf — silencing every chime for the rest of
+                // the run over a quit that never actually happened.
+                // KillCurrentlyPlayingForCancellableShutdown kills whatever
+                // is currently playing (the user did ask to quit, and a
+                // chime shouldn't survive that choice even if the app does)
+                // without setting the flag; only Exit, firing once shutdown
+                // is genuinely proceeding, may do that.
                 //
                 // This whole method only ever runs under a real desktop
                 // lifetime (see its own header comment on why it is excluded
                 // from coverage entirely), so both lines are excluded along
-                // with it rather than tested directly; ChimePlayer.StopAll's
-                // own real-process test is what proves the call itself does
-                // what it claims.
+                // with it rather than tested directly; ChimePlayer.StopAll
+                // and KillCurrentlyPlayingForCancellableShutdown each have
+                // their own real-process test proving what they actually do.
                 desktop.Exit += (_, _) => ChimePlayer.StopAll();
-                desktop.ShutdownRequested += (_, _) => ChimePlayer.StopAll();
+                desktop.ShutdownRequested += (_, _) => ChimePlayer.KillCurrentlyPlayingForCancellableShutdown();
 
                 new SessionManager().Start();
 
