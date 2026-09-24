@@ -21,9 +21,21 @@ namespace ClaudeBuddy.Tests;
 // (NewChatRecentFolders, NewChatLastCli, the OpenClaw settings the fourth
 // row's availability depends on), which is process-wide — see
 // SettingsCollection.cs.
+//
+// Seams cleared in the constructor as well as Dispose, not only at the end
+// of each test method: an assertion failure or an exception between a seam
+// being set and that end-of-method call used to leave it set for whatever
+// ran next — the same class of leak ChatPanelPinTests' own CB-168 fix
+// (01606f15) closed for ChatPanel's registry. The constructor clears first
+// so a test never inherits whatever a differently-ordered previous test
+// left behind either, matching NewChatWindowTests' own IDisposable shape.
 [Collection("Settings")]
-public class NewChatWindowScreenshots
+public class NewChatWindowScreenshots : IDisposable
 {
+    public NewChatWindowScreenshots() => ClearSeams();
+
+    public void Dispose() => ClearSeams();
+
     private static NewChatWindow NewWindow(
         NewChatCli? prefillCli = null, string? prefillCwd = null, string? prefillAgentId = null)
     {
@@ -59,8 +71,6 @@ public class NewChatWindowScreenshots
         var window = NewWindow();
 
         ScreenshotHelper.Capture(window, "new-chat-window-default.png");
-
-        ClearSeams();
     }
 
     // One local CLI disabled with its reason — Codex not found — beside the
@@ -80,8 +90,6 @@ public class NewChatWindowScreenshots
         var window = NewWindow();
 
         ScreenshotHelper.Capture(window, "new-chat-window-cli-disabled.png");
-
-        ClearSeams();
     }
 
     // The inline failure a launch attempt renders — the status line is the
@@ -125,8 +133,6 @@ public class NewChatWindowScreenshots
         Assert.False(radios.Single(r => Equals(r.Tag, NewChatWindow.OpenClawTag)).IsEnabled);
 
         ScreenshotHelper.CaptureAlreadyShown(window, "new-chat-window-launch-error.png");
-
-        ClearSeams();
     }
 
     // The OpenClaw row selected, Ready, with agents loaded — the agent
@@ -157,8 +163,6 @@ public class NewChatWindowScreenshots
         ScreenshotHelper.Flush();
 
         ScreenshotHelper.CaptureAlreadyShown(window, "new-chat-window-openclaw-enabled.png");
-
-        ClearSeams();
     }
 
     // OpenClaw disabled — no gateway configured, the state a fresh install
@@ -180,8 +184,6 @@ public class NewChatWindowScreenshots
         var window = NewWindow();
 
         ScreenshotHelper.Capture(window, "new-chat-window-openclaw-disabled.png");
-
-        ClearSeams();
     }
 
     private static void ClearSeams()
