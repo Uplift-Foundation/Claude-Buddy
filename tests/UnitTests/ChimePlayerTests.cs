@@ -99,6 +99,25 @@ public class ChimePlayerTests
         Assert.Contains("$env:" + ChimePlayer.ChimeEnvVar, ChimePlayer.WindowsScript);
     }
 
+    // QA round 5, finding 3: BuildProcess was excluded along with the rest
+    // of Play, but building a Process/ProcessStartInfo has no OS side
+    // effect of its own — nothing here calls Start — so there is nothing
+    // that needs a real machine to prove, the same reasoning
+    // WindowsStartInfoFor's own tests already rest on. Only the branch
+    // this runner can actually take (macOS) is asserted on directly.
+    [Fact]
+    public void BuildProcess_OnMacUsesAfplayWithThePathAsItsSoleArgument()
+    {
+        if (!OperatingSystem.IsMacOS()) return; // the only branch this runner can take
+
+        using var proc = ChimePlayer.BuildProcess("/System/Library/Sounds/Glass.aiff");
+
+        Assert.NotNull(proc);
+        Assert.Equal("/usr/bin/afplay", proc!.StartInfo.FileName);
+        Assert.Equal(new[] { "/System/Library/Sounds/Glass.aiff" }, proc.StartInfo.ArgumentList);
+        Assert.False(proc.StartInfo.UseShellExecute);
+    }
+
     // Round 3(d): a Settings preview and the summary-fallback chime both
     // call ChimePlayer.Play directly, and can be running at the same time
     // as an ordinary scan chime — none of them serialized against any of
@@ -363,6 +382,177 @@ public class ChimePlayerTests
         {
             ChimePlayer.ResetStoppedForTests();
         }
+    }
+
+    // QA round 5, finding 1: reproduces the regression round 5(a)'s own
+    // _previewChain introduced. A silent WAV rather than a system sound —
+    // long enough (several seconds) that "still playing" is genuinely
+    // true when the second request lands, and silent so the run doesn't
+    // make noise. Drives the real PlayPreview/PlayOnePreview path, not
+    // the seam: the seam never populates _currentPreview at all (its
+    // branch inside PlayOnePreview returns before
+    // KillPreviousAndTrackNewPreview is ever reached), so it has no
+    // "victim" for the chain to have queued a kill behind in the first
+    // place — only a real process, tracked the real way, can show this.
+    [Fact]
+    public void ChoosingANewSoundCutsOffThePreviewAlreadyPlaying()
+    {
+        if (!OperatingSystem.IsMacOS()) return; // afplay is the only real target this test drives
+
+        var dir = Path.Combine(Path.GetTempPath(), "cb-chime-race1-" + Guid.NewGuid());
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var first = WriteSilentWav(Path.Combine(dir, "first.wav"), seconds: 4);
+            var second = WriteSilentWav(Path.Combine(dir, "second.wav"), seconds: 4);
+
+            ChimePlayer.PlayForTests = null; // the real path — see the comment above
+            ChimePlayer.PlayPreview(first);
+
+            // Wait for the worker to genuinely be mid-playback (not merely
+            // queued) before the second request lands — this is what
+            // makes _previewWorkerRunning true and _currentPreview
+            // non-null at the same time, the exact state the regression
+            // needed to reproduce.
+            Process? firstAfplay = null;
+            var findDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+            while (DateTime.UtcNow < findDeadline)
+            {
+                var candidates = Process.GetProcessesByName("afplay");
+                if (candidates.Length > 0)
+                {
+                    firstAfplay = candidates[0];
+                    break;
+                }
+
+                Thread.Sleep(20);
+            }
+
+            Assert.NotNull(firstAfplay);
+            Assert.False(firstAfplay!.HasExited, "the first preview was not actually still playing when the second request was made");
+
+            ChimePlayer.PlayPreview(second);
+
+            // On 84f445a6 this took roughly the file's own duration (about
+            // 4.7s measured); on the fix (matching a123e831's two
+            // independent tasks) it takes on the order of tens of
+            // milliseconds. 1.5s is generous slack above that, and still
+            // nowhere near the 4s file duration or the 5s cap.
+            Assert.True(firstAfplay.WaitForExit(1500),
+                "the previous preview was not cut off promptly by the new one");
+        }
+        finally
+        {
+            ChimePlayer.PlayForTests = null;
+            ChimePlayer.StopAll(); // unblocks the worker if it is still mid-wait on `second`
+            ChimePlayer.ResetStoppedForTests();
+            WaitForNoPreviewWorker();
+            try { Directory.Delete(dir, true); } catch { }
+        }
+    }
+
+    // QA round 5, finding 2: Play tracked a process in _live before
+    // Start() actually ran, the same shape PlayOnePreview already fixed
+    // in round 4. Reproduced statistically, the same way the finding was
+    // originally measured (racing two real threads many times) rather
+    // than forced — Play has no seam to pause it at the exact instant
+    // between TryStart and the tracking lock, so a real race across many
+    // trials is the honest way to show this closed rather than merely
+    // argued closed.
+    [Fact]
+    public void AStopAllRacingAChimesStartLeavesNoChimeRunning()
+    {
+        if (!OperatingSystem.IsMacOS()) return;
+
+        var dir = Path.Combine(Path.GetTempPath(), "cb-chime-race2-" + Guid.NewGuid());
+        Directory.CreateDirectory(dir);
+        try
+        {
+            ChimePlayer.PlayForTests = null; // the real path
+
+            for (var i = 0; i < 30; i++)
+            {
+                var path = WriteSilentWav(Path.Combine(dir, $"chime-{i}.wav"), seconds: 2);
+                var before = Process.GetProcessesByName("afplay").Select(p => p.Id).ToHashSet();
+
+                var playTask = Task.Run(() => ChimePlayer.Play(path));
+                ChimePlayer.StopAll(); // racing Play's own TryStart/track sequence, as tightly as the runtime allows
+
+                // Reset only once Play has returned: _stopped is sticky in
+                // production, and Play's post-start re-check is exactly what
+                // this race depends on, so un-sticking it while Play is still
+                // between TryStart and that check measures a state the app
+                // can never be in.
+                Assert.True(playTask.Wait(TimeSpan.FromSeconds(4)), $"iteration {i}: Play did not return");
+                ChimePlayer.ResetStoppedForTests();
+                Thread.Sleep(100); // let any process that did start actually appear
+
+                var started = Process.GetProcessesByName("afplay").Where(p => !before.Contains(p.Id)).ToList();
+                foreach (var proc in started)
+                {
+                    try
+                    {
+                        Assert.True(proc.WaitForExit(500), $"iteration {i}: a chime survived a StopAll that raced its own start");
+                    }
+                    finally
+                    {
+                        proc.Dispose();
+                    }
+                }
+            }
+        }
+        finally
+        {
+            ChimePlayer.PlayForTests = null;
+            ChimePlayer.ResetStoppedForTests();
+            try { Directory.Delete(dir, true); } catch { }
+        }
+    }
+
+    // Gives a leftover preview worker (from a test that intentionally
+    // raced or force-stopped one) a bounded moment to notice its process
+    // died and exit its own loop, so it can never bleed into a later
+    // test's own _previewWorkerRunning/_currentPreview state.
+    private static void WaitForNoPreviewWorker()
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+        while (DateTime.UtcNow < deadline && Process.GetProcessesByName("afplay").Length > 0)
+        {
+            Thread.Sleep(50);
+        }
+    }
+
+    // A minimal, valid, silent WAV file of the given duration — real
+    // enough for afplay to actually run it for that long, silent so the
+    // test suite makes no noise. 8kHz mono 8-bit unsigned PCM, value 128
+    // throughout (silence in that format).
+    private static string WriteSilentWav(string path, double seconds)
+    {
+        const int sampleRate = 8000;
+        var sampleCount = (int)(sampleRate * seconds);
+
+        using var stream = new FileStream(path, FileMode.Create);
+        using var writer = new BinaryWriter(stream);
+
+        writer.Write("RIFF"u8.ToArray());
+        writer.Write(36 + sampleCount);
+        writer.Write("WAVE"u8.ToArray());
+        writer.Write("fmt "u8.ToArray());
+        writer.Write(16);
+        writer.Write((short)1); // PCM
+        writer.Write((short)1); // mono
+        writer.Write(sampleRate);
+        writer.Write(sampleRate); // byte rate: 1 byte/sample * sampleRate
+        writer.Write((short)1); // block align
+        writer.Write((short)8); // bits per sample
+        writer.Write("data"u8.ToArray());
+        writer.Write(sampleCount);
+
+        var silence = new byte[sampleCount];
+        Array.Fill(silence, (byte)128);
+        writer.Write(silence);
+
+        return path;
     }
 
     private static Process StartLongRunningProcessForTests()

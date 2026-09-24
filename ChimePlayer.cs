@@ -120,21 +120,6 @@ namespace ClaudeBuddy
         private static bool _previewWorkerRunning;
         private static Process? _currentPreview;
 
-        // Round 5(a): a single ordered chain, the same idea TurnSounds'
-        // own _chimeChain already uses for scan chimes. Item 3's fix moved
-        // PlayPreview's kill off the UI thread by dispatching it as its
-        // own fire-and-forget task, separate from whatever task starts the
-        // worker — two independent tasks with no guaranteed order between
-        // them, which is exactly the shape that could let a new preview's
-        // process start before the old one's kill had even been issued,
-        // stacking playback again the way round 3(4) already fixed once.
-        // Chaining both onto one sequence makes "the old kill happens
-        // before the new worker starts" literal: each continuation only
-        // begins once the previous one has completed, and TaskScheduler.
-        // Default keeps every link off whatever thread queued it — the UI
-        // thread included.
-        private static Task _previewChain = Task.CompletedTask;
-
         // The one place that both kills a preview already playing and
         // records its replacement, so PlayOnePreview's production path and
         // SetCurrentPreviewForTests below can share it rather than risk the
@@ -227,30 +212,25 @@ namespace ClaudeBuddy
             return startInfo;
         }
 
-        // Excluded from coverage along with everything it calls: this starts
-        // a real audio subprocess and blocks the calling thread on it for up
-        // to five seconds, which is exactly the shape TextToSpeech.Speak and
-        // KillTree are already excluded for. The branch that checks
-        // PlayForTests is excluded along with the rest rather than split into
-        // its own method, per the plan — every scan-level test that exercises
-        // it does so through the seam actually firing, which coverage cannot
-        // see through an exclusion but a failing assertion still would.
-        [ExcludeFromCodeCoverage]
+        // Round 5, finding 3: no longer excluded — the real subprocess
+        // work this used to be excluded along with now lives entirely in
+        // TryStart/WaitAndKillIfStillRunning/KillTree, each still excluded
+        // on its own for genuinely starting, waiting on or killing a real
+        // OS process. Everything else here is a decision (which seam, is
+        // this stopped, track or don't), and belongs measured.
         internal static void Play(string path)
         {
-            // Round 4, item 1: the seam path still checks IsStopped on its
-            // own — a test proving "Play is a no-op once stopped" has to
-            // see that through the same seam every other Play test uses.
-            // The real path's own check moved below, into the same lock as
-            // _live.Add: reading IsStopped here, releasing that lock, and
-            // only then adding to _live left a real gap open — StopAll
-            // could run in between, finding _live still empty, and a
-            // process added and started right after would never be killed
-            // at all despite _stopped already being true when Play started.
+            // Checked once up front for both paths: a chime queued behind
+            // StopAll must not start at all, rather than start and be
+            // killed by the re-check below a moment later (which on the
+            // real path is an audible click after Quit). The re-check after
+            // TryStart still has to exist — this one only closes the easy
+            // case, not a StopAll landing between here and the tracking.
+            if (IsStopped) return;
+
             var seam = PlayForTests;
             if (seam is not null)
             {
-                if (IsStopped) return;
                 seam(path);
                 return;
             }
@@ -258,18 +238,35 @@ namespace ClaudeBuddy
             var proc = BuildProcess(path);
             if (proc is null) return;
 
-            lock (PlayingGate)
+            if (!TryStart(proc))
             {
-                if (_stopped)
-                {
-                    proc.Dispose();
-                    return;
-                }
-
-                _live.Add(proc);
+                proc.Dispose();
+                return;
             }
 
-            RunAndWait(proc);
+            // Round 5, finding 2: tracked only now that Start has actually
+            // succeeded — mirrors PlayOnePreview's own round-4, item-2 fix,
+            // which this method never got. The old order (Add, then Start)
+            // left a real ~20ms window where a concurrent StopAll's own
+            // KillTree call read a pid off a Process that had not actually
+            // started yet — Process.Id throws in that state, silently
+            // caught — so the chime, once it did start moments later, ran
+            // to completion unkilled even though _stopped had already gone
+            // true. Measured 40/40 at 0-6ms. Re-checked again right here,
+            // the same as PlayOnePreview does, rather than trusted from
+            // whatever the seam-side check (or nothing, on the real path)
+            // saw before BuildProcess/TryStart ran.
+            lock (PlayingGate) _live.Add(proc);
+
+            if (IsStopped)
+            {
+                KillTree(proc);
+            }
+            else
+            {
+                WaitAndKillIfStillRunning(proc);
+            }
+
             ClearIfCurrent(proc);
             proc.Dispose();
         }
@@ -280,7 +277,12 @@ namespace ClaudeBuddy
         // Play() above there is no need for a caller to wrap this in its
         // own Task.Run the way SettingsWindow used to; see
         // PlayPendingPreview's own comment there.
-        [ExcludeFromCodeCoverage]
+        //
+        // Round 5, finding 3: no longer excluded, same reasoning as Play's
+        // — the decisions here (which process is the victim, whether the
+        // worker needs starting) are ordinary code; only the two Task.Run
+        // targets actually touch a real process, and KillTree/
+        // RunPreviewWorker (via PlayOnePreview) carry their own exclusions.
         internal static void PlayPreview(string path)
         {
             // Round 4: the preview channel is exactly the kind of "queued
@@ -296,32 +298,40 @@ namespace ClaudeBuddy
             // and KillTree, on Windows, runs taskkill and can wait up to
             // 3 s for it. The lock below only ever swaps state (which
             // process is the victim, whether the worker needs starting);
-            // the actual kill happens on _previewChain, never on this
-            // thread.
+            // the actual kill runs on its own background task, never on
+            // this thread.
             //
-            // Round 5(a): the kill and (when needed) the worker start are
-            // chained onto _previewChain in that order, rather than each
-            // being its own independent Task.Run — so the worker is
-            // guaranteed not to begin until the old victim's kill has run
-            // to completion, closing the reordering gap two unrelated
-            // fire-and-forget tasks would otherwise leave open.
+            // Round 5, finding 1: round 4 briefly chained the kill and the
+            // worker-start onto one ordered _previewChain task instead of
+            // two independent ones, to additionally guarantee their
+            // relative order — but that chain had a real regression.
+            // `startWorker`'s continuation runs RunPreviewWorker itself,
+            // which is long-running: it blocks inside WaitAndKillIfStill-
+            // Running for as long as whatever it's currently playing takes
+            // (up to the 5 s cap). A kill queued onto the SAME chain while
+            // the worker was already mid-loop had to wait for that entire
+            // loop to finish first, turning a ~45 ms cutoff into one that
+            // waited out almost the full cap — measured about 4.7 s versus
+            // about 45 ms. The two independent tasks below don't have that
+            // risk, and don't need chaining to be correct: `victim` can
+            // only be non-null while the worker already holds it as
+            // _currentPreview, which by construction means
+            // _previewWorkerRunning is already true — so `startWorker` and
+            // `victim is not null` can never both be true from the same
+            // snapshot, and there is nothing for the two tasks to actually
+            // race over in the first place.
+            Process? victim;
+            bool startWorker;
             lock (PlayingGate)
             {
                 _nextPreviewPath = path;
-                var victim = _currentPreview;
-                var startWorker = !_previewWorkerRunning;
+                victim = _currentPreview;
+                startWorker = !_previewWorkerRunning;
                 _previewWorkerRunning = true;
-
-                if (victim is not null)
-                {
-                    _previewChain = _previewChain.ContinueWith(_ => KillTree(victim), TaskScheduler.Default);
-                }
-
-                if (startWorker)
-                {
-                    _previewChain = _previewChain.ContinueWith(_ => RunPreviewWorker(), TaskScheduler.Default);
-                }
             }
+
+            if (victim is not null) _ = Task.Run(() => KillTree(victim));
+            if (startWorker) _ = Task.Run(RunPreviewWorker);
         }
 
         // The worker: picks up whichever path is currently the most
@@ -332,7 +342,9 @@ namespace ClaudeBuddy
         // _previewWorkerRunning was false), which is what makes "only one
         // preview ever calls into ChimePlayer.Play/the test seam at once"
         // true by construction rather than by timing.
-        [ExcludeFromCodeCoverage]
+        // Round 5, finding 3: no longer excluded — the loop and its exit
+        // condition are ordinary decisions; PlayOnePreview and KillTree
+        // carry their own exclusions for the real process work.
         private static void RunPreviewWorker()
         {
             while (true)
@@ -363,14 +375,18 @@ namespace ClaudeBuddy
         // ChimePlayerTests.PlayPreviewKillsTheLivePreviewProcessBeforeTrackingTheNext),
         // and SteppingThroughPreviewsDoesNotStackOverlappingPlayback proves
         // the coalescing above, which needs no real process to be true.
-        [ExcludeFromCodeCoverage]
+        // Round 5, finding 3: no longer excluded, same reasoning as
+        // Play's — TryStart/WaitAndKillIfStillRunning/KillTree carry their
+        // own exclusions for the real process work; this method's own
+        // lines are all decisions.
         private static void PlayOnePreview(string path)
         {
+            // Same up-front check as Play's, for the same reason.
+            if (IsStopped) return;
+
             var seam = PlayForTests;
             if (seam is not null)
             {
-                // Round 4, item 1's seam-side check, same reasoning as Play's.
-                if (IsStopped) return;
                 seam(path);
                 return;
             }
@@ -422,8 +438,17 @@ namespace ClaudeBuddy
         // pulled out once there were two call sites, so a fix to one
         // doesn't have to be remembered for the other. Null off any
         // platform this app doesn't make a sound on.
-        [ExcludeFromCodeCoverage]
-        private static Process? BuildProcess(string path)
+        //
+        // Round 5, finding 3: no longer excluded, and internal rather than
+        // private so a test can assert on it directly the same way
+        // WindowsStartInfoFor already is — building a Process/
+        // ProcessStartInfo has no OS side effect of its own (nothing here
+        // calls Start), so there is nothing about it that needs a real
+        // machine to prove. Only the branch this runner can actually take
+        // (macOS) is asserted on directly; the Windows branch is
+        // WindowsStartInfoFor's own tests, and the "no sound on this
+        // platform" branch has no real machine to run it on either.
+        internal static Process? BuildProcess(string path)
         {
             if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
             {
@@ -449,22 +474,12 @@ namespace ClaudeBuddy
             return null;
         }
 
-        // Starts `proc`, waits up to MaxDuration, and kills it if it hasn't
-        // exited by then — the half of Play's old body that has nothing to
-        // do with which tracking field owns the process, so both call
-        // sites share it and only Play/PlayOnePreview's surrounding code
-        // differs in how they register and release it.
-        [ExcludeFromCodeCoverage]
-        private static void RunAndWait(Process proc)
-        {
-            if (!TryStart(proc)) return;
-            WaitAndKillIfStillRunning(proc);
-        }
-
-        // Split out of RunAndWait in round 4: PlayOnePreview needs to do
-        // something (track the process, re-check _stopped) in the gap
-        // between Start succeeding and the wait beginning, which RunAndWait
-        // itself has no room for.
+        // Starts `proc` — the one line in this whole class that actually
+        // launches a real OS process, which is why this stays excluded
+        // even though Play/PlayOnePreview around it no longer are. Split
+        // out in round 4 so PlayOnePreview could fit its own tracking
+        // logic between Start succeeding and the wait beginning; Play now
+        // does the same.
         [ExcludeFromCodeCoverage]
         private static bool TryStart(Process proc)
         {
@@ -490,8 +505,9 @@ namespace ClaudeBuddy
         // Removing from a set rather than nulling a slot means this is safe
         // to call once per process regardless of how many others are still
         // live at the same moment — no "only the current one" ambiguity to
-        // get wrong the way a single Process? slot had.
-        [ExcludeFromCodeCoverage]
+        // get wrong the way a single Process? slot had. Round 5, finding 3:
+        // no longer excluded — a lock and a Remove call, nothing that
+        // touches the OS.
         private static void ClearIfCurrent(Process proc)
         {
             lock (PlayingGate) _live.Remove(proc);
@@ -507,7 +523,11 @@ namespace ClaudeBuddy
         // crash cannot be caught here, the same limit TextToSpeech.Cancel
         // already lives with, but an ordinary Quit now can be, for all of
         // them at once.
-        [ExcludeFromCodeCoverage]
+        //
+        // Round 5, finding 3: no longer excluded — setting the flag and
+        // calling KillEverythingLive are both ordinary code; the real
+        // process work KillEverythingLive triggers is KillTree's own
+        // exclusion, not this method's.
         internal static void StopAll()
         {
             // Round 4: _stopped is set in its own lock acquisition, ahead of
@@ -536,10 +556,14 @@ namespace ClaudeBuddy
         // from then on for a quit that never actually happened — which is
         // wrong in a way StopAll's own sticky contract is not: only a
         // shutdown that actually goes through may make that call.
-        [ExcludeFromCodeCoverage]
+        //
+        // Round 5, finding 3: no longer excluded — a one-line delegation
+        // to KillEverythingLive.
         internal static void KillCurrentlyPlayingForCancellableShutdown() => KillEverythingLive();
 
-        [ExcludeFromCodeCoverage]
+        // Round 5, finding 3: no longer excluded — the snapshot-and-clear
+        // is ordinary code; KillTree, called in the loop below, carries
+        // its own exclusion for the real kill.
         private static void KillEverythingLive()
         {
             Process[] victims;
