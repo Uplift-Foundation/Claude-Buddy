@@ -65,6 +65,20 @@ public class SpeakScopeUiTests : IDisposable
     // that runs after this one).
     private static void DissolveDirect(ChatPanel panel)
     {
+        // Shown first, unconditionally — ChatPanelPinTests' own
+        // TheRegistryQueriesSurviveAPanelBoundToNothing always does this
+        // before pressing a directly-constructed panel's close button, and
+        // for good reason found the hard way here: a PointerPressed raised
+        // on a never-shown window's control is not guaranteed to route
+        // synchronously under every build/timing configuration, which
+        // previously let this call return with `panel` still pinned and
+        // still in ChatPanel's static registry — a worse leak than the
+        // unpinned one this helper exists to close, because a pinned
+        // phantom with no session isn't reachable by anything else. Safe to
+        // call even if the panel is already shown (Show() is a no-op then).
+        panel.Show();
+        Flush();
+
         panel.TogglePin();
 
         var pointer = new Pointer(Pointer.GetNextFreeId(), PointerType.Mouse, isPrimary: true);
@@ -561,6 +575,12 @@ public class SpeakScopeUiTests : IDisposable
             // the "no panel is unpinned" check's answer (CB-168).
             DissolveDirect(panel);
         }
+
+        // Outside the finally, the same way PinningAPanelWithNoOrbBehindItIsHarmless
+        // verifies its own cleanup rather than trusting it: a silent failure
+        // to dissolve here is exactly the shape of leak this whole test
+        // exists to close, so it has to be provable rather than assumed.
+        Assert.DoesNotContain(panel, ChatPanelTestAccess.All);
     }
 
     // The summary leg is started rather than awaited — the button returns while
