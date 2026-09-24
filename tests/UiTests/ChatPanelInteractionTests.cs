@@ -538,6 +538,13 @@ public class ChatPanelInteractionTests : IDisposable
         input.Focus();
         Flush();
 
+        // Emptied here rather than assumed empty. The suite shares one headless
+        // platform — and so one clipboard — across every test since CB-183, so
+        // whatever the paste test above left on it is still there. Under
+        // per-test isolation the clipboard was rebuilt for each test, which is
+        // the only reason this used to pass without saying so.
+        await panel.Clipboard!.ClearAsync();
+
         var gesture = TextBox.PasteGesture!;
         input.RaiseEvent(new KeyEventArgs
         {
