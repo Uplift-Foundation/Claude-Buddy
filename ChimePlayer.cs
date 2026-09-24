@@ -63,6 +63,132 @@ namespace ClaudeBuddy
         // Set and cleared by the test, never by production code.
         internal static Action<string>? PlayForTests;
 
+        // CB-168 (Ines, round 2 of this pass): the narrow seam this class
+        // was missing. Everything in this file that decides WHICH processes
+        // are live, WHICH ONE gets killed WHEN, and IN WHAT ORDER — StopAll,
+        // the preview channel's kill-then-replace, the superseded check —
+        // is ordinary code with no OS dependency at all. The OS dependency
+        // is exactly three operations on a running child: ask its id, ask
+        // whether it has exited, and kill its whole tree. IChimeProcess is
+        // those three operations and nothing else.
+        //
+        // Before this seam, the only way to prove StopAll (or the preview
+        // channel) killed the right process was to spawn a REAL process and
+        // watch it actually die — which is what made
+        // AStopAllSweptAcrossPlaysSpawnLeavesNoChimeRunning and its three
+        // siblings racy under load in the first place (see
+        // ChimePlayerTests' own history): the thing under test (which
+        // process gets a kill request) and the thing making the test flaky
+        // (how long the OS takes to tear a process down) were the same
+        // process, so there was no way to assert on one without also
+        // waiting on the other. Splitting them apart is what actually fixes
+        // that, rather than widening the margin again: ChimePlayerTests now
+        // asserts the logic against FakeChimeProcess (a kill is
+        // *requested*, on the right target, in the right order — no wall
+        // clock anywhere), and only ChimePlayerIntegrationTests below still
+        // spawns a real afplay, to prove RealChimeProcess's three OS-facing
+        // members actually do what they claim.
+        internal interface IChimeProcess : IDisposable
+        {
+            int Id { get; }
+            bool HasExited { get; }
+            bool WaitForExit(int milliseconds);
+            void Kill();
+        }
+
+        // The real implementation, wrapping a Process that has already been
+        // started (StartProcess below is the only production caller, and it
+        // only wraps one once Process.Start has succeeded). Every member
+        // touches the OS, so every member is excluded from coverage — the
+        // same reasoning TryStart/WaitAndKillIfStillRunning/KillTree used
+        // before this seam existed; this class is what their OS-facing
+        // halves became. Kill() is copied from the old KillTree rather than
+        // shared with TextToSpeech.KillTree, for the same reason the old
+        // comment gave: this one has no _speaking field to clear and no
+        // SpeakState to move back to Idle.
+        private sealed class RealChimeProcess : IChimeProcess
+        {
+            private readonly Process _proc;
+            internal RealChimeProcess(Process proc) => _proc = proc;
+
+            [ExcludeFromCodeCoverage]
+            public int Id => _proc.Id;
+
+            [ExcludeFromCodeCoverage]
+            public bool HasExited => _proc.HasExited;
+
+            [ExcludeFromCodeCoverage]
+            public bool WaitForExit(int milliseconds) => _proc.WaitForExit(milliseconds);
+
+            [ExcludeFromCodeCoverage]
+            public void Kill()
+            {
+                int pid;
+                try
+                {
+                    pid = _proc.Id;
+                }
+                catch
+                {
+                    return;
+                }
+
+                if (OperatingSystem.IsWindows())
+                {
+                    try
+                    {
+                        using var taskkill = Process.Start(new ProcessStartInfo("taskkill")
+                        {
+                            ArgumentList = { "/PID", pid.ToString(), "/T", "/F" },
+                            UseShellExecute = false,
+                            CreateNoWindow = true,
+                            RedirectStandardOutput = true,
+                            RedirectStandardError = true
+                        });
+                        taskkill?.WaitForExit(3000);
+                    }
+                    catch { /* fall through to Kill below */ }
+                }
+
+                try
+                {
+                    if (!_proc.HasExited) _proc.Kill(entireProcessTree: true);
+                }
+                catch { /* already gone, or the object is disposed — both fine here */ }
+            }
+
+            [ExcludeFromCodeCoverage]
+            public void Dispose() => _proc.Dispose();
+        }
+
+        // A second, distinct seam from PlayForTests above: PlayForTests
+        // bypasses BuildProcess/tracking entirely (there is no real process
+        // behind a substituted chime to track), so it has nothing to offer
+        // a test of StopAll's or the preview channel's own kill/track
+        // decisions. This one instead substitutes what "the process"
+        // Play/PlayOnePreview go on to track and (maybe) kill actually is —
+        // every decision around it still runs for real. Left null in
+        // production, where StartProcess always builds a real
+        // RealChimeProcess.
+        internal static Func<string, IChimeProcess?>? ProcessFactoryForTests;
+
+        private static IChimeProcess? StartProcess(string path)
+        {
+            var factory = ProcessFactoryForTests;
+            if (factory is not null) return factory(path);
+
+            var proc = BuildProcess(path);
+            if (proc is null) return null;
+
+            if (!TryStart(proc))
+            {
+                proc.Dispose();
+                return null;
+            }
+
+            return new RealChimeProcess(proc);
+        }
+
         // Round 3(d): a second test seam, distinct from PlayForTests above.
         // PlayForTests returns before Play ever reaches the process-
         // tracking code at all — there is no real process behind a
@@ -72,7 +198,16 @@ namespace ClaudeBuddy
         // process through the exact same Add path Play uses, so a test can
         // hand it something harmless and long-running (never real audio)
         // and prove StopAll actually kills it.
-        internal static void TrackForTests(Process proc)
+        //
+        // CB-168: overloaded rather than replaced. The Process overload
+        // keeps ChimePlayerIntegrationTests' real-process tests working
+        // unchanged; the IChimeProcess overload is what ChimePlayerTests'
+        // fake-based logic tests use instead, so a fake never has to be
+        // smuggled through a real System.Diagnostics.Process just to reach
+        // the same tracking path.
+        internal static void TrackForTests(Process proc) => TrackForTests(new RealChimeProcess(proc));
+
+        internal static void TrackForTests(IChimeProcess proc)
         {
             lock (PlayingGate) _live.Add(proc);
         }
@@ -92,7 +227,7 @@ namespace ClaudeBuddy
         // leave the other one making noise. A set is what actually holds
         // "everything Play is running right now," so StopAll can mean all
         // of it regardless of which caller started which process.
-        private static readonly HashSet<Process> _live = new();
+        private static readonly HashSet<IChimeProcess> _live = new();
         private static readonly object PlayingGate = new();
 
         // QA round 3, finding 4 (LOW): a Settings preview used to go
@@ -118,7 +253,7 @@ namespace ClaudeBuddy
         // running — the two must never contend to kill each other.
         private static string? _nextPreviewPath;
         private static bool _previewWorkerRunning;
-        private static Process? _currentPreview;
+        private static IChimeProcess? _currentPreview;
 
         // The one place that both kills a preview already playing and
         // records its replacement, so PlayOnePreview's production path and
@@ -135,11 +270,11 @@ namespace ClaudeBuddy
         // an already-started process for the same reason. `previous` is
         // safe to KillTree here precisely because IT went through this
         // same call, after ITS OWN Start, whenever it became current.
-        private static void KillPreviousAndTrackNewPreview(Process next)
+        private static void KillPreviousAndTrackNewPreview(IChimeProcess next)
         {
             lock (PlayingGate)
             {
-                if (_currentPreview is { } previous) KillTree(previous);
+                if (_currentPreview is { } previous) previous.Kill();
                 _currentPreview = next;
                 _live.Add(next);
             }
@@ -151,7 +286,14 @@ namespace ClaudeBuddy
         // PlayPreview itself uses to decide whether to kill a predecessor,
         // and can then prove that registering a second one kills the
         // first — see ChimePlayerTests.
+        //
+        // CB-168: overloaded the same way TrackForTests was, for the same
+        // reason — real-process integration tests keep the Process overload,
+        // fake-based logic tests use the IChimeProcess one directly.
         internal static void SetCurrentPreviewForTests(Process next) =>
+            KillPreviousAndTrackNewPreview(new RealChimeProcess(next));
+
+        internal static void SetCurrentPreviewForTests(IChimeProcess next) =>
             KillPreviousAndTrackNewPreview(next);
 
         // Round 4 (CB-167): once StopAll has run, this class must never
@@ -235,32 +377,31 @@ namespace ClaudeBuddy
                 return;
             }
 
-            var proc = BuildProcess(path);
+            // CB-168: StartProcess is BuildProcess+TryStart, wrapped as an
+            // IChimeProcess — the seam that lets ChimePlayerTests substitute
+            // a FakeChimeProcess here and assert on the decisions below with
+            // no real process and no wall clock. See StartProcess's own
+            // comment.
+            var proc = StartProcess(path);
             if (proc is null) return;
-
-            if (!TryStart(proc))
-            {
-                proc.Dispose();
-                return;
-            }
 
             // Round 5, finding 2: tracked only now that Start has actually
             // succeeded — mirrors PlayOnePreview's own round-4, item-2 fix,
             // which this method never got. The old order (Add, then Start)
             // left a real ~20ms window where a concurrent StopAll's own
-            // KillTree call read a pid off a Process that had not actually
+            // kill call read a pid off a Process that had not actually
             // started yet — Process.Id throws in that state, silently
             // caught — so the chime, once it did start moments later, ran
             // to completion unkilled even though _stopped had already gone
             // true. Measured 40/40 at 0-6ms. Re-checked again right here,
             // the same as PlayOnePreview does, rather than trusted from
             // whatever the seam-side check (or nothing, on the real path)
-            // saw before BuildProcess/TryStart ran.
+            // saw before StartProcess ran.
             lock (PlayingGate) _live.Add(proc);
 
             if (IsStopped)
             {
-                KillTree(proc);
+                proc.Kill();
             }
             else
             {
@@ -320,7 +461,7 @@ namespace ClaudeBuddy
             // `victim is not null` can never both be true from the same
             // snapshot, and there is nothing for the two tasks to actually
             // race over in the first place.
-            Process? victim;
+            IChimeProcess? victim;
             bool startWorker;
             lock (PlayingGate)
             {
@@ -330,7 +471,7 @@ namespace ClaudeBuddy
                 _previewWorkerRunning = true;
             }
 
-            if (victim is not null) _ = Task.Run(() => KillTree(victim));
+            if (victim is not null) _ = Task.Run(() => victim.Kill());
             if (startWorker) _ = Task.Run(RunPreviewWorker);
         }
 
@@ -391,23 +532,17 @@ namespace ClaudeBuddy
                 return;
             }
 
-            var proc = BuildProcess(path);
+            var proc = StartProcess(path);
             if (proc is null) return;
-
-            if (!TryStart(proc))
-            {
-                proc.Dispose();
-                return;
-            }
 
             // Round 4, item 2: tracked — and the previous preview killed —
             // only now that Start has actually succeeded. The old order
             // called this (and so set _currentPreview, added to _live)
-            // BEFORE Start, so a KillTree landing in that exact gap read a
+            // BEFORE Start, so a kill call landing in that exact gap read a
             // pid off a Process that had never really started at all —
-            // Process.Id throws before Start runs, and KillTree's own catch
-            // swallows that silently, leaving the "previous" preview to run
-            // to completion unkilled.
+            // Process.Id throws before Start runs, and that catch swallows
+            // it silently, leaving the "previous" preview to run to
+            // completion unkilled.
             KillPreviousAndTrackNewPreview(proc);
 
             // QA round 6, F1: a request that landed while this preview was
@@ -431,7 +566,7 @@ namespace ClaudeBuddy
             // of being left to run its full duration.
             if (IsStopped || superseded)
             {
-                KillTree(proc);
+                proc.Kill();
             }
             else
             {
@@ -506,12 +641,17 @@ namespace ClaudeBuddy
             }
         }
 
-        [ExcludeFromCodeCoverage]
-        private static void WaitAndKillIfStillRunning(Process proc)
+        // CB-168: no longer excluded. WaitForExit/Kill are IChimeProcess
+        // members — RealChimeProcess's implementations of those stay
+        // excluded for touching the OS, but the decision made here ("still
+        // running after MaxDuration? kill it") is ordinary code, reachable
+        // and asserted on through FakeChimeProcess with no real wait at all
+        // (a fake's WaitForExit returns immediately).
+        private static void WaitAndKillIfStillRunning(IChimeProcess proc)
         {
             if (!proc.WaitForExit((int)MaxDuration.TotalMilliseconds))
             {
-                KillTree(proc);
+                proc.Kill();
             }
         }
 
@@ -521,7 +661,7 @@ namespace ClaudeBuddy
         // get wrong the way a single Process? slot had. Round 5, finding 3:
         // no longer excluded — a lock and a Remove call, nothing that
         // touches the OS.
-        private static void ClearIfCurrent(Process proc)
+        private static void ClearIfCurrent(IChimeProcess proc)
         {
             lock (PlayingGate) _live.Remove(proc);
         }
@@ -539,8 +679,8 @@ namespace ClaudeBuddy
         //
         // Round 5, finding 3: no longer excluded — setting the flag and
         // calling KillEverythingLive are both ordinary code; the real
-        // process work KillEverythingLive triggers is KillTree's own
-        // exclusion, not this method's.
+        // process work KillEverythingLive triggers is RealChimeProcess.Kill's
+        // own exclusion, not this method's.
         internal static void StopAll()
         {
             // Round 4: _stopped is set in its own lock acquisition, ahead of
@@ -574,66 +714,21 @@ namespace ClaudeBuddy
         // to KillEverythingLive.
         internal static void KillCurrentlyPlayingForCancellableShutdown() => KillEverythingLive();
 
-        // Round 5, finding 3: no longer excluded — the snapshot-and-clear
-        // is ordinary code; KillTree, called in the loop below, carries
-        // its own exclusion for the real kill.
+        // CB-168: no longer mentions KillTree — that method's real-OS half
+        // moved onto RealChimeProcess.Kill (excluded there); the
+        // snapshot-and-clear-and-call-Kill sequence here is ordinary code,
+        // and is exactly what ChimePlayerTests' fake-based StopAll tests
+        // exercise directly.
         private static void KillEverythingLive()
         {
-            Process[] victims;
+            IChimeProcess[] victims;
             lock (PlayingGate)
             {
                 victims = _live.ToArray();
                 _live.Clear();
             }
 
-            foreach (var victim in victims) KillTree(victim);
-        }
-
-        // Copied from TextToSpeech.KillTree rather than shared with it,
-        // because the two now differ in one respect that matters: this one
-        // has no _speaking field to clear and no SpeakState to move back to
-        // Idle, since a chime was never tracked as "the" utterance in the
-        // first place. See that method's own comment for why taskkill /T /F
-        // is asked first on Windows and Process.Kill(entireProcessTree:
-        // true) is asked regardless — a single standalone Kill(tree: true)
-        // was measured to leave one survivor per utterance in a real run of
-        // TextToSpeech, and there is no reason to expect afplay or
-        // PlaySync's child tree to behave differently.
-        [ExcludeFromCodeCoverage]
-        private static void KillTree(Process victim)
-        {
-            int pid;
-            try
-            {
-                pid = victim.Id;
-            }
-            catch
-            {
-                return;
-            }
-
-            if (OperatingSystem.IsWindows())
-            {
-                try
-                {
-                    using var taskkill = Process.Start(new ProcessStartInfo("taskkill")
-                    {
-                        ArgumentList = { "/PID", pid.ToString(), "/T", "/F" },
-                        UseShellExecute = false,
-                        CreateNoWindow = true,
-                        RedirectStandardOutput = true,
-                        RedirectStandardError = true
-                    });
-                    taskkill?.WaitForExit(3000);
-                }
-                catch { /* fall through to Kill below */ }
-            }
-
-            try
-            {
-                if (!victim.HasExited) victim.Kill(entireProcessTree: true);
-            }
-            catch { /* already gone, or the object is disposed — both fine here */ }
+            foreach (var victim in victims) victim.Kill();
         }
     }
 }
