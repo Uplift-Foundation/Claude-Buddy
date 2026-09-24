@@ -342,16 +342,8 @@ namespace ClaudeBuddy
         // given key), so calling it for real is not something a headless
         // test run should do. TrayMenuTests checks the item exists and its
         // label, and stops there — the same split OpenSettings already has.
-        //
-        // TODO(CB-168): wire to NewChatWindow.Toggle() once that window
-        // lands — it needs the launch-core types (NewChatCli et al.) from
-        // feature/start-new-chat-launch, merged in after that branch pushes.
-        // The menu item exists now so the tray shape and its tests don't
-        // wait on that dependency.
         [ExcludeFromCodeCoverage]
-        internal static void OpenNewChat()
-        {
-        }
+        internal static void OpenNewChat() => NewChatWindow.Toggle();
 
         // Excluded from coverage: starts a relay, which is a live Claude Code
         // session in a tmux pane on another machine — and that costs the person

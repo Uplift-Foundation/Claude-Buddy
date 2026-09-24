@@ -3059,6 +3059,17 @@ namespace ClaudeBuddy
         public SessionStatus? StatusFor(string? sessionId) =>
             string.IsNullOrEmpty(sessionId) ? null : _statuses.GetValueOrDefault(sessionId);
 
+        // A snapshot copy, keyed by session id — CB-168's "New chat…" dialog
+        // uses this twice: to seed its folder combo (RecentFolders.Merge
+        // wants the live cwds) and to tell which orb, if any, is new once a
+        // launch has gone out (NewChatOrbWatch wants the ids that already
+        // existed). A copy rather than the live dictionary, the same
+        // reasoning ClaudeCodeProfileDirs' own accessor gives: a caller
+        // holding a reference to _statuses directly could observe — or in a
+        // future change, mutate — state out from under the next scan.
+        public IReadOnlyDictionary<string, SessionStatus> AllStatuses =>
+            new Dictionary<string, SessionStatus>(_statuses);
+
         // Make this session's orb acknowledge a click that was answered without
         // creating anything.
         //

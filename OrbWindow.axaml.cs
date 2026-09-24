@@ -413,6 +413,14 @@ namespace ClaudeBuddy
             DismissItem.IsVisible = SessionPresence.CanDismiss(status);
             EndSessionItem.IsVisible = SessionPresence.CanEndSession(status);
 
+            // CB-168: a local-CLI orb pre-fills the dialog with its own cwd
+            // and CLI. OpenClaw's arm is ines-carvalho's — this is the hook
+            // point for her to extend once the agent picker slot lands;
+            // until then an OpenClaw orb simply doesn't offer the item,
+            // rather than offering one that opens with nothing useful
+            // pre-filled.
+            NewChatHereItem.IsVisible = status.IsLocalCli;
+
             // Back to the plain wording on every pass, so a refusal explained
             // once does not outlive the thing it was about. A husk whose job has
             // since finished has no daemon under it any more, and the row it
@@ -2696,6 +2704,29 @@ namespace ClaudeBuddy
         {
             SessionManager.Instance?.EndSession(SessionId);
         }
+
+        // What this orb would pre-fill the "New chat…" dialog with, or null
+        // if there's no session bound here to pre-fill from at all. Pure —
+        // no window, no Toggle() call — so the mapping is testable without
+        // ever opening a real NewChatWindow. NewChatOrbWatch.CliOf is shared
+        // with the dialog's own "did an orb appear" watch, so the two never
+        // map a session's CLI differently.
+        internal static (NewChatCli? Cli, string Cwd)? NewChatPrefillFor(SessionStatus? status) =>
+            status is null ? null : (NewChatOrbWatch.CliOf(status.Source), status.Cwd);
+
+        // CB-168: opens NewChatWindow pre-filled per NewChatPrefillFor
+        // above. Excluded from coverage the same way OpenSettings is —
+        // Toggle() does real OS-facing work headless tests have no business
+        // doing — but narrowed to this one call rather than the whole
+        // handler, so the prefill mapping above stays covered.
+        internal void NewChatHere_Click(object? sender, RoutedEventArgs e)
+        {
+            if (NewChatPrefillFor(_lastStatus) is not { } prefill) return;
+            OpenNewChatWindow(prefill.Cli, prefill.Cwd);
+        }
+
+        [ExcludeFromCodeCoverage]
+        private static void OpenNewChatWindow(NewChatCli? cli, string cwd) => NewChatWindow.Toggle(cli, cwd);
 
         // What is running underneath this session, asked once, as the menu
         // opens — CB-26.

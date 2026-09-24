@@ -52,6 +52,16 @@
                      when there's no name yet, since it'd just repeat. -->
                 <MenuItem x:Name="SessionInfoItem" IsEnabled="False"/>
                 <MenuItem x:Name="SessionPathItem" IsEnabled="False"/>
+                <!-- CB-168: opens NewChatWindow pre-filled with this orb's
+                     cwd and CLI. Shown only for a local-CLI orb (IsLocalCli)
+                     — an OpenClaw orb pre-fills its agent instead, on the
+                     slot ines-carvalho's OpenClaw picker fills in; visibility
+                     for both is set in UpdateFrom, next to the other
+                     session-dependent rows. -->
+                <MenuItem x:Name="NewChatHereItem"
+                          Header="New chat here"
+                          IsVisible="False"
+                          Click="NewChatHere_Click"/>
                 <Separator/>
                 <!-- Only shown for an orb the user has dragged; see
                      OrbWindow.SetPinned. -->
