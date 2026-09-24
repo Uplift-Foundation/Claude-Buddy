@@ -100,6 +100,10 @@ public class NewChatWindowTests : IDisposable
             .Where(r => r.Tag is NewChatCli).ToList();
         Assert.Equal(3, radios.Count);
         Assert.All(radios, r => Assert.True(r.IsEnabled));
+
+        // No reason to state for a plain enabled row — the text line is
+        // absent entirely, not present-and-empty.
+        Assert.All(radios, r => Assert.Null(window.ReasonTextFor(r.Tag!)));
     }
 
     [AvaloniaFact]
@@ -121,6 +125,13 @@ public class NewChatWindowTests : IDisposable
 
         Assert.False(codexRow.IsEnabled);
         Assert.Equal(reason, ToolTip.GetTip(codexRow));
+
+        // Stated on screen, not only in a tooltip nobody can see in a
+        // screenshot or without hovering — team-lead's own review flag.
+        var reasonText = window.ReasonTextFor(NewChatCli.Codex);
+        Assert.NotNull(reasonText);
+        Assert.Equal(reason, reasonText!.Text);
+        Assert.True(reasonText.IsVisible);
     }
 
     [AvaloniaFact]
@@ -134,6 +145,11 @@ public class NewChatWindowTests : IDisposable
 
         var row = window.CliList.Children.OfType<RadioButton>().Single(r => r.Tag is NewChatCli);
         Assert.Equal(warning, ToolTip.GetTip(row));
+
+        var reasonText = window.ReasonTextFor(NewChatCli.ClaudeCode);
+        Assert.NotNull(reasonText);
+        Assert.Equal(warning, reasonText!.Text);
+        Assert.True(reasonText.IsVisible);
     }
 
     [AvaloniaFact]
@@ -352,6 +368,11 @@ public class NewChatWindowTests : IDisposable
         var row = window.CliList.Children.OfType<RadioButton>().Single(r => (string)r.Content! == "OpenClaw");
         Assert.False(row.IsEnabled);
         Assert.Equal("turn on \"Allow replying to agents\" in Settings", ToolTip.GetTip(row));
+
+        var reasonText = window.ReasonTextFor(NewChatWindow.OpenClawTag);
+        Assert.NotNull(reasonText);
+        Assert.Equal("turn on \"Allow replying to agents\" in Settings", reasonText!.Text);
+        Assert.True(reasonText.IsVisible);
     }
 
     [AvaloniaFact]
@@ -365,6 +386,7 @@ public class NewChatWindowTests : IDisposable
 
         var row = window.CliList.Children.OfType<RadioButton>().Single(r => (string)r.Content! == "OpenClaw");
         Assert.True(row.IsEnabled);
+        Assert.Null(window.ReasonTextFor(NewChatWindow.OpenClawTag));
     }
 
     // With no local CLI usable at all, OpenClaw (if ready) is the fallback

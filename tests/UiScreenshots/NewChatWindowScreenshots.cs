@@ -90,7 +90,14 @@ public class NewChatWindowScreenshots
     [AvaloniaFact]
     public void LaunchError()
     {
-        NewChatAvailability.CurrentForTests = () => new[] { Enabled(NewChatCli.ClaudeCode) };
+        // All four rows present — the same default availability every other
+        // scenario uses — so this capture shows what a user actually sees:
+        // the failure line under a dialog with every entry still there, not
+        // a fixture-narrowed page missing Codex and Grok.
+        NewChatAvailability.CurrentForTests = () => new[]
+        {
+            Enabled(NewChatCli.ClaudeCode), Enabled(NewChatCli.Codex), Enabled(NewChatCli.Grok)
+        };
         NewChatWindow.OpenClawAvailabilityForTests = () => OpenClawNewChatAvailability.NoGateway;
         NewChatWindow.CurrentStatusesForTests = () => new Dictionary<string, SessionStatus>();
         NewChatLauncher.LaunchForTests = (_, _) => new LaunchResult(

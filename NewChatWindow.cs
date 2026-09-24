@@ -105,7 +105,10 @@ namespace ClaudeBuddy
         // same IsCheckedChanged handler that reads a boxed NewChatCli for
         // the three local rows can tell the fourth one apart by reference
         // rather than by a value that could collide with a real enum member.
-        private static readonly object OpenClawTag = new();
+        // internal rather than private: NewChatWindowTests needs it to find
+        // the OpenClaw row's own reason text via ReasonTextFor, the same way
+        // it finds a local row's by NewChatCli.
+        internal static readonly object OpenClawTag = new();
 
         private readonly StackPanel _cliList = new() { Spacing = 6 };
         private readonly StackPanel _folderSection = new() { Spacing = 6 };
@@ -248,15 +251,12 @@ namespace ClaudeBuddy
 
                 // Reason is set exactly when disabled, Warning exactly when
                 // enabled-but-imperfect — NewChatOption's own comment states
-                // this, so at most one of the two is ever shown.
-                if (!option.Enabled && option.Reason is { Length: > 0 } reason)
-                {
-                    ToolTip.SetTip(radio, reason);
-                }
-                else if (option.Warning is { Length: > 0 } warning)
-                {
-                    ToolTip.SetTip(radio, warning);
-                }
+                // this, so at most one of the two is ever shown. Stated on
+                // screen, not only as a tooltip: a reason nobody can see
+                // without hovering isn't a stated reason, and a screenshot
+                // can't prove a tooltip exists.
+                var statedText = !option.Enabled ? option.Reason : option.Warning;
+                if (statedText is { Length: > 0 } tip) ToolTip.SetTip(radio, tip);
 
                 var capturedCli = option.Cli;
                 radio.IsCheckedChanged += (_, _) =>
@@ -268,6 +268,11 @@ namespace ClaudeBuddy
                 };
 
                 _cliList.Children.Add(radio);
+
+                if (statedText is { Length: > 0 } shown)
+                {
+                    _cliList.Children.Add(ReasonText(shown, option.Cli));
+                }
             }
 
             var openClawAvailability = OpenClawAvailabilityForTests?.Invoke() ?? OpenClawNewChat.AvailabilityFor(
@@ -283,10 +288,8 @@ namespace ClaudeBuddy
                 Tag = OpenClawTag
             };
 
-            if (!openClawReady)
-            {
-                ToolTip.SetTip(openClawRadio, OpenClawNewChat.ReasonFor(openClawAvailability));
-            }
+            var openClawReasonText = openClawReady ? null : OpenClawNewChat.ReasonFor(openClawAvailability);
+            if (openClawReasonText is { Length: > 0 } openClawTip) ToolTip.SetTip(openClawRadio, openClawTip);
 
             openClawRadio.IsCheckedChanged += (_, _) =>
             {
@@ -298,6 +301,11 @@ namespace ClaudeBuddy
             };
 
             _cliList.Children.Add(openClawRadio);
+
+            if (openClawReasonText is { Length: > 0 } shownOpenClawReason)
+            {
+                _cliList.Children.Add(ReasonText(shownOpenClawReason, OpenClawTag));
+            }
 
             // Preference order: an explicit OpenClaw agent prefill (an
             // OpenClaw orb's own "New chat here") wins outright when the
@@ -345,6 +353,28 @@ namespace ClaudeBuddy
             _folderSection.IsVisible = !_openClawSelected;
             _agentSection.IsVisible = _openClawSelected;
         }
+
+        // The stated reason/warning line under a CLI row — small, secondary
+        // text, indented to read as belonging to the row above it. Tag
+        // carries the same value the row's own RadioButton.Tag does (a
+        // NewChatCli, or OpenClawTag for the fourth row), so a test can find
+        // "the reason text for this row" the same way it finds the row
+        // itself, without depending on sibling order in _cliList.Children.
+        private static TextBlock ReasonText(string text, object tag) => new()
+        {
+            Text = text,
+            Tag = tag,
+            FontSize = 11,
+            Opacity = 0.7,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Avalonia.Thickness(24, -2, 0, 4)
+        };
+
+        // internal for NewChatWindowTests: the reason/warning line for a
+        // given row's tag, or null when that row has none (an enabled row
+        // with no warning, most local CLIs most of the time).
+        internal TextBlock? ReasonTextFor(object tag) =>
+            _cliList.Children.OfType<TextBlock>().SingleOrDefault(t => Equals(t.Tag, tag));
 
         private void BuildAgentCombo(string? preferredAgentId = null)
         {

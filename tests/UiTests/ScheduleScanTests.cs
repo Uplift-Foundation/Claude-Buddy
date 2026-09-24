@@ -102,6 +102,30 @@ public class ScheduleScanTests
         Assert.Equal("waiting", status!.State);
     }
 
+    // CB-168: SessionManager.OrbFor is the only place NewChatWindow's
+    // OpenClaw watch is allowed to get an orb from — see its own comment on
+    // why a second, independently-constructed one would be a genuine
+    // duplicate. This is the direct proof, against a real scan rather than
+    // the OrbForTests seam every NewChatWindow test uses: the orb the scan
+    // actually built for a session is the one OrbFor hands back for that
+    // same id, and an id nothing has ever scanned returns null rather than
+    // constructing one on demand.
+    [AvaloniaFact]
+    public async Task OrbForReturnsTheScanBuiltOrbForAKnownSessionAndNullForAnUnknownOne()
+    {
+        using var scratch = new Scratch();
+        scratch.Write("session-a");
+        var manager = Manager(scratch);
+
+        await manager.ScheduleScan();
+
+        var orb = manager.OrbFor("session-a");
+        Assert.NotNull(orb);
+        Assert.Equal("session-a", orb!.SessionId);
+
+        Assert.Null(manager.OrbFor("session-unknown"));
+    }
+
     // The re-entrancy guard: a second ScheduleScan while the first is still
     // reading disk must not start a second read on top of it — CB-106's own
     // finding was that heavy *ambient* disk contention is what turns an
