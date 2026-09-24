@@ -10,9 +10,19 @@ namespace ClaudeBuddy.UnitTests;
 // creates a session on a real gateway, the same treatment SendAsync already
 // gets — but its early "not connected" return needs no network and no
 // gateway to reach, the same way OpenClawChatSendTests reaches SendAsync's
-// equivalent branch through the "Couldn't send:" note. No test process here
-// ever starts OpenClawSessions' connect loop, so its gateway field is
-// reliably null.
+// equivalent branch through the "Couldn't send:" note.
+//
+// [Collection("Settings")]: OpenClawSessions' _gateway field is a
+// process-wide static, and this asserts a specific value of it (null) —
+// the same reason OpenClawLiveImageResolutionTests,
+// OpenClawCronRunRecoveryEndToEndTests and OpenClawRoomSendTests are all in
+// this collection, since each sets it through SetGatewayForTests. Without
+// this, xUnit is free to run this class in parallel with any of those,
+// and a gateway set there is visible here too — this class asserting
+// "not connected to the gateway" would then depend on which test from an
+// unrelated class happened to be mid-run, rather than being reliably null
+// the way the header used to claim before this fix.
+[Collection("Settings")]
 public class OpenClawStartConversationTests
 {
     [Fact]
