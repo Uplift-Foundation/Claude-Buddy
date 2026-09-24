@@ -2902,26 +2902,18 @@ namespace ClaudeBuddy
             // the picker froze the settings window for that long on every
             // step.
             //
-            // QA round 3: moving that call to a background Task.Run on its
-            // own is not enough — five arrow-key steps taken faster than one
-            // sound plays out would start five overlapping ChimePlayer.Play
-            // processes, each a real afplay/PlaySync with no way for this
-            // class to reach in and stop one once it has started. ChimePlayer
-            // cannot stop a process it has already handed off to WaitForExit
-            // either; that needs its own process-tracking work, landing
-            // separately and out of scope for this file to build.
-            //
-            // Debounced instead of "started then stopped": every call
-            // restarts the same timer, so ChimePlayer.Play is only ever
-            // reached once the selection has actually settled for a quarter
-            // second — the last of a fast burst wins, and the first four are
-            // never played at all rather than played and then silenced. That
-            // is also a truer reading of "preview it once" than firing on
-            // every transient selection a fast arrow-key press only passed
-            // through. The one case this does not cover — settle on A, hear
-            // it start, immediately pick B before A's ~2.4 s finishes —
-            // still needs ChimePlayer's own stop support and is out of scope
-            // here for the same reason.
+            // QA round 3, finding 4: moving that call to a background
+            // Task.Run on its own was not enough either — arrow-key steps
+            // taken at an ordinary human pace, not just a fast burst, each
+            // settle past the 250ms debounce below and each used to start
+            // its own independent ChimePlayer.Play call, so several
+            // deliberate choices in a row still stacked. That half of the
+            // fix now lives in ChimePlayer.PlayPreview itself (a channel
+            // that kills whatever preview is already playing before
+            // starting the next), not here — this debounce still matters on
+            // top of it, since it is what keeps a fast burst from calling
+            // PlayPreview at all for the choices nobody stopped on, rather
+            // than calling it and immediately killing it again.
             _pendingPreviewPath = path;
             RestartThePreviewDebounce();
         }
@@ -2983,7 +2975,13 @@ namespace ClaudeBuddy
         {
             var path = _pendingPreviewPath;
             _pendingPreviewPath = null;
-            if (path is not null) _ = Task.Run(() => ChimePlayer.Play(path));
+
+            // PlayPreview, not Play — the whole point of round 3's fix.
+            // Cheap enough to call directly rather than from its own
+            // Task.Run: it only ever locks, at most kills one process
+            // (fast) and either sets a field or starts its own worker the
+            // first time in a while, never blocks on WaitForExit itself.
+            if (path is not null) ChimePlayer.PlayPreview(path);
         }
 
         // A drawn triangle rather than the "▶" text glyph it stands in for —

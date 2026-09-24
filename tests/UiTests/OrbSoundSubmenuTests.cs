@@ -283,7 +283,13 @@ public class OrbSoundSubmenuTests : IDisposable
         _clearedKeys.Add(newKey);
 
         Assert.NotEqual(oldKey, newKey);
-        Assert.Null(ClaudeBuddySettings.OrbTurnSoundFor(oldKey));
+        // QA round 3, finding 3: copied onto the new key, not moved off the
+        // old one — two orbs can share a key (same cwd and title, no agent
+        // name to tell them apart), and clearing the old key on the way out
+        // would silently unmute whichever sibling is still called by that
+        // name. An orphaned entry under a key nothing looks up any more is
+        // harmless, so it is left exactly where it was.
+        Assert.Equal("off", ClaudeBuddySettings.OrbTurnSoundFor(oldKey)?.Finished);
         Assert.Equal("off", ClaudeBuddySettings.OrbTurnSoundFor(newKey)?.Finished);
 
         // And the menu, reopened, agrees — reads the override back under the
@@ -483,5 +489,62 @@ public class OrbSoundSubmenuTests : IDisposable
         Assert.Equal(newKey, orb.SoundKey);
         Assert.Equal("Ping", ClaudeBuddySettings.OrbTurnSoundFor(newKey)?.Finished);
         Assert.Equal("off", ClaudeBuddySettings.OrbTurnSoundFor(oldKey)?.Finished);
+    }
+
+    // QA round 3, finding 2 (LOW-MEDIUM), copied and adapted from
+    // Cb167QaRound3UiTests.cs rather than reinvented: a blank key reads as
+    // "free" to both OrbTurnSoundFor (its own empty-key guard) and
+    // SetOrbTurnSound (an empty-key guard that makes the write a no-op) —
+    // so migrating *into* one used to look like a safe migration onto an
+    // unoccupied key, write nothing there, and still clear the real
+    // override out from under the old key on the way out. Reachable on a
+    // real machine: ClaudeBuddyHook.sh:70 writes cwd with no fallback, so
+    // one status write missing it is enough to blank the key for a single
+    // poll.
+    [AvaloniaFact]
+    public void ALiveOrbWhoseCwdGoesBlankKeepsItsOverride()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        var cwd = "/Users/user/project-" + Guid.NewGuid();
+
+        orb.UpdateFrom(new SessionStatus { State = "idle", Cwd = cwd, Title = "fix-login" });
+        var key = orb.SoundKey;
+        _clearedKeys.Add(key);
+        ClaudeBuddySettings.SetOrbTurnSound(key, "off", null);
+
+        orb.UpdateFrom(new SessionStatus { State = "idle", Cwd = "", Title = "fix-login" }); // one status write without cwd
+        orb.UpdateFrom(new SessionStatus { State = "idle", Cwd = cwd, Title = "fix-login" }); // back to normal
+
+        Assert.Equal(key, orb.SoundKey); // never drifted onto the blank key
+        Assert.NotNull(ClaudeBuddySettings.OrbTurnSoundFor(orb.SoundKey));
+        Assert.Equal("off", ClaudeBuddySettings.OrbTurnSoundFor(orb.SoundKey)?.Finished);
+    }
+
+    // QA round 3, finding 3 (LOW-MEDIUM), copied and adapted from
+    // Cb167QaRound3UiTests.cs: two live orbs sharing one key (same cwd and
+    // title, no agent name — exactly the collision SoundKeyFor cannot tell
+    // apart) both read a mute set under that shared key. Renaming one of
+    // them used to MOVE the override onto its own new key and clear the
+    // shared key on the way out, so the other orb — still called by the
+    // old name — silently started chiming again. Copying instead of moving
+    // is the fix; this is the case that fix exists for.
+    [AvaloniaFact]
+    public void RenamingOneOfTwoOrbsThatShareAKeyDoesNotUnmuteTheOther()
+    {
+        var x = new OrbWindow(Guid.NewGuid().ToString());
+        var y = new OrbWindow(Guid.NewGuid().ToString());
+        var cwd = "/Users/user/project-" + Guid.NewGuid();
+
+        x.UpdateFrom(new SessionStatus { State = "idle", Cwd = cwd, Title = "build" });
+        y.UpdateFrom(new SessionStatus { State = "idle", Cwd = cwd, Title = "build" });
+        Assert.Equal(x.SoundKey, y.SoundKey);
+        _clearedKeys.Add(y.SoundKey);
+        ClaudeBuddySettings.SetOrbTurnSound(y.SoundKey, "off", null);
+
+        x.UpdateFrom(new SessionStatus { State = "idle", Cwd = cwd, Title = "deploy" });
+        _clearedKeys.Add(x.SoundKey);
+
+        Assert.NotEqual(x.SoundKey, y.SoundKey);
+        Assert.Equal("off", ClaudeBuddySettings.OrbTurnSoundFor(y.SoundKey)?.Finished);
     }
 }

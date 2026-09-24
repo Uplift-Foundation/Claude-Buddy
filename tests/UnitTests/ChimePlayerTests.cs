@@ -119,6 +119,43 @@ public class ChimePlayerTests
         Assert.True(b.WaitForExit(3000), "the second tracked process was not killed by StopAll");
     }
 
+    // QA round 3, finding 4 (LOW): stepping through the Settings sound
+    // picker at an ordinary human pace — well past the 250ms debounce,
+    // each choice its own settled request — used to start a fresh,
+    // independent ChimePlayer.Play call every time, with nothing to stop
+    // the previous one still playing underneath it. Four choices a person
+    // actually paused on sounded like four overlapping chimes.
+    //
+    // This proves the mechanism with real processes rather than the
+    // PlayForTests seam, the same reason StopAllKillsEveryConcurrently
+    // TrackedProcessNotJustOne above does: a seam has nothing real for
+    // KillTree to act on, so the only way to prove a process actually
+    // dies is to give it one. SetCurrentPreviewForTests reaches the exact
+    // kill-then-replace path PlayPreview's own production code uses
+    // (KillPreviousAndTrackNewPreview), registering each harmless,
+    // long-running process — never real audio — the same way Play() would
+    // register a real preview process.
+    [Fact]
+    public void PlayPreviewKillsTheLivePreviewProcessBeforeTrackingTheNext()
+    {
+        using var first = StartLongRunningProcessForTests();
+        using var second = StartLongRunningProcessForTests();
+
+        ChimePlayer.SetCurrentPreviewForTests(first);
+        Assert.False(first.HasExited);
+
+        ChimePlayer.SetCurrentPreviewForTests(second);
+
+        Assert.True(first.WaitForExit(3000), "the previous preview process was not killed when a new one started");
+        Assert.False(second.HasExited);
+
+        // And still reachable by StopAll, same as any other tracked chime
+        // — the fix's other half named explicitly: "the process must still
+        // be tracked in _live so StopAll covers it."
+        ChimePlayer.StopAll();
+        Assert.True(second.WaitForExit(3000), "StopAll did not reach the tracked preview process");
+    }
+
     private static Process StartLongRunningProcessForTests()
     {
         var startInfo = OperatingSystem.IsWindows()

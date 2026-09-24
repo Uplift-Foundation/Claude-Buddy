@@ -437,6 +437,45 @@ public class SoundSettingsRowTests : IDisposable
         Assert.Equal(new[] { expectedPath }, _played);
     }
 
+    // QA round 3, finding 4 (LOW), copied and adapted from
+    // Cb167QaRound3UiTests.cs: the two cases above prove that a fast burst
+    // never reaches ChimePlayer at all for the choices it passes through,
+    // but they say nothing about choices a person actually pauses on —
+    // each one past the 250ms debounce, each its own settled request. Before
+    // ChimePlayer.PlayPreview existed, each one called ChimePlayer.Play
+    // independently, and nothing stopped the previous one from still
+    // playing underneath the next. The seam here sleeps as long as Glass
+    // genuinely lasts (1.65s, measured) — long enough that four steps
+    // 300ms apart would clearly overlap without the fix, and
+    // FlushPendingPreviewForTests stands in for the real debounce tick,
+    // which calls exactly what this does.
+    [AvaloniaFact]
+    public async Task SteppingThroughPreviewsDoesNotStackOverlappingPlayback()
+    {
+        var file = NewRealTempFile();
+        var live = 0;
+        var maxLive = 0;
+        var liveLock = new object();
+        ChimePlayer.PlayForTests = _ =>
+        {
+            var now = Interlocked.Increment(ref live);
+            lock (liveLock) maxLive = Math.Max(maxLive, now);
+            Thread.Sleep(1650);
+            Interlocked.Decrement(ref live);
+        };
+
+        for (var i = 0; i < 4; i++)
+        {
+            SettingsWindow.PreviewSound(file, "Glass");
+            SettingsWindow.FlushPendingPreviewForTests();
+            await Task.Delay(300);
+        }
+
+        await Task.Delay(2000);
+
+        Assert.Equal(1, maxLive);
+    }
+
     // The other half of "exactly one preview per choice": settling on ONE
     // choice, with no burst at all, still plays it exactly once — the
     // debounce is not a rate limiter that could also eat a deliberate,

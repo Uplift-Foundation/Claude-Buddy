@@ -95,6 +95,58 @@ namespace ClaudeBuddy
         private static readonly HashSet<Process> _live = new();
         private static readonly object PlayingGate = new();
 
+        // QA round 3, finding 4 (LOW): a Settings preview used to go
+        // straight through Play() the same as any other chime, so stepping
+        // through the sound picker with ordinary, human-paced pauses
+        // between choices — well past SettingsWindow's 250ms debounce, each
+        // one its own flush — started a fresh, independent process every
+        // time with nothing to stop the previous one still playing
+        // underneath it. Four choices a person actually paused on sounded
+        // like four overlapping chimes in a real run.
+        //
+        // PlayPreview below is a channel rather than a second Play(): only
+        // one worker is ever calling into an actual preview, and a request
+        // that arrives while it is busy replaces whatever the worker was
+        // going to play next rather than queuing alongside it — so several
+        // requests landing while one is playing collapse into "play
+        // whichever was requested most recently, the moment the current
+        // one is free." When the worker is genuinely blocked inside a real
+        // process's WaitForExit, "free" is hurried along: a new request
+        // kills the process already playing (KillTree) before the worker
+        // moves on, which is also why this still needs its own slot here
+        // rather than reusing whichever Process a scan chime happens to be
+        // running — the two must never contend to kill each other.
+        private static string? _nextPreviewPath;
+        private static bool _previewWorkerRunning;
+        private static Process? _currentPreview;
+
+        // The one place that both kills a preview already playing and
+        // records its replacement, so PlayOnePreview's production path and
+        // SetCurrentPreviewForTests below can share it rather than risk the
+        // two drifting apart. Still added to _live via the same field
+        // every other kind of chime uses, so StopAll reaches a preview
+        // exactly as it already reaches a scan chime or the summary
+        // fallback — this only adds a second, earlier kill path ahead of
+        // it, not a second set to keep in sync.
+        private static void KillPreviousAndTrackNewPreview(Process next)
+        {
+            lock (PlayingGate)
+            {
+                if (_currentPreview is { } previous) KillTree(previous);
+                _currentPreview = next;
+                _live.Add(next);
+            }
+        }
+
+        // Round 3 finding 4's version of TrackForTests above, for the
+        // preview slot specifically: a test hands this a real, harmless,
+        // long-running process (never real audio) through the exact path
+        // PlayPreview itself uses to decide whether to kill a predecessor,
+        // and can then prove that registering a second one kills the
+        // first — see ChimePlayerTests.
+        internal static void SetCurrentPreviewForTests(Process next) =>
+            KillPreviousAndTrackNewPreview(next);
+
         // Builds the Windows ProcessStartInfo on its own, callable and
         // assertable from a test even though Play itself is excluded from
         // coverage. The path never appears in ArgumentList or in
@@ -149,10 +201,109 @@ namespace ClaudeBuddy
                 return;
             }
 
-            Process proc;
+            var proc = BuildProcess(path);
+            if (proc is null) return;
+
+            lock (PlayingGate) _live.Add(proc);
+            RunAndWait(proc);
+            ClearIfCurrent(proc);
+            proc.Dispose();
+        }
+
+        // Round 3 finding 4: the preview channel. Cheap and quick to call —
+        // a lock, at most one KillTree, and either a field assignment or
+        // (only the first time in a while) starting the worker — so unlike
+        // Play() above there is no need for a caller to wrap this in its
+        // own Task.Run the way SettingsWindow used to; see
+        // PlayPendingPreview's own comment there.
+        [ExcludeFromCodeCoverage]
+        internal static void PlayPreview(string path)
+        {
+            lock (PlayingGate)
+            {
+                _nextPreviewPath = path;
+                if (_currentPreview is { } playing) KillTree(playing);
+                if (_previewWorkerRunning) return;
+                _previewWorkerRunning = true;
+            }
+
+            _ = Task.Run(RunPreviewWorker);
+        }
+
+        // The worker: picks up whichever path is currently the most
+        // recently requested, plays it to completion (or until the next
+        // request kills it early), and loops — stopping only once nothing
+        // new arrived while it was busy. Never more than one of these
+        // running at a time (PlayPreview only starts it when
+        // _previewWorkerRunning was false), which is what makes "only one
+        // preview ever calls into ChimePlayer.Play/the test seam at once"
+        // true by construction rather than by timing.
+        [ExcludeFromCodeCoverage]
+        private static void RunPreviewWorker()
+        {
+            while (true)
+            {
+                string path;
+                lock (PlayingGate)
+                {
+                    if (_nextPreviewPath is null)
+                    {
+                        _previewWorkerRunning = false;
+                        return;
+                    }
+
+                    path = _nextPreviewPath;
+                    _nextPreviewPath = null;
+                }
+
+                PlayOnePreview(path);
+            }
+        }
+
+        // One iteration of the worker's loop. Seam-checked the same way
+        // Play() is — a test's seam call still runs on this same
+        // background worker thread, never the caller's — but with no real
+        // process behind it there is nothing for KillPreviousAndTrackNewPreview
+        // to register or for a later request to kill; that half of this
+        // fix is proven with real processes instead (see
+        // ChimePlayerTests.PlayPreviewKillsTheLivePreviewProcessBeforeTrackingTheNext),
+        // and SteppingThroughPreviewsDoesNotStackOverlappingPlayback proves
+        // the coalescing above, which needs no real process to be true.
+        [ExcludeFromCodeCoverage]
+        private static void PlayOnePreview(string path)
+        {
+            var seam = PlayForTests;
+            if (seam is not null)
+            {
+                seam(path);
+                return;
+            }
+
+            var proc = BuildProcess(path);
+            if (proc is null) return;
+
+            KillPreviousAndTrackNewPreview(proc);
+            RunAndWait(proc);
+
+            lock (PlayingGate)
+            {
+                _live.Remove(proc);
+                if (ReferenceEquals(_currentPreview, proc)) _currentPreview = null;
+            }
+
+            proc.Dispose();
+        }
+
+        // The per-OS process shape Play and PlayOnePreview both start —
+        // pulled out once there were two call sites, so a fix to one
+        // doesn't have to be remembered for the other. Null off any
+        // platform this app doesn't make a sound on.
+        [ExcludeFromCodeCoverage]
+        private static Process? BuildProcess(string path)
+        {
             if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
             {
-                proc = new Process
+                return new Process
                 {
                     StartInfo = new ProcessStartInfo
                     {
@@ -165,44 +316,35 @@ namespace ClaudeBuddy
                     }
                 };
             }
-            else if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             {
-                proc = new Process { StartInfo = WindowsStartInfoFor(path) };
-            }
-            else
-            {
-                return;
+                return new Process { StartInfo = WindowsStartInfoFor(path) };
             }
 
-            lock (PlayingGate) _live.Add(proc);
+            return null;
+        }
 
+        // Starts `proc`, waits up to MaxDuration, and kills it if it hasn't
+        // exited by then — the half of Play's old body that has nothing to
+        // do with which tracking field owns the process, so both call
+        // sites share it and only Play/PlayOnePreview's surrounding code
+        // differs in how they register and release it.
+        [ExcludeFromCodeCoverage]
+        private static void RunAndWait(Process proc)
+        {
             try
             {
-                if (!proc.Start())
-                {
-                    ClearIfCurrent(proc);
-                    proc.Dispose();
-                    return;
-                }
+                if (!proc.Start()) return;
             }
             catch
             {
-                ClearIfCurrent(proc);
-                proc.Dispose();
                 return;
             }
 
-            try
+            if (!proc.WaitForExit((int)MaxDuration.TotalMilliseconds))
             {
-                if (!proc.WaitForExit((int)MaxDuration.TotalMilliseconds))
-                {
-                    KillTree(proc);
-                }
-            }
-            finally
-            {
-                ClearIfCurrent(proc);
-                proc.Dispose();
+                KillTree(proc);
             }
         }
 

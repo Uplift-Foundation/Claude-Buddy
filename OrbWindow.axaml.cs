@@ -2827,16 +2827,39 @@ namespace ClaudeBuddy
         // if the old key still carries one and the new key doesn't already
         // have its own (an orb that never had an override at all, or one
         // whose new key happens to collide with an existing choice, is left
-        // alone either way), it is rewritten under the new key and cleared
-        // from the old one. Without this, a choice a user already made —
-        // "Off" clicked from the menu before the title arrived — would keep
-        // silently reverting to the default the instant Claude Code named
-        // the session, which is exactly the bug QA found: the menu showed
-        // Off ticked while the orb went on chiming.
+        // alone either way), it is copied onto the new key. Without this, a
+        // choice a user already made — "Off" clicked from the menu before
+        // the title arrived — would keep silently reverting to the default
+        // the instant Claude Code named the session, which is exactly the
+        // bug QA found: the menu showed Off ticked while the orb went on
+        // chiming.
+        //
+        // QA round 3, finding 2 (LOW-MEDIUM): a blank key reads as "free" to
+        // both OrbTurnSoundFor (its own empty-key guard returns null) and
+        // SetOrbTurnSound (an empty-key guard that makes the write a
+        // no-op) — so migrating *into* one used to look exactly like a safe
+        // migration onto an unoccupied key, write nothing there, and still
+        // clear the override out from under the old key on the way out.
+        // Reachable on a real machine, not a contrived edge case: the hook
+        // writes cwd with no fallback (ClaudeBuddyHook.sh:70), so a single
+        // status write missing it is enough to blank the key for one poll.
+        // Skipped entirely instead — the window keeps using its last real
+        // key, the same resilience a missing title already gets by falling
+        // back to the session id rather than an empty string.
+        //
+        // QA round 3, finding 3 (LOW-MEDIUM): migration used to clear the
+        // old key on the way out, which is exactly wrong when two orbs
+        // share one key (same cwd and title, no agent name to tell them
+        // apart, which is exactly the case SoundKeyFor cannot distinguish).
+        // Renaming one of them moved the shared override onto its own new
+        // key and cleared the shared key out from under the other, silently
+        // unmuting a session that never asked to be. Copied rather than
+        // moved now: an orphaned entry under a key nothing looks up any
+        // more is harmless, and losing a mute is not.
         internal void RefreshSoundKey(SessionStatus status)
         {
             var key = SessionManager.SoundKeyFor(status, SessionId);
-            if (key == SoundKey) return;
+            if (key == SoundKey || string.IsNullOrEmpty(key)) return;
 
             if (!string.IsNullOrEmpty(SoundKey))
             {
@@ -2844,7 +2867,6 @@ namespace ClaudeBuddy
                 if (stale is not null && ClaudeBuddySettings.OrbTurnSoundFor(key) is null)
                 {
                     ClaudeBuddySettings.SetOrbTurnSound(key, stale.Finished, stale.Attention);
-                    ClaudeBuddySettings.ClearOrbTurnSound(SoundKey);
                 }
             }
 
