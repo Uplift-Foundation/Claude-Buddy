@@ -175,6 +175,43 @@ namespace ClaudeBuddy.Tests
                 Classify("cron", $$"""{"sessionKey":"agent:ops:cron:j","action":"{{action}}"}""").Signal);
         }
 
+        // Only the exact measured casing counts. A gateway that ever varies its
+        // casing produces None rather than a wrong Work/Open/End — the same
+        // "unmeasured shape is None" rule as an unknown event name, applied
+        // inside a known one.
+        [Theory]
+        [InlineData("Start")]
+        [InlineData("START")]
+        public void ARosterPhaseInTheWrongCaseIsNothing(string phase)
+        {
+            Assert.Equal(RunSignal.None,
+                Classify("sessions.changed", $$"""{"sessionKey":"k","phase":"{{phase}}","runId":"{{Run}}"}""").Signal);
+        }
+
+        [Fact]
+        public void AStreamInTheWrongCaseIsNothing()
+        {
+            Assert.Equal(RunSignal.None,
+                Classify("agent", """{"sessionKey":"k","stream":"Thinking"}""").Signal);
+        }
+
+        [Fact]
+        public void AChatStateInTheWrongCaseIsNothing()
+        {
+            Assert.Equal(RunSignal.None,
+                Classify("chat", """{"sessionKey":"k","state":"DELTA"}""").Signal);
+        }
+
+        // A non-string phase can't be compared to "start"/"end" at all — Str
+        // returns null for it, same as a missing field, rather than throwing or
+        // stringifying the number.
+        [Fact]
+        public void ARosterNonStringPhaseIsNothing()
+        {
+            Assert.Equal(RunSignal.None,
+                Classify("sessions.changed", $$"""{"sessionKey":"k","phase":1,"runId":"{{Run}}"}""").Signal);
+        }
+
         // --- everything else ---
 
         // CB-149: the housekeeping re-upsert, in the shape it actually arrives in
@@ -291,6 +328,43 @@ namespace ClaudeBuddy.Tests
 
             Assert.Equal(new RunTrack(T0.AddSeconds(1), Run, true),
                 OpenClawRunSignal.Apply(old, new RunEvent(RunSignal.Open, Run), T0.AddSeconds(1)));
+        }
+
+        // Two runs open on one session key — the record holds exactly one, so a
+        // second Open forgets the first rather than merging with it (per
+        // OpenReplacesWhateverWasThere). Ending the *first* run by name then
+        // leaves the second lit, because the record no longer claims to be the
+        // first run at all: an End that names a run the record isn't tracking
+        // is a no-op (AnEndForADifferentRunLeavesItRunning), and that is exactly
+        // what happens here.
+        [Fact]
+        public void EndingTheFirstOfTwoOverlappingRunsLeavesTheSecondLit()
+        {
+            var afterFirstOpen = OpenClawRunSignal.Apply(null, new RunEvent(RunSignal.Open, Run), T0);
+            var afterSecondOpen = OpenClawRunSignal.Apply(afterFirstOpen, new RunEvent(RunSignal.Open, Other), T0.AddSeconds(1));
+
+            var afterFirstEnds = OpenClawRunSignal.Apply(afterSecondOpen, new RunEvent(RunSignal.End, Run), T0.AddSeconds(2));
+
+            Assert.Equal(afterSecondOpen, afterFirstEnds);
+            Assert.True(OpenClawRunSignal.IsGenerating(afterFirstEnds!.Value, T0.AddSeconds(2)));
+        }
+
+        // The other order: the record only ever claims to be tracking the
+        // *second* run once it has opened, so the second run's own End clears
+        // the whole record — even though nothing has said the first run ended.
+        // A session can only ever glow for the run this file currently believes
+        // is the live one; two genuinely concurrent runs on one session key are
+        // not disambiguated on the wire, and this is the documented cost of
+        // that (see OpenClawRunSignal's own header comment).
+        [Fact]
+        public void EndingTheSecondOfTwoOverlappingRunsClearsTrackingOfBoth()
+        {
+            var afterFirstOpen = OpenClawRunSignal.Apply(null, new RunEvent(RunSignal.Open, Run), T0);
+            var afterSecondOpen = OpenClawRunSignal.Apply(afterFirstOpen, new RunEvent(RunSignal.Open, Other), T0.AddSeconds(1));
+
+            var afterSecondEnds = OpenClawRunSignal.Apply(afterSecondOpen, new RunEvent(RunSignal.End, Other), T0.AddSeconds(2));
+
+            Assert.Null(afterSecondEnds);
         }
 
         [Fact]

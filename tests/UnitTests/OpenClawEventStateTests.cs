@@ -537,6 +537,79 @@ namespace ClaudeBuddy.Tests
             Assert.DoesNotContain(sessions, s => keys.Contains(s.Key));
         }
 
+        // Out-of-order delivery: an End arriving with nothing open yet is a
+        // no-op (there is no record to clear), and it leaves no trace that
+        // would stop the real Start from opening the run normally afterward.
+        [Fact]
+        public void AnEndThatArrivesBeforeItsStartIsIgnoredAndTheLateStartOpensNormally()
+        {
+            var salt = Salt();
+            var key = $"agent:{salt}main:main";
+            var rows = Rows(OpenClawEventFixtures.MainSessionRun, salt);
+            var at = DateTime.UtcNow;
+
+            Deliver(rows.First(IsEnd), at);
+            Assert.Equal("idle", OpenClawSessions.StateFor(key, at.AddSeconds(1)));
+
+            Deliver(rows.First(IsStart), at.AddSeconds(2));
+            Assert.Equal("generating", OpenClawSessions.StateFor(key, at.AddSeconds(3)));
+        }
+
+        // A stray Work event after the run's End relights the orb rather than
+        // being dropped — Apply starts a fresh anonymous record for it. Bounded
+        // by RunIdle, not the ceiling, since nothing reopened the run: a late
+        // straggler gets at most twenty seconds, not forty-five minutes.
+        [Fact]
+        public void AWorkEventAfterEndRelightsTheOrbForRunIdleNotTheCeiling()
+        {
+            var salt = Salt();
+            var key = $"agent:{salt}main:main";
+            var rows = Rows(OpenClawEventFixtures.MainSessionRun, salt);
+            var at = DateTime.UtcNow;
+
+            Deliver(rows.First(IsStart), at);
+            Deliver(rows.First(IsEnd), at.AddSeconds(1));
+            Assert.Equal("idle", OpenClawSessions.StateFor(key, at.AddSeconds(2)));
+
+            OpenClawSessions.OnEvent("agent",
+                Json($$"""{"sessionKey":"{{key}}","stream":"thinking"}"""), at.AddSeconds(3));
+
+            Assert.Equal("generating", OpenClawSessions.StateFor(key, at.AddSeconds(3) + OpenClawRunSignal.RunIdle));
+            Assert.Equal("idle",
+                OpenClawSessions.StateFor(key, at.AddSeconds(3) + OpenClawRunSignal.RunIdle + TimeSpan.FromMilliseconds(1)));
+        }
+
+        // Reconnect clearing: a session mid-run when the socket drops must not
+        // stay pinned "generating" for up to 45 minutes just because nothing
+        // told this client the run ended. Restart() is safe to call directly
+        // with the feature off and no host set — it clears Running before it
+        // ever looks at either setting (see its own comment) — so this reaches
+        // the same line RunAsync's connection-drop path calls, without opening
+        // a socket.
+        [Fact]
+        public void RestartClearsAMidRunSessionSoItDoesNotStayPinnedAcrossAReconnect()
+        {
+            var was = ClaudeBuddySettings.OpenClawEnabled;
+            var host = ClaudeBuddySettings.OpenClawHost;
+            try
+            {
+                var key = Key();
+                Fire("agent", key);
+                Assert.Equal("generating", Listed(key)!.State);
+
+                ClaudeBuddySettings.OpenClawEnabled = false;
+                ClaudeBuddySettings.OpenClawHost = "";
+                OpenClawSessions.Restart();
+
+                Assert.Equal("idle", Listed(key)!.State);
+            }
+            finally
+            {
+                ClaudeBuddySettings.OpenClawEnabled = was;
+                ClaudeBuddySettings.OpenClawHost = host;
+            }
+        }
+
         // CB-149, from the capture: housekeeping with no run in it lights
         // nothing — including the session a task names as its child.
         [Fact]
