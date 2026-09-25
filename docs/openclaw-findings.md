@@ -427,6 +427,60 @@ the chat panel — it is exactly the "TurnUpdated carries the whole turn, not a
 delta" property the panel design asked the transport to guarantee, so a dropped
 or coalesced event cannot desync the view.
 
+## A run outside a cron session (CB-169)
+
+The section above was a cron run on the cron job's own session, and the orb's "working" rule was built from it. CB-169 (an OpenClaw orb never glows while its conversation replies) is what a run on any *other* session looks like. Captured 25 Sep 2026 against OpenClaw 2026.9.2 with `dotnet run --project tools/openclaw-probe -- events <seconds> - <out.jsonl> [messagesKey]`, which subscribes exactly as the app does. Two windows: 300 s on `sessions.subscribe` alone, and 400 s with `sessions.messages.subscribe` added for `agent:main:main`.
+
+**What was captured is a heartbeat, not a person.** The run on `agent:main:main` is the gateway's own every-300-s heartbeat job injecting into the agent's main session (`sessionTarget: "main"`, `systemSent: true` on the session record, 4.5 s runtime). No human Discord turn happened in either window, and none was sent to make one — see the end of this section.
+
+### On `sessions.subscribe` alone, a run is two rows
+
+```
++122.29s sessions.changed agent:main:main  phase=message
++122.29s sessions.changed agent:main:main  phase=start  runId=<run>
++126.78s sessions.changed agent:main:main  phase=message
++126.78s sessions.changed agent:main:main  phase=end    runId=<run>
+```
+
+That is everything that named the session. There were **no `agent`, `chat` or `session.tool` events at all**, where the cron run in the same window (on its own `…:cron:<job>` session) streamed thinking, assistant, tool and chat events as in the table above. And the app dropped every `sessions.changed` (CB-152), so for a run like this it received nothing it used. That is the whole of CB-169.
+
+The rows that CB-152 was about have a different shape, and it is what tells them apart: `reason: "cron-binding"` or `"placement"`, **no `phase` and no `runId`**, fired for sessions across the roster at once — the capture has one naming a Discord DM, a Discord channel and six cron sessions inside 2.2 s, none of them doing anything. Phase `message` does carry the session but no runId; it is a transcript row being appended, and it arrives immediately before the start *and* before the end.
+
+### `task/upserted` cannot end a run
+
+Every `task` event in both windows has **no top-level `sessionKey`**. The session is `task.childSessionKey`, and `task.runId` is the cron scheduler's id (`cron:<job>:<ms>:<uuid>`), not the agent run's. So the old rule that cleared a session's glow on a task upsert never fired on a real payload, and could not have named the right run if it had. That rules out one of CB-169's three candidates. The run's own `cron` `finished` already ends it, and that one does carry the run-scoped key.
+
+### `sessions.messages.subscribe` does add the stream — not needed, not wired
+
+Same job, same session, same kind of run, with `sessions.messages.subscribe {key: "agent:main:main"}` added (two runs, 300 s apart, identical):
+
+```
++86.21s agent            agent:main:main runId=<run> stream=lifecycle phase=start
++86.21s sessions.changed agent:main:main runId=<run> phase=start
++90.36s agent            agent:main:main runId=<run> stream=lifecycle phase=end
++90.37s chat             agent:main:main runId=<run> state=final
++90.37s sessions.changed agent:main:main runId=<run> phase=end
+```
+
+So the per-session subscription is what carries `agent`/`chat` for a non-cron session. The paired control is the capture above: same heartbeat job, same session, no subscription, and none of these events. A heartbeat produces no thinking or assistant text, so whether a real reply's mid-run deltas arrive this way is **still unmeasured**. First measured terminal `chat` state: `"final"`.
+
+Scope, both ways. **Declared** in `dist/method-scopes-K6J_UQGL.js`: `["sessions.messages.subscribe", "sessions-subscriptions", "operator.read", …]`, the same group and scope as `sessions.subscribe`. **Measured** on one token: `{key}` returns `{"subscribed": true}`. The same method with `includeApprovals: true` is refused with "requires a paired device and gateway scope: operator.approvals", and `tasks.flows` with "missing scope: operator.admin". That token held `operator.read` *and* `operator.write`, because reply was on for the machine, so the acceptance was measured at read+write and the read-only claim rests on the declaration.
+
+It is not wired in. The phase start and end rows already light the orb, and a subscription per session would be one more thing to hold open for every session on the roster.
+
+### How long a run lasts — the number behind `RunCeiling`
+
+The start/end pair has nothing between it, so "no event for 20 s means it stopped" (`RunIdle`) would put out a reply's glow 20 s in. An opened run has to wait for its end. The ceiling on that wait came from the live gateway, not a guess:
+
+- The gateway's own declared run timeout is `DEFAULT_AGENT_TIMEOUT_SECONDS = 172800` (two days), which bounds nothing useful.
+- `runtimeMs` for the last run of every session on `sessions.list` that reports one (39 of 71): Discord sessions n=25, median 11.2 s, 12 of 25 over 20 s, three over 5 min, **longest 1812 s**. Main sessions n=5, longest 153.6 s. Subagents n=3, longest 199.4 s.
+
+A 10-minute ceiling would have put the longest run out two-thirds of the way through. `RunCeiling` is 45 minutes: the longest measured run with half as much again on top. It is only a safety net. The run's own end clears it at once. A dropped connection clears every run, because an end sent while the socket was down is never seen.
+
+### Still open
+
+- **Whether a person's Discord DM turn produces the same start/end pair on its `…:discord:direct:<id>` key.** Every run measured was a heartbeat on `agent:main:main` or a cron job. The fix assumes the pair is emitted for any session's run. That is the natural reading of a roster-level lifecycle row, and the `runtimeMs` survey shows Discord sessions do have runs, but it is not measured. The read of the emit sites in `dist/` was cut short by the gateway host going unreachable. Nothing was sent to provoke one: this is a read-only investigation, and `chat.send` into a real conversation is out of bounds for it. The check is to leave the `events` probe running while someone DMs an agent.
+
 ## Reading and writing a conversation
 
 Two methods beyond the session index, both confirmed working against the real
@@ -634,10 +688,14 @@ nouns. `chatType` at the top level is a more reliable source for
   exists in the protocol and requires `includeApprovals: true` on
   `sessions.messages.subscribe`, which in turn needs `operator.approvals` —
   a scope this device did not request. Unverified end to end.
-- Whether a Discord-originated turn *streams* identically to a cron one. Only
-  cron activity occurred while watching. Sending into either is now known to
-  work (above); what is untested is whether the event sequence differs.
-- What a terminal `chat` state looks like (only `state: "delta"` was seen).
+- Whether a Discord-originated turn *streams* identically to a cron one.
+  **Partly answered by CB-169** (see "A run outside a cron session"): it does
+  not. A run on a non-cron session sends only a `sessions.changed` start/end
+  pair to a `sessions.subscribe` client, with no agent/chat/tool events. That
+  was measured on a heartbeat run on a main session, though, and a person's
+  Discord DM turn has still not been captured.
+- ~~What a terminal `chat` state looks like~~ — `state: "final"`, measured by
+  CB-169 on both a cron run and a main-session run.
 
 ## Incidental
 

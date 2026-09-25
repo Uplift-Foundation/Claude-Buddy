@@ -38,8 +38,9 @@ namespace ClaudeBuddy
         // stream rather than from sessions.list, because the list is wrong about
         // it: `hasActiveRun` never once flipped across a complete observed run,
         // and a run's own key never appears in the list at all. Events are also
-        // immediate, where a poll is up to a scan behind.
-        private static readonly Dictionary<string, DateTime> Running =
+        // immediate, where a poll is up to a scan behind. What an event does to
+        // an entry is OpenClawRunSignal's decision (CB-169), not this file's.
+        private static readonly Dictionary<string, RunTrack> Running =
             new(StringComparer.Ordinal);
 
         // When we last saw *any* activity on a session, from the event stream.
@@ -102,9 +103,9 @@ namespace ClaudeBuddy
         // live event stream, and the rule worth checking — a session stops
         // counting as working once its events go quiet, whether or not a terminal
         // event ever arrived — needs a timestamp in the past to check at all.
-        internal static void SetRunningForTests(string key, DateTime when)
+        internal static void SetRunningForTests(string key, DateTime when, bool open = false)
         {
-            lock (Gate) Running[key] = when;
+            lock (Gate) Running[key] = new RunTrack(when, null, open);
         }
 
         internal static void ForgetRunningForTests()
@@ -373,13 +374,6 @@ namespace ClaudeBuddy
                 return matches.Count == 1 ? matches[0] : (null, null);
             }
         }
-
-        // How long a session stays "working" after its last event. A turn emits
-        // events continuously while it runs — thinking deltas, tool phases — so
-        // silence for this long means it stopped, whether or not a terminal
-        // event arrived. Long enough to bridge a slow tool call, short enough
-        // that a finished orb doesn't keep pulsing at you.
-        private static readonly TimeSpan RunIdle = TimeSpan.FromSeconds(20);
 
         // How far back a session counts as current at all.
         //
@@ -959,9 +953,21 @@ namespace ClaudeBuddy
                     // gateway — leaving a live socket whose orbs keep updating
                     // while every send and every history load fails with "not
                     // connected", until the next reconnect happened to fix it.
+                    //
+                    // Runs go with the connection (CB-169). An end that arrived
+                    // while the socket was down was never seen, and a run opened
+                    // by a start waits RunCeiling for one, so keeping the record
+                    // across a reconnect could hold an orb lit for 45 minutes
+                    // after its reply finished. Dropping it means a run still
+                    // going across the gap goes dark early, which is the failure
+                    // a person notices rather than one that quietly pins an orb.
                     lock (Gate)
                     {
-                        if (ReferenceEquals(_gateway, gateway)) _gateway = null;
+                        if (ReferenceEquals(_gateway, gateway))
+                        {
+                            _gateway = null;
+                            Running.Clear();
+                        }
                     }
 
                     gateway?.Dispose();
@@ -1471,12 +1477,15 @@ namespace ClaudeBuddy
                 : new Delivery(channel!, to!, account);
         }
 
-        internal static string StateFor(string key)
+        // How long silence means "stopped" is OpenClawRunSignal.IsGenerating's
+        // rule: RunIdle after streaming work, RunCeiling after an explicit start.
+        // `now` is injectable so the boundary is testable without sleeping.
+        internal static string StateFor(string key, DateTime? now = null)
         {
             lock (Gate)
             {
-                if (!Running.TryGetValue(key, out var last)) return "idle";
-                if (DateTime.UtcNow - last > RunIdle)
+                if (!Running.TryGetValue(key, out var track)) return "idle";
+                if (!OpenClawRunSignal.IsGenerating(track, now ?? DateTime.UtcNow))
                 {
                     Running.Remove(key);
                     return "idle";
@@ -1504,35 +1513,42 @@ namespace ClaudeBuddy
             return reported;
         }
 
-        // Every event that names a session is evidence that session is working.
+        // What an event says about its session, recorded for Parse to read back.
         // The key on an event is run-scoped — "…:run:<runId>" appended to the
         // session's own key — so it has to be trimmed back before it means
         // anything to the list.
         // internal: this is the whole of how a gateway orb learns it is working.
         // The gateway's session list does not carry a running state, so an orb
-        // pulses because an event named its session — and the effect is
-        // observable through Parse, which reads what this records.
-        internal static void OnEvent(string name, JsonElement payload)
+        // pulses because of what this recorded — and the effect is observable
+        // through Parse.
+        internal static void OnEvent(string name, JsonElement payload) =>
+            OnEvent(name, payload, DateTime.UtcNow);
+
+        // `now` is a seam so a real captured sequence can be replayed at its
+        // real spacing — and stretched past RunIdle — without sleeping.
+        internal static void OnEvent(string name, JsonElement payload, DateTime now)
         {
-            // "sessions.changed" is the gateway telling every client "go
+            if (name is "tick" or "health" or "presence" or "connect.challenge") return;
+
+            var key = OpenClawRunSignal.SessionOf(payload);
+            if (key is null) return;
+
+            var signal = OpenClawRunSignal.Classify(name, payload);
+
+            // "sessions.changed" is mostly the gateway telling every client "go
             // re-fetch the list", not "this session just did something" — see
-            // CB-152. It arrives once per session on the *whole roster* on
-            // every reconnect (confirmed live: a single reconnect fired it for
-            // an agent's cron-internal session, its own main DM, and — the
-            // reproduction case — a stale channel with no real activity in
-            // three days), including sessions nobody has touched in days. It
-            // carries the same sessionKey shape as a real turn-progress event,
-            // so without this exclusion it reads exactly like one and arms
-            // Running/LastSeen for the entire roster at once.
-            if (name is "tick" or "health" or "presence" or "connect.challenge"
-                or "sessions.changed") return;
-            if (payload.ValueKind != JsonValueKind.Object) return;
-
-            var key = Str(payload, "sessionKey");
-            if (string.IsNullOrEmpty(key)) return;
-
-            var run = key.IndexOf(":run:", StringComparison.Ordinal);
-            if (run > 0) key = key[..run];
+            // CB-152. It arrives once per session on the *whole roster* on every
+            // reconnect (confirmed live: a single reconnect fired it for an
+            // agent's cron-internal session, its own main DM, and — the
+            // reproduction case — a stale channel with no real activity in three
+            // days). Those rows carry no phase and no runId, classify as None,
+            // and must not touch LastSeen either, or they keep the whole roster
+            // looking recent. The rows that *do* carry a phase and a runId are
+            // the only lifecycle a run on a non-cron session ever sends
+            // (CB-169), so they count — and nothing of this event reaches a
+            // transcript, which it never did.
+            var roster = name == "sessions.changed";
+            if (roster && signal.Signal == RunSignal.None) return;
 
             OpenClawChatSession? chat;
 
@@ -1540,35 +1556,21 @@ namespace ClaudeBuddy
             {
                 Chats.TryGetValue(key, out chat);
 
-                // A finished run stops counting immediately rather than waiting
-                // out RunIdle — the gateway said so, which beats inferring it.
                 // Seen is recorded for every event including the one that ends a
                 // run: a conversation that just finished replying is exactly the
-                // one worth keeping on screen.
-                LastSeen[key] = DateTime.UtcNow;
+                // one worth keeping on screen. That includes a task upsert, whose
+                // housekeeping re-touches are why CB-149 existed: it is recent
+                // activity, just not work, so it moves LastSeen and not Running.
+                LastSeen[key] = now;
 
-                // "task"/"upserted" is a background task's result landing in the
-                // conversation, not a session starting to generate one — see
-                // OpenClawChatSession.OnAgentEvent, which treats the identical
-                // event as Complete() rather than as new streaming text. Left to
-                // fall through to the Running arm below, a task the gateway keeps
-                // touching (its own housekeeping re-upserting an old, permanently
-                // blocked record among them — CB-149) reads as a session that is
-                // perpetually mid-reply, and its orb never leaves the screen: the
-                // event both defeats "Keep orbs for" (State != "generating" is
-                // the only escape from the recency filter) and never ages out on
-                // its own, since every fresh touch rearms Running before RunIdle
-                // can retire the last one.
-                if ((name is "cron" && Str(payload, "action") == "finished")
-                    || (name is "task" && Str(payload, "action") == "upserted"))
-                {
-                    Running.Remove(key);
-                }
-                else
-                {
-                    Running[key] = DateTime.UtcNow;
-                }
+                var next = OpenClawRunSignal.Apply(
+                    Running.TryGetValue(key, out var track) ? track : null, signal, now);
+
+                if (next is { } t) Running[key] = t;
+                else Running.Remove(key);
             }
+
+            if (roster) return;
 
             // Only for a session someone has opened: building a transcript for
             // 59 sessions nobody is looking at would be work and memory spent on
