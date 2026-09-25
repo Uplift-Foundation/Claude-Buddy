@@ -220,6 +220,15 @@ jobs:
       # paper over it. Same trx/copy dance as UI tests above, same retry
       # loop for the same not-yet-Windows-CI-proven reason.
       #
+      # CB-183: this suite stays on Avalonia.Headless's default PerTest
+      # isolation ON PURPOSE, unlike tests/UiTests. PerAssembly lets fallback
+      # fonts loaded by one test persist into the next, so SemiBold text
+      # changed weight with test order (50 of 112 captures, pixel deltas up to
+      # 229/255; the same test run alone drew what develop draws). The
+      # dispatcher race UiTests' attribute closes is therefore still possible
+      # here; the CB-119 guard and the retry below are what catch it. It was
+      # never seen short in the 2 runs measured, which is not a rate.
+      #
       # CB-119: this step's shape matches "UI tests" above exactly — same
       # 3-attempt retry, same trx-copy-before-giving-up — so it gets the same
       # treatment for the same reason: a test-case-cleanup race here would be
