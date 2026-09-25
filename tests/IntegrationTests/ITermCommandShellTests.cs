@@ -125,6 +125,49 @@ public class ITermCommandShellTests
         }
     }
 
+    // `cd` as the user's interactive shell may define it. This stands in for
+    // zoxide's `init zsh --cmd cd`, measured on a real Mac: one argument that
+    // is not a directory falls through to a fuzzy match elsewhere, while the
+    // two-argument `--` form goes straight to the builtin. The generated line
+    // must still refuse to run when its directory has gone.
+    private const string FuzzyCd = """
+        cd() {
+          if [ "$1" = "--" ]; then builtin cd "$@"
+          elif [ $# -eq 1 ] && [ ! -d "$1" ]; then builtin cd "$FUZZY_TARGET"
+          else builtin cd "$@"; fi
+        }
+        """;
+
+    [MacITermShellFact]
+    public void AFuzzyCdInTheUsersZshrcCannotRedirectAMissingDirectory()
+    {
+        var home = Directory.CreateTempSubdirectory("cb-iterm-home-").FullName;
+        var elsewhere = Path.Combine(home, "with space");
+        Directory.CreateDirectory(elsewhere);
+        File.WriteAllText(Path.Combine(home, ".zshrc"), FuzzyCd + "\nFUZZY_TARGET='" + elsewhere + "'\n");
+
+        try
+        {
+            // The stand-in really does redirect a bare cd — without this the
+            // assertion below could pass against a .zshrc that never loaded.
+            var (bareExit, bareOut, _) = Run(
+                "'/bin/zsh' -l -i -c 'cd " + Path.Combine(home, "with spac").Replace(" ", "\\ ") + " && /bin/pwd'", home);
+            Assert.Equal(0, bareExit);
+            Assert.EndsWith("/with space", bareOut.TrimEnd('\n'));
+
+            var line = TerminalScripts.ShellCommandLine(
+                Path.Combine(home, "with spac"), "exec '/usr/bin/printf' 'ran'");
+            var (exit, stdout, _) = Run(TerminalScripts.ITermCommand("/bin/zsh", line), home);
+
+            Assert.Equal(1, exit);
+            Assert.DoesNotContain("ran", stdout);
+        }
+        finally
+        {
+            Directory.Delete(home, true);
+        }
+    }
+
     private static string RealPath(string path)
     {
         var psi = new ProcessStartInfo("/bin/pwd") { UseShellExecute = false, RedirectStandardOutput = true, WorkingDirectory = path };

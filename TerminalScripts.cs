@@ -62,8 +62,22 @@ namespace ClaudeBuddy
         // — every caller either already built it with ShellQuote (ClaudeCommand)
         // or is TmuxAttachCommand's own output, which begins "unset TMUX; exec
         // …" and must not be wrapped in a second `exec` of its own.
+        //
+        // `cd --`, not a bare `cd`, because the line can meet an interactive
+        // shell — iTerm2 runs it under `-l -i`, and Terminal.app's `do script`
+        // always has — and there `cd` is whatever the user's .zshrc made it.
+        // zoxide's `init --cmd cd` is a real case, measured on a real Mac: its
+        // one-argument form falls through to a fuzzy match when the directory
+        // is not there, so a recorded cwd that had been deleted landed in a
+        // similarly named project instead and the command ran there, the
+        // guard never firing. Its two-argument `--` form goes straight to the
+        // builtin, and `--` is POSIX, accepted by sh, bash, dash, ksh and zsh
+        // alike. Not `builtin cd`, which dash lacks, and not `command cd`,
+        // which zsh resolves to /usr/bin/cd — a program that succeeds without
+        // moving anything. It also keeps a directory named with a leading dash
+        // from being read as an option.
         internal static string ShellCommandLine(string? cwd, string command) =>
-            string.IsNullOrEmpty(cwd) ? command : "cd " + ShellQuote(cwd) + " || exit 1; " + command;
+            string.IsNullOrEmpty(cwd) ? command : "cd -- " + ShellQuote(cwd) + " || exit 1; " + command;
 
         // One tmux client, as `list-clients` describes it.
         internal readonly record struct TmuxClient(
@@ -428,7 +442,7 @@ namespace ClaudeBuddy
             // machine on the line, which reads in a coverage report as a branch
             // nothing took while the line itself is plainly executed.
             var script = "#!/bin/sh\n";
-            if (!string.IsNullOrEmpty(cwd)) script += "cd " + ShellQuote(cwd) + " || exit 1\n";
+            if (!string.IsNullOrEmpty(cwd)) script += "cd -- " + ShellQuote(cwd) + " || exit 1\n";
 
             return script + TmuxAttachCommand(tmuxBinary, socket, session) + "\n";
         }
@@ -536,7 +550,7 @@ namespace ClaudeBuddy
         // $SHELL rather than a fixed /bin/zsh, because the point of a login
         // shell here is the user's PATH, and a bash user keeps theirs in
         // .bash_profile/.bashrc, which zsh never reads. But only a POSIX-family
-        // shell: the line is sh syntax — `cd '…' || exit 1; exec …`, `'\''` for
+        // shell: the line is sh syntax — `cd -- '…' || exit 1; exec …`, `'\''` for
         // an embedded apostrophe, and TmuxAttachCommand's `unset TMUX` — and
         // fish, nushell or xonsh would misparse some of it, so for those
         // /bin/zsh, which every macOS since 10.15 ships and defaults to, is the
@@ -574,7 +588,7 @@ namespace ClaudeBuddy
         //
         // iTerm2's `command` is not a shell command. It splits the string into
         // argv itself and execs the first word directly, with no shell in
-        // between — so the line ShellCommandLine builds, `cd '<dir>' || exit 1;
+        // between — so the line ShellCommandLine builds, `cd -- '<dir>' || exit 1;
         // exec '<bin>'`, was being exec'd as a program named "cd". The session
         // died at once, `create window` answered `missing value`, and the tty
         // lookup after it failed with -1728: a blank window, and "Couldn't open a

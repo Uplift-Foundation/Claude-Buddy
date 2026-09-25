@@ -69,7 +69,7 @@ namespace ClaudeBuddy.Tests
             var line = TerminalScripts.ShellCommandLine("/Users/user/proj", "exec '/usr/bin/claude' 'agents'");
 
             Assert.Equal(
-                "cd '/Users/user/proj' || exit 1; exec '/usr/bin/claude' 'agents'", line);
+                "cd -- '/Users/user/proj' || exit 1; exec '/usr/bin/claude' 'agents'", line);
         }
 
         // `cd ''` fails, and `|| exit 1` would take the whole command down with
@@ -93,8 +93,8 @@ namespace ClaudeBuddy.Tests
 
             var line = TerminalScripts.ShellCommandLine("/tmp/x", command);
 
-            Assert.Equal("cd '/tmp/x' || exit 1; " + command, line);
-            Assert.StartsWith("cd '/tmp/x' || exit 1; unset TMUX; exec ", line);
+            Assert.Equal("cd -- '/tmp/x' || exit 1; " + command, line);
+            Assert.StartsWith("cd -- '/tmp/x' || exit 1; unset TMUX; exec ", line);
         }
 
         // --- RunScriptFor / ITermRunScript / TerminalRunScript: CB-80 ---------
@@ -255,7 +255,73 @@ namespace ClaudeBuddy.Tests
             var script = TerminalScripts.RunScriptFor(
                 "/System/Applications/Utilities/Terminal.app", "/tmp/x", "exec 'x'", "/bin/bash");
 
-            Assert.Equal(TerminalScripts.TerminalRunScript("cd '/tmp/x' || exit 1; exec 'x'"), script);
+            Assert.Equal(TerminalScripts.TerminalRunScript("cd -- '/tmp/x' || exit 1; exec 'x'"), script);
+        }
+
+        // Each character a directory name can carry that some layer would
+        // otherwise take — the shell (space, apostrophe, dollar), iTerm2's
+        // splitter (backslash, double quote, tilde) or the AppleScript literal
+        // (double quote, backslash) — reaches the shell as exactly the cd
+        // guard ShellCommandLine built, and none of it reaches iTerm2 raw.
+        [Theory]
+        [InlineData("/Users/user/with space")]
+        [InlineData("/Users/user/it's")]
+        [InlineData("/Users/user/say \"hi\"")]
+        [InlineData("/Users/user/back\\slash")]
+        [InlineData("/Users/user/back\\n")]
+        [InlineData("/Users/user/$HOME")]
+        [InlineData("/Users/user/~tilde")]
+        [InlineData("/Users/user/-leading-dash")]
+        public void EachHostileCharacterReachesTheShellIntact(string cwd)
+        {
+            var script = TerminalScripts.RunScriptFor("/Applications/iTerm.app", cwd, "exec 'x'", "/bin/zsh");
+
+            Assert.Equal("cd -- " + TerminalScripts.ShellQuote(cwd) + " || exit 1; exec 'x'", DecodedPayload(script!));
+            Assert.DoesNotContain(cwd[12..], script);
+        }
+
+        // No cwd: no cd guard at all — `cd -- ''` would fail and take the
+        // command with it — so the shell is handed the command alone.
+        [Fact]
+        public void WithNoCwdTheShellRunsTheCommandAlone()
+        {
+            var script = TerminalScripts.RunScriptFor("/Applications/iTerm.app", null, "exec 'x'", "/bin/zsh");
+
+            Assert.Equal("exec 'x'", DecodedPayload(script!));
+        }
+
+        // The cd guard ends option parsing. Under the interactive shell iTerm2
+        // now runs, `cd` can be the user's own function — zoxide's
+        // `--cmd cd` fuzzy-matches a missing directory with one argument and
+        // goes straight to the builtin with `--` — so a bare `cd` let a deleted
+        // cwd land in some other project and run the command there.
+        [Fact]
+        public void TheCdGuardEndsOptionParsing()
+        {
+            Assert.StartsWith("cd -- '/tmp/x' || exit 1; ", TerminalScripts.ShellCommandLine("/tmp/x", "exec 'x'"));
+        }
+
+        // Terminal.app's script, pinned byte for byte: this change is iTerm2's,
+        // and `do script` typing a line into a real shell was never broken.
+        [Fact]
+        public void TheTerminalRunScriptIsUnchanged()
+        {
+            Assert.Equal(
+                "tell application \"Terminal\"\n" +
+                "    set t to do script \"cd -- '/tmp/a \\\"b\\\"' || exit 1; exec 'x'\"\n" +
+                "    return tty of t\n" +
+                "end tell",
+                TerminalScripts.RunScriptFor(
+                    "/System/Applications/Utilities/Terminal.app", "/tmp/a \"b\"", "exec 'x'", "/bin/zsh")!
+                    .ReplaceLineEndings("\n"));
+        }
+
+        static string DecodedPayload(string script)
+        {
+            const string open = "printf %s ";
+            var start = script.IndexOf(open, StringComparison.Ordinal) + open.Length;
+            var end = script.IndexOf(" | /usr/bin/base64", StringComparison.Ordinal);
+            return System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(script[start..end]));
         }
 
         // --- LoginShellFor: which shell runs the line -------------------------
@@ -385,7 +451,7 @@ namespace ClaudeBuddy.Tests
             // The cd is for after the attach ends — detach or exit drops the
             // window to a shell, and the useful place to land is the directory
             // whose orb was clicked.
-            Assert.Contains("cd '/Users/user/Source/Claude-Buddy' || exit 1\n", script);
+            Assert.Contains("cd -- '/Users/user/Source/Claude-Buddy' || exit 1\n", script);
         }
 
         // No socket recorded means the default server, which `attach` finds on
@@ -428,7 +494,7 @@ namespace ClaudeBuddy.Tests
             var script = TerminalScripts.TmuxAttachScript(
                 "/usr/bin/tmux", null, "claude-swarm", "/Users/user/user's stuff");
 
-            Assert.Contains("cd '/Users/user/user'\\''s stuff' || exit 1", script);
+            Assert.Contains("cd -- '/Users/user/user'\\''s stuff' || exit 1", script);
         }
 
         // A session name carries the same hazards a path does — the relay's is
