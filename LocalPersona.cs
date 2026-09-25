@@ -133,10 +133,25 @@ namespace ClaudeBuddy
         // who this is. A team that gives a member neither file falls
         // straight through to the shared project persona, unchanged from
         // before this ticket.
+        //
+        // Each candidate carries the directory level of the walk that offered
+        // it (CB-187): <dir> for <dir>/CLAUDE.md, for <dir>/.claude/CLAUDE.md
+        // and for both profile layouts alike, and the config directory itself
+        // for a user-level file. profile-gen writes a persona's picture
+        // relative to that project directory, and the path alone cannot say
+        // which it was — ~/.claude/CLAUDE.md is level ~ when the walk reaches
+        // it from below and level ~/.claude when only the config list offers
+        // it — so the walk, which knows, says so.
+        internal readonly record struct Candidate(string Path, string Level);
+
         internal static IReadOnlyList<string> CandidateFiles(
+            string? cwd, IEnumerable<string> userConfigDirs, SessionSource source, string agentName = "") =>
+            Candidates(cwd, userConfigDirs, source, agentName).Select(candidate => candidate.Path).ToArray();
+
+        internal static IReadOnlyList<Candidate> Candidates(
             string? cwd, IEnumerable<string> userConfigDirs, SessionSource source, string agentName = "")
         {
-            var files = new List<string>();
+            var files = new List<Candidate>();
             // ClaudeCloud joins these two for the same reason, and the reason is
             // worth restating because this guard names sources one by one rather
             // than asking IsLocalCli: a cloud session's cwd is a path inside a
@@ -153,9 +168,9 @@ namespace ClaudeBuddy
             // anything the first did not.
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-            void Add(string path)
+            void Add(string path, string level)
             {
-                if (seen.Add(path)) files.Add(path);
+                if (seen.Add(path)) files.Add(new Candidate(path, level));
             }
 
             var hasAgentName = agentName is not ("" or "." or "..");
@@ -165,14 +180,14 @@ namespace ClaudeBuddy
             {
                 if (hasAgentName)
                 {
-                    Add(Path.Combine(directory, "profiles", agentName, agentName + ".md"));
-                    Add(Path.Combine(directory, ".profiles-assets", agentName, agentName + ".md"));
+                    Add(Path.Combine(directory, "profiles", agentName, agentName + ".md"), directory);
+                    Add(Path.Combine(directory, ".profiles-assets", agentName, agentName + ".md"), directory);
                 }
 
-                Add(Path.Combine(directory, "CLAUDE.md"));
-                Add(Path.Combine(directory, "CLAUDE.local.md"));
-                Add(Path.Combine(directory, ".claude", "CLAUDE.md"));
-                Add(Path.Combine(directory, "AGENTS.md"));
+                Add(Path.Combine(directory, "CLAUDE.md"), directory);
+                Add(Path.Combine(directory, "CLAUDE.local.md"), directory);
+                Add(Path.Combine(directory, ".claude", "CLAUDE.md"), directory);
+                Add(Path.Combine(directory, "AGENTS.md"), directory);
                 directory = Path.GetDirectoryName(directory);
             }
 
@@ -181,7 +196,7 @@ namespace ClaudeBuddy
             foreach (var configDir in userConfigDirs)
             {
                 if (string.IsNullOrWhiteSpace(configDir)) continue;
-                Add(Path.Combine(configDir.Trim(), "CLAUDE.md"));
+                Add(Path.Combine(configDir.Trim(), "CLAUDE.md"), configDir.Trim());
             }
 
             return files;
@@ -215,43 +230,55 @@ namespace ClaudeBuddy
         // importing each other, or two paths reaching one file through a link)
         // is read once and not twice.
         //
-        // Origin is the directory of the candidate that brought each file in —
-        // its own directory for a candidate, the candidate's for anything it
-        // imports — because a persona file profile-gen imports writes its
-        // picture relative to the CLAUDE.md that imports it, and nothing else
-        // here remembers which one that was. A file two candidates both reach
-        // keeps the first, nearer one's, since the visited set reads it once.
-        internal static IReadOnlyList<(string Path, string[] Lines, string Origin)> Load(
-            IReadOnlyList<string> candidates)
+        // Level is the walk-level directory of the candidate that brought each
+        // file in (see Candidate), carried to everything that candidate
+        // imports, because a persona file profile-gen imports writes its
+        // picture relative to that project directory and nothing else here
+        // remembers which one it was. A file two candidates both reach keeps
+        // the first, nearer one's, since the visited set reads it once.
+        //
+        // An import of an import inherits the candidate's level too, not the
+        // intermediate file's directory. The level is the one directory here
+        // that is what it is *because* of where the project is — the walk
+        // found it — while an intermediate file's directory is only wherever
+        // the author chose to split their markdown, and the file naming the
+        // picture already gets its own directory as the first root. Offering
+        // every directory along the chain would make the places a relative
+        // picture can land grow with the import depth, for no convention
+        // anyone writes: profile-gen never nests an import at all.
+        //
+        // Canonicalised like the workspace root, so it compares with the
+        // canonical paths the roots are measured against. A level that will
+        // not canonicalise — gone between the walk and the read — falls back
+        // to the file's own directory, which is simply no extra root.
+        internal static IReadOnlyList<(string Path, string[] Lines, string Level)> Load(
+            IReadOnlyList<Candidate> candidates)
         {
-            var read = new List<(string Path, string[] Lines, string Origin)>();
+            var read = new List<(string Path, string[] Lines, string Level)>();
             var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             foreach (var candidate in candidates)
             {
                 if (read.Count >= MaxFiles) break;
-                ReadInto(candidate, 0, null, read, visited);
+                ReadInto(candidate.Path, 0, PersonaFiles.CanonicalDirectory(candidate.Level), read, visited);
             }
 
             return read;
         }
 
-        // origin is null only for the candidate itself, which becomes its own
-        // origin once its canonical path is known.
-        //
-        // An import of an import inherits the candidate's directory, not the
-        // intermediate file's. The candidate is the one file here that sits
-        // where it does *because* of where the project is — Claude Code found
-        // it by walking the tree — so its directory is what an author means by
-        // "relative to the project". An intermediate file's directory is only
-        // wherever the author chose to split their markdown, and the file
-        // naming the picture already gets its own directory as the first root.
-        // Offering every file along the chain would also make the roots a
-        // picture can resolve under grow with the import depth, for no
-        // convention anyone actually writes.
+        // A bare list of paths, each its own level: what every caller before
+        // CB-187 meant, since the only root it offered was the file's own
+        // directory. Kept for the tests that build a list by hand.
+        internal static IReadOnlyList<(string Path, string[] Lines, string Level)> Load(
+            IReadOnlyList<string> candidates) =>
+            Load(OwnLevels(candidates));
+
+        private static IReadOnlyList<Candidate> OwnLevels(IReadOnlyList<string> candidates) =>
+            candidates.Select(path => new Candidate(path, Path.GetDirectoryName(path) ?? path)).ToArray();
+
         private static void ReadInto(
-            string path, int hop, string? origin,
-            List<(string Path, string[] Lines, string Origin)> read, HashSet<string> visited)
+            string path, int hop, string? level,
+            List<(string Path, string[] Lines, string Level)> read, HashSet<string> visited)
         {
             if (read.Count >= MaxFiles) return;
 
@@ -264,13 +291,13 @@ namespace ClaudeBuddy
             // Never null: canonical is a FileInfo.FullName for a file that
             // exists, so it is absolute and has a parent.
             var directory = Path.GetDirectoryName(canonical)!;
-            origin ??= directory;
+            level ??= directory;
 
-            read.Add((canonical, lines, origin));
+            read.Add((canonical, lines, level));
             if (hop >= MaxImportHops) return;
 
             foreach (var import in ImportsIn(lines, directory))
-                ReadInto(import, hop + 1, origin, read, visited);
+                ReadInto(import, hop + 1, level, read, visited);
         }
 
         // An import is a bare `@something.md` token: either the whole line or a
@@ -304,15 +331,16 @@ namespace ClaudeBuddy
         // not against the session's cwd, so a `portrait.png` written in
         // ~/.claude/CLAUDE.md means the one in ~/.claude and cannot be
         // shadowed by a file of that name in whatever directory the session
-        // happens to be sitting in. The directory of the file that imported
-        // it is tried next, and the workspace root (CB-147) last, each only
-        // when the narrower lookup before it finds nothing — so a picture
-        // written relative to the importing CLAUDE.md, as profile-gen writes
-        // it, or to the workspace root still resolves, without weakening the
-        // guarantee the file-directory lookup already made.
+        // happens to be sitting in. The walk-level directory the candidate
+        // was found at is tried next (CB-187), and the workspace root
+        // (CB-147) last, each only when the narrower lookup before it finds
+        // nothing — so a picture written relative to the project directory,
+        // as profile-gen writes it, or to the workspace root still resolves,
+        // without weakening the guarantee the file-directory lookup already
+        // made.
         internal static Persona Resolve(
             string? cwd, SessionSource source, IEnumerable<string> userConfigDirs, string agentName = "") =>
-            ResolveFrom(CandidateFiles(cwd, userConfigDirs, source, agentName), cwd);
+            ResolveFrom(Candidates(cwd, userConfigDirs, source, agentName), cwd);
 
         // The same fold, over a candidate list somebody else has already built.
         //
@@ -333,7 +361,13 @@ namespace ClaudeBuddy
         // treats a null workspace root as "one candidate root", which is
         // this ticket's required degenerate case (D8) rather than a special
         // case bolted on beside it.
-        internal static Persona ResolveFrom(IReadOnlyList<string> candidates, string? workspaceCwd = null)
+        //
+        // A bare list of paths is each its own level — see Load's overload —
+        // so a hand-built list behaves exactly as it did before CB-187.
+        internal static Persona ResolveFrom(IReadOnlyList<string> candidates, string? workspaceCwd = null) =>
+            ResolveFrom(OwnLevels(candidates), workspaceCwd);
+
+        internal static Persona ResolveFrom(IReadOnlyList<Candidate> candidates, string? workspaceCwd = null)
         {
             if (candidates.Count == 0) return Empty;
 
@@ -350,7 +384,7 @@ namespace ClaudeBuddy
             string? avatarPath = null;
             var files = new List<string>();
 
-            foreach (var (path, lines, origin) in Load(candidates))
+            foreach (var (path, lines, level) in Load(candidates))
             {
                 files.Add(path);
 
@@ -379,13 +413,14 @@ namespace ClaudeBuddy
                 // could not read — so the one case worth reporting was the one
                 // case that never reached the resolver at all.
                 //
-                // root — the file's own directory — first, then origin — the
-                // directory of the candidate that imported it — then
-                // workspaceRoot, each only if the one before finds nothing:
-                // see PersonaFiles.AvatarAt's own comments (D1/D2) for why
-                // that order is not arbitrary. For a candidate itself origin
-                // is root, and CandidateRoots drops the repeat.
-                var picture = PersonaFiles.AvatarPathAt(root, origin, workspaceRoot, fields);
+                // root — the file's own directory — first, then level — the
+                // walk-level directory of the candidate that brought it in —
+                // then workspaceRoot, each only if the one before finds
+                // nothing: see PersonaFiles.AvatarAt's own comments (D1/D2)
+                // for why that order is not arbitrary. For a CLAUDE.md sitting
+                // at its own level, level is root, and CandidateRoots drops
+                // the repeat.
+                var picture = PersonaFiles.AvatarPathAt(root, level, workspaceRoot, fields);
                 if (picture is null) continue;
 
                 avatarSource = path;

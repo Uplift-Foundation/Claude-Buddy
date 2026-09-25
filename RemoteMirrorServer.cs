@@ -488,7 +488,7 @@ namespace ClaudeBuddy
         {
             if (!status.IsLocalCli || string.IsNullOrWhiteSpace(status.Cwd)) return null;
 
-            var candidates = LocalPersona.CandidateFiles(
+            var candidates = LocalPersona.Candidates(
                 status.Cwd, LocalPersona.UserConfigDirs(), status.Source, status.Agent);
             var local = LocalPersona.ResolveFrom(candidates, status.Cwd);
             var avatar = local.AvatarPath is null ? null : PersonaFiles.ReadAvatarFile(local.AvatarPath);

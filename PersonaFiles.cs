@@ -207,7 +207,7 @@ namespace ClaudeBuddy
                 : picture[..QuotedHead] + "…" + picture[^QuotedTail..]
                     + " (" + picture.Length.ToString("N0", CultureInfo.InvariantCulture) + " characters)";
 
-        // workspaceSearched and importerSearched both default to false so
+        // workspaceSearched and levelSearched both default to false so
         // every single-root call site says exactly what it always said
         // (CB-147, D6). Each reads true only when AvatarAt actually ran the
         // guard chain against that root as a distinct directory and it
@@ -216,15 +216,15 @@ namespace ClaudeBuddy
         // not vary on either: TooLarge already names the file that was found,
         // and NotAPicturePath is decided before any root is tried at all.
         //
-        // workspaceSearched was bothRootsSearched until the importing file
-        // became a third root; with three, "both" stopped naming a count and
+        // workspaceSearched was bothRootsSearched until the walk-level
+        // directory became a third root (CB-187); with three, "both" stopped naming a count and
         // had to name which root. The two-root strings it produced are
         // unchanged byte for byte.
         internal static string RejectionMessage(
             AvatarRejection reason, string picture, long bytes,
-            bool workspaceSearched = false, bool importerSearched = false)
+            bool workspaceSearched = false, bool levelSearched = false)
         {
-            var searched = SearchedAnchors(workspaceSearched, importerSearched);
+            var searched = SearchedAnchors(workspaceSearched, levelSearched);
             var detail = reason switch
             {
                 AvatarRejection.TooLarge =>
@@ -248,22 +248,22 @@ namespace ClaudeBuddy
         // tried, as the words a reader of persona.log would use for them.
         // Null for the file's own directory alone, which has its own wording
         // above and keeps it.
-        private static string? SearchedAnchors(bool workspaceSearched, bool importerSearched) =>
-            (workspaceSearched, importerSearched) switch
+        private static string? SearchedAnchors(bool workspaceSearched, bool levelSearched) =>
+            (workspaceSearched, levelSearched) switch
             {
                 (false, false) => null,
                 (true, false) => "both the directory of the markdown that named it and the workspace",
                 (false, true) =>
-                    "both the directory of the markdown that named it and the directory of the file that imported it",
+                    "both the directory of the markdown that named it and the project directory it was found from",
                 (true, true) =>
-                    "the directory of the markdown that named it, the directory of the file that imported it, "
+                    "the directory of the markdown that named it, the project directory it was found from, "
                     + "and the workspace",
             };
 
         private static void Reject(
             AvatarRejection reason, string picture, long bytes = 0,
-            bool workspaceSearched = false, bool importerSearched = false) =>
-            PersonaLog.Record(RejectionMessage(reason, picture, bytes, workspaceSearched, importerSearched));
+            bool workspaceSearched = false, bool levelSearched = false) =>
+            PersonaLog.Record(RejectionMessage(reason, picture, bytes, workspaceSearched, levelSearched));
 
         // Where a picture named in markdown actually lives, with every guard
         // applied and no bytes kept.
@@ -285,24 +285,24 @@ namespace ClaudeBuddy
             return path;
         }
 
-        // The counterparts taking the other candidate roots: the directory of
-        // the file that imported the one naming the picture, and the session's
+        // The counterparts taking the other candidate roots: the walk-level
+        // directory the naming file was found from (CB-187), and the session's
         // workspace root (CB-147), alongside the directory of the markdown
         // that named it. Everything said about the single-root overloads above
         // applies unchanged to whichever root actually resolves it — these
         // exist so LocalPersona.ResolveFrom can offer the other conventions
         // without a second implementation of the resolution.
         internal static string? AvatarPathAt(
-            string fileDirectory, string? importerDirectory, string? workspaceRoot, PersonaMarkdown.Fields fields)
+            string fileDirectory, string? levelDirectory, string? workspaceRoot, PersonaMarkdown.Fields fields)
         {
             if (fields.Avatar is null) { RejectUnusableValue(fields); return null; }
-            return AvatarPathAt(fileDirectory, importerDirectory, workspaceRoot, fields.Avatar);
+            return AvatarPathAt(fileDirectory, levelDirectory, workspaceRoot, fields.Avatar);
         }
 
         internal static string? AvatarPathAt(
-            string fileDirectory, string? importerDirectory, string? workspaceRoot, string? avatar)
+            string fileDirectory, string? levelDirectory, string? workspaceRoot, string? avatar)
         {
-            AvatarAt(fileDirectory, importerDirectory, workspaceRoot, avatar, out var path);
+            AvatarAt(fileDirectory, levelDirectory, workspaceRoot, avatar, out var path);
             return path;
         }
 
@@ -401,25 +401,29 @@ namespace ClaudeBuddy
             string fileDirectory, string? workspaceRoot, string? avatar, out string? path) =>
             AvatarAt(fileDirectory, null, workspaceRoot, avatar, out path);
 
-        // The importing file's directory is the third root, between the other
-        // two, and it is what profile-gen's schema actually says: a persona
-        // file's `image:` is relative to the directory of the CLAUDE.md that
-        // imports it. CB-147's workspace root only stood in for that, and only
-        // while the session sat in that same directory — one level down, the
-        // name still resolved and the picture was lost.
+        // CB-187: the walk-level directory is the third root, between the
+        // other two, and it is what profile-gen actually writes against: a
+        // persona's `image:` is relative to the project directory whose
+        // CLAUDE.md (or .claude/CLAUDE.md, or profiles/<name>/<name>.md) the
+        // walk found — LocalPersona.Candidate has the cases. CB-147's
+        // workspace root only stood in for that, and only while the session
+        // sat in that same directory — one level down, the name still
+        // resolved and the picture was lost.
         //
         // Second rather than first, for D1/D2's reason one step removed: the
         // file that named the picture is the most specific thing that said
         // anything about it, so a picture beside it still wins outright. Ahead
         // of the workspace for the same reason the file directory is: the
-        // importing file is markdown somebody wrote on purpose, and the cwd is
-        // wherever the session happened to be, so the narrower anchor is tried
-        // first and a same-named file in the cwd cannot shadow it. D3 holds
+        // level is where markdown somebody wrote on purpose was found, and the
+        // cwd is wherever the session happened to be, so the narrower anchor
+        // is tried first and a same-named file in the cwd cannot shadow it —
+        // a deliberate change from CB-147, where the cwd's copy was the only
+        // second root there was. D3 holds
         // unchanged — every root gets the whole guard chain against itself
         // alone — and D4's widening of an absolute value extends to this root
         // too: it is accepted if it is contained in any of the three.
         internal static byte[]? AvatarAt(
-            string fileDirectory, string? importerDirectory, string? workspaceRoot, string? avatar,
+            string fileDirectory, string? levelDirectory, string? workspaceRoot, string? avatar,
             out string? path)
         {
             path = null;
@@ -428,7 +432,7 @@ namespace ClaudeBuddy
             // rejection worth writing down.
             if (string.IsNullOrWhiteSpace(avatar)) return null;
 
-            var roots = CandidateRoots(fileDirectory, importerDirectory, workspaceRoot);
+            var roots = CandidateRoots(fileDirectory, levelDirectory, workspaceRoot);
 
             var haveRejection = false;
             var bestRejection = AvatarRejection.Unreadable;
@@ -460,14 +464,16 @@ namespace ClaudeBuddy
 
             // Each anchor is named only if it was genuinely searched as a
             // root of its own — see D6. A workspace root equal to the
-            // importing file's directory is one search, and it is reported as
-            // the workspace, which is the wording CB-147 already gave that
-            // exact case (a CLAUDE.md in the cwd importing a persona file).
+            // walk-level directory is one search, and it is reported as the
+            // workspace, which is the wording CB-147 already gave that exact
+            // case (a CLAUDE.md in the cwd importing a persona file). A level
+            // equal to the file's own directory is likewise no search of its
+            // own.
             var workspaceSearched = workspaceRoot is not null && !SameDirectory(workspaceRoot, fileDirectory);
-            var importerSearched = importerDirectory is not null
-                && !SameDirectory(importerDirectory, fileDirectory)
-                && !(workspaceRoot is not null && SameDirectory(importerDirectory, workspaceRoot));
-            Reject(bestRejection, avatar, bestLength, workspaceSearched, importerSearched);
+            var levelSearched = levelDirectory is not null
+                && !SameDirectory(levelDirectory, fileDirectory)
+                && !(workspaceRoot is not null && SameDirectory(levelDirectory, workspaceRoot));
+            Reject(bestRejection, avatar, bestLength, workspaceSearched, levelSearched);
             return null;
         }
 
@@ -483,16 +489,16 @@ namespace ClaudeBuddy
         internal static IReadOnlyList<string> CandidateRoots(string fileDirectory, string? workspaceRoot) =>
             CandidateRoots(fileDirectory, null, workspaceRoot);
 
-        // The same, with the importing file's directory between the two. Each
-        // root is dropped if it repeats one already in the list, so a
-        // persona written straight into a CLAUDE.md (its own importer) or a
-        // CLAUDE.md sitting in the session's cwd (the workspace) costs no
-        // second search of the same directory.
+        // The same, with the walk-level directory between the two. Each root
+        // is dropped if it repeats one already in the list, so a persona
+        // written straight into a CLAUDE.md (at its own level) or a level that
+        // is the session's cwd (the workspace) costs no second search of the
+        // same directory.
         internal static IReadOnlyList<string> CandidateRoots(
-            string fileDirectory, string? importerDirectory, string? workspaceRoot)
+            string fileDirectory, string? levelDirectory, string? workspaceRoot)
         {
             var roots = new List<string> { fileDirectory };
-            foreach (var root in new[] { importerDirectory, workspaceRoot })
+            foreach (var root in new[] { levelDirectory, workspaceRoot })
             {
                 if (root is not null && !roots.Any(existing => SameDirectory(existing, root))) roots.Add(root);
             }

@@ -240,6 +240,53 @@ public class LocalPersonaTests : IDisposable
         Assert.Equal(Path.Combine(configDir, "CLAUDE.md"), Assert.Single(files));
     }
 
+    // CB-187: the walk level each candidate carries. Pure path arithmetic,
+    // like the rest of CandidateFiles — one row per shape the walk offers.
+    [Fact]
+    public void EveryShapeTheWalkOffersCarriesTheDirectoryLevelThatOfferedIt()
+    {
+        var full = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "cb-levels", "a"));
+        var configDir = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "cb-levels-config"));
+
+        var candidates = LocalPersona.Candidates(full, new[] { configDir }, SessionSource.ClaudeCode, "ines");
+        string LevelOf(string path) => Assert.Single(candidates, candidate => candidate.Path == path).Level;
+
+        Assert.Equal(full, LevelOf(Path.Combine(full, "CLAUDE.md")));
+        Assert.Equal(full, LevelOf(Path.Combine(full, "CLAUDE.local.md")));
+        Assert.Equal(full, LevelOf(Path.Combine(full, ".claude", "CLAUDE.md")));
+        Assert.Equal(full, LevelOf(Path.Combine(full, "AGENTS.md")));
+        Assert.Equal(full, LevelOf(Path.Combine(full, "profiles", "ines", "ines.md")));
+        Assert.Equal(full, LevelOf(Path.Combine(full, ".profiles-assets", "ines", "ines.md")));
+
+        var parent = Path.GetDirectoryName(full)!;
+        Assert.Equal(parent, LevelOf(Path.Combine(parent, ".claude", "CLAUDE.md")));
+
+        Assert.Equal(configDir, LevelOf(Path.Combine(configDir, "CLAUDE.md")));
+
+        // And CandidateFiles is the same list, paths only.
+        Assert.Equal(
+            candidates.Select(candidate => candidate.Path),
+            LocalPersona.CandidateFiles(full, new[] { configDir }, SessionSource.ClaudeCode, "ines"));
+    }
+
+    // ~/.claude/CLAUDE.md is two shapes at once: level ~ when the walk climbs
+    // to it from a project under the home directory, and level ~/.claude when
+    // only the config list offers it. The walk comes first, so it is level ~
+    // — and a picture written relative to ~/.claude still resolves, because
+    // the file's own directory is tried before any level.
+    [Fact]
+    public void AConfigFileTheWalkReachesFirstKeepsTheWalksLevel()
+    {
+        var home = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "cb-levels-home"));
+        var configDir = Path.Combine(home, ".claude");
+
+        var candidates = LocalPersona.Candidates(
+            Path.Combine(home, "project"), new[] { configDir }, SessionSource.ClaudeCode);
+
+        Assert.Equal(home, Assert.Single(
+            candidates, candidate => candidate.Path == Path.Combine(configDir, "CLAUDE.md")).Level);
+    }
+
     // --- Load: what is actually read, and what it imports ------------------
 
     [Fact]
@@ -285,26 +332,38 @@ public class LocalPersonaTests : IDisposable
         Assert.Equal(new[] { main, first, second }, read.Select(entry => entry.Path));
     }
 
-    // Every file carries the directory of the candidate that brought it in,
-    // however deep the import: the candidate's own directory for itself, and
-    // the same directory for an import of an import — never the intermediate
-    // file's.
+    // CB-187: every file carries the walk level of the candidate that brought
+    // it in, however deep the import — never the intermediate file's
+    // directory, and for a .claude/CLAUDE.md never .claude.
     [Fact]
-    public void EveryFileCarriesTheDirectoryOfTheCandidateThatBroughtItIn()
+    public void EveryFileCarriesTheWalkLevelOfTheCandidateThatBroughtItIn()
     {
         var project = Dir("project");
-        var docs = Dir("project", "docs");
-        var other = Dir("other");
-        var main = Write(project, "CLAUDE.md", "@docs/persona.md");
+        var dotClaude = Dir("project", ".claude");
+        var docs = Dir("project", ".claude", "docs");
+        Write(dotClaude, "CLAUDE.md", "@docs/persona.md");
         Write(docs, "persona.md", "@second.md");
         Write(docs, "second.md", "Her name is Leota");
-        var agents = Write(other, "AGENTS.md", "Her name is Madame");
 
-        var read = LocalPersona.Load(new[] { main, agents });
+        var read = LocalPersona.Load(
+            LocalPersona.Candidates(project, Array.Empty<string>(), SessionSource.ClaudeCode));
 
-        var projectDir = Path.GetDirectoryName(PersonaFiles.CanonicalFile(main))!;
-        var otherDir = Path.GetDirectoryName(PersonaFiles.CanonicalFile(agents))!;
-        Assert.Equal(new[] { projectDir, projectDir, projectDir, otherDir }, read.Select(entry => entry.Origin));
+        var level = PersonaFiles.CanonicalDirectory(project);
+        Assert.Equal(3, read.Count);
+        Assert.All(read, entry => Assert.Equal(level, entry.Level));
+    }
+
+    // A bare list of paths is each its own level: what a hand-built list
+    // meant before CB-187, when the file's own directory was the only root.
+    [Fact]
+    public void ABareListOfPathsIsEachItsOwnLevel()
+    {
+        var dotClaude = Dir("project", ".claude");
+        var main = Write(dotClaude, "CLAUDE.md", "Her name is Leota");
+
+        var read = LocalPersona.Load(new[] { main });
+
+        Assert.Equal(Path.GetDirectoryName(PersonaFiles.CanonicalFile(main)), Assert.Single(read).Level);
     }
 
     [Fact]
@@ -439,10 +498,10 @@ public class LocalPersonaTests : IDisposable
 
     // profile-gen's layout, exactly: a CLAUDE.md imports the persona file from
     // inside a marker block, and the persona file writes its picture relative
-    // to the directory of that CLAUDE.md. From the repository root that
-    // happened to work, because the cwd is the importing file's directory;
-    // from anywhere below it the picture was lost and the name kept, which is
-    // the bug this pins. The importing file's directory is its own root now.
+    // to the project directory that CLAUDE.md sits at. From the repository
+    // root that happened to work, because the cwd is that directory; from
+    // anywhere below it the picture was lost and the name kept, which is the
+    // bug CB-187 pins. The walk level is its own root now.
     [Fact]
     public void APictureNamedRelativeToTheImportingFileResolvesFromASubdirectory()
     {
@@ -469,10 +528,11 @@ public class LocalPersonaTests : IDisposable
     }
 
     // The nearest root still wins, in both directions: a picture beside the
-    // file that named it beats one beside the file that imported it, and one
-    // beside the importing file beats one in the session's cwd.
+    // file that named it beats one at the walk level, and one at the walk
+    // level beats one in the session's cwd — the last a deliberate change
+    // from CB-147, where the cwd's copy was the only second root.
     [Fact]
-    public void TheNamingFilesDirectoryBeatsTheImportersAndTheImportersBeatsTheWorkspace()
+    public void TheNamingFilesDirectoryBeatsTheLevelAndTheLevelBeatsTheWorkspace()
     {
         var root = Dir("repo");
         var personaDir = Dir("repo", "persona");

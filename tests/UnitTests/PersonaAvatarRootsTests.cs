@@ -73,7 +73,7 @@ public class PersonaAvatarRootsTests
         Assert.Equal(new[] { "/ws/project", "/WS/PROJECT" }, roots);
     }
 
-    // --- the importing file's directory, between the other two ------------
+    // --- CB-187's walk-level directory, between the other two -------------
 
     [Fact]
     public void ThreeDistinctDirectoriesGiveThreeRootsNarrowestFirst()
@@ -83,21 +83,21 @@ public class PersonaAvatarRootsTests
         Assert.Equal(new[] { "/ws/.claude/persona", "/ws", "/ws/a/b" }, roots);
     }
 
-    // A persona written straight into a CLAUDE.md is its own importer: the
-    // origin Load hands down for a candidate is the candidate's directory.
+    // A persona written straight into a CLAUDE.md sits at its own level: the
+    // level Load hands down for <dir>/CLAUDE.md is <dir>.
     [Fact]
-    public void AnImporterThatIsTheFilesOwnDirectoryDedupes()
+    public void ALevelThatIsTheFilesOwnDirectoryDedupes()
     {
         var roots = PersonaFiles.CandidateRoots("/ws/project", "/ws/project/", "/ws/project/a");
 
         Assert.Equal(new[] { "/ws/project", "/ws/project/a" }, roots);
     }
 
-    // The case this bug's fixture sits in when the session is at the
-    // repository root: the importing CLAUDE.md is in the cwd, so the
-    // workspace root is the importer's directory a second time.
+    // The case CB-187's fixture sits in when the session is at the
+    // repository root: the level is the cwd, so the workspace root is the
+    // level a second time.
     [Fact]
-    public void AWorkspaceThatIsTheImportersDirectoryDedupes()
+    public void AWorkspaceThatIsTheLevelDedupes()
     {
         var roots = PersonaFiles.CandidateRoots("/ws/.claude/persona", "/ws", "/ws");
 
@@ -105,7 +105,7 @@ public class PersonaAvatarRootsTests
     }
 
     [Fact]
-    public void ANullImporterLeavesCb147sTwoRoots()
+    public void ANullLevelLeavesCb147sTwoRoots()
     {
         Assert.Equal(
             PersonaFiles.CandidateRoots("/ws/.claude/persona", "/ws/a"),

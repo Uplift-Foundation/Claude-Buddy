@@ -1599,7 +1599,7 @@ namespace ClaudeBuddy
         internal void ApplyPersona(
             string sessionId,
             SessionStatus status,
-            Dictionary<(string Cwd, SessionSource Source, string Agent), IReadOnlyList<string>> candidatesByCwd)
+            Dictionary<(string Cwd, SessionSource Source, string Agent), IReadOnlyList<LocalPersona.Candidate>> candidatesByCwd)
         {
             // A gateway session's identity comes from the gateway, and a
             // remote-control relay is not a conversation at all. Neither has a
@@ -1635,10 +1635,15 @@ namespace ClaudeBuddy
             // whether CandidateFiles found a member-specific file for any of
             // them. status.Agent is "" for anything that isn't a team member,
             // which reproduces today's one-entry-per-cwd behaviour exactly.
+            //
+            // Candidates rather than bare paths (CB-187): each carries the
+            // walk level it was found at, which the fold needs to resolve a
+            // picture profile-gen wrote relative to the project directory.
+            // The signature below stats the paths alone, exactly as before.
             var key = (status.Cwd, status.Source, status.Agent);
             if (!candidatesByCwd.TryGetValue(key, out var candidates))
             {
-                candidates = LocalPersona.CandidateFiles(
+                candidates = LocalPersona.Candidates(
                     status.Cwd, _userConfigDirs(), status.Source, status.Agent);
                 candidatesByCwd[key] = candidates;
             }
@@ -1663,9 +1668,10 @@ namespace ClaudeBuddy
             // face until the app restarts. Persona.Watched is Files plus the
             // picture for exactly that reason, and it costs one extra stat per
             // tick and only for a session that has a portrait at all.
+            var candidatePaths = candidates.Select(candidate => candidate.Path);
             var watched = known.Persona is null
-                ? candidates
-                : candidates.Concat(known.Persona.Watched);
+                ? candidatePaths
+                : candidatePaths.Concat(known.Persona.Watched);
 
             var signature = LocalPersona.Signature(watched);
 
@@ -1710,7 +1716,7 @@ namespace ClaudeBuddy
             // signature differ for no reason and resolve a second time, every
             // time, forever. One more round of stats here is what stops that.
             _personas[sessionId] =
-                (LocalPersona.Signature(candidates.Concat(persona.Watched)), persona);
+                (LocalPersona.Signature(candidatePaths.Concat(persona.Watched)), persona);
 
             LocalPersonas.Set(sessionId, persona);
         }
@@ -1948,7 +1954,7 @@ namespace ClaudeBuddy
             // nothing measurable. Several sessions in one repo is the common
             // case and is what this actually saves.
             var candidatesByCwd =
-                new Dictionary<(string Cwd, SessionSource Source, string Agent), IReadOnlyList<string>>();
+                new Dictionary<(string Cwd, SessionSource Source, string Agent), IReadOnlyList<LocalPersona.Candidate>>();
 
             // The gateway's sessions join the same list the status files
             // produced, so everything downstream — ordering, stacking, pinning,
