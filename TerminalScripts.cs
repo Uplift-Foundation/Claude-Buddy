@@ -62,8 +62,22 @@ namespace ClaudeBuddy
         // — every caller either already built it with ShellQuote (ClaudeCommand)
         // or is TmuxAttachCommand's own output, which begins "unset TMUX; exec
         // …" and must not be wrapped in a second `exec` of its own.
+        //
+        // `cd --`, not a bare `cd`, because the line can meet an interactive
+        // shell — iTerm2 runs it under `-l -i`, and Terminal.app's `do script`
+        // always has — and there `cd` is whatever the user's .zshrc made it.
+        // zoxide's `init --cmd cd` is a real case, measured on a real Mac: its
+        // one-argument form falls through to a fuzzy match when the directory
+        // is not there, so a recorded cwd that had been deleted landed in a
+        // similarly named project instead and the command ran there, the
+        // guard never firing. Its two-argument `--` form goes straight to the
+        // builtin, and `--` is POSIX, accepted by sh, bash, dash, ksh and zsh
+        // alike. Not `builtin cd`, which dash lacks, and not `command cd`,
+        // which zsh resolves to /usr/bin/cd — a program that succeeds without
+        // moving anything. It also keeps a directory named with a leading dash
+        // from being read as an option.
         internal static string ShellCommandLine(string? cwd, string command) =>
-            string.IsNullOrEmpty(cwd) ? command : "cd " + ShellQuote(cwd) + " || exit 1; " + command;
+            string.IsNullOrEmpty(cwd) ? command : "cd -- " + ShellQuote(cwd) + " || exit 1; " + command;
 
         // One tmux client, as `list-clients` describes it.
         internal readonly record struct TmuxClient(
@@ -428,7 +442,7 @@ namespace ClaudeBuddy
             // machine on the line, which reads in a coverage report as a branch
             // nothing took while the line itself is plainly executed.
             var script = "#!/bin/sh\n";
-            if (!string.IsNullOrEmpty(cwd)) script += "cd " + ShellQuote(cwd) + " || exit 1\n";
+            if (!string.IsNullOrEmpty(cwd)) script += "cd -- " + ShellQuote(cwd) + " || exit 1\n";
 
             return script + TmuxAttachCommand(tmuxBinary, socket, session) + "\n";
         }
@@ -509,27 +523,127 @@ namespace ClaudeBuddy
         // warns today, so they fall back to the script-file mechanism this
         // exists to avoid for the two apps that have a better one — the null
         // here is what tells AgentTeamViewer's launcher to take that path.
-        internal static string? RunScriptFor(string appBundlePath, string? cwd, string command)
+        internal static string? RunScriptFor(string appBundlePath, string? cwd, string command) =>
+            RunScriptFor(appBundlePath, cwd, command,
+                LoginShellFor(Environment.GetEnvironmentVariable("SHELL"), File.Exists));
+
+        // The same, with the shell iTerm2 is to run the line under passed in
+        // rather than read from the environment, so the tests do not depend on
+        // the machine they run on. Terminal.app ignores it: `do script` types
+        // the line into the session's own shell, which is already the user's.
+        internal static string? RunScriptFor(
+            string appBundlePath, string? cwd, string command, string loginShell)
         {
             var line = ShellCommandLine(cwd, command);
 
             return Path.GetFileName(appBundlePath) switch
             {
-                "iTerm.app" => ITermRunScript(line),
+                "iTerm.app" => ITermRunScript(ITermCommand(loginShell, line)),
                 "Terminal.app" => TerminalRunScript(line),
                 _ => null
             };
         }
 
+        // The shell iTerm2 runs the line under: the user's own $SHELL when it is
+        // one that can parse the line, /bin/zsh otherwise.
+        //
+        // $SHELL rather than a fixed /bin/zsh, because the point of a login
+        // shell here is the user's PATH, and a bash user keeps theirs in
+        // .bash_profile/.bashrc, which zsh never reads. But only a POSIX-family
+        // shell: the line is sh syntax — `cd -- '…' || exit 1; exec …`, `'\''` for
+        // an embedded apostrophe, and TmuxAttachCommand's `unset TMUX` — and
+        // fish, nushell or xonsh would misparse some of it, so for those
+        // /bin/zsh, which every macOS since 10.15 ships and defaults to, is the
+        // better answer than a line that fails. The path also has to be plain —
+        // absolute, and nothing in it but the characters a real shell path
+        // uses — because it goes to iTerm2 inside single quotes, and
+        // ITermCommand below explains why no other character is safe there.
+        // And it has to exist: a command iTerm2 cannot exec does not fail, it
+        // quietly opens a plain shell instead (see ITermRunScript), which is the
+        // defect this exists to fix.
+        internal const string FallbackLoginShell = "/bin/zsh";
+
+        static readonly HashSet<string> PosixShells = new(StringComparer.Ordinal)
+        {
+            "sh", "bash", "zsh", "dash", "ksh", "mksh"
+        };
+
+        internal static string LoginShellFor(string? shellEnv, Func<string, bool> exists)
+        {
+            if (string.IsNullOrEmpty(shellEnv) || shellEnv[0] != '/') return FallbackLoginShell;
+
+            foreach (var c in shellEnv)
+            {
+                if (!(char.IsAsciiLetterOrDigit(c) || c is '/' or '.' or '_' or '-'))
+                    return FallbackLoginShell;
+            }
+
+            return PosixShells.Contains(Path.GetFileName(shellEnv)) && exists(shellEnv)
+                ? shellEnv
+                : FallbackLoginShell;
+        }
+
+        // What iTerm2 is actually handed as `command`: a shell, asked to run the
+        // line.
+        //
+        // iTerm2's `command` is not a shell command. It splits the string into
+        // argv itself and execs the first word directly, with no shell in
+        // between — so the line ShellCommandLine builds, `cd -- '<dir>' || exit 1;
+        // exec '<bin>'`, was being exec'd as a program named "cd". The session
+        // died at once, `create window` answered `missing value`, and the tty
+        // lookup after it failed with -1728: a blank window, and "Couldn't open a
+        // terminal for Claude Code". That is every iTerm2 launch since CB-80.
+        //
+        // `-l -i` because the point is the user's own environment. Measured on
+        // a real Mac: `zsh -lc` alone did not put ~/.local/bin — where `claude`
+        // itself installs — or nvm's node on PATH, because those are set in
+        // .zshrc, which only an interactive shell reads. `-lic` got the full
+        // PATH, and it is also exactly what Terminal.app's `do script` path
+        // runs the same line under, so the two terminals now agree.
+        //
+        // The line itself travels base64-encoded, and that is not decoration.
+        // iTerm2's own argv splitting was measured on 3.7.3 rather than assumed,
+        // and it is not POSIX: single quotes keep `$`, `"`, `;` and `|` literal,
+        // but backslash sequences are interpreted even *inside* them — `'a\nb'`
+        // arrives as a newline, `'a\eb'` as an escape character, `'a\'` does
+        // not close the quote, and doubling the backslash does not reliably
+        // protect it (`'a\\nb'` still became a newline while `'c\\\\d'`
+        // kept two). Outside quotes, `a\\b` becomes `ab` and a bare `~` expands.
+        // There is no escaping rule for that to be worth stating, and a
+        // directory can legally contain a backslash. So none reaches it: the
+        // base64 alphabet has no backslash, quote or tilde, and everything
+        // around it — `$(…)`, `"`, `%`, `|` inside one pair of single quotes —
+        // was measured to arrive untouched. The shell decodes it and evals it,
+        // which is the POSIX layer ShellQuote was already written for.
+        //
+        // eval of a command substitution, not a pipe into the shell: `claude`
+        // needs the session's tty on stdin, and a pipe would take it away.
+        internal static string ITermCommand(string loginShell, string line) =>
+            "'" + loginShell + "' -l -i -c 'eval \"$(printf %s " +
+            Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(line)) +
+            " | /usr/bin/base64 -D)\"'";
+
         // `create window with default profile command` is iTerm2's "run this",
-        // not "open this file" — the verb switch CB-80 exists for. Returns the
-        // new session's tty on stdout, so the caller has real confirmation a
-        // window was actually created rather than only that osascript launched
-        // (the same distinction RunOsaScript's own comment draws for the
-        // fire-and-forget focus path).
-        internal static string ITermRunScript(string line) => $$"""
+        // not "open this file" — the verb switch CB-80 exists for. `command` is
+        // exec'd as argv with no shell, so what arrives here is ITermCommand's
+        // output rather than the bare line. Returns the new session's tty on
+        // stdout, so the caller has real confirmation a window was actually
+        // created rather than only that osascript launched (the same
+        // distinction RunOsaScript's own comment draws for the fire-and-forget
+        // focus path).
+        //
+        // A window, not the command: the tty says nothing about whether the
+        // command ran. Handed the old bare line, iTerm2 3.7.3 was seen doing two
+        // different things on the same Mac — the diagnosis that found this bug
+        // got `missing value` for the window and -1728 from the tty lookup,
+        // while six later runs of the identical script each got a tty back and
+        // exit 0, with iTerm2 having quietly started a plain login shell in ~
+        // instead. Either way Claude Code never started. Which is why getting
+        // `command` right is the whole fix, and a returned tty cannot be read as
+        // proof of it.
+        internal static string ITermRunScript(string command) => $$"""
             tell application "iTerm"
-                set w to (create window with default profile command "{{EscapeForAppleScript(line)}}")
+                set w to (create window with default profile command "{{EscapeForAppleScript(command)}}")
                 tell current session of w
                     return tty
                 end tell
