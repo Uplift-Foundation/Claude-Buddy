@@ -269,12 +269,18 @@ namespace ClaudeBuddy
         // A bare list of paths, each its own level: what every caller before
         // CB-187 meant, since the only root it offered was the file's own
         // directory. Kept for the tests that build a list by hand.
+        //
+        // A blank level rather than a second computation of the file's
+        // directory: CanonicalDirectory answers null for it, and ReadInto
+        // already falls back to the directory of the canonical file it read
+        // — the one place that knows that directory, and knows it after links
+        // are resolved rather than before.
         internal static IReadOnlyList<(string Path, string[] Lines, string Level)> Load(
             IReadOnlyList<string> candidates) =>
             Load(OwnLevels(candidates));
 
         private static IReadOnlyList<Candidate> OwnLevels(IReadOnlyList<string> candidates) =>
-            candidates.Select(path => new Candidate(path, Path.GetDirectoryName(path) ?? path)).ToArray();
+            candidates.Select(path => new Candidate(path, "")).ToArray();
 
         private static void ReadInto(
             string path, int hop, string? level,
