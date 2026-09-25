@@ -73,6 +73,53 @@ public class PersonaAvatarRootsTests
         Assert.Equal(new[] { "/ws/project", "/WS/PROJECT" }, roots);
     }
 
+    // --- the importing file's directory, between the other two ------------
+
+    [Fact]
+    public void ThreeDistinctDirectoriesGiveThreeRootsNarrowestFirst()
+    {
+        var roots = PersonaFiles.CandidateRoots("/ws/.claude/persona", "/ws", "/ws/a/b");
+
+        Assert.Equal(new[] { "/ws/.claude/persona", "/ws", "/ws/a/b" }, roots);
+    }
+
+    // A persona written straight into a CLAUDE.md is its own importer: the
+    // origin Load hands down for a candidate is the candidate's directory.
+    [Fact]
+    public void AnImporterThatIsTheFilesOwnDirectoryDedupes()
+    {
+        var roots = PersonaFiles.CandidateRoots("/ws/project", "/ws/project/", "/ws/project/a");
+
+        Assert.Equal(new[] { "/ws/project", "/ws/project/a" }, roots);
+    }
+
+    // The case this bug's fixture sits in when the session is at the
+    // repository root: the importing CLAUDE.md is in the cwd, so the
+    // workspace root is the importer's directory a second time.
+    [Fact]
+    public void AWorkspaceThatIsTheImportersDirectoryDedupes()
+    {
+        var roots = PersonaFiles.CandidateRoots("/ws/.claude/persona", "/ws", "/ws");
+
+        Assert.Equal(new[] { "/ws/.claude/persona", "/ws" }, roots);
+    }
+
+    [Fact]
+    public void ANullImporterLeavesCb147sTwoRoots()
+    {
+        Assert.Equal(
+            PersonaFiles.CandidateRoots("/ws/.claude/persona", "/ws/a"),
+            PersonaFiles.CandidateRoots("/ws/.claude/persona", null, "/ws/a"));
+    }
+
+    [Fact]
+    public void AllThreeTheSameIsOneRoot()
+    {
+        var roots = PersonaFiles.CandidateRoots("/ws", "/ws", "/ws");
+
+        Assert.Equal(new[] { "/ws" }, roots);
+    }
+
     // PersonaFiles.Rank — D5's ranking, asserted as the ordering contract it
     // actually is rather than as three hardcoded integers: AvatarAt only ever
     // asks "did this rejection get strictly further than the best one so

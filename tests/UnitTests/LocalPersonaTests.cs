@@ -285,6 +285,28 @@ public class LocalPersonaTests : IDisposable
         Assert.Equal(new[] { main, first, second }, read.Select(entry => entry.Path));
     }
 
+    // Every file carries the directory of the candidate that brought it in,
+    // however deep the import: the candidate's own directory for itself, and
+    // the same directory for an import of an import — never the intermediate
+    // file's.
+    [Fact]
+    public void EveryFileCarriesTheDirectoryOfTheCandidateThatBroughtItIn()
+    {
+        var project = Dir("project");
+        var docs = Dir("project", "docs");
+        var other = Dir("other");
+        var main = Write(project, "CLAUDE.md", "@docs/persona.md");
+        Write(docs, "persona.md", "@second.md");
+        Write(docs, "second.md", "Her name is Leota");
+        var agents = Write(other, "AGENTS.md", "Her name is Madame");
+
+        var read = LocalPersona.Load(new[] { main, agents });
+
+        var projectDir = Path.GetDirectoryName(PersonaFiles.CanonicalFile(main))!;
+        var otherDir = Path.GetDirectoryName(PersonaFiles.CanonicalFile(agents))!;
+        Assert.Equal(new[] { projectDir, projectDir, projectDir, otherDir }, read.Select(entry => entry.Origin));
+    }
+
     [Fact]
     public void TwoFilesImportingEachOtherAreEachReadOnce()
     {
@@ -413,6 +435,65 @@ public class LocalPersonaTests : IDisposable
         Assert.Equal(Path.Combine(configDir, "leota.png"), persona.AvatarPath);
         Assert.Equal(Png(), File.ReadAllBytes(persona.AvatarPath!));
         Assert.Equal(named, persona.AvatarSource);
+    }
+
+    // profile-gen's layout, exactly: a CLAUDE.md imports the persona file from
+    // inside a marker block, and the persona file writes its picture relative
+    // to the directory of that CLAUDE.md. From the repository root that
+    // happened to work, because the cwd is the importing file's directory;
+    // from anywhere below it the picture was lost and the name kept, which is
+    // the bug this pins. The importing file's directory is its own root now.
+    [Fact]
+    public void APictureNamedRelativeToTheImportingFileResolvesFromASubdirectory()
+    {
+        var root = Dir("repo");
+        var personaDir = Dir("repo", ".claude", "persona");
+        var cwd = Dir("repo", "a", "b");
+        Write(root, "CLAUDE.md",
+            "<!-- profile-gen:start slug=persona -->",
+            "@.claude/persona/persona.md",
+            "<!-- profile-gen:end slug=persona -->");
+        var named = Write(personaDir, "persona.md",
+            "---",
+            "schema_version: 1",
+            "name: \"Jennifer Voss\"",
+            "image: \".claude/persona/persona.gif\"",
+            "---");
+        File.WriteAllBytes(Path.Combine(personaDir, "persona.gif"), Png());
+
+        var persona = LocalPersona.Resolve(cwd, SessionSource.ClaudeCode, Array.Empty<string>());
+
+        Assert.Equal("Jennifer Voss", persona.Name);
+        Assert.Equal(PersonaFiles.CanonicalFile(Path.Combine(personaDir, "persona.gif")), persona.AvatarPath);
+        Assert.Equal(PersonaFiles.CanonicalFile(named), persona.AvatarSource);
+    }
+
+    // The nearest root still wins, in both directions: a picture beside the
+    // file that named it beats one beside the file that imported it, and one
+    // beside the importing file beats one in the session's cwd.
+    [Fact]
+    public void TheNamingFilesDirectoryBeatsTheImportersAndTheImportersBeatsTheWorkspace()
+    {
+        var root = Dir("repo");
+        var personaDir = Dir("repo", "persona");
+        var cwd = Dir("repo", "a");
+        Write(root, "CLAUDE.md", "@persona/persona.md");
+        Write(personaDir, "persona.md", "Her profile picture is face.png");
+
+        File.WriteAllBytes(Path.Combine(cwd, "face.png"), new byte[] { 3 });
+        File.WriteAllBytes(Path.Combine(root, "face.png"), new byte[] { 2 });
+        File.WriteAllBytes(Path.Combine(personaDir, "face.png"), new byte[] { 1 });
+
+        Assert.Equal(new byte[] { 1 }, File.ReadAllBytes(
+            LocalPersona.Resolve(cwd, SessionSource.ClaudeCode, Array.Empty<string>()).AvatarPath!));
+
+        File.Delete(Path.Combine(personaDir, "face.png"));
+        Assert.Equal(new byte[] { 2 }, File.ReadAllBytes(
+            LocalPersona.Resolve(cwd, SessionSource.ClaudeCode, Array.Empty<string>()).AvatarPath!));
+
+        File.Delete(Path.Combine(root, "face.png"));
+        Assert.Equal(new byte[] { 3 }, File.ReadAllBytes(
+            LocalPersona.Resolve(cwd, SessionSource.ClaudeCode, Array.Empty<string>()).AvatarPath!));
     }
 
     [Fact]

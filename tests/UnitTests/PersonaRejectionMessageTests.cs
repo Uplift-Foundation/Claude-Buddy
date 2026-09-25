@@ -102,7 +102,8 @@ public class PersonaRejectionMessageTests
 
     // --- CB-147, D6: the two-root wording, opted into rather than default --
 
-    // bothRootsSearched defaults to false, so every call above — none of
+    // workspaceSearched (bothRootsSearched until the importing file became a
+    // third root) defaults to false, so every call above — none of
     // which passes it — is the proof that every existing message is
     // untouched. These are the opt-in arm: only EscapesRoot and Unreadable
     // vary on it, because those are the only two reachable when a value has
@@ -114,7 +115,7 @@ public class PersonaRejectionMessageTests
     {
         var single = PersonaFiles.RejectionMessage(PersonaFiles.AvatarRejection.EscapesRoot, "cto.png", 0);
         var both = PersonaFiles.RejectionMessage(
-            PersonaFiles.AvatarRejection.EscapesRoot, "cto.png", 0, bothRootsSearched: true);
+            PersonaFiles.AvatarRejection.EscapesRoot, "cto.png", 0, workspaceSearched: true);
 
         Assert.Contains(
             "escapes root — it resolves outside the directory of the markdown that named it", single);
@@ -128,13 +129,70 @@ public class PersonaRejectionMessageTests
     {
         var single = PersonaFiles.RejectionMessage(PersonaFiles.AvatarRejection.Unreadable, "cto.png", 0);
         var both = PersonaFiles.RejectionMessage(
-            PersonaFiles.AvatarRejection.Unreadable, "cto.png", 0, bothRootsSearched: true);
+            PersonaFiles.AvatarRejection.Unreadable, "cto.png", 0, workspaceSearched: true);
 
         Assert.Contains("it is missing, empty, or this process may not open it", single);
         Assert.Contains("directory of the markdown that named it", both);
         Assert.Contains("workspace", both);
         Assert.Contains("empty, or this process may not open it", both);
         Assert.NotEqual(single, both);
+    }
+
+    // The importing file's directory as a searched anchor, alone and beside
+    // the workspace. Whole strings rather than fragments, because the
+    // two-root wording above has to stay byte-identical and the three-root
+    // one is new: a fragment check would pass on a sentence that reads
+    // wrong.
+    [Fact]
+    public void EscapesRootNamesTheImportingFileWhenItWasSearched()
+    {
+        Assert.Contains(
+            "(escapes root — it resolves outside both the directory of the markdown that named it and the "
+            + "directory of the file that imported it)",
+            PersonaFiles.RejectionMessage(
+                PersonaFiles.AvatarRejection.EscapesRoot, "cto.png", 0, importerSearched: true));
+
+        Assert.Contains(
+            "(escapes root — it resolves outside the directory of the markdown that named it, the directory "
+            + "of the file that imported it, and the workspace)",
+            PersonaFiles.RejectionMessage(
+                PersonaFiles.AvatarRejection.EscapesRoot, "cto.png", 0,
+                workspaceSearched: true, importerSearched: true));
+    }
+
+    [Fact]
+    public void UnreadableNamesTheImportingFileWhenItWasSearched()
+    {
+        Assert.Contains(
+            "(unreadable — it is missing under both the directory of the markdown that named it and the "
+            + "directory of the file that imported it, empty, or this process may not open it)",
+            PersonaFiles.RejectionMessage(
+                PersonaFiles.AvatarRejection.Unreadable, "cto.png", 0, importerSearched: true));
+
+        Assert.Contains(
+            "(unreadable — it is missing under the directory of the markdown that named it, the directory of "
+            + "the file that imported it, and the workspace, empty, or this process may not open it)",
+            PersonaFiles.RejectionMessage(
+                PersonaFiles.AvatarRejection.Unreadable, "cto.png", 0,
+                workspaceSearched: true, importerSearched: true));
+    }
+
+    // CB-147's two-root strings, whole, so renaming the flag and building the
+    // sentence out of parts is proved to have changed nothing a reader of an
+    // existing persona.log would see.
+    [Fact]
+    public void TheWorkspaceOnlyWordingIsExactlyWhatCb147Wrote()
+    {
+        Assert.Contains(
+            "(escapes root — it resolves outside both the directory of the markdown that named it and the "
+            + "workspace)",
+            PersonaFiles.RejectionMessage(
+                PersonaFiles.AvatarRejection.EscapesRoot, "cto.png", 0, workspaceSearched: true));
+        Assert.Contains(
+            "(unreadable — it is missing under both the directory of the markdown that named it and the "
+            + "workspace, empty, or this process may not open it)",
+            PersonaFiles.RejectionMessage(
+                PersonaFiles.AvatarRejection.Unreadable, "cto.png", 0, workspaceSearched: true));
     }
 
     // TooLarge and NotAPicturePath are the two categories D5's ranking can
@@ -150,9 +208,12 @@ public class PersonaRejectionMessageTests
         var category = Enum.Parse<PersonaFiles.AvatarRejection>(reason);
 
         var single = PersonaFiles.RejectionMessage(category, "cto.png", 9_437_184);
-        var both = PersonaFiles.RejectionMessage(category, "cto.png", 9_437_184, bothRootsSearched: true);
+        var both = PersonaFiles.RejectionMessage(category, "cto.png", 9_437_184, workspaceSearched: true);
+        var all = PersonaFiles.RejectionMessage(
+            category, "cto.png", 9_437_184, workspaceSearched: true, importerSearched: true);
 
         Assert.Equal(single, both);
+        Assert.Equal(single, all);
     }
 
     // The cap is spelled with invariant separators rather than the machine's,

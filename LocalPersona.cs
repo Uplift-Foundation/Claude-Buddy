@@ -214,22 +214,44 @@ namespace ClaudeBuddy
         // The visited set is keyed on the canonical path, so a cycle (two files
         // importing each other, or two paths reaching one file through a link)
         // is read once and not twice.
-        internal static IReadOnlyList<(string Path, string[] Lines)> Load(IReadOnlyList<string> candidates)
+        //
+        // Origin is the directory of the candidate that brought each file in —
+        // its own directory for a candidate, the candidate's for anything it
+        // imports — because a persona file profile-gen imports writes its
+        // picture relative to the CLAUDE.md that imports it, and nothing else
+        // here remembers which one that was. A file two candidates both reach
+        // keeps the first, nearer one's, since the visited set reads it once.
+        internal static IReadOnlyList<(string Path, string[] Lines, string Origin)> Load(
+            IReadOnlyList<string> candidates)
         {
-            var read = new List<(string Path, string[] Lines)>();
+            var read = new List<(string Path, string[] Lines, string Origin)>();
             var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             foreach (var candidate in candidates)
             {
                 if (read.Count >= MaxFiles) break;
-                ReadInto(candidate, 0, read, visited);
+                ReadInto(candidate, 0, null, read, visited);
             }
 
             return read;
         }
 
+        // origin is null only for the candidate itself, which becomes its own
+        // origin once its canonical path is known.
+        //
+        // An import of an import inherits the candidate's directory, not the
+        // intermediate file's. The candidate is the one file here that sits
+        // where it does *because* of where the project is — Claude Code found
+        // it by walking the tree — so its directory is what an author means by
+        // "relative to the project". An intermediate file's directory is only
+        // wherever the author chose to split their markdown, and the file
+        // naming the picture already gets its own directory as the first root.
+        // Offering every file along the chain would also make the roots a
+        // picture can resolve under grow with the import depth, for no
+        // convention anyone actually writes.
         private static void ReadInto(
-            string path, int hop, List<(string Path, string[] Lines)> read, HashSet<string> visited)
+            string path, int hop, string? origin,
+            List<(string Path, string[] Lines, string Origin)> read, HashSet<string> visited)
         {
             if (read.Count >= MaxFiles) return;
 
@@ -239,13 +261,16 @@ namespace ClaudeBuddy
             var lines = PersonaFiles.ReadMarkdown(canonical);
             if (lines is null) return;
 
-            read.Add((canonical, lines));
-            if (hop >= MaxImportHops) return;
-
             // Never null: canonical is a FileInfo.FullName for a file that
             // exists, so it is absolute and has a parent.
-            foreach (var import in ImportsIn(lines, Path.GetDirectoryName(canonical)!))
-                ReadInto(import, hop + 1, read, visited);
+            var directory = Path.GetDirectoryName(canonical)!;
+            origin ??= directory;
+
+            read.Add((canonical, lines, origin));
+            if (hop >= MaxImportHops) return;
+
+            foreach (var import in ImportsIn(lines, directory))
+                ReadInto(import, hop + 1, origin, read, visited);
         }
 
         // An import is a bare `@something.md` token: either the whole line or a
@@ -279,11 +304,12 @@ namespace ClaudeBuddy
         // not against the session's cwd, so a `portrait.png` written in
         // ~/.claude/CLAUDE.md means the one in ~/.claude and cannot be
         // shadowed by a file of that name in whatever directory the session
-        // happens to be sitting in. The workspace root is tried only when
-        // that first, narrower lookup finds nothing (CB-147) — so a picture
-        // written relative to the workspace root, rather than to the
-        // directory of the markdown that named it, still resolves, without
-        // weakening the guarantee the file-directory lookup already made.
+        // happens to be sitting in. The directory of the file that imported
+        // it is tried next, and the workspace root (CB-147) last, each only
+        // when the narrower lookup before it finds nothing — so a picture
+        // written relative to the importing CLAUDE.md, as profile-gen writes
+        // it, or to the workspace root still resolves, without weakening the
+        // guarantee the file-directory lookup already made.
         internal static Persona Resolve(
             string? cwd, SessionSource source, IEnumerable<string> userConfigDirs, string agentName = "") =>
             ResolveFrom(CandidateFiles(cwd, userConfigDirs, source, agentName), cwd);
@@ -324,7 +350,7 @@ namespace ClaudeBuddy
             string? avatarPath = null;
             var files = new List<string>();
 
-            foreach (var (path, lines) in Load(candidates))
+            foreach (var (path, lines, origin) in Load(candidates))
             {
                 files.Add(path);
 
@@ -353,11 +379,13 @@ namespace ClaudeBuddy
                 // could not read — so the one case worth reporting was the one
                 // case that never reached the resolver at all.
                 //
-                // root — the file's own directory — first, workspaceRoot
-                // second and only if root finds nothing: see
-                // PersonaFiles.AvatarAt's own comment (D1/D2) for why that
-                // order is not arbitrary.
-                var picture = PersonaFiles.AvatarPathAt(root, workspaceRoot, fields);
+                // root — the file's own directory — first, then origin — the
+                // directory of the candidate that imported it — then
+                // workspaceRoot, each only if the one before finds nothing:
+                // see PersonaFiles.AvatarAt's own comments (D1/D2) for why
+                // that order is not arbitrary. For a candidate itself origin
+                // is root, and CandidateRoots drops the repeat.
+                var picture = PersonaFiles.AvatarPathAt(root, origin, workspaceRoot, fields);
                 if (picture is null) continue;
 
                 avatarSource = path;
