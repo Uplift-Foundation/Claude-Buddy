@@ -147,9 +147,162 @@ namespace ClaudeBuddy.Tests
         public void TheCommandLineIsEscapedForTheAppleScriptLiteral()
         {
             var script = TerminalScripts.RunScriptFor(
-                "/Applications/iTerm.app", "/tmp/say \"hi\"", "exec 'x'");
+                "/System/Applications/Utilities/Terminal.app", "/tmp/say \"hi\"", "exec 'x'");
 
             Assert.Contains("say \\\"hi\\\"", script);
+        }
+
+        // iTerm2's command carries double quotes of its own — around the eval'd
+        // substitution — and those have to be escaped for the literal as well,
+        // or the literal closes at `eval ` and the rest is read as AppleScript.
+        [Fact]
+        public void TheITermCommandIsEscapedForTheAppleScriptLiteral()
+        {
+            var script = TerminalScripts.RunScriptFor(
+                "/Applications/iTerm.app", "/tmp/x", "exec 'x'", "/bin/zsh");
+
+            Assert.Contains("-c 'eval \\\"$(printf %s ", script);
+            Assert.Contains("| /usr/bin/base64 -D)\\\"'\")", script);
+        }
+
+        // --- ITermCommand: iTerm2's `command` is argv, not a shell ------------
+        //
+        // The defect: iTerm2 execs `command` as argv with no shell in between,
+        // so `cd '<dir>' || exit 1; exec …` was exec'd as a program named "cd",
+        // and every iTerm2 launch opened a window with no Claude Code in it.
+
+        const string Hostile = "/Users/user/it's a \"quoted\" dir \\n\\(x) $HOME ~";
+
+        // The first word iTerm2 execs is a shell, asked to run the line — never
+        // the line's own first word.
+        [Fact]
+        public void ITermIsHandedAShellRatherThanTheLine()
+        {
+            var command = TerminalScripts.ITermCommand("/bin/zsh", "cd '/tmp' || exit 1; exec 'x'");
+
+            Assert.StartsWith("'/bin/zsh' -l -i -c 'eval \"$(printf %s ", command);
+            Assert.EndsWith(" | /usr/bin/base64 -D)\"'", command);
+            Assert.DoesNotContain("cd ", command);
+        }
+
+        // Login and interactive both: measured on a real Mac, `zsh -lc` alone
+        // left ~/.local/bin — where `claude` installs — off PATH, because it is
+        // set in .zshrc, which only an interactive shell reads.
+        [Fact]
+        public void TheShellIsALoginAndInteractiveOne()
+        {
+            var command = TerminalScripts.ITermCommand("/bin/bash", "exec 'x'");
+
+            Assert.StartsWith("'/bin/bash' -l -i -c ", command);
+        }
+
+        // Every character iTerm2 was measured to reinterpret stays out of what
+        // it is handed: backslashes (interpreted even inside single quotes),
+        // tildes (expanded when bare), and any apostrophe beyond the four that
+        // delimit the two quoted words — for a line built from the worst
+        // directory the probes used.
+        [Fact]
+        public void NothingITermReinterpretsReachesIt()
+        {
+            var line = TerminalScripts.ShellCommandLine(Hostile, "exec '/usr/bin/claude' 'it'\\''s'");
+            var command = TerminalScripts.ITermCommand("/bin/zsh", line);
+
+            Assert.DoesNotContain("\\", command);
+            Assert.DoesNotContain("~", command);
+            Assert.DoesNotContain("\n", command);
+            Assert.Equal(4, command.Count(c => c == '\''));
+        }
+
+        // What the shell decodes is the line, byte for byte — including the
+        // non-ASCII, which base64 carries as UTF-8.
+        [Theory]
+        [InlineData("cd '/tmp' || exit 1; exec 'x'")]
+        [InlineData("unset TMUX; exec 'tmux' '-S' '/tmp/tmux-501/default' 'attach'")]
+        [InlineData("cd '/Users/user/caf\u00e9 \u2713' || exit 1; exec 'x'")]
+        [InlineData("")]
+        public void TheShellDecodesExactlyTheLine(string line)
+        {
+            var command = TerminalScripts.ITermCommand("/bin/zsh", line);
+
+            const string open = "printf %s ";
+            var start = command.IndexOf(open, StringComparison.Ordinal) + open.Length;
+            var end = command.IndexOf(" | /usr/bin/base64", StringComparison.Ordinal);
+            var decoded = System.Text.Encoding.UTF8.GetString(
+                Convert.FromBase64String(command[start..end]));
+
+            Assert.Equal(line, decoded);
+        }
+
+        // The whole path: RunScriptFor puts the cd guard and the command inside
+        // the shell's payload, not in iTerm2's argv.
+        [Fact]
+        public void RunScriptForHandsITermTheWrappedLine()
+        {
+            var script = TerminalScripts.RunScriptFor(
+                "/Applications/iTerm.app", Hostile, "exec 'x'", "/bin/zsh");
+            var want = TerminalScripts.ITermRunScript(
+                TerminalScripts.ITermCommand("/bin/zsh", TerminalScripts.ShellCommandLine(Hostile, "exec 'x'")));
+
+            Assert.Equal(want, script);
+            Assert.DoesNotContain("it's", script);
+        }
+
+        // Terminal.app is unchanged: `do script` types into a real shell, so it
+        // gets the bare line, and ignores the login-shell argument entirely.
+        [Fact]
+        public void TerminalAppStillGetsTheBareLine()
+        {
+            var script = TerminalScripts.RunScriptFor(
+                "/System/Applications/Utilities/Terminal.app", "/tmp/x", "exec 'x'", "/bin/bash");
+
+            Assert.Equal(TerminalScripts.TerminalRunScript("cd '/tmp/x' || exit 1; exec 'x'"), script);
+        }
+
+        // --- LoginShellFor: which shell runs the line -------------------------
+
+        [Theory]
+        [InlineData("/bin/zsh", "/bin/zsh")]
+        [InlineData("/bin/bash", "/bin/bash")]
+        [InlineData("/opt/homebrew/bin/bash", "/opt/homebrew/bin/bash")]
+        [InlineData("/bin/sh", "/bin/sh")]
+        [InlineData("/bin/dash", "/bin/dash")]
+        [InlineData("/bin/ksh", "/bin/ksh")]
+        [InlineData("/usr/local/bin/mksh", "/usr/local/bin/mksh")]
+        [InlineData("/nix/store/abc-zsh-5.9/bin/zsh", "/nix/store/abc-zsh-5.9/bin/zsh")]
+        // Not POSIX: the line's `'\''` and `unset` would be misparsed.
+        [InlineData("/opt/homebrew/bin/fish", "/bin/zsh")]
+        [InlineData("/opt/homebrew/bin/nu", "/bin/zsh")]
+        [InlineData("/usr/local/bin/xonsh", "/bin/zsh")]
+        // Unset, empty, or not an absolute path.
+        [InlineData(null, "/bin/zsh")]
+        [InlineData("", "/bin/zsh")]
+        [InlineData("zsh", "/bin/zsh")]
+        // Characters that cannot go to iTerm2 safely, even inside quotes.
+        [InlineData("/Users/user/my bin/zsh", "/bin/zsh")]
+        [InlineData("/Users/user/it's/zsh", "/bin/zsh")]
+        [InlineData("/Users/user/a\\b/zsh", "/bin/zsh")]
+        [InlineData("~/bin/zsh", "/bin/zsh")]
+        public void TheLoginShellIsTheUsersWhenItCanRunTheLine(string? shellEnv, string want)
+        {
+            Assert.Equal(want, TerminalScripts.LoginShellFor(shellEnv, _ => true));
+        }
+
+        // A $SHELL that names a file which is not there falls back too: iTerm2
+        // handed a command it cannot exec opens a plain shell instead, silently,
+        // which is the very failure this fixes.
+        [Fact]
+        public void AShellThatDoesNotExistFallsBack()
+        {
+            Assert.Equal("/bin/zsh", TerminalScripts.LoginShellFor("/opt/homebrew/bin/bash", _ => false));
+        }
+
+        [Fact]
+        public void TheExistenceCheckIsAskedAboutTheShellItself()
+        {
+            string? asked = null;
+            TerminalScripts.LoginShellFor("/opt/homebrew/bin/bash", p => { asked = p; return true; });
+
+            Assert.Equal("/opt/homebrew/bin/bash", asked);
         }
 
         [Fact]
