@@ -318,6 +318,57 @@ namespace ClaudeBuddy
                 : AttachPlacement.BesideTheUser;
         }
 
+        // Where a *new chat* goes, which is not where an attach goes.
+        //
+        // PlacementFor's split answers "bring this session to me without moving
+        // me", and it is right for an orb: the conversation already exists and
+        // the user wants it beside what they are doing. A new chat is the
+        // opposite request. It starts fresh work rather than joining existing
+        // work, and splitting it into the window the user is in halves the
+        // space of whatever they were doing to make room for something
+        // unrelated — reported exactly that way the first time the fixed iTerm2
+        // launch put a New chat beside the user's tmux window rather than in a
+        // window of its own.
+        //
+        // So there are two answers rather than three: a client attached
+        // anywhere gets a new window in that client's session — still inside
+        // the thing they use to move between windows — and no client gets a
+        // terminal window, for the same reason PlacementFor's last arm gives.
+        // The active window is not asked about at all, because nothing here
+        // would do anything different with it.
+        internal static AttachPlacement NewChatPlacementFor(string? attachedSession) =>
+            string.IsNullOrEmpty(attachedSession)
+                ? AttachPlacement.ATerminalWindow
+                : AttachPlacement.ItsOwnTmuxWindow;
+
+        // The two rules as TerminalLauncher applies them, named so a test can
+        // hold each caller to its own: PlaceInTmux (every orb attach and
+        // AgentTeamViewer launch) takes the first, PlaceInOwnTmuxWindow (New
+        // chat) the second. Same shape, so one placement body serves both; the
+        // second ignores the active window because it never needs one. Here
+        // rather than in TerminalLauncher because that class is excluded from
+        // coverage as a whole, and these are decisions.
+        internal static readonly Func<string?, string?, AttachPlacement> OrbAttachPlacement = PlacementFor;
+
+        internal static readonly Func<string?, string?, AttachPlacement> NewChatPlacement =
+            (session, _) => NewChatPlacementFor(session);
+
+        // The tmux arguments a placement stands for, or null for a placement
+        // that is not tmux's to make.
+        //
+        // Split out of TerminalLauncher's placement, where it was a switch
+        // inside a method excluded from coverage for running tmux — the one
+        // part of it that decides anything, and the part that now has two rules
+        // feeding it.
+        internal static string[]? TmuxPlacementArgs(
+            AttachPlacement placement, string? session, string? activeWindow, string? cwd, string command) =>
+            placement switch
+            {
+                AttachPlacement.BesideTheUser => TmuxSplitArgs(null, activeWindow!, cwd, command),
+                AttachPlacement.ItsOwnTmuxWindow => TmuxNewWindowArgs(null, session!, cwd, command),
+                _ => null
+            };
+
         // `split-window` into the window the user is looking at.
         //
         // -h so the conversation lands beside their work rather than under it: a
@@ -332,6 +383,18 @@ namespace ClaudeBuddy
         // -c is omitted rather than passed empty when no cwd was recorded: `-c ''`
         // fails and would take the split with it, which is the same trap
         // TmuxAttachScript's `cd` guard documents one screen down.
+        //
+        // -c is not trusted to land, though, in either builder: the command
+        // carries ShellCommandLine's `cd -- '<dir>' || exit 1` guard as well.
+        // tmux format-expands -c — it is what makes `-c "#{pane_current_path}"`
+        // work — so a directory whose name contains `#{…}` or `#(…)` became a
+        // different path, and when the path it becomes does not exist, tmux does
+        // not fail: it starts the pane in $HOME. Measured on tmux 3.7c, a real
+        // directory named `fmt#{session_name}x` started the CLI in the home
+        // directory, as did a cwd deleted after it was recorded, and the pane id
+        // came back as if nothing were wrong. `##` does not escape it there.
+        // The shell's cd reads the name literally, lands exactly or exits, and
+        // -c stays only as the pane's starting point for tmux's own bookkeeping.
         internal static string[] TmuxSplitArgs(
             string? socket, string target, string? cwd, string command)
         {
@@ -346,7 +409,7 @@ namespace ClaudeBuddy
             args.Add("-P");
             args.Add("-F");
             args.Add("#{pane_id}");
-            args.Add(command);
+            args.Add(ShellCommandLine(cwd, command));
 
             return TmuxArgs(socket, args.ToArray());
         }
@@ -374,7 +437,7 @@ namespace ClaudeBuddy
             args.Add("-P");
             args.Add("-F");
             args.Add("#{pane_id}");
-            args.Add(command);
+            args.Add(ShellCommandLine(cwd, command));
 
             return TmuxArgs(socket, args.ToArray());
         }

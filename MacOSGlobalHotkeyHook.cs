@@ -112,9 +112,9 @@ namespace ClaudeBuddy
         private uint _nextId;
         private bool _installed;
 
-        public void Register(HotkeyAction action, HotkeyCombo combo, Action callback)
+        public bool Register(HotkeyAction action, HotkeyCombo combo, Action callback)
         {
-            if (!VirtualKeyCodes.TryGetValue(combo.Key, out var keyCode)) return;
+            if (!VirtualKeyCodes.TryGetValue(combo.Key, out var keyCode)) return false;
 
             EnsureHandlerInstalled();
 
@@ -130,7 +130,13 @@ namespace ClaudeBuddy
             if (result == NoErr && hotKeyRef != IntPtr.Zero)
             {
                 _registrations.Add(hotKeyRef);
+                return true;
             }
+
+            // Refused — most often eventHotKeyExistsErr, another app already
+            // holding the chord. The caller writes that to hotkeys.log.
+            _callbacksById.Remove(id);
+            return false;
         }
 
         private void EnsureHandlerInstalled()

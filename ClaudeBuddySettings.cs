@@ -103,7 +103,12 @@ namespace ClaudeBuddy
             "remoteControlEnabled", "remoteControlProfileDir", "remoteControlProfileDirs",
             "remoteControlIdleMinutes", "remoteControlServeOnLaunch",
             "peerLinkEnabled", "peerLinkPort",
-            "newChatRecentFolders", "newChatLastCli"
+            "newChatRecentFolders", "newChatLastCli",
+            // Both hotkey overrides. toggleOrbsHotkey was missing from this
+            // list from CB-155 until the new-chat hotkey was added beside it;
+            // Save's ContainsKey guard kept that from throwing, but it meant
+            // the value was carried in _unknownKeys as well as the model.
+            "toggleOrbsHotkey", "newChatHotkey"
         };
 
         // JsonNode.ToJsonString(options) needs a TypeInfoResolver on the
@@ -433,6 +438,13 @@ namespace ClaudeBuddy
             // confirm a remapping UI was wanted, only that the value be
             // overridable, and settings.json already is.
             public string? ToggleOrbsHotkey { get; set; }
+
+            // Overrides HotkeyRegistry.Default(OpenNewChat), on exactly the
+            // same terms as ToggleOrbsHotkey above: null or unparseable means
+            // the built-in Ctrl+Alt+N, and settings.json is the only place to
+            // set it, because the toggle's override has no settings-window
+            // control either.
+            public string? NewChatHotkey { get; set; }
 
             // Which port to listen on. Zero means "let the operating system
             // choose", which is the sensible default because discovery
@@ -1107,6 +1119,12 @@ namespace ClaudeBuddy
             set { Load(); lock (Gate) _model.ToggleOrbsHotkey = value; Save(); }
         }
 
+        public static string? NewChatHotkey
+        {
+            get { Load(); lock (Gate) return _model.NewChatHotkey; }
+            set { Load(); lock (Gate) _model.NewChatHotkey = value; Save(); }
+        }
+
         // The port to listen on, with 0 meaning "the one everybody expects".
         //
         // **Found by deploying, not by reading.** The stored default was 0, and
@@ -1707,6 +1725,7 @@ namespace ClaudeBuddy
                         PeerLinkEnabled = root["peerLinkEnabled"]?.GetValue<bool>() ?? false,
                         PeerLinkPort = root["peerLinkPort"]?.GetValue<int>() ?? 0,
                         ToggleOrbsHotkey = Text(root["toggleOrbsHotkey"]),
+                        NewChatHotkey = Text(root["newChatHotkey"]),
                         ClaudeCodeChatEnabled = root["claudeCodeChatEnabled"]?.GetValue<bool>() ?? true,
                         ClaudeCodeReplyEnabled = root["claudeCodeReplyEnabled"]?.GetValue<bool>() ?? false,
                         CodexChatEnabled = root["codexChatEnabled"]?.GetValue<bool>() ?? true,
@@ -2226,6 +2245,7 @@ namespace ClaudeBuddy
                         ["peerLinkEnabled"] = _model.PeerLinkEnabled,
                         ["peerLinkPort"] = _model.PeerLinkPort,
                         ["toggleOrbsHotkey"] = _model.ToggleOrbsHotkey,
+                        ["newChatHotkey"] = _model.NewChatHotkey,
                         // Null when never chosen rather than a copy of the
                         // current default, the same as speakVoice below — so
                         // changing which profile ships as the default still

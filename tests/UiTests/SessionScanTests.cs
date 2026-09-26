@@ -1350,7 +1350,9 @@ public class SessionScanTests
         Func<Dictionary<string, string>?>? jobListing = null,
         TimeSpan? sweepGrace = null,
         Func<HashSet<string>?>? attachClients = null,
-        Func<int, SessionDependents.Verdict>? dependents = null)
+        Func<int, SessionDependents.Verdict>? dependents = null,
+        bool? onWindows = null,
+        Func<string, string?>? transcriptHunt = null)
     {
         // Both CLIs on, for the reason Scan above states at length.
         ClaudeBuddySettings.ClaudeCodeEnabled = true;
@@ -1367,7 +1369,9 @@ public class SessionScanTests
         var manager = new SessionManager(
             scratch.Dir, jobListing,
             attachClients ?? (() => new HashSet<string>(StringComparer.Ordinal)),
-            dependents: dependents ?? (_ => SessionDependents.Nothing));
+            transcriptHunt: transcriptHunt,
+            dependents: dependents ?? (_ => SessionDependents.Nothing),
+            onWindows: onWindows);
         if (sweepGrace is not null) manager.SweepGrace = sweepGrace.Value;
         return manager;
     }
@@ -1396,6 +1400,74 @@ public class SessionScanTests
         }));
 
         if (written is not null) File.SetLastWriteTimeUtc(path, written.Value);
+    }
+
+    // CB-194. The shape the Windows hook writes for a Claude Code session
+    // running inside WSL: no pid, because the hook's walk up the Windows process
+    // tree ends in the interop bridge; Linux paths, because that is where the
+    // session is; and Windows Terminal, which WT_SESSION carries through WSLENV.
+    // The transcript is on the Linux side and does not exist from here, which
+    // is why every test using this hands over a hunt that finds nothing rather
+    // than letting the scan walk this machine's real projects directories.
+    private static void WriteWslFile(Scratch scratch, string sessionId, string cwd = "/home/k/project")
+    {
+        var transcript = cwd.StartsWith('/')
+            ? $"/home/k/.claude/projects/-home-k-project/{sessionId}.jsonl"
+            : $@"C:\Users\k\.claude\projects\C--Users-k-project\{sessionId}.jsonl";
+
+        scratch.Write(
+            sessionId, state: "generating", cli: "claude", cwd: cwd, pid: 0,
+            termProgram: "WindowsTerminal", tty: "", transcriptPath: transcript);
+    }
+
+    // A listing that was read and names nobody: what the Windows daemon answers
+    // about every WSL session, since the daemon that runs those is in the VM.
+    private static Dictionary<string, string>? NobodyListed() => Listing();
+
+    [AvaloniaFact]
+    public void AWslSessionGetsAnOrbOnWindowsThoughTheWindowsListingDoesNotNameIt()
+    {
+        using var scratch = new Scratch();
+        WriteWslFile(scratch, "wsl-1");
+
+        var manager = Manager(scratch, NobodyListed, onWindows: true, transcriptHunt: _ => null);
+        manager.ScanAndUpdate();
+
+        Assert.Equal(new[] { "wsl-1" }, OrbIds(manager));
+
+        // Drawn as the terminal session it is — Unknown is not a job phase, so
+        // nothing downstream badges or dims it as a background one.
+        var status = manager.StatusFor("wsl-1");
+        Assert.NotNull(status);
+        Assert.Equal(LocalSessionShape.Terminal, status!.Shape);
+        Assert.Equal(OrbPresence.Present, status.Presence);
+    }
+
+    // The negative controls, on the same listing. Each is the rule the fix must
+    // not switch off: a pid-less file the local daemon *can* answer for, and
+    // does not name, is a subagent or a leftover and still goes.
+    [AvaloniaFact]
+    public void TheSameFileOnAMacIsStillDroppedAsNotALiveJob()
+    {
+        using var scratch = new Scratch();
+        WriteWslFile(scratch, "wsl-1");
+
+        var manager = Manager(scratch, NobodyListed, onWindows: false, transcriptHunt: _ => null);
+        manager.ScanAndUpdate();
+
+        Assert.Empty(OrbIds(manager));
+    }
+
+    [AvaloniaFact]
+    public void APidlessNativeWindowsFileIsStillDroppedAsNotALiveJob()
+    {
+        using var scratch = new Scratch();
+        WriteWslFile(scratch, "win-1", cwd: @"C:\Users\k\project");
+
+        var manager = Manager(scratch, NobodyListed, onWindows: true, transcriptHunt: _ => null);
+        manager.ScanAndUpdate();
+
+        Assert.Empty(OrbIds(manager));
     }
 
     [AvaloniaFact]

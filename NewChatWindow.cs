@@ -21,39 +21,93 @@ namespace ClaudeBuddy
     {
         private static NewChatWindow? _open;
 
-        // Excluded from coverage for the same reason SettingsWindow.Toggle
-        // is, and to the same width: this is real OS-facing work
-        // (MacOSActivation, Show, Activate) with no decision inside it that
-        // can be pulled out and left testable — "is a window already open"
-        // only means anything once a real Window has actually been shown,
-        // which is the one thing a headless suite must not do here (see
-        // NewChatWindowTests' own header on why Close() specifically is
-        // dangerous). Every actual decision this dialog makes — which CLI is
-        // enabled, what the folder combo offers, what Start's status line
-        // says, when the watch gives up, what an orb pre-fills — is pulled
-        // out into its own pure method below and tested directly; this is
-        // only ever the wiring around them. tests/UiTests reaches the
-        // private constructor instead — see NewChatWindowTests.
-        [ExcludeFromCodeCoverage]
+        // Opens the dialog, or brings the one already open forward — never a
+        // second one. Despite the name it never closes anything: the tray
+        // item, an orb's "New chat here" and the global hotkey all mean "take
+        // me to New chat", and a second press of the hotkey closing the window
+        // it had just opened would be the opposite of that.
+        //
+        // The decision is covered; the two OS-facing halves are not. They are
+        // real OS work (MacOSActivation, Show, Activate) with no decision in
+        // them, and Show() is the one thing a headless suite must not do here
+        // (see NewChatWindowTests' own header on why Close() specifically is
+        // dangerous, and HotkeyActionsTests on Show). PresentForTests and
+        // BringForwardForTests stand in for them, which is what lets the
+        // open-versus-focus rule be tested at all — it was excluded as a
+        // whole until the hotkey made it worth having a test.
         public static void Toggle(NewChatCli? prefillCli = null, string? prefillCwd = null, string? prefillAgentId = null)
         {
             if (_open is not null)
             {
-                _open.Activate();
+                BringForward(_open);
                 return;
             }
 
             _open = new NewChatWindow(prefillCli, prefillCwd, prefillAgentId);
-            _open.Closed += (_, _) =>
-            {
-                _open?._watchTimer?.Stop();
-                _open = null;
-                MacOSActivation.SetAccessory();
-            };
+            _open.Closed += OnClosed;
+            (PresentForTests ?? Present)(_open);
+        }
 
+        // A hotkey pressed while the dialog is minimised has to un-minimise
+        // it; Activate() alone raises a minimised window on neither platform.
+        // Done here rather than in the excluded half because it is a decision
+        // a test can observe on a window that was never shown.
+        private static void BringForward(NewChatWindow window)
+        {
+            if (window.WindowState == WindowState.Minimized) window.WindowState = WindowState.Normal;
+            (BringForwardForTests ?? Activate)(window);
+        }
+
+        internal static Action<NewChatWindow>? PresentForTests;
+        internal static Action<NewChatWindow>? BringForwardForTests;
+
+        // The singleton itself, for a test to inspect and to clear between
+        // cases: tests never Close() a window, so without this the first
+        // test's window would be "already open" for every test after it.
+        internal static NewChatWindow? OpenForTests
+        {
+            get => _open;
+            set => _open = value;
+        }
+
+        [ExcludeFromCodeCoverage]
+        private static void Present(NewChatWindow window)
+        {
             MacOSActivation.SetRegular();
-            _open.Show();
-            _open.Activate();
+            window.Show();
+            window.Activate();
+        }
+
+        // SetRegular again as well as Activate, for two reasons. It is what
+        // calls activateIgnoringOtherApps: — without which Activate() only
+        // reorders the window within this app, and a hotkey pressed from
+        // another app would leave that app in front. And the policy may have
+        // been put back to Accessory by SettingsWindow closing while this one
+        // stayed open, since SetAccessory doesn't ask what else is showing.
+        // Toggle's old open-window arm called Activate() alone, so the tray
+        // item gets the same fix.
+        [ExcludeFromCodeCoverage]
+        private static void Activate(NewChatWindow window)
+        {
+            MacOSActivation.SetRegular();
+            window.Activate();
+        }
+
+        [ExcludeFromCodeCoverage]
+        private static void OnClosed(object? sender, EventArgs e)
+        {
+            Forget();
+            MacOSActivation.SetAccessory();
+        }
+
+        // What closing means to Toggle: stop the orb watch and let the next
+        // call build a fresh window. Split out of OnClosed so the part a test
+        // can observe runs in one — OnClosed itself only fires on a real
+        // Close(), which this suite must not call.
+        internal static void Forget()
+        {
+            _open?._watchTimer?.Stop();
+            _open = null;
         }
 
         // The seam a UI test satisfies in place of the real session scan —

@@ -206,3 +206,23 @@ public sealed class MacITermShellFactAttribute : FactAttribute
             Skip = "no /usr/bin/base64 or /bin/zsh on this machine";
     }
 }
+
+// A real tmux, plus script(1) to give its client a terminal. The tmux
+// placement tests start a private server and attach a client to it, which
+// needs both; skipped where either is missing rather than failed, since a CI
+// runner without tmux says nothing about the placement. macOS only because
+// script(1)'s argument order differs on Linux.
+public sealed class MacTmuxFactAttribute : FactAttribute
+{
+    public MacTmuxFactAttribute()
+    {
+        if (!OperatingSystem.IsMacOS())
+        {
+            Skip = "drives tmux through macOS's script(1)";
+            return;
+        }
+
+        if (ClaudeBuddy.TerminalLauncher.ResolveTmux() is null || !File.Exists("/usr/bin/script"))
+            Skip = "needs tmux and /usr/bin/script";
+    }
+}

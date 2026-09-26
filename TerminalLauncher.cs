@@ -98,16 +98,28 @@ namespace ClaudeBuddy
             }
         }
 
-        // Runs the attach in a new window of whichever tmux session already
-        // has a client, and hands back its pane.
+        // Runs the attach beside the user in tmux — split into the window their
+        // most recent client is showing, or a new window in its session when
+        // that window cannot be resolved — and hands back its pane.
         //
         // Moved verbatim from AgentTeamViewer.PlaceInTmux, including its
         // reliance on TerminalScripts.PlacementFor/TmuxSplitArgs/
         // TmuxNewWindowArgs and ResolveTmux, both of which stayed put in
         // AgentTeamViewer since they are private helpers this file would
         // otherwise have to duplicate — see the note on ResolveTmux below.
+        // Every AgentTeamViewer launch and orb attach comes through here.
+        public static string? PlaceInTmux(string command, string cwd) =>
+            Place(command, cwd, TerminalScripts.OrbAttachPlacement);
+
+        // Runs a new chat in a tmux window of its own, in the session of the
+        // user's most recent client, and hands back its pane — never a split.
+        // TerminalScripts.NewChatPlacementFor has the reasoning.
+        public static string? PlaceInOwnTmuxWindow(string command, string cwd) =>
+            Place(command, cwd, TerminalScripts.NewChatPlacement);
+
         [ExcludeFromCodeCoverage]
-        public static string? PlaceInTmux(string command, string cwd)
+        private static string? Place(
+            string command, string cwd, Func<string?, string?, TerminalScripts.AttachPlacement> rule)
         {
             var tmux = ResolveTmux();
             if (tmux is null) return null;
@@ -115,17 +127,7 @@ namespace ClaudeBuddy
             var session = TerminalScripts.MostRecentClient(AttachedClients(tmux, ""))?.Session;
             var activeWindow = session is null ? null : CurrentWindowOf(tmux, "", session);
 
-            var args = TerminalScripts.PlacementFor(session, activeWindow) switch
-            {
-                TerminalScripts.AttachPlacement.BesideTheUser =>
-                    TerminalScripts.TmuxSplitArgs(null, activeWindow!, cwd, command),
-
-                TerminalScripts.AttachPlacement.ItsOwnTmuxWindow =>
-                    TerminalScripts.TmuxNewWindowArgs(null, session!, cwd, command),
-
-                _ => null
-            };
-
+            var args = TerminalScripts.TmuxPlacementArgs(rule(session, activeWindow), session, activeWindow, cwd, command);
             if (args is null) return null;
 
             if (!TryRun(tmux, out var pane, args)) return null;

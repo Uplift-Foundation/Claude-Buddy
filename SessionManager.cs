@@ -391,7 +391,8 @@ namespace ClaudeBuddy
             Func<HashSet<string>?>? attachClients = null,
             Func<string, string?>? transcriptHunt = null,
             Func<IReadOnlyList<string>>? userConfigDirs = null,
-            Func<int, SessionDependents.Verdict>? dependents = null)
+            Func<int, SessionDependents.Verdict>? dependents = null,
+            bool? onWindows = null)
         {
             _statusDir = statusDir;
             _jobListing = jobListing ?? BackgroundJobs.SnapshotForScan;
@@ -410,9 +411,18 @@ namespace ClaudeBuddy
             // method group converting to a zero-argument Func.
             _userConfigDirs = userConfigDirs ?? (() => LocalPersona.UserConfigDirs());
             _dependents = dependents ?? SessionDependents.Of;
+            _onWindows = onWindows ?? OperatingSystem.IsWindows();
         }
 
         private readonly Func<Dictionary<string, string>?> _jobListing;
+
+        // Which platform's rules the scan applies, rather than whichever one it
+        // happens to be running on — a seam for SessionPresence.LocalDaemonCanAnswerFor,
+        // whose whole question is "is this Windows looking at a WSL session".
+        // Handed over so the scan suites can ask it on both CI legs: on a Mac
+        // runner the real answer is always false, and the case CB-194 fixed
+        // would otherwise only ever be exercised on the Windows one.
+        private readonly bool _onWindows;
 
         // What is running underneath a session's pid, for the one irreversible
         // action in the app — a seam for exactly the reason _attachClients is
@@ -1173,9 +1183,11 @@ namespace ClaudeBuddy
             Func<Dictionary<string, string>?>? jobListing = null,
             Func<int, bool>? isRunning = null,
             DateTime? nowUtc = null,
-            bool honourOrbLifetime = true)
+            bool honourOrbLifetime = true,
+            bool? onWindows = null)
         {
             statusDir ??= StatusDirectory.Path();
+            var windows = onWindows ?? OperatingSystem.IsWindows();
             var now = nowUtc ?? DateTime.UtcNow;
 
             IEnumerable<string> files;
@@ -1276,8 +1288,14 @@ namespace ClaudeBuddy
                 // live job's inherited marker as a husk where this one cannot.
                 // It is a difference in accuracy, not in the rule, and it can
                 // only ever keep a session this method should keep.
+                //
+                // The one guard the live scan has that is not about cost: a
+                // session the listing cannot know about — WSL, seen from
+                // Windows — reads Unknown here as it does there, or a paired
+                // machine would be told this one's WSL sessions do not exist.
                 var status = entry.Status;
-                var phase = status.Source == SessionSource.ClaudeCode
+                var daemonCanAnswer = SessionPresence.LocalDaemonCanAnswerFor(status, windows);
+                var phase = status.Source == SessionSource.ClaudeCode && daemonCanAnswer
                     ? BackgroundJobs.Phase(jobs, entry.SessionId)
                     : JobPhase.Unknown;
 
@@ -1305,9 +1323,20 @@ namespace ClaudeBuddy
                 // backgrounded-husk are *facts* about whether the session is
                 // there. Only expiry is a preference about how long to keep
                 // showing one, and only expiry is dropped here.
+                //
+                // Except for a session with no fact left to go on. A WSL
+                // session seen from Windows names no process this machine can
+                // probe, and the daemon that could vouch for it is in the VM —
+                // so once the listing stops being asked (above), the lifetime
+                // is the only thing that can ever say it is gone. Dropping it
+                // here too would offer a WSL session that was killed without a
+                // SessionEnd to every peer forever, which is the exact failure
+                // the pid-less rule below exists to prevent. It is the same
+                // rule the visible scan applies to that session, so the two
+                // still agree about which sessions exist.
                 var verdict = JudgeLiveness(
                     entry.SessionId, entry.Status, entry.Written,
-                    now, honourOrbLifetime ? StaleAfter : null,
+                    now, honourOrbLifetime || !daemonCanAnswer ? StaleAfter : null,
                     superseded, running, handedToBackground);
 
                 // Ignoring orb lifetime answers a narrower question than
@@ -2352,7 +2381,14 @@ namespace ClaudeBuddy
                 // On a machine with nothing background-ish on it every session
                 // keeps Unknown, which is the answer that means "nobody asked"
                 // and which no rule below acts on.
+                //
+                // A session this machine's daemon cannot know about keeps
+                // Unknown too, however readable the listing is — a WSL session
+                // seen from Windows is never on it, and reading its absence as
+                // NotAJob dropped every one of them. See
+                // SessionPresence.LocalDaemonCanAnswerFor.
                 var phase = worthAsking && status.Source == SessionSource.ClaudeCode
+                            && SessionPresence.LocalDaemonCanAnswerFor(status, _onWindows)
                     ? BackgroundJobs.Phase(Jobs(), sessionId)
                     : JobPhase.Unknown;
 

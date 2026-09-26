@@ -94,16 +94,22 @@ namespace ClaudeBuddy
         private IntPtr _hwnd;
         private int _nextId;
 
-        public void Register(HotkeyAction action, HotkeyCombo combo, Action callback)
+        public bool Register(HotkeyAction action, HotkeyCombo combo, Action callback)
         {
-            if (!VirtualKeyCodes.TryGetValue(combo.Key, out var vk)) return;
+            if (!VirtualKeyCodes.TryGetValue(combo.Key, out var vk)) return false;
 
             EnsureWindow();
 
             var id = ++_nextId;
             _callbacksById[id] = callback;
 
-            RegisterHotKey(_hwnd, id, ToWinModifiers(combo.Modifiers) | ModNoRepeat, vk);
+            if (RegisterHotKey(_hwnd, id, ToWinModifiers(combo.Modifiers) | ModNoRepeat, vk)) return true;
+
+            // Refused — ERROR_HOTKEY_ALREADY_REGISTERED when another app holds
+            // the chord, or a hidden window that never got created. The caller
+            // writes that to hotkeys.log.
+            _callbacksById.Remove(id);
+            return false;
         }
 
         private void EnsureWindow()
