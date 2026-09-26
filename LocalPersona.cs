@@ -142,7 +142,12 @@ namespace ClaudeBuddy
         // which it was — ~/.claude/CLAUDE.md is level ~ when the walk reaches
         // it from below and level ~/.claude when only the config list offers
         // it — so the walk, which knows, says so.
-        internal readonly record struct Candidate(string Path, string Level);
+        // IsMemberProfile marks the two agent-owned shapes above (profiles/…
+        // and .profiles-assets/…) and nothing else — see ResolveFrom's own
+        // comment for what that flag buys (CB-191). Defaulted so every
+        // existing two-argument `new Candidate(path, level)` call, including
+        // OwnLevels' own, keeps meaning "not a member file" unchanged.
+        internal readonly record struct Candidate(string Path, string Level, bool IsMemberProfile = false);
 
         internal static IReadOnlyList<string> CandidateFiles(
             string? cwd, IEnumerable<string> userConfigDirs, SessionSource source, string agentName = "") =>
@@ -168,9 +173,9 @@ namespace ClaudeBuddy
             // anything the first did not.
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-            void Add(string path, string level)
+            void Add(string path, string level, bool isMemberProfile = false)
             {
-                if (seen.Add(path)) files.Add(new Candidate(path, level));
+                if (seen.Add(path)) files.Add(new Candidate(path, level, isMemberProfile));
             }
 
             var hasAgentName = agentName is not ("" or "." or "..");
@@ -180,8 +185,8 @@ namespace ClaudeBuddy
             {
                 if (hasAgentName)
                 {
-                    Add(Path.Combine(directory, "profiles", agentName, agentName + ".md"), directory);
-                    Add(Path.Combine(directory, ".profiles-assets", agentName, agentName + ".md"), directory);
+                    Add(Path.Combine(directory, "profiles", agentName, agentName + ".md"), directory, isMemberProfile: true);
+                    Add(Path.Combine(directory, ".profiles-assets", agentName, agentName + ".md"), directory, isMemberProfile: true);
                 }
 
                 Add(Path.Combine(directory, "CLAUDE.md"), directory);
@@ -255,15 +260,25 @@ namespace ClaudeBuddy
             IReadOnlyList<Candidate> candidates)
         {
             var read = new List<(string Path, string[] Lines, string Level)>();
-            var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            ReadCandidates(candidates, read, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+            return read;
+        }
 
+        // The body Load's loop used to be, pulled out so ResolveFrom can run
+        // it one candidate at a time — the shared `read` list and `visited`
+        // set are what keep the twenty-file cap and the cycle guard the same
+        // cumulative cap and guard across separate calls that they already
+        // were across one candidate to the next inside a single call.
+        private static void ReadCandidates(
+            IReadOnlyList<Candidate> candidates,
+            List<(string Path, string[] Lines, string Level)> read,
+            HashSet<string> visited)
+        {
             foreach (var candidate in candidates)
             {
                 if (read.Count >= MaxFiles) break;
                 ReadInto(candidate.Path, 0, PersonaFiles.CanonicalDirectory(candidate.Level), read, visited);
             }
-
-            return read;
         }
 
         // A bare list of paths, each its own level: what every caller before
@@ -373,6 +388,35 @@ namespace ClaudeBuddy
         internal static Persona ResolveFrom(IReadOnlyList<string> candidates, string? workspaceCwd = null) =>
             ResolveFrom(OwnLevels(candidates), workspaceCwd);
 
+        // CB-191: name, voice, rate and avatar all come from one persona, not
+        // from whichever candidate happened to state each one first. Before
+        // this the fold below ran name/voice/rate/avatar as four independent
+        // first-wins races over the whole flattened candidate list, so a team
+        // member's own `.profiles-assets/<name>/<name>.md` — naming itself
+        // but no picture — supplied the name and then lost the avatar race to
+        // the project's CLAUDE.md a few candidates later. The result wore the
+        // member's name and the project's face: two different personas'
+        // fields, stitched together, which is not what either file said.
+        //
+        // The fix is scoped to exactly the case the ticket is about, not
+        // generalised to every candidate. Every candidate here is read and
+        // folded into the running first-wins totals exactly as before *except*
+        // a member-profile candidate (Candidate.IsMemberProfile — the two
+        // agent-owned shapes Candidates adds ahead of the project's own
+        // files): the moment one of those, together with whatever it itself
+        // imports, states any field at all, that group's own fields are the
+        // whole answer, returned immediately with nothing folded in from a
+        // shallower project or home file the walk had already read, and
+        // nothing from a farther one it has not reached yet.
+        //
+        // That leaves TheNearestFileToNameAFieldOwnsIt's monorepo case —
+        // several plain CLAUDE.md files at different directory levels, no
+        // agent name anywhere — resolving exactly as it always has: a nearer
+        // file's name and a farther file's voice are still one project
+        // persona layered over its own defaults, which was never the bug.
+        // Only a member's own file is exclusive once it says anything, because
+        // only a member's own file is a *different* persona from the
+        // project's, in the sense CB-154 introduced the shape to mean.
         internal static Persona ResolveFrom(IReadOnlyList<Candidate> candidates, string? workspaceCwd = null)
         {
             if (candidates.Count == 0) return Empty;
@@ -383,6 +427,9 @@ namespace ClaudeBuddy
             // which is exactly the "no second root" case D8 requires.
             var workspaceRoot = PersonaFiles.CanonicalDirectory(workspaceCwd);
 
+            var read = new List<(string Path, string[] Lines, string Level)>();
+            var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
             string? name = null;
             string? voice = null;
             double? rate = null;
@@ -390,8 +437,66 @@ namespace ClaudeBuddy
             string? avatarPath = null;
             var files = new List<string>();
 
-            foreach (var (path, lines, level) in Load(candidates))
+            foreach (var candidate in candidates)
             {
+                if (read.Count >= MaxFiles) break;
+
+                var start = read.Count;
+                ReadCandidates(new[] { candidate }, read, visited);
+                if (read.Count == start) continue;
+
+                var group = Fold(read, start, read.Count, workspaceRoot);
+
+                if (candidate.IsMemberProfile && !group.IsEmpty)
+                {
+                    // The member's own persona, once it says anything at all,
+                    // is the whole answer — see the comment above. Whatever
+                    // was already folded in from an earlier, shallower
+                    // candidate above this loop is dropped rather than used
+                    // to fill in what this file leaves blank.
+                    return new Persona(
+                        group.Name, group.Voice, group.Rate, group.AvatarSource, group.AvatarPath, group.Files);
+                }
+
+                files.AddRange(group.Files);
+                name ??= group.Name;
+                voice ??= group.Voice;
+                rate ??= group.Rate;
+                if (avatarPath is null)
+                {
+                    avatarSource = group.AvatarSource;
+                    avatarPath = group.AvatarPath;
+                }
+            }
+
+            return new Persona(name, voice, rate, avatarSource, avatarPath, files);
+        }
+
+        // One candidate's own fields — its file plus whatever it imports,
+        // read[start..end) — first-wins within itself exactly as the old
+        // single flattened fold was first-wins across everything. Split out
+        // of ResolveFrom so that fold can be asked of one candidate's slice
+        // for the member short-circuit above and of the running totals for
+        // every other candidate, without two copies of the field-reading body.
+        private readonly record struct Group(
+            string? Name, string? Voice, double? Rate, string? AvatarSource, string? AvatarPath, List<string> Files)
+        {
+            internal bool IsEmpty => Name is null && Voice is null && Rate is null && AvatarPath is null;
+        }
+
+        private static Group Fold(
+            List<(string Path, string[] Lines, string Level)> read, int start, int end, string? workspaceRoot)
+        {
+            string? name = null;
+            string? voice = null;
+            double? rate = null;
+            string? avatarSource = null;
+            string? avatarPath = null;
+            var files = new List<string>();
+
+            for (var i = start; i < end; i++)
+            {
+                var (path, lines, level) = read[i];
                 files.Add(path);
 
                 var fields = PersonaMarkdown.Parse(lines);
@@ -433,7 +538,7 @@ namespace ClaudeBuddy
                 avatarPath = picture;
             }
 
-            return new Persona(name, voice, rate, avatarSource, avatarPath, files);
+            return new Group(name, voice, rate, avatarSource, avatarPath, files);
         }
 
         // What the scan compares to decide whether anything is worth re-reading:

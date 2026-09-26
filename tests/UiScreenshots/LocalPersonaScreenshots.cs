@@ -120,6 +120,66 @@ public class LocalPersonaScreenshots
         }
     }
 
+    // CB-191: a team member's own orb, beside the project's face it must not
+    // borrow. The project's CLAUDE.md imports a PERSONA.MD naming Jennifer
+    // and cto.png — the exact shape this repository's own persona file
+    // takes — and the member's own .profiles-assets file names only itself.
+    // What a reviewer opens this image to confirm is that the orb drew no
+    // picture at all rather than Jennifer's: a wrong pixel here is the whole
+    // of the regression this ticket fixes, and nothing about LocalPersonas.For
+    // reporting the right AvatarPath can show that on its own.
+    private static string WriteMemberFixture(out string memberName)
+    {
+        memberName = "ines-harrow";
+
+        var project = Path.Combine(Path.GetTempPath(), "cb-persona-member-capture-" + Guid.NewGuid());
+        var claudeDir = Path.Combine(project, ".claude");
+        var memberDir = Path.Combine(project, ".profiles-assets", memberName);
+        Directory.CreateDirectory(claudeDir);
+        Directory.CreateDirectory(memberDir);
+
+        File.WriteAllBytes(Path.Combine(claudeDir, "cto.png"), Portrait());
+        File.WriteAllLines(Path.Combine(claudeDir, "PERSONA.MD"),
+            new[] { "## Attributes", "Name Jennifer", "Profile Photo cto.png" });
+        File.WriteAllText(Path.Combine(project, "CLAUDE.md"), "@.claude/PERSONA.MD\n");
+        File.WriteAllLines(Path.Combine(memberDir, memberName + ".md"),
+            new[] { "## Attributes", "Name Ines Harrow" });
+
+        return project;
+    }
+
+    [AvaloniaFact]
+    public void ATeamMembersOrbWearsItsOwnInitialsNotTheProjectsFace()
+    {
+        var project = WriteMemberFixture(out var memberName);
+        var sessionId = "local-persona-member-capture-" + Guid.NewGuid();
+
+        try
+        {
+            var persona = LocalPersona.Resolve(
+                project, SessionSource.ClaudeCode, Array.Empty<string>(), memberName);
+            Assert.Equal("Ines Harrow", persona.Name);
+            Assert.Null(persona.AvatarPath);
+
+            LocalPersonas.SetForTests(
+                new Dictionary<string, LocalPersona.Persona> { [sessionId] = persona });
+
+            var status = Local(project);
+            status.Agent = memberName;
+
+            var orb = new OrbWindow(sessionId);
+            orb.UpdateFrom(status);
+
+            ScreenshotHelper.Capture(orb, "local-persona-member-orb.png");
+        }
+        finally
+        {
+            LocalPersonas.SetForTests(new Dictionary<string, LocalPersona.Persona>());
+            OpenClawAvatars.Forget(LocalPersonas.AvatarKey(sessionId));
+            if (Directory.Exists(project)) Directory.Delete(project, true);
+        }
+    }
+
     [AvaloniaFact]
     public void ALocalChatPanelHeaderWearsThePersonasNameAndFace()
     {
