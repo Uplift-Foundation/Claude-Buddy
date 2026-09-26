@@ -226,7 +226,7 @@ public class OrbWindowOpenClawActionsTests
         await orb.EndConversationClickAsync();
 
         Assert.True(orb.EndConversationArmed);
-        Assert.Equal("End it? Click again", End(orb).Header);
+        Assert.Equal("End it? Click again (can be restored on the gateway)", End(orb).Header);
         Assert.Empty(calls);
     }
 
@@ -336,7 +336,7 @@ public class OrbWindowOpenClawActionsTests
         await orb.EndConversationClickAsync();
         orb.UpdateFrom(OpenClaw());
 
-        Assert.Equal("End it? Click again", End(orb).Header);
+        Assert.Equal("End it? Click again (can be restored on the gateway)", End(orb).Header);
         Assert.True(orb.EndConversationArmed);
     }
 

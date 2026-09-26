@@ -140,7 +140,7 @@ public class OpenClawOrbActionsTests
     {
         Assert.Equal("Interrupt the current run", OpenClawActionText.Header(OpenClawAction.Interrupt));
         Assert.Equal("End the conversation", OpenClawActionText.Header(OpenClawAction.End));
-        Assert.Equal("End it? Click again", OpenClawActionText.Armed);
+        Assert.Equal("End it? Click again (can be restored on the gateway)", OpenClawActionText.Armed);
         Assert.Equal("Interrupting…", OpenClawActionText.Working(OpenClawAction.Interrupt));
         Assert.Equal("Ending…", OpenClawActionText.Working(OpenClawAction.End));
         Assert.Equal("Stops the agent generating. The conversation stays.",

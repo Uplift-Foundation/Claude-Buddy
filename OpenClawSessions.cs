@@ -1572,6 +1572,25 @@ namespace ClaudeBuddy
             // (CB-169), so they count — and nothing of this event reaches a
             // transcript, which it never did.
             var roster = name == "sessions.changed";
+
+            // An archive, from this app or any other client, arrives as a
+            // sessions.changed carrying the whole row with archived:true
+            // (CB-170, measured). The conversation is over: it leaves the
+            // snapshot now rather than on the next poll, and whatever run or
+            // activity was recorded for it goes with it, so nothing can hold
+            // its orb up. Parse drops the same row on the poll path.
+            if (roster && Bool(payload, "archived") == true)
+            {
+                lock (Gate)
+                {
+                    Running.Remove(key);
+                    LastSeen.Remove(key);
+                }
+
+                Forget(key);
+                return;
+            }
+
             if (roster && signal.Signal == RunSignal.None) return;
 
             OpenClawChatSession? chat;

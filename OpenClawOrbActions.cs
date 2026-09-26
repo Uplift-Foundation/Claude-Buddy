@@ -123,7 +123,10 @@ namespace ClaudeBuddy
     // the same sentences.
     internal static class OpenClawActionText
     {
-        public const string Armed = "End it? Click again";
+        // Says it can be undone, because it can: an archive is reversed from
+        // OpenClaw with archived:false, history intact (measured). Worded as
+        // permanent it would be a warning about something that isn't true.
+        public const string Armed = "End it? Click again (can be restored on the gateway)";
 
         public static string Header(OpenClawAction action) => action == OpenClawAction.Interrupt
             ? "Interrupt the current run"
