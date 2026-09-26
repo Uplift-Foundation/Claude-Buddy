@@ -1120,6 +1120,99 @@ namespace ClaudeBuddy.Tests
                 TerminalScripts.PlacementFor(session, activeWindow));
         }
 
+        // --- NewChatPlacementFor: a new chat gets a window of its own ---------
+        //
+        // Reported the first time the fixed iTerm2 launch let New chat reach
+        // tmux: it split a pane into the window the user was working in. A new
+        // chat is new work, not an existing conversation brought beside them,
+        // so it gets a window of its own in their session.
+
+        [Fact]
+        public void ANewChatWithAClientGetsItsOwnTmuxWindow()
+        {
+            Assert.Equal(
+                TerminalScripts.AttachPlacement.ItsOwnTmuxWindow,
+                TerminalScripts.NewChatPlacementFor("user"));
+        }
+
+        [Theory]
+        [InlineData(null)]
+        [InlineData("")]
+        public void ANewChatWithNoClientGetsATerminalWindow(string? session)
+        {
+            Assert.Equal(
+                TerminalScripts.AttachPlacement.ATerminalWindow,
+                TerminalScripts.NewChatPlacementFor(session));
+        }
+
+        // The case the report was about: the active window *did* resolve, which
+        // is exactly when the attach rule splits. New chat must not.
+        [Theory]
+        [InlineData("user:3")]
+        [InlineData(null)]
+        [InlineData("")]
+        public void ANewChatNeverSplitsWhateverTheActiveWindow(string? activeWindow)
+        {
+            Assert.Equal(
+                TerminalScripts.AttachPlacement.ItsOwnTmuxWindow,
+                TerminalScripts.NewChatPlacement("user", activeWindow));
+        }
+
+        // And the other caller keeps its split: every orb attach and
+        // AgentTeamViewer launch goes through PlaceInTmux, which applies this
+        // rule. Pinned so giving New chat its own placement cannot quietly move
+        // the attach off round 6a's answer.
+        [Theory]
+        [InlineData("user", "user:3", "BesideTheUser")]
+        [InlineData("user", null, "ItsOwnTmuxWindow")]
+        [InlineData(null, null, "ATerminalWindow")]
+        public void AnOrbAttachStillSplitsBesideTheUser(string? session, string? activeWindow, string want)
+        {
+            Assert.Equal(
+                Enum.Parse<TerminalScripts.AttachPlacement>(want),
+                TerminalScripts.OrbAttachPlacement(session, activeWindow));
+        }
+
+        // --- TmuxPlacementArgs: what each placement asks tmux to do ------------
+
+        [Fact]
+        public void BesideTheUserIsASplitOfTheActiveWindow()
+        {
+            var args = TerminalScripts.TmuxPlacementArgs(
+                TerminalScripts.AttachPlacement.BesideTheUser, "user", "user:3", "/tmp/x", "cmd");
+
+            Assert.Equal(TerminalScripts.TmuxSplitArgs(null, "user:3", "/tmp/x", "cmd"), args);
+        }
+
+        [Fact]
+        public void ItsOwnTmuxWindowIsANewWindowInTheSession()
+        {
+            var args = TerminalScripts.TmuxPlacementArgs(
+                TerminalScripts.AttachPlacement.ItsOwnTmuxWindow, "user", "user:3", "/tmp/x", "cmd");
+
+            Assert.Equal(TerminalScripts.TmuxNewWindowArgs(null, "user", "/tmp/x", "cmd"), args);
+        }
+
+        [Fact]
+        public void ATerminalWindowIsNotTmuxsToMake()
+        {
+            Assert.Null(TerminalScripts.TmuxPlacementArgs(
+                TerminalScripts.AttachPlacement.ATerminalWindow, null, null, "/tmp/x", "cmd"));
+        }
+
+        // New chat end to end through the pure half: a resolved active window,
+        // and still `new-window -t user:` — never `split-window`.
+        [Fact]
+        public void ANewChatAsksTmuxForANewWindowNotASplit()
+        {
+            var args = TerminalScripts.TmuxPlacementArgs(
+                TerminalScripts.NewChatPlacement("user", "user:3"), "user", "user:3", "/tmp/x", "cmd")!;
+
+            Assert.Equal("new-window", args[0]);
+            Assert.Equal("user:", args[Array.IndexOf(args, "-t") + 1]);
+            Assert.DoesNotContain("split-window", args);
+        }
+
         // --- TmuxSplitArgs / TmuxNewWindowArgs --------------------------------
 
         // The command is the last element and arrives untouched. tmux hands that

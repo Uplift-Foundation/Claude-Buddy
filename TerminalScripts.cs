@@ -318,6 +318,57 @@ namespace ClaudeBuddy
                 : AttachPlacement.BesideTheUser;
         }
 
+        // Where a *new chat* goes, which is not where an attach goes.
+        //
+        // PlacementFor's split answers "bring this session to me without moving
+        // me", and it is right for an orb: the conversation already exists and
+        // the user wants it beside what they are doing. A new chat is the
+        // opposite request. It starts fresh work rather than joining existing
+        // work, and splitting it into the window the user is in halves the
+        // space of whatever they were doing to make room for something
+        // unrelated — reported exactly that way the first time the fixed iTerm2
+        // launch put a New chat beside the user's tmux window rather than in a
+        // window of its own.
+        //
+        // So there are two answers rather than three: a client attached
+        // anywhere gets a new window in that client's session — still inside
+        // the thing they use to move between windows — and no client gets a
+        // terminal window, for the same reason PlacementFor's last arm gives.
+        // The active window is not asked about at all, because nothing here
+        // would do anything different with it.
+        internal static AttachPlacement NewChatPlacementFor(string? attachedSession) =>
+            string.IsNullOrEmpty(attachedSession)
+                ? AttachPlacement.ATerminalWindow
+                : AttachPlacement.ItsOwnTmuxWindow;
+
+        // The two rules as TerminalLauncher applies them, named so a test can
+        // hold each caller to its own: PlaceInTmux (every orb attach and
+        // AgentTeamViewer launch) takes the first, PlaceInOwnTmuxWindow (New
+        // chat) the second. Same shape, so one placement body serves both; the
+        // second ignores the active window because it never needs one. Here
+        // rather than in TerminalLauncher because that class is excluded from
+        // coverage as a whole, and these are decisions.
+        internal static readonly Func<string?, string?, AttachPlacement> OrbAttachPlacement = PlacementFor;
+
+        internal static readonly Func<string?, string?, AttachPlacement> NewChatPlacement =
+            (session, _) => NewChatPlacementFor(session);
+
+        // The tmux arguments a placement stands for, or null for a placement
+        // that is not tmux's to make.
+        //
+        // Split out of TerminalLauncher's placement, where it was a switch
+        // inside a method excluded from coverage for running tmux — the one
+        // part of it that decides anything, and the part that now has two rules
+        // feeding it.
+        internal static string[]? TmuxPlacementArgs(
+            AttachPlacement placement, string? session, string? activeWindow, string? cwd, string command) =>
+            placement switch
+            {
+                AttachPlacement.BesideTheUser => TmuxSplitArgs(null, activeWindow!, cwd, command),
+                AttachPlacement.ItsOwnTmuxWindow => TmuxNewWindowArgs(null, session!, cwd, command),
+                _ => null
+            };
+
         // `split-window` into the window the user is looking at.
         //
         // -h so the conversation lands beside their work rather than under it: a
