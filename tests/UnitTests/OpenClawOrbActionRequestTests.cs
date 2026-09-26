@@ -194,6 +194,26 @@ public class OpenClawOrbActionRequestTests : IDisposable
         }
     }
 
+    // A refusal without a message is shown by its code, and one with neither
+    // still says something: the row never goes blank. This is the gateway's
+    // own fallback in OpenClawGateway, reached from the row that surfaces it.
+    [Theory]
+    [InlineData("UNAVAILABLE", "UNAVAILABLE")]
+    [InlineData(null, "request failed")]
+    public async Task ARefusalWithNoMessageIsStillShown(string? code, string expected)
+    {
+        var (_, gateway) = await ConnectedAsync(r => code is null
+            ? new { type = "res", id = r.Id, ok = false, error = new { } }
+            : new { type = "res", id = r.Id, ok = false, error = (object)new { code } });
+        using (gateway)
+        {
+            var (outcome, detail) = await OpenClawSessions.InterruptAsync(Orb, CancellationToken.None);
+
+            Assert.Equal(OpenClawActionOutcome.Refused, outcome);
+            Assert.Equal(expected, detail);
+        }
+    }
+
     [Fact]
     public async Task InterruptWhileDisconnectedSendsNothing()
     {

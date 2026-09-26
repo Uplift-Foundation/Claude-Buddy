@@ -584,13 +584,15 @@ namespace ClaudeBuddy
                 return methods;
             }
 
+            // GetString() on a String element is never null, so it is asserted
+            // rather than tested: a null arm here could never be reached, and an
+            // unreachable arm is a branch with no possible numerator.
             foreach (var method in list.EnumerateArray())
             {
-                if (method.ValueKind == JsonValueKind.String
-                    && method.GetString() is { Length: > 0 } name)
-                {
-                    methods.Add(name);
-                }
+                if (method.ValueKind != JsonValueKind.String) continue;
+
+                var name = method.GetString()!;
+                if (name.Length > 0) methods.Add(name);
             }
 
             return methods;
