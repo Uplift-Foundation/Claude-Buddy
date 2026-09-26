@@ -32,9 +32,34 @@ namespace ClaudeBuddy.Tests;
 [Collection("Settings")]
 public class NewChatWindowScreenshots : IDisposable
 {
-    public NewChatWindowScreenshots() => ClearSeams();
+    public NewChatWindowScreenshots()
+    {
+        FreshSettings();
+        ClearSeams();
+    }
 
     public void Dispose() => ClearSeams();
+
+    // CB-201's own review flag: AccountPickerWithTwoProfiles used to point
+    // CLAUDE_BUDDY_SETTINGS_DIR at its own fresh directory but never put it
+    // back, and ClearSeams only resets the delegate seams, not the settings
+    // dir or ClaudeCodeProfileDirs itself. xUnit constructs a fresh instance
+    // per test method but does not guarantee method order, so whichever
+    // scenario ran right after AccountPickerWithTwoProfiles inherited its two
+    // stray profiles — DefaultState drew the Account picker on the macOS CI
+    // leg for exactly this reason, on a capture that is supposed to look
+    // identical to CB-168's dialog. A fresh settings dir per scenario, the
+    // same pattern NewChatWindowTests' own FreshSettings() already uses,
+    // means every scenario starts from an empty profile list regardless of
+    // what ran before it — order stops being able to matter at all, rather
+    // than merely not mattering in whatever order happened to be tried.
+    private static void FreshSettings()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "cb-newchat-screenshots-" + Guid.NewGuid());
+        Directory.CreateDirectory(dir);
+        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
+        ClaudeBuddySettings.ReloadForTests();
+    }
 
     private static NewChatWindow NewWindow(
         NewChatCli? prefillCli = null, string? prefillCwd = null, string? prefillAgentId = null)
@@ -148,10 +173,9 @@ public class NewChatWindowScreenshots : IDisposable
         NewChatWindow.OpenClawAvailabilityForTests = () => OpenClawNewChatAvailability.NoGateway;
         NewChatWindow.CurrentStatusesForTests = () => new Dictionary<string, SessionStatus>();
 
-        var dir = Path.Combine(Path.GetTempPath(), "cb-newchat-screenshot-" + Guid.NewGuid());
-        Directory.CreateDirectory(dir);
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
-        ClaudeBuddySettings.ReloadForTests();
+        // The constructor's own FreshSettings() already gave this instance an
+        // isolated, empty settings dir — no extra dir setup needed here, only
+        // the two profiles this scenario is actually about.
         ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-work");
         ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-board");
 
