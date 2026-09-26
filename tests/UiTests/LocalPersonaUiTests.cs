@@ -415,6 +415,52 @@ public class LocalPersonaUiTests : IDisposable
         Assert.Equal(orb.OrbColor, ((ISolidColorBrush)panel.Avatar.Fill!).Color);
     }
 
+    // --- CB-191: a team member's own persona resolves as a unit ------------
+
+    // Before this, a member profile naming itself and no picture still won
+    // the avatar race against the project's own CLAUDE.md/PERSONA.MD a few
+    // candidates later — the orb kept its own letters (an agent's name
+    // already beats a persona's in OrbLabel's own precedence, see
+    // APersonaBeatsTheTitleAndAnAgentNameBeatsThePersona above), but its
+    // *face* was borrowed from the project. This resolves through the real
+    // LocalPersona.Resolve, exactly as the screenshot capture does, so it
+    // fails if the reading half regresses and not only if the drawing half
+    // does.
+    [AvaloniaFact]
+    public void ATeamMembersOrbKeepsItsOwnLettersRatherThanTheProjectsFace()
+    {
+        ClaudeBuddySettings.TwoLetterGlyphs = true;
+
+        var project = Path.Combine(Path.GetTempPath(), "cb-persona-member-ui-" + Guid.NewGuid());
+        var claudeDir = Path.Combine(project, ".claude");
+        var memberDir = Path.Combine(project, ".profiles-assets", "ines-harrow");
+        Directory.CreateDirectory(claudeDir);
+        Directory.CreateDirectory(memberDir);
+        _dirsToClean.Add(project);
+
+        File.WriteAllBytes(Path.Combine(claudeDir, "cto.png"), Portrait());
+        File.WriteAllLines(Path.Combine(claudeDir, "PERSONA.MD"),
+            new[] { "## Attributes", "Name Jennifer", "Profile Photo cto.png" });
+        File.WriteAllText(Path.Combine(project, "CLAUDE.md"), "@.claude/PERSONA.MD\n");
+        File.WriteAllLines(Path.Combine(memberDir, "ines-harrow.md"),
+            new[] { "## Attributes", "Name Ines Harrow" });
+
+        var persona = LocalPersona.Resolve(
+            project, SessionSource.ClaudeCode, Array.Empty<string>(), "ines-harrow");
+        Assert.Equal("Ines Harrow", persona.Name);
+        Assert.Null(persona.AvatarPath);
+
+        var sessionId = PublishPersona(persona);
+        var orb = NewOrb(sessionId);
+
+        orb.UpdateFrom(Local(agent: "ines-harrow"));
+
+        Assert.True(
+            orb.Glyph.IsVisible, "a member with no picture of its own must not wear the project's face");
+        Assert.IsNotType<ImageBrush>(orb.Orb.Fill);
+        Assert.Equal("Ih", orb.GlyphText);
+    }
+
     // --- the whole way through ---
 
     // A status file on disk, a CLAUDE.md beside the directory it names, one
