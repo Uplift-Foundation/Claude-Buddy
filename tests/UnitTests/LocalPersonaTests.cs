@@ -909,14 +909,44 @@ public class LocalPersonaTests : IDisposable
         var claudeDir = Dir("tree", "project", ".claude");
         WriteProjectPersona(project, claudeDir);
 
-        // Front matter rather than the colon-less "## Attributes" shape used
-        // elsewhere in this file: RawAvatar — the field this fix reads — is
-        // only set by the labelled arms (front matter, a bullet, a bold
-        // field, a table row), which is what lets PersonaFiles later tell
-        // "named and unreadable" apart from "never named". The section arm's
-        // avatar case does not fill it, so it would not exercise this path.
+        // Front matter — RawAvatar, the field this fix reads, is set by
+        // every labelled arm (front matter, a bullet, a bold field, a table
+        // row, and the colon-less "## Attributes" form too, since
+        // PersonaMarkdown.Parse's Assign now sets it for that arm alongside
+        // the prose one — see PersonaMarkdown.cs). The sibling case right
+        // below writes the colon-less shape instead, so both are pinned
+        // rather than just the one this file already reached for elsewhere.
         var memberDir = Dir("tree", "project", ".profiles-assets", "ines-harrow");
         Write(memberDir, "ines-harrow.md", "---", "image: \"typo.png\"", "---");
+
+        var persona = LocalPersona.Resolve(project, SessionSource.ClaudeCode, Array.Empty<string>(), "ines-harrow");
+
+        Assert.NotEqual("Jennifer", persona.Name);
+        Assert.Null(persona.Name);
+        Assert.Null(persona.AvatarPath);
+        Assert.Null(persona.AvatarSource);
+    }
+
+    // The colon-less sibling of the test above, and the one that actually
+    // matters most: "## Attributes" / "Profile Photo <file>" is this
+    // repository's own PERSONA.MD convention and, per PersonaMarkdown.cs's
+    // own header comment, "the form people actually reach for when they are
+    // *listing* attributes rather than addressing Claude" — so a member
+    // profile is more likely to be written this way than in front matter.
+    // Before PersonaMarkdown.Parse's Assign started setting RawAvatar for
+    // this arm too, this exact fixture fell through to the project's
+    // CLAUDE.md and put Jennifer's face on the member's orb, identical to
+    // the bug this whole ticket exists to fix — just reached through a
+    // grammar arm the fix's first pass never touched.
+    [Fact]
+    public void AMemberNamingAnUnreadablePictureInTheColonLessFormStillExcludesTheProjectsFace()
+    {
+        var project = Dir("tree", "project");
+        var claudeDir = Dir("tree", "project", ".claude");
+        WriteProjectPersona(project, claudeDir);
+
+        var memberDir = Dir("tree", "project", ".profiles-assets", "ines-harrow");
+        Write(memberDir, "ines-harrow.md", "## Attributes", "Profile Photo typo.png");
 
         var persona = LocalPersona.Resolve(project, SessionSource.ClaudeCode, Array.Empty<string>(), "ines-harrow");
 
