@@ -32,14 +32,7 @@ namespace ClaudeBuddy
         public static void Start()
         {
             _hook = CreateHook();
-            if (_hook is null) return;
-
-            foreach (var binding in HotkeyActions.Plan())
-            {
-                if (binding.Combo is not { } combo) continue;
-                var action = binding.Action;
-                _hook.Register(action, combo, () => HotkeyActions.Dispatch(action));
-            }
+            HotkeyActions.RegisterAll(_hook);
         }
 
         public static void Stop() => _hook?.Dispose();
@@ -89,6 +82,44 @@ namespace ClaudeBuddy
             return plan;
         }
 
+        // Hands every planned registration to a hook, and writes one
+        // hotkeys.log line for each the OS refused. Without that line a chord
+        // another app already holds is a dead hotkey with no trace anywhere,
+        // which from outside is indistinguishable from the parser defects
+        // CB-197 fixed. Takes the hook as a parameter so a test can pass one
+        // that refuses; GlobalHotkeys.Start passes the real one and is the
+        // only excluded part.
+        //
+        // A hook that throws is logged the same way and the loop carries on:
+        // one action's registration failing must not cost the others, and
+        // this runs during app startup, where an escaping exception would
+        // take the whole app down over a hotkey.
+        internal static void RegisterAll(IGlobalHotkeyHook? hook)
+        {
+            if (hook is null) return;
+
+            foreach (var binding in Plan())
+            {
+                if (binding.Combo is not { } combo) continue;
+                var action = binding.Action;
+
+                bool registered;
+                try
+                {
+                    registered = hook.Register(action, combo, () => Dispatch(action));
+                }
+                catch
+                {
+                    registered = false;
+                }
+
+                if (!registered) HotkeyLog.Record(RefusedNote(action, combo));
+            }
+        }
+
+        internal static string RefusedNote(HotkeyAction action, HotkeyCombo combo) =>
+            $"{action}: {HotkeyRegistry.Format(combo)} could not be registered with the operating system — another app may already hold it.";
+
         // Posted, never run inline. Neither hook promises the UI thread in so
         // many words: Carbon's application event target and the Windows
         // hook's hidden window both happen to be serviced by the thread
@@ -106,12 +137,17 @@ namespace ClaudeBuddy
     }
 
     // What GlobalHotkeys needs from a platform: register one combo against
-    // one callback, and tear everything down. Small on purpose — the two
+    // one callback, saying whether the OS accepted it, and tear everything
+    // down. Small on purpose — the two
     // implementations differ completely in how they get a callback to fire
     // (Carbon's application event target vs. a hidden window's WndProc), and
     // this interface is only the sliver both can honestly implement.
     internal interface IGlobalHotkeyHook : IDisposable
     {
-        void Register(HotkeyAction action, HotkeyCombo combo, Action callback);
+        // False when the chord could not be registered: a key the hook has no
+        // code for, or the OS refusing it — typically because another app
+        // already holds it. Never throws by contract, though RegisterAll
+        // guards against one that does.
+        bool Register(HotkeyAction action, HotkeyCombo combo, Action callback);
     }
 }

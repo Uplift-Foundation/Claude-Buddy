@@ -255,4 +255,134 @@ public class HotkeyActionsTests : IDisposable
         Assert.All(plan, b => Assert.NotNull(b.Combo));
         Assert.False(File.Exists(HotkeyLog.Path_));
     }
+
+    // RegisterAll against a fake hook: what reaches the OS, and the
+    // hotkeys.log line for each registration the OS refused.
+    private sealed class FakeHook : IGlobalHotkeyHook
+    {
+        private readonly Func<HotkeyAction, bool> _accepts;
+        private readonly bool _throws;
+
+        public FakeHook(Func<HotkeyAction, bool>? accepts = null, bool throws = false)
+        {
+            _accepts = accepts ?? (_ => true);
+            _throws = throws;
+        }
+
+        public List<(HotkeyAction Action, HotkeyCombo Combo, Action Callback)> Calls { get; } = new();
+
+        public bool Register(HotkeyAction action, HotkeyCombo combo, Action callback)
+        {
+            Calls.Add((action, combo, callback));
+            if (_throws) throw new InvalidOperationException("a hook that breaks its contract");
+            return _accepts(action);
+        }
+
+        public void Dispose() { }
+    }
+
+    private static string[] LogLines() =>
+        File.Exists(HotkeyLog.Path_) ? File.ReadAllLines(HotkeyLog.Path_) : Array.Empty<string>();
+
+    private static IDisposable FreshLog()
+    {
+        var scope = CrashLog.ScopeForTests(Path.Combine(Path.GetTempPath(), "cb-hotkey-register-log-" + Guid.NewGuid()));
+        HotkeyLog.ResetForTests();
+        return scope;
+    }
+
+    [AvaloniaFact]
+    public void RegisterAll_AllAccepted_RegistersBothDefaultsAndLogsNothing()
+    {
+        using var log = FreshLog();
+        var hook = new FakeHook();
+
+        HotkeyActions.RegisterAll(hook);
+
+        Assert.Equal(new[] { "Ctrl+Alt+H", "Ctrl+Alt+N" },
+            hook.Calls.Select(c => HotkeyRegistry.Format(c.Combo)).ToArray());
+        Assert.Empty(LogLines());
+    }
+
+    [AvaloniaFact]
+    public void RegisterAll_TheCallbackItHandsTheHookDispatchesItsAction()
+    {
+        using var log = FreshLog();
+        var hook = new FakeHook();
+        HotkeyActions.RegisterAll(hook);
+
+        // What a real press does: the hook invokes the callback it was given.
+        hook.Calls.Single(c => c.Action == HotkeyAction.OpenNewChat).Callback();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Single(_presented);
+    }
+
+    [AvaloniaFact]
+    public void RegisterAll_NewChatRefused_LogsOneLineNamingItAndTheToggleStillRegisters()
+    {
+        using var log = FreshLog();
+        var hook = new FakeHook(accepts: a => a != HotkeyAction.OpenNewChat);
+
+        HotkeyActions.RegisterAll(hook);
+
+        var line = Assert.Single(LogLines());
+        Assert.Contains("OpenNewChat", line);
+        Assert.Contains("Ctrl+Alt+N", line);
+        Assert.Contains(hook.Calls, c => c.Action == HotkeyAction.ToggleOrbsVisible
+                                         && HotkeyRegistry.Format(c.Combo) == "Ctrl+Alt+H");
+    }
+
+    [AvaloniaFact]
+    public void RegisterAll_BothRefused_LogsOneLineEach_AndASecondStartAddsNone()
+    {
+        using var log = FreshLog();
+
+        HotkeyActions.RegisterAll(new FakeHook(accepts: _ => false));
+        HotkeyActions.RegisterAll(new FakeHook(accepts: _ => false));
+
+        var lines = LogLines();
+        Assert.Equal(2, lines.Length);
+        Assert.Contains(lines, l => l.Contains("ToggleOrbsVisible") && l.Contains("Ctrl+Alt+H"));
+        Assert.Contains(lines, l => l.Contains("OpenNewChat") && l.Contains("Ctrl+Alt+N"));
+    }
+
+    [AvaloniaFact]
+    public void RegisterAll_AHookThatThrows_IsLoggedAsRefusedAndTheLoopCarriesOn()
+    {
+        using var log = FreshLog();
+        var hook = new FakeHook(throws: true);
+
+        HotkeyActions.RegisterAll(hook);   // no exception escapes
+
+        Assert.Equal(2, hook.Calls.Count);
+        Assert.Equal(2, LogLines().Length);
+    }
+
+    [AvaloniaFact]
+    public void RegisterAll_ACollisionNoteAndARefusal_WriteExactlyTwoLines_AndTheUnplannedActionIsNeverRegistered()
+    {
+        using var log = FreshLog();
+        ClaudeBuddySettings.ToggleOrbsHotkey = "Ctrl+Alt+N";
+        var hook = new FakeHook(accepts: _ => false);
+
+        HotkeyActions.RegisterAll(hook);
+
+        Assert.DoesNotContain(hook.Calls, c => c.Action == HotkeyAction.OpenNewChat);
+        var lines = LogLines();
+        Assert.Equal(2, lines.Length);
+        Assert.Contains(lines, l => l.Contains("OpenNewChat: no hotkey registered"));
+        Assert.Contains(lines, l => l.Contains(HotkeyActions.RefusedNote(HotkeyAction.ToggleOrbsVisible,
+            HotkeyRegistry.Default(HotkeyAction.OpenNewChat))));
+    }
+
+    [AvaloniaFact]
+    public void RegisterAll_WithNoHook_DoesNothing()
+    {
+        using var log = FreshLog();
+
+        HotkeyActions.RegisterAll(null);
+
+        Assert.Empty(LogLines());
+    }
 }
