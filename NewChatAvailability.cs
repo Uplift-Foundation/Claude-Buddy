@@ -93,7 +93,14 @@ namespace ClaudeBuddy
     // account) is a test rather than a real settings file and a real $HOME.
     internal static class NewChatAccounts
     {
-        internal const string DefaultLabel = "Default (~/.claude)";
+        // Not a compile-time const: the separator has to be the platform's
+        // own, the same reason every extra's label is built off
+        // Path.DirectorySeparatorChar rather than a hardcoded "/" — QA
+        // (CB-201) caught the Default row still reading "~/.claude" on
+        // Windows CI while every real extra had already picked up "~\..."
+        // from ChatHeaderMeta.HomeRelative, which two rows in the same list
+        // disagreeing about their own separator is not a cosmetic gap.
+        internal static readonly string DefaultLabel = "Default (~" + Path.DirectorySeparatorChar + ".claude)";
 
         // One row of the combo box. ProfileDir is exactly what Launch should
         // be handed — null for Default, so a caller never needs its own

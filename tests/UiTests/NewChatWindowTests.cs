@@ -47,6 +47,13 @@ public class NewChatWindowTests : IDisposable
     private static NewChatOption Disabled(NewChatCli cli, string reason) =>
         new(cli, Enabled: false, Reason: reason, Warning: null);
 
+    // The separator NewChatAccounts.Choices' labels actually carry on this
+    // platform (via ChatHeaderMeta.HomeRelative) — CI's Windows leg caught a
+    // hardcoded "~/" here expecting "~\.claude-board" instead, the same
+    // "passes on the machine it was written on" shape NewChatAccountsTests'
+    // own Tilde() helper exists to avoid.
+    private static string Tilde(string rest) => "~" + Path.DirectorySeparatorChar + rest;
+
     private static NewChatWindow NewWindow(
         NewChatCli? prefillCli = null, string? prefillCwd = null, string? prefillAgentId = null)
     {
@@ -296,7 +303,7 @@ public class NewChatWindowTests : IDisposable
 
         Assert.True(window.AccountSection.IsVisible);
         var items = window.AccountCombo.ItemsSource!.Cast<NewChatAccounts.Choice>().ToList();
-        Assert.Equal(new[] { NewChatAccounts.DefaultLabel, "~/.claude-board" }, items.Select(i => i.Label));
+        Assert.Equal(new[] { NewChatAccounts.DefaultLabel, Tilde(".claude-board") }, items.Select(i => i.Label));
     }
 
     [AvaloniaFact]
