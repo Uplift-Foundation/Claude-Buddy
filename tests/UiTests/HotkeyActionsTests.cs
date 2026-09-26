@@ -1,0 +1,257 @@
+using Avalonia.Controls;
+using Avalonia.Headless.XUnit;
+using Avalonia.Threading;
+using Xunit;
+
+namespace ClaudeBuddy.Tests;
+
+// What a global hotkey does once the OS has delivered it — everything after
+// the native hook calls back, which is the whole feature except the key
+// press itself. No key is ever pressed here and nothing is synthesized:
+// HotkeyActions.Dispatch is called directly, which is exactly what both
+// native hooks do on a real press (see GlobalHotkeys.Start).
+//
+// NewChatWindow.Toggle's two OS-facing halves are replaced with
+// PresentForTests/BringForwardForTests, so no window is ever Show()n —
+// showing one under the headless lifetime is what hung the whole UiTests
+// suite on the collapsible-settings branch — and none is ever Close()d,
+// for the font-cache reason NewChatWindowTests' header gives. Every test
+// clears the singleton instead, through OpenForTests.
+//
+// [Collection("Settings")]: the window reads ClaudeBuddySettings while being
+// built, and OverrideFor reads the two hotkey settings directly.
+[Collection("Settings")]
+public class HotkeyActionsTests : IDisposable
+{
+    private readonly List<NewChatWindow> _presented = new();
+    private readonly List<NewChatWindow> _broughtForward = new();
+    private readonly List<bool> _onUiThread = new();
+
+    public HotkeyActionsTests()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "cb-hotkey-actions-" + Guid.NewGuid());
+        Directory.CreateDirectory(dir);
+        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
+        ClaudeBuddySettings.ReloadForTests();
+
+        // No real CLI probe and no real session scan behind the window.
+        NewChatAvailability.CurrentForTests = () => new[]
+        {
+            new NewChatOption(NewChatCli.ClaudeCode, Enabled: true, Reason: null, Warning: null)
+        };
+        NewChatWindow.CurrentStatusesForTests = () => new Dictionary<string, SessionStatus>();
+
+        NewChatWindow.OpenForTests = null;
+        NewChatWindow.PresentForTests = w =>
+        {
+            _onUiThread.Add(Dispatcher.UIThread.CheckAccess());
+            _presented.Add(w);
+        };
+        NewChatWindow.BringForwardForTests = w =>
+        {
+            _onUiThread.Add(Dispatcher.UIThread.CheckAccess());
+            _broughtForward.Add(w);
+        };
+    }
+
+    public void Dispose()
+    {
+        NewChatWindow.OpenForTests = null;
+        NewChatWindow.PresentForTests = null;
+        NewChatWindow.BringForwardForTests = null;
+        NewChatWindow.CurrentStatusesForTests = null;
+        NewChatAvailability.CurrentForTests = null;
+    }
+
+    [AvaloniaFact]
+    public void OpenNewChat_WithNoWindowOpen_OpensOne()
+    {
+        HotkeyActions.Dispatch(HotkeyAction.OpenNewChat);
+
+        // Posted, not run inside the call — the native callback returns
+        // before any window work happens.
+        Assert.Null(NewChatWindow.OpenForTests);
+        Assert.Empty(_presented);
+
+        Dispatcher.UIThread.RunJobs();
+
+        var opened = Assert.Single(_presented);
+        Assert.Same(opened, NewChatWindow.OpenForTests);
+        Assert.Empty(_broughtForward);
+    }
+
+    [AvaloniaFact]
+    public void OpenNewChat_WithAWindowOpen_FocusesItAndNeverOpensASecond()
+    {
+        HotkeyActions.Dispatch(HotkeyAction.OpenNewChat);
+        Dispatcher.UIThread.RunJobs();
+        var first = Assert.Single(_presented);
+
+        // Pressed twice more: still the one window, brought forward each
+        // time, and never closed — a toggle that closed on the second press
+        // would leave OpenForTests null here.
+        HotkeyActions.Dispatch(HotkeyAction.OpenNewChat);
+        HotkeyActions.Dispatch(HotkeyAction.OpenNewChat);
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Single(_presented);
+        Assert.Equal(new[] { first, first }, _broughtForward);
+        Assert.Same(first, NewChatWindow.OpenForTests);
+    }
+
+    [AvaloniaFact]
+    public void OpenNewChat_AfterTheWindowCloses_OpensAFreshOne()
+    {
+        HotkeyActions.Dispatch(HotkeyAction.OpenNewChat);
+        Dispatcher.UIThread.RunJobs();
+        var first = Assert.Single(_presented);
+
+        // A simulation, named as one: the real Closed handler (OnClosed) is
+        // excluded from coverage and never runs here, because Close() is the
+        // call NewChatWindowTests' header says a headless run must not make.
+        // Clearing the singleton is the one thing it does that Toggle reads.
+        NewChatWindow.OpenForTests = null;
+
+        HotkeyActions.Dispatch(HotkeyAction.OpenNewChat);
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal(2, _presented.Count);
+        Assert.NotSame(first, _presented[1]);
+        Assert.Same(_presented[1], NewChatWindow.OpenForTests);
+        Assert.Empty(_broughtForward);
+    }
+
+    [AvaloniaFact]
+    public void OpenNewChat_WithTheWindowMinimised_RestoresItBeforeBringingItForward()
+    {
+        HotkeyActions.Dispatch(HotkeyAction.OpenNewChat);
+        Dispatcher.UIThread.RunJobs();
+        var window = NewChatWindow.OpenForTests!;
+        window.WindowState = WindowState.Minimized;
+
+        WindowState? stateWhenBroughtForward = null;
+        NewChatWindow.BringForwardForTests = w => stateWhenBroughtForward = w.WindowState;
+
+        HotkeyActions.Dispatch(HotkeyAction.OpenNewChat);
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal(WindowState.Normal, stateWhenBroughtForward);
+        Assert.Equal(WindowState.Normal, window.WindowState);
+    }
+
+    [AvaloniaFact]
+    public void OpenNewChat_FromABackgroundThread_RunsOnTheUiThread()
+    {
+        // The case Post exists for: a hook that ever calls back off the UI
+        // thread. Dispatch itself runs on a pool thread here; the window work
+        // must not.
+        Task.Run(() => HotkeyActions.Dispatch(HotkeyAction.OpenNewChat)).Wait();
+        Assert.Empty(_presented);
+
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Single(_presented);
+        Assert.Equal(new[] { true }, _onUiThread);
+    }
+
+    [AvaloniaFact]
+    public void TheTrayItemAndTheHotkeyShareOneWindow()
+    {
+        // The tray's "New chat…" handler and the hotkey are the same method,
+        // so whichever is used first, the other focuses rather than opening.
+        TrayController.OpenNewChat();
+        HotkeyActions.Dispatch(HotkeyAction.OpenNewChat);
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Single(_presented);
+        Assert.Single(_broughtForward);
+    }
+
+    [AvaloniaFact]
+    public void ToggleOrbsVisible_StillDispatchesWithNoSessionManager()
+    {
+        // The existing action through the new dispatch path. SessionManager
+        // is null under the headless lifetime, so the toggle is a no-op —
+        // what this proves is that routing it through Post neither throws
+        // nor opens New chat by mistake.
+        HotkeyActions.Dispatch(HotkeyAction.ToggleOrbsVisible);
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Empty(_presented);
+        Assert.Null(NewChatWindow.OpenForTests);
+    }
+
+    [AvaloniaFact]
+    public void HandlerFor_MapsEachActionToItsTrayMethod()
+    {
+        Assert.Equal(nameof(TrayController.ToggleOrbsVisible),
+            HotkeyActions.HandlerFor(HotkeyAction.ToggleOrbsVisible).Method.Name);
+        Assert.Equal(nameof(TrayController.OpenNewChat),
+            HotkeyActions.HandlerFor(HotkeyAction.OpenNewChat).Method.Name);
+    }
+
+    [AvaloniaFact]
+    public void OverrideFor_ReadsEachActionsOwnSetting()
+    {
+        Assert.Null(HotkeyActions.OverrideFor(HotkeyAction.OpenNewChat));
+
+        ClaudeBuddySettings.ToggleOrbsHotkey = "Ctrl+Shift+H";
+        ClaudeBuddySettings.NewChatHotkey = "Ctrl+Shift+N";
+
+        Assert.Equal("Ctrl+Shift+H", HotkeyActions.OverrideFor(HotkeyAction.ToggleOrbsVisible));
+        Assert.Equal("Ctrl+Shift+N", HotkeyActions.OverrideFor(HotkeyAction.OpenNewChat));
+
+        // What GlobalHotkeys.Start registers, end to end short of the OS.
+        Assert.Equal("Ctrl+Shift+N", HotkeyRegistry.Format(
+            HotkeyRegistry.Resolve(HotkeyAction.OpenNewChat, HotkeyActions.OverrideFor(HotkeyAction.OpenNewChat))));
+    }
+
+    [AvaloniaFact]
+    public void AnUnknownActionThrowsRatherThanDoingNothing()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => HotkeyActions.HandlerFor((HotkeyAction)999));
+        Assert.Throws<ArgumentOutOfRangeException>(() => HotkeyActions.OverrideFor((HotkeyAction)999));
+    }
+
+    // CB-196 AC6 through the live settings: what GlobalHotkeys.Start will
+    // register, and the one hotkeys.log line a lost collision leaves.
+    [AvaloniaFact]
+    public void Plan_NewChatOnTheTogglesChord_FallsBackAndLogsOneLine()
+    {
+        var logDir = Path.Combine(Path.GetTempPath(), "cb-hotkey-plan-log-" + Guid.NewGuid());
+        using var scope = CrashLog.ScopeForTests(logDir);
+        HotkeyLog.ResetForTests();
+        try
+        {
+            ClaudeBuddySettings.NewChatHotkey = "Alt+Ctrl+H";
+
+            // Twice, as a relaunch-free re-plan would: still one line.
+            HotkeyActions.Plan();
+            var plan = HotkeyActions.Plan();
+
+            Assert.Equal("Ctrl+Alt+H", HotkeyRegistry.Format(
+                plan.Single(b => b.Action == HotkeyAction.ToggleOrbsVisible).Combo!.Value));
+            Assert.Equal("Ctrl+Alt+N", HotkeyRegistry.Format(
+                plan.Single(b => b.Action == HotkeyAction.OpenNewChat).Combo!.Value));
+            var line = Assert.Single(File.ReadAllLines(HotkeyLog.Path_));
+            Assert.Contains("OpenNewChat: Ctrl+Alt+H is already ToggleOrbsVisible's hotkey", line);
+        }
+        finally
+        {
+            HotkeyLog.ResetForTests();
+        }
+    }
+
+    [AvaloniaFact]
+    public void Plan_WithNoCollision_WritesNoLog()
+    {
+        var logDir = Path.Combine(Path.GetTempPath(), "cb-hotkey-plan-log-" + Guid.NewGuid());
+        using var scope = CrashLog.ScopeForTests(logDir);
+        HotkeyLog.ResetForTests();
+
+        var plan = HotkeyActions.Plan();
+
+        Assert.All(plan, b => Assert.NotNull(b.Combo));
+        Assert.False(File.Exists(HotkeyLog.Path_));
+    }
+}

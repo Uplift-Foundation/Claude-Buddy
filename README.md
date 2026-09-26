@@ -1021,29 +1021,24 @@ OpenClaw shows up disabled, with a reason stated directly under the row rather t
 
 ## Global hotkeys
 
-**Ctrl+Alt+H** hides or shows every orb, from anywhere — the same toggle as
-the tray menu's "Show orbs" checkbox, reachable without finding the menu bar
-icon first. It works whether or not Claude Buddy has focus: macOS registers it
-through Carbon's `RegisterEventHotKey`, which asks the window server for one
-exact key combination rather than a feed of every keystroke, so — unlike an
-`NSEvent` global monitor or a `CGEventTap` — it needs no Accessibility or
-Input Monitoring permission. Windows registers the same combination with
-`RegisterHotKey` against a hidden window created for the purpose.
+Two system-wide hotkeys, both working whether or not Claude Buddy has focus:
 
-Override the combination in `settings.json`:
+| Default | Does | Override key |
+| --- | --- | --- |
+| **Ctrl+Alt+H** | hides or shows every orb — the tray menu's "Show orbs" checkbox | `toggleOrbsHotkey` |
+| **Ctrl+Alt+N** | opens **New chat**, or brings the one already open to the front — the tray menu's "New chat…" | `newChatHotkey` |
+
+Each is reachable without finding the menu bar icon first. **Ctrl+Alt+N never opens a second New chat window** and never closes the one that's open: pressed again, it un-minimises the dialog if needed and brings it forward, wherever it was opened from.
+
+macOS registers them through Carbon's `RegisterEventHotKey`, which asks the window server for one exact key combination rather than a feed of every keystroke, so — unlike an `NSEvent` global monitor or a `CGEventTap` — it needs no Accessibility or Input Monitoring permission. Windows registers the same combinations with `RegisterHotKey` against a hidden window created for the purpose.
+
+Override either combination in `settings.json`:
 
 ```json
-{ "toggleOrbsHotkey": "Ctrl+Shift+H" }
+{ "toggleOrbsHotkey": "Ctrl+Shift+H", "newChatHotkey": "Ctrl+Shift+N" }
 ```
 
-Modifiers are `Ctrl`/`Control`, `Alt`/`Option`, `Shift`, and `Cmd`/`Command`/
-`Win`/`Windows`/`Super`/`Meta` (all four spellings mean the same physical key,
-whichever platform you're on), joined with `+` and ending in a letter or digit
-key. An unparseable value falls back to the built-in default rather than
-leaving the hotkey unregistered, so a typo costs you the override, not the
-feature. There is no settings-window control for this yet — only the one
-hotkey exists so far, and this file's whole point is that the registry
-(`HotkeyRegistry.cs`) has room for more without needing one added first.
+Modifiers are `Ctrl`/`Control`, `Alt`/`Option`, `Shift`, and `Cmd`/`Command`/`Win`/`Windows`/`Super`/`Meta` (all four spellings mean the same physical key, whichever platform you're on), joined with `+` and ending in one key: a letter, a single digit (`Ctrl+Alt+5` is the 5 key), or a key name such as `F5` or `Space`. Numbers, commas and modifier keys used as the key (`Ctrl+Alt+LeftCtrl`) are rejected. An unparseable value falls back to that hotkey's built-in default rather than leaving it unregistered, so a typo costs you the override, not the feature. If `newChatHotkey` resolves to the orb toggle's combination, however it's spelled, the toggle keeps it and New chat falls back to Ctrl+Alt+N; if the toggle has itself been moved to Ctrl+Alt+N, New chat registers no hotkey at all rather than registering one combination twice. Either way a line saying so goes into `hotkeys.log`, beside `crash.log` in the app's log directory. There is no settings-window control for either yet — `settings.json` is the only place to change them.
 
 ## Personas from CLAUDE.md
 

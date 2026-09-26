@@ -92,6 +92,226 @@ public class HotkeyRegistryTests
         Assert.Equal(expected, combo);
     }
 
+    // The new-chat hotkey: Ctrl+Alt+N by default, overridable on the same
+    // terms as the toggle, and never on the toggle's chord.
+    [Fact]
+    public void Default_OpenNewChat_IsControlAltN()
+    {
+        var combo = HotkeyRegistry.Default(HotkeyAction.OpenNewChat);
+
+        Assert.Equal(KeyModifiers.Control | KeyModifiers.Alt, combo.Modifiers);
+        Assert.Equal(Key.N, combo.Key);
+        Assert.Equal("Ctrl+Alt+N", HotkeyRegistry.Format(combo));
+    }
+
+    [Fact]
+    public void Resolve_OpenNewChat_UsesTheOverrideWhenItParses()
+    {
+        var combo = HotkeyRegistry.Resolve(HotkeyAction.OpenNewChat, "Cmd+Shift+N");
+
+        Assert.Equal(KeyModifiers.Meta | KeyModifiers.Shift, combo.Modifiers);
+        Assert.Equal(Key.N, combo.Key);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("N")]              // a bare key is not a global hotkey
+    [InlineData("Ctrl+Alt+N+M")]   // two keys
+    public void Resolve_OpenNewChat_FallsBackToItsOwnDefault(string? overrideSpec)
+    {
+        // Its *own* default, not the toggle's — the fallback arm is per action.
+        var combo = HotkeyRegistry.Resolve(HotkeyAction.OpenNewChat, overrideSpec);
+
+        Assert.Equal(HotkeyRegistry.Default(HotkeyAction.OpenNewChat), combo);
+        Assert.NotEqual(HotkeyRegistry.Default(HotkeyAction.ToggleOrbsVisible), combo);
+    }
+
+    [Fact]
+    public void TryParse_RoundTripsTheNewChatDefault()
+    {
+        Assert.True(HotkeyRegistry.TryParse("ctrl+alt+n", out var combo));
+        Assert.Equal(HotkeyRegistry.Default(HotkeyAction.OpenNewChat), combo);
+    }
+
+    // Two actions on one chord would register twice with the OS: macOS keeps
+    // the first and ignores the second, Windows' RegisterHotKey refuses it
+    // outright, and on both the second action silently never fires. Every
+    // action, not just the pair that exists today, so the next one added is
+    // checked without anyone remembering to extend this.
+    [Fact]
+    public void EveryActionHasADefaultAndNoTwoDefaultsCollide()
+    {
+        var defaults = Enum.GetValues<HotkeyAction>().Select(HotkeyRegistry.Default).ToList();
+
+        Assert.Equal(defaults.Count, defaults.Distinct().Count());
+        Assert.Contains(HotkeyRegistry.Default(HotkeyAction.OpenNewChat), defaults);
+        Assert.NotEqual(
+            HotkeyRegistry.Default(HotkeyAction.ToggleOrbsVisible),
+            HotkeyRegistry.Default(HotkeyAction.OpenNewChat));
+    }
+
+    // CB-197: specs Enum.TryParse<Key> used to accept that name no key a
+    // person can press. Every one was a *successful* parse, so Resolve never
+    // fell back — for either action, since both share TryParse.
+    [Theory]
+    [InlineData("Ctrl+999")]             // undefined underlying value
+    [InlineData("Ctrl+-1")]              // signed number
+    [InlineData("Ctrl+Alt+10")]          // two digits is a number, not a key
+    [InlineData("Ctrl+Alt+05")]
+    [InlineData("Ctrl+A,B")]             // flags OR — used to bind B
+    [InlineData("Ctrl+Alt+LeftCtrl")]    // modifier keys as the key
+    [InlineData("Ctrl+Alt+RightCtrl")]
+    [InlineData("Ctrl+Alt+LeftAlt")]
+    [InlineData("Ctrl+Alt+RightAlt")]
+    [InlineData("Ctrl+Alt+LeftShift")]
+    [InlineData("Ctrl+Alt+RightShift")]
+    [InlineData("Ctrl+Alt+LWin")]
+    [InlineData("Ctrl+Alt+RWin")]
+    [InlineData("Ctrl+Alt+None")]        // "no key" by name
+    [InlineData("Ctrl+Alt+N!")]          // junk in a name
+    [InlineData("Ctrl+Alt+_N")]
+    public void TryParse_RejectsWhatNamesNoPressableKey_AndBothActionsFallBack(string spec)
+    {
+        Assert.False(HotkeyRegistry.TryParse(spec, out _));
+
+        foreach (var action in Enum.GetValues<HotkeyAction>())
+        {
+            Assert.Equal(HotkeyRegistry.Default(action), HotkeyRegistry.Resolve(action, spec));
+        }
+    }
+
+    // A single digit is the digit key — never its ordinal ("5" was Key.Clear,
+    // "0" was Key.None) — for both actions.
+    [Theory]
+    [InlineData("Ctrl+Alt+0", Key.D0)]
+    [InlineData("Ctrl+Alt+1", Key.D1)]
+    [InlineData("Ctrl+Alt+5", Key.D5)]
+    [InlineData("Ctrl+Alt+9", Key.D9)]
+    [InlineData("Ctrl+Alt+D5", Key.D5)]  // the enum's own name still works
+    public void TryParse_ASingleDigitIsTheDigitKey(string spec, Key expected)
+    {
+        Assert.True(HotkeyRegistry.TryParse(spec, out var combo));
+        Assert.Equal(expected, combo.Key);
+        Assert.Equal(KeyModifiers.Control | KeyModifiers.Alt, combo.Modifiers);
+
+        foreach (var action in Enum.GetValues<HotkeyAction>())
+        {
+            Assert.Equal(expected, HotkeyRegistry.Resolve(action, spec).Key);
+        }
+    }
+
+    [Theory]
+    [InlineData("Ctrl+Alt+F5", Key.F5)]  // letters-then-digits names are still names
+    [InlineData("Ctrl+Alt+Space", Key.Space)]
+    public void TryParse_StillAcceptsNamedKeysThatContainDigits(string spec, Key expected)
+    {
+        Assert.True(HotkeyRegistry.TryParse(spec, out var combo));
+        Assert.Equal(expected, combo.Key);
+    }
+
+    // CB-196 AC6: the collision rule, one case per arm. Plan takes the
+    // overrides as a function so none of this reads settings.
+    private static Func<HotkeyAction, string?> Overrides(string? toggle = null, string? newChat = null) =>
+        action => action switch
+        {
+            HotkeyAction.ToggleOrbsVisible => toggle,
+            HotkeyAction.OpenNewChat => newChat,
+            _ => null
+        };
+
+    private static HotkeyBinding For(IReadOnlyList<HotkeyBinding> plan, HotkeyAction action) =>
+        Assert.Single(plan, b => b.Action == action);
+
+    private static readonly HotkeyCombo CtrlAltH = new(KeyModifiers.Control | KeyModifiers.Alt, Key.H);
+    private static readonly HotkeyCombo CtrlAltN = new(KeyModifiers.Control | KeyModifiers.Alt, Key.N);
+
+    [Fact]
+    public void Plan_NoOverrides_EveryActionGetsItsDefaultAndNoNote()
+    {
+        var plan = HotkeyRegistry.Plan(Overrides());
+
+        Assert.Equal(Enum.GetValues<HotkeyAction>().Length, plan.Count);
+        Assert.Equal(new HotkeyBinding(HotkeyAction.ToggleOrbsVisible, CtrlAltH, null), For(plan, HotkeyAction.ToggleOrbsVisible));
+        Assert.Equal(new HotkeyBinding(HotkeyAction.OpenNewChat, CtrlAltN, null), For(plan, HotkeyAction.OpenNewChat));
+    }
+
+    [Fact]
+    public void Plan_DistinctOverrides_AreBothHonoured()
+    {
+        var plan = HotkeyRegistry.Plan(Overrides(toggle: "Ctrl+Shift+H", newChat: "Ctrl+Shift+N"));
+
+        Assert.Equal("Ctrl+Shift+H", HotkeyRegistry.Format(For(plan, HotkeyAction.ToggleOrbsVisible).Combo!.Value));
+        Assert.Equal("Ctrl+Shift+N", HotkeyRegistry.Format(For(plan, HotkeyAction.OpenNewChat).Combo!.Value));
+        Assert.All(plan, b => Assert.Null(b.Note));
+    }
+
+    [Fact]
+    public void Plan_NewChatOnTheTogglesChord_ToggleWinsAndNewChatFallsBackToCtrlAltN()
+    {
+        // The toggle's chord respelled — equal once parsed, which is the case
+        // a string comparison would have missed.
+        var plan = HotkeyRegistry.Plan(Overrides(newChat: "Alt+Ctrl+H"));
+
+        Assert.Equal(new HotkeyBinding(HotkeyAction.ToggleOrbsVisible, CtrlAltH, null), For(plan, HotkeyAction.ToggleOrbsVisible));
+        var newChat = For(plan, HotkeyAction.OpenNewChat);
+        Assert.Equal(CtrlAltN, newChat.Combo);
+        Assert.Contains("Ctrl+Alt+H is already ToggleOrbsVisible's", newChat.Note);
+        Assert.Contains("Ctrl+Alt+N", newChat.Note);
+    }
+
+    [Fact]
+    public void Plan_NewChatOnAnOverriddenTogglesChord_StillFallsBack()
+    {
+        var plan = HotkeyRegistry.Plan(Overrides(toggle: "Ctrl+Shift+J", newChat: "Shift+Ctrl+J"));
+
+        Assert.Equal(new HotkeyCombo(KeyModifiers.Control | KeyModifiers.Shift, Key.J),
+            For(plan, HotkeyAction.ToggleOrbsVisible).Combo);
+        Assert.Equal(CtrlAltN, For(plan, HotkeyAction.OpenNewChat).Combo);
+        Assert.NotNull(For(plan, HotkeyAction.OpenNewChat).Note);
+    }
+
+    [Fact]
+    public void Plan_ToggleBoundToCtrlAltN_NewChatRegistersNothingAndSaysWhy()
+    {
+        var plan = HotkeyRegistry.Plan(Overrides(toggle: "Ctrl+Alt+N"));
+
+        Assert.Equal(new HotkeyBinding(HotkeyAction.ToggleOrbsVisible, CtrlAltN, null), For(plan, HotkeyAction.ToggleOrbsVisible));
+        var newChat = For(plan, HotkeyAction.OpenNewChat);
+        Assert.Null(newChat.Combo);
+        Assert.Contains("no hotkey registered", newChat.Note);
+    }
+
+    [Fact]
+    public void Plan_BothFallbackArms_NewChatOverrideAndDefaultBothTaken_RegistersNothing()
+    {
+        // Toggle on Ctrl+Alt+N, New chat asking for the toggle's new chord:
+        // neither its override nor its default is free.
+        var plan = HotkeyRegistry.Plan(Overrides(toggle: "Ctrl+Alt+N", newChat: "Ctrl+Alt+N"));
+
+        Assert.Null(For(plan, HotkeyAction.OpenNewChat).Combo);
+        Assert.NotNull(For(plan, HotkeyAction.OpenNewChat).Note);
+    }
+
+    [Fact]
+    public void Plan_NeverHandsOutOneComboTwice()
+    {
+        // Every pairing of a handful of chords, including each other's
+        // defaults, respellings and garbage.
+        var specs = new string?[] { null, "garbage", "Ctrl+Alt+H", "Alt+Ctrl+H", "Ctrl+Alt+N", "Ctrl+Shift+N", "Ctrl+Alt+5" };
+        foreach (var toggle in specs)
+        foreach (var newChat in specs)
+        {
+            var combos = HotkeyRegistry.Plan(Overrides(toggle, newChat))
+                .Where(b => b.Combo is not null).Select(b => b.Combo!.Value).ToList();
+            Assert.Equal(combos.Count, combos.Distinct().Count());
+
+            // The toggle is never the one that loses.
+            Assert.NotNull(HotkeyRegistry.Plan(Overrides(toggle, newChat))
+                .Single(b => b.Action == HotkeyAction.ToggleOrbsVisible).Combo);
+        }
+    }
+
     [Fact]
     public void Default_UnknownAction_Throws()
     {
