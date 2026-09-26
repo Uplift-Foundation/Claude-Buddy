@@ -1017,4 +1017,84 @@ public class SessionPresenceTests
         Assert.False(SessionPresence.CouldBeABackgroundedHusk(
             WithTranscript(transcriptPath: ""), JobPhase.NotAJob));
     }
+
+    // --- LocalDaemonCanAnswerFor ----------------------------------------------
+    // Whether this machine's `claude agents` listing is evidence about a session
+    // at all. CB-194: a WSL session seen from Windows is never on the Windows
+    // listing, and reading that absence as NotAJob dropped every WSL orb.
+
+    private static SessionStatus Wsl(
+        int pid = 0,
+        string cwd = "/home/k/project",
+        string transcriptPath = "/home/k/.claude/projects/-home-k-project/240f91e6.jsonl",
+        SessionSource source = SessionSource.ClaudeCode)
+    {
+        var status = Status(pid: pid, source: source);
+        status.Cwd = cwd;
+        status.TranscriptPath = transcriptPath;
+        return status;
+    }
+
+    [Fact]
+    public void WindowsCannotAnswerForAPidlessSessionFromInsideWsl()
+    {
+        // The shape the hook writes for every WSL session: no pid, because its
+        // walk up the Windows process tree ends in the interop bridge.
+        Assert.False(SessionPresence.LocalDaemonCanAnswerFor(Wsl(), onWindows: true));
+    }
+
+    [Fact]
+    public void EitherPathAloneIsEnoughToRecogniseWsl()
+    {
+        // The cwd arm is for a hook wired by hand from the README snippet, which
+        // may pass no transcript at all; the transcript arm for anything that
+        // reports it without a cwd.
+        Assert.False(SessionPresence.LocalDaemonCanAnswerFor(
+            Wsl(transcriptPath: ""), onWindows: true));
+        Assert.False(SessionPresence.LocalDaemonCanAnswerFor(
+            Wsl(cwd: ""), onWindows: true));
+    }
+
+    [Fact]
+    public void OnAMacTheSameFileIsStillTheListingsToJudge()
+    {
+        // Every path on a Mac starts with '/'. Without the platform clause this
+        // would switch the subagent rule off for everyone — the negative control
+        // for the case above.
+        Assert.True(SessionPresence.LocalDaemonCanAnswerFor(Wsl(), onWindows: false));
+    }
+
+    [Fact]
+    public void ANativeWindowsSessionIsStillTheListingsToJudge()
+    {
+        // Pid-less with drive-letter paths: a subagent or a leftover file on
+        // Windows itself, which the listing does know about — the rule
+        // RuledOutAsAJob serves must keep firing for it.
+        Assert.True(SessionPresence.LocalDaemonCanAnswerFor(
+            Wsl(cwd: @"C:\Users\k\project",
+                transcriptPath: @"C:\Users\k\.claude\projects\C--Users-k-project\240f91e6.jsonl"),
+            onWindows: true));
+
+        // And with no paths at all there is nothing to call WSL.
+        Assert.True(SessionPresence.LocalDaemonCanAnswerFor(
+            Wsl(cwd: "", transcriptPath: ""), onWindows: true));
+    }
+
+    [Fact]
+    public void ASessionThatNamesItsProcessIsAlwaysTheListingsToJudge()
+    {
+        // A recorded pid means this machine can see the process, so whatever
+        // the listing says stands, whatever its paths look like.
+        Assert.True(SessionPresence.LocalDaemonCanAnswerFor(Wsl(pid: 4321), onWindows: true));
+    }
+
+    [Theory]
+    [InlineData(SessionSource.Codex)]
+    [InlineData(SessionSource.Grok)]
+    public void CodexAndGrokAreLeftToTheirOwnRule(SessionSource source)
+    {
+        // Their pid-less rule never consults the listing, and this must not
+        // become a way round it.
+        Assert.True(SessionPresence.LocalDaemonCanAnswerFor(Wsl(source: source), onWindows: true));
+    }
 }

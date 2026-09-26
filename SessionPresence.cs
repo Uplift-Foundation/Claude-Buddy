@@ -288,6 +288,52 @@ namespace ClaudeBuddy
         // goes and the two never disagree.
         internal static bool RuledOutAsAJob(JobPhase phase) => phase == JobPhase.NotAJob;
 
+        // Whether this machine's `claude agents` listing can speak for this
+        // session at all — asked before its answer is read, so that a session
+        // it cannot know about gets Unknown rather than a verdict.
+        //
+        // The one it cannot is a Claude Code session running inside WSL, seen
+        // from the Windows app. That session's daemon lives in the Linux VM, so
+        // the Windows listing never names it, and "not on the listing" read as
+        // NotAJob — which RuledOutAsAJob above turns into NotALiveJob for any
+        // file naming no process. The hook records no process for exactly these
+        // sessions, on purpose: its walk up the Windows process tree dead-ends in
+        // the interop bridge, and ClaudeBuddyHook.ps1 says in as many words that
+        // the app treats an unrecorded pid as "can't check" and keeps the orb.
+        // The two rules together dropped every WSL orb on every scan (CB-194),
+        // while the same session started from a Windows prompt drew normally,
+        // because there the walk finds claude.exe and the pid rule never fires.
+        //
+        // Recognised by a POSIX-absolute transcript path or cwd. On Windows a
+        // native session reports drive-letter paths and nothing else, so a
+        // leading '/' can only have come from inside WSL — the same signal the
+        // hook already keys its own WSL fallback on. The transcript first
+        // because it is the path Claude Code itself chose; the cwd as well
+        // because a hook wired by hand from the README's snippet may not pass
+        // a transcript at all.
+        //
+        // Narrow on purpose, and each clause is load-bearing:
+        //
+        // - Windows only, taken as an argument rather than read here. On a Mac
+        //   every path starts with '/', so without it this would switch off the
+        //   subagent rule for everyone; as an argument, both CI legs can assert
+        //   both answers.
+        // - Claude Code only. Codex and Grok have their own pid-less rule, which
+        //   never consults the listing, and nothing here should touch it.
+        // - No recorded pid. A session that names its process is a session this
+        //   machine can see, and whatever the listing says about it stands.
+        internal static bool LocalDaemonCanAnswerFor(SessionStatus status, bool onWindows)
+        {
+            if (!onWindows) return true;
+            if (status.Source != SessionSource.ClaudeCode) return true;
+            if (status.SessionPid > 0) return true;
+
+            return !(IsPosixAbsolute(status.TranscriptPath) || IsPosixAbsolute(status.Cwd));
+        }
+
+        private static bool IsPosixAbsolute(string? path) =>
+            !string.IsNullOrEmpty(path) && path[0] == '/';
+
         // Whether some `claude attach` client is sitting in this session.
         //
         // `attachedIds` is what the process scan found — the argv[2] of every
