@@ -336,13 +336,11 @@ namespace ClaudeBuddy
         [ExcludeFromCodeCoverage]
         internal static void OpenSettings() => SettingsWindow.Toggle();
 
-        // Excluded from coverage for the same reason OpenSettings is:
-        // NewChatWindow.Toggle follows the same singleton-window pattern
-        // (MacOSActivation.SetRegular, Activate, a real window shown and
-        // given key), so calling it for real is not something a headless
-        // test run should do. TrayMenuTests checks the item exists and its
-        // label, and stops there — the same split OpenSettings already has.
-        [ExcludeFromCodeCoverage]
+        // The tray item and the OpenNewChat global hotkey both land here, so
+        // the two can't disagree about what "New chat" means. No longer
+        // excluded from coverage the way OpenSettings still is:
+        // NewChatWindow.Toggle's OS-facing halves have test seams now, so
+        // HotkeyActionsTests calls this for real with nothing shown.
         internal static void OpenNewChat() => NewChatWindow.Toggle();
 
         // Excluded from coverage: starts a relay, which is a live Claude Code

@@ -741,4 +741,70 @@ public class SettingsRoundTripTests
         PointSettingsAt(dir);
         Assert.Equal("Ctrl+Shift+H", ClaudeBuddySettings.ToggleOrbsHotkey);
     }
+
+    // The new-chat hotkey's override, on the toggle's terms: null by default,
+    // and the string survives a save and a reload.
+    [Fact]
+    public void NewChatHotkey_DefaultsToNullAndRoundTripsAnOverride()
+    {
+        var dir = NewSettingsDir();
+        PointSettingsAt(dir);
+
+        Assert.Null(ClaudeBuddySettings.NewChatHotkey);
+
+        ClaudeBuddySettings.NewChatHotkey = "Ctrl+Shift+N";
+
+        var settingsPath = Path.Combine(dir, "settings.json");
+        var root = JsonNode.Parse(File.ReadAllText(settingsPath)) as JsonObject;
+        Assert.Equal("Ctrl+Shift+N", root!["newChatHotkey"]!.GetValue<string>());
+
+        PointSettingsAt(dir);
+        Assert.Equal("Ctrl+Shift+N", ClaudeBuddySettings.NewChatHotkey);
+
+        // Clearing it goes back to "use the built-in binding" across a reload
+        // too, rather than the old value resurfacing from anywhere.
+        ClaudeBuddySettings.NewChatHotkey = null;
+        PointSettingsAt(dir);
+        Assert.Null(ClaudeBuddySettings.NewChatHotkey);
+    }
+
+    // Both overrides survive a relaunch followed by a save that touches
+    // neither, each is written exactly once, and a key this build has never
+    // heard of rides along untouched beside them.
+    //
+    // What this cannot catch, stated so nobody reads it as covering it: a
+    // hotkey key missing from KnownKeys. toggleOrbsHotkey was missing from
+    // CB-155 until the new-chat hotkey was added, and the file came out
+    // byte-identical either way, because Save skips any _unknownKeys entry
+    // the model has already written. The "written once" assertion is
+    // for the day that guard is removed, not a test of the list.
+    [Fact]
+    public void HotkeyOverrides_SurviveAnUnrelatedSaveAfterARelaunch_AndAreWrittenOnce()
+    {
+        var dir = NewSettingsDir();
+        var settingsPath = Path.Combine(dir, "settings.json");
+        File.WriteAllText(settingsPath,
+            """{ "toggleOrbsHotkey": "Ctrl+Shift+H", "newChatHotkey": "Ctrl+Shift+N", "someFutureSetting": 7 }""");
+
+        PointSettingsAt(dir);
+        ClaudeBuddySettings.TwoLetterGlyphs = true;   // any Save at all
+        ClaudeBuddySettings.FlushPendingSave();
+
+        var text = File.ReadAllText(settingsPath);
+        var root = JsonNode.Parse(text) as JsonObject;
+        Assert.Equal("Ctrl+Shift+H", root!["toggleOrbsHotkey"]!.GetValue<string>());
+        Assert.Equal("Ctrl+Shift+N", root["newChatHotkey"]!.GetValue<string>());
+        Assert.Equal(7, root["someFutureSetting"]!.GetValue<int>());
+        foreach (var key in new[] { "toggleOrbsHotkey", "newChatHotkey" })
+        {
+            Assert.Equal(1, text.Split($"\"{key}\"").Length - 1);
+        }
+
+        // And the overrides are what the model reads back, not merely bytes
+        // that survived: a key replayed only out of _unknownKeys would pass
+        // the file assertions above and still read as null here.
+        PointSettingsAt(dir);
+        Assert.Equal("Ctrl+Shift+H", ClaudeBuddySettings.ToggleOrbsHotkey);
+        Assert.Equal("Ctrl+Shift+N", ClaudeBuddySettings.NewChatHotkey);
+    }
 }
