@@ -1215,10 +1215,10 @@ namespace ClaudeBuddy.Tests
 
         // --- TmuxSplitArgs / TmuxNewWindowArgs --------------------------------
 
-        // The command is the last element and arrives untouched. tmux hands that
-        // element to `sh -c`, so anything this builder did to it would be a
-        // syntax error in a pane that just appeared — see the `sh -n` cases in
-        // tests/IntegrationTests/TmuxAttachScriptTests.
+        // The command is the last element and arrives untouched behind the cd
+        // guard. tmux hands that element to `sh -c`, so anything this builder did
+        // to it would be a syntax error in a pane that just appeared — see the
+        // `sh -n` cases in tests/IntegrationTests/TmuxAttachScriptTests.
         [Fact]
         public void TheSplitPutsTheCommandLastAndUnaltered()
         {
@@ -1226,7 +1226,53 @@ namespace ClaudeBuddy.Tests
 
             var args = TerminalScripts.TmuxSplitArgs(null, "user:3", "/tmp/x", command);
 
-            Assert.Equal(command, args[^1]);
+            Assert.Equal("cd -- '/tmp/x' || exit 1; " + command, args[^1]);
+        }
+
+        // tmux format-expands -c, so a directory named with `#{…}` or `#(…)`
+        // became another path, and one that did not exist started the pane in
+        // $HOME with the pane id returned as if it had worked. Both builders
+        // therefore guard the command with the shell's own cd, which reads the
+        // name literally and exits rather than running somewhere else.
+        [Theory]
+        [InlineData("/Users/user/fmt#{session_name}x")]
+        [InlineData("/Users/user/run#(touch PWNED)x")]
+        [InlineData("/Users/user/it's #")]
+        public void BothBuildersGuardTheCommandWithALiteralCd(string cwd)
+        {
+            var guard = "cd -- " + TerminalScripts.ShellQuote(cwd) + " || exit 1; exec 'x'";
+
+            Assert.Equal(guard, TerminalScripts.TmuxSplitArgs(null, "user:3", cwd, "exec 'x'")[^1]);
+            Assert.Equal(guard, TerminalScripts.TmuxNewWindowArgs(null, "user", cwd, "exec 'x'")[^1]);
+        }
+
+        // No cwd, no guard — `cd -- ''` would fail and take the command with it.
+        [Theory]
+        [InlineData(null)]
+        [InlineData("")]
+        public void NoCwdMeansTheBareCommand(string? cwd)
+        {
+            Assert.Equal("exec 'x'", TerminalScripts.TmuxSplitArgs(null, "user:3", cwd, "exec 'x'")[^1]);
+            Assert.Equal("exec 'x'", TerminalScripts.TmuxNewWindowArgs(null, "user", cwd, "exec 'x'")[^1]);
+        }
+
+        // The new window hands back its pane id, which is what the caller treats
+        // as "tmux took it" — the same -P -F contract the split has.
+        [Fact]
+        public void TheNewWindowAsksForItsPaneId()
+        {
+            var args = TerminalScripts.TmuxNewWindowArgs(null, "user", "/tmp/x", "cmd");
+
+            Assert.Contains("-P", args);
+            Assert.Equal("#{pane_id}", args[Array.IndexOf(args, "-F") + 1]);
+        }
+
+        [Fact]
+        public void ACwdIsPassedThroughDashCToTheNewWindowToo()
+        {
+            var args = TerminalScripts.TmuxNewWindowArgs(null, "user", "/tmp/x", "cmd");
+
+            Assert.Equal("/tmp/x", args[Array.IndexOf(args, "-c") + 1]);
         }
 
         // -h so the conversation lands beside their work rather than under it, and

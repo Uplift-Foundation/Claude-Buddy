@@ -136,6 +136,53 @@ public sealed class TmuxPlacementTests : IDisposable
         Assert.Equal(new[] { before + ":2" }, Windows());
     }
 
+    private string PathOf(string pane) =>
+        Tmux("display-message", "-p", "-t", pane, "#{pane_current_path}").Trim();
+
+    private bool PaneAlive(string pane) =>
+        Tmux("list-panes", "-a", "-F", "#{pane_id}").Split('\n').Contains(pane);
+
+    // tmux format-expands -c, so this directory — which exists — became
+    // `…/fmtcbtestx`, which does not, and tmux started the pane in $HOME with
+    // the CLI running there. The cd guard in the command lands it exactly.
+    [MacTmuxFact]
+    public void BothPlacementsLandInADirectoryNamedLikeATmuxFormat()
+    {
+        AttachClient();
+        var dir = Path.Combine(_dir, "fmt#{session_name}x");
+        Directory.CreateDirectory(dir);
+
+        var chat = TerminalLauncher.PlaceInOwnTmuxWindow("exec /bin/sleep 30", dir);
+        var attach = TerminalLauncher.PlaceInTmux("exec /bin/sleep 30", dir);
+
+        Assert.Equal(RealPath(dir), PathOf(chat!));
+        Assert.Equal(RealPath(dir), PathOf(attach!));
+    }
+
+    // A cwd that has gone runs nothing: the guard exits, the pane closes, and
+    // no CLI starts in $HOME in its place.
+    [MacTmuxFact]
+    public void AMissingDirectoryRunsNothing()
+    {
+        AttachClient();
+
+        var pane = TerminalLauncher.PlaceInOwnTmuxWindow("exec /bin/sleep 30", Path.Combine(_dir, "gone"));
+
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (pane is not null && PaneAlive(pane))
+        {
+            Assert.True(DateTime.UtcNow < deadline, "the pane for a missing directory stayed open");
+            Thread.Sleep(100);
+        }
+        Assert.Single(Windows());
+    }
+
+    // /tmp is a link to /private/tmp, and tmux reports the resolved path.
+    private static string RealPath(string path) =>
+        new DirectoryInfo(path).FullName.StartsWith("/tmp/", StringComparison.Ordinal)
+            ? "/private" + new DirectoryInfo(path).FullName
+            : new DirectoryInfo(path).FullName;
+
     // A server with no client is nowhere the user is looking, so New chat
     // declines it — the caller then opens a terminal window — and creates
     // nothing in it.

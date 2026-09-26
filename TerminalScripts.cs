@@ -383,6 +383,18 @@ namespace ClaudeBuddy
         // -c is omitted rather than passed empty when no cwd was recorded: `-c ''`
         // fails and would take the split with it, which is the same trap
         // TmuxAttachScript's `cd` guard documents one screen down.
+        //
+        // -c is not trusted to land, though, in either builder: the command
+        // carries ShellCommandLine's `cd -- '<dir>' || exit 1` guard as well.
+        // tmux format-expands -c — it is what makes `-c "#{pane_current_path}"`
+        // work — so a directory whose name contains `#{…}` or `#(…)` became a
+        // different path, and when the path it becomes does not exist, tmux does
+        // not fail: it starts the pane in $HOME. Measured on tmux 3.7c, a real
+        // directory named `fmt#{session_name}x` started the CLI in the home
+        // directory, as did a cwd deleted after it was recorded, and the pane id
+        // came back as if nothing were wrong. `##` does not escape it there.
+        // The shell's cd reads the name literally, lands exactly or exits, and
+        // -c stays only as the pane's starting point for tmux's own bookkeeping.
         internal static string[] TmuxSplitArgs(
             string? socket, string target, string? cwd, string command)
         {
@@ -397,7 +409,7 @@ namespace ClaudeBuddy
             args.Add("-P");
             args.Add("-F");
             args.Add("#{pane_id}");
-            args.Add(command);
+            args.Add(ShellCommandLine(cwd, command));
 
             return TmuxArgs(socket, args.ToArray());
         }
@@ -425,7 +437,7 @@ namespace ClaudeBuddy
             args.Add("-P");
             args.Add("-F");
             args.Add("#{pane_id}");
-            args.Add(command);
+            args.Add(ShellCommandLine(cwd, command));
 
             return TmuxArgs(socket, args.ToArray());
         }
