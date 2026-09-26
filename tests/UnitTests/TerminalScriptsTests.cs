@@ -1238,6 +1238,7 @@ namespace ClaudeBuddy.Tests
         [InlineData("/Users/user/fmt#{session_name}x")]
         [InlineData("/Users/user/run#(touch PWNED)x")]
         [InlineData("/Users/user/it's #")]
+        [InlineData("-leading-dash")]
         public void BothBuildersGuardTheCommandWithALiteralCd(string cwd)
         {
             var guard = "cd -- " + TerminalScripts.ShellQuote(cwd) + " || exit 1; exec 'x'";

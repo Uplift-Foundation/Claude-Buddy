@@ -159,22 +159,41 @@ public sealed class TmuxPlacementTests : IDisposable
         Assert.Equal(RealPath(dir), PathOf(attach!));
     }
 
-    // A cwd that has gone runs nothing: the guard exits, the pane closes, and
-    // no CLI starts in $HOME in its place.
+    // A cwd that has gone runs nothing on either path: the guard exits, the
+    // pane closes, and no CLI starts in $HOME in its place. For New chat that
+    // leaves the user's one window; for an attach, the split closes and the
+    // user's window is back to one pane.
     [MacTmuxFact]
-    public void AMissingDirectoryRunsNothing()
+    public void AMissingDirectoryRunsNothingForANewChat()
     {
         AttachClient();
 
         var pane = TerminalLauncher.PlaceInOwnTmuxWindow("exec /bin/sleep 30", Path.Combine(_dir, "gone"));
 
+        WaitUntilGone(pane);
+        Assert.Single(Windows());
+    }
+
+    [MacTmuxFact]
+    public void AMissingDirectoryRunsNothingForAnAttach()
+    {
+        AttachClient();
+        var before = ClientWindow();
+
+        var pane = TerminalLauncher.PlaceInTmux("exec /bin/sleep 30", Path.Combine(_dir, "gone"));
+
+        WaitUntilGone(pane);
+        Assert.Equal(new[] { before + ":1" }, Windows());
+    }
+
+    private void WaitUntilGone(string? pane)
+    {
         var deadline = DateTime.UtcNow.AddSeconds(5);
         while (pane is not null && PaneAlive(pane))
         {
             Assert.True(DateTime.UtcNow < deadline, "the pane for a missing directory stayed open");
             Thread.Sleep(100);
         }
-        Assert.Single(Windows());
     }
 
     // /tmp is a link to /private/tmp, and tmux reports the resolved path.
