@@ -132,7 +132,18 @@ namespace ClaudeBuddy
                 var resolved = ClaudeProfile.Resolve(home, trimmed);
                 if (!seen.Add(resolved)) continue;
 
-                choices.Add(new Choice("~/" + trimmed.TrimStart('~', '/', '\\'), trimmed));
+                // The label is built from the *resolved* path, not the raw
+                // setting — QA (CB-201) caught an absolute entry outside
+                // $HOME ("/Volumes/Backup/.claude-mobile") rendering as
+                // "~/Volumes/Backup/.claude-mobile" when the label was built
+                // by trimming leading punctuation off the raw string instead.
+                // ChatHeaderMeta.HomeRelative already carries this exact rule
+                // (a real separator at the boundary, not just a matching
+                // prefix, is what makes something "under" home) for cwd
+                // display; reusing it here is one resolver rather than a
+                // second copy that could disagree with it. ProfileDir stays
+                // the raw, untouched string — the label is display only.
+                choices.Add(new Choice(ChatHeaderMeta.HomeRelative(resolved, home), trimmed));
             }
 
             return choices;
