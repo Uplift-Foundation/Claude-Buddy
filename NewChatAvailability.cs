@@ -84,4 +84,58 @@ namespace ClaudeBuddy
             _ => null
         };
     }
+
+    // CB-201's Account picker: turns the user's configured
+    // ClaudeCodeProfileDirs into the rows a combo box shows, plus the profile
+    // dir NewChatLauncher.Launch should actually receive for each — pure, the
+    // same reason NewChatAvailability.Evaluate above is, so every branch (an
+    // empty list, a duplicate, a blank, a second spelling of the default
+    // account) is a test rather than a real settings file and a real $HOME.
+    internal static class NewChatAccounts
+    {
+        internal const string DefaultLabel = "Default (~/.claude)";
+
+        // One row of the combo box. ProfileDir is exactly what Launch should
+        // be handed — null for Default, so a caller never needs its own
+        // "is this the default row" check before passing the selection
+        // through.
+        internal sealed record Choice(string Label, string? ProfileDir)
+        {
+            public override string ToString() => Label;
+        }
+
+        // Default first, then each configured extra that isn't a second
+        // spelling of the default account and isn't a repeat of one already
+        // added. A result of exactly one entry (Default alone) is what tells
+        // NewChatWindow to hide the picker entirely — CB-201's "empty list
+        // means no picker" decision.
+        //
+        // Resolved through ClaudeProfile.Resolve rather than a fresh
+        // Path.Combine/HashSet pair, so a dir that collapses to the default
+        // account here (".claude", ".claude/", the absolute $HOME/.claude
+        // spelling) is the same set of dirs ConfigDirFor would also read as
+        // null — one resolver, one answer, asked from two places.
+        internal static IReadOnlyList<Choice> Choices(string home, IReadOnlyList<string> extras)
+        {
+            var choices = new List<Choice> { new(DefaultLabel, null) };
+
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ClaudeProfile.Resolve(home, ClaudeBuddySettings.DefaultRemoteControlProfileDir)
+            };
+
+            foreach (var extra in extras)
+            {
+                if (string.IsNullOrWhiteSpace(extra)) continue;
+
+                var trimmed = extra.Trim();
+                var resolved = ClaudeProfile.Resolve(home, trimmed);
+                if (!seen.Add(resolved)) continue;
+
+                choices.Add(new Choice("~/" + trimmed.TrimStart('~', '/', '\\'), trimmed));
+            }
+
+            return choices;
+        }
+    }
 }

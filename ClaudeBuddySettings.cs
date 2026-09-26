@@ -103,7 +103,7 @@ namespace ClaudeBuddy
             "remoteControlEnabled", "remoteControlProfileDir", "remoteControlProfileDirs",
             "remoteControlIdleMinutes", "remoteControlServeOnLaunch",
             "peerLinkEnabled", "peerLinkPort",
-            "newChatRecentFolders", "newChatLastCli",
+            "newChatRecentFolders", "newChatLastCli", "newChatLastProfile",
             // Both hotkey overrides. toggleOrbsHotkey was missing from this
             // list from CB-155 until the new-chat hotkey was added beside it;
             // Save's ContainsKey guard kept that from throwing, but it meant
@@ -685,6 +685,13 @@ namespace ClaudeBuddy
             // rather than a stored copy of it.
             public string? NewChatLastCli { get; set; }
 
+            // The account (a ClaudeCodeProfileDirs entry) last chosen in the
+            // "New chat…" dialog's Account picker (CB-201). Null means either
+            // "never chosen" or "Default was chosen" — both read the same way
+            // downstream, since Default is what the dialog falls back to
+            // anyway when nothing else applies.
+            public string? NewChatLastProfile { get; set; }
+
             // Auto-organize: which shape and how much space between orbs.
             public string ArrangeShape { get; set; } = DefaultArrangeShape;
             public double ArrangeSpacing { get; set; } = DefaultArrangeSpacing;
@@ -1086,6 +1093,31 @@ namespace ClaudeBuddy
             lock (Gate)
             {
                 _model.NewChatLastCli = string.IsNullOrWhiteSpace(cli) ? null : cli;
+            }
+
+            Save();
+        }
+
+        // The account last chosen in the "New chat…" dialog (CB-201). Null
+        // means never chosen, or Default — the dialog treats both the same.
+        public static string? NewChatLastProfile
+        {
+            get
+            {
+                Load();
+                lock (Gate)
+                {
+                    return _model.NewChatLastProfile;
+                }
+            }
+        }
+
+        public static void SetNewChatLastProfile(string? profileDir)
+        {
+            Load();
+            lock (Gate)
+            {
+                _model.NewChatLastProfile = string.IsNullOrWhiteSpace(profileDir) ? null : profileDir;
             }
 
             Save();
@@ -1773,7 +1805,8 @@ namespace ClaudeBuddy
                         TurnSoundsEnabled = Bool(root["turnSoundsEnabled"], true),
                         TurnFinishedSound = Text(root["turnFinishedSound"]),
                         NeedsAttentionSound = Text(root["needsAttentionSound"]),
-                        NewChatLastCli = Text(root["newChatLastCli"])
+                        NewChatLastCli = Text(root["newChatLastCli"]),
+                        NewChatLastProfile = Text(root["newChatLastProfile"])
                     };
 
                     // Same shape as claudeCodeProfileDirs below: read as an array
@@ -2294,6 +2327,7 @@ namespace ClaudeBuddy
                         ["needsAttentionSound"] = _model.NeedsAttentionSound,
                         ["newChatRecentFolders"] = newChatRecentFolders,
                         ["newChatLastCli"] = _model.NewChatLastCli,
+                        ["newChatLastProfile"] = _model.NewChatLastProfile,
                         // Grouped rather than three top-level keys: it reads as
                         // one setting in the file the way it reads as one card in
                         // the window. A null entry — which is what a colour left

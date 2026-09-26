@@ -23,10 +23,10 @@ namespace ClaudeBuddy
         // real terminal, the same FakeChatSession-shaped seam CLAUDE.md asks
         // for elsewhere in this app — see NewChatAvailability.CurrentForTests
         // for the matching seam on the other half of the dialog.
-        internal static Func<NewChatCli, string, LaunchResult>? LaunchForTests;
+        internal static Func<NewChatCli, string, string?, LaunchResult>? LaunchForTests;
 
-        internal static LaunchResult Launch(NewChatCli cli, string cwd) =>
-            LaunchForTests?.Invoke(cli, cwd) ?? RealLaunch(cli, cwd);
+        internal static LaunchResult Launch(NewChatCli cli, string cwd, string? profileDir = null) =>
+            LaunchForTests?.Invoke(cli, cwd, profileDir) ?? RealLaunch(cli, cwd, profileDir);
 
         // The real launch: locate the binary fresh (never the cached
         // ClaudeBinary/CodexBinary/GrokBinary.Path — see NewChatAvailability
@@ -48,7 +48,7 @@ namespace ClaudeBuddy
         // every decision this method makes is now a call to one of them, and
         // both are plain functions a test can drive directly.
         [ExcludeFromCodeCoverage]
-        private static LaunchResult RealLaunch(NewChatCli cli, string cwd)
+        private static LaunchResult RealLaunch(NewChatCli cli, string cwd, string? profileDir)
         {
             var name = DisplayName(cli);
             var binary = LocateFresh(cli);
@@ -60,10 +60,16 @@ namespace ClaudeBuddy
 
             var directory = ResolveDirectory(cwd, Directory.Exists(cwd), Environment.CurrentDirectory);
 
+            // Computed once and handed to both platform arms below, so
+            // there's exactly one place per launch that decides which
+            // account this chat runs under.
+            var configDir = ConfigDirFor(
+                cli, Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), profileDir);
+
             if (OperatingSystem.IsWindows())
             {
                 var started = TerminalLauncher.StartWindowsProcess(useWindowsTerminal =>
-                    NewChatCommand.WindowsProcessStartInfo(cli, binary, directory, useWindowsTerminal));
+                    NewChatCommand.WindowsProcessStartInfo(cli, binary, directory, useWindowsTerminal, configDir));
 
                 return Decide(name, binary, directory, NewChatPlatform.Windows, started, null, null);
             }
@@ -76,7 +82,7 @@ namespace ClaudeBuddy
             // "exec " so the terminal's own shell becomes the CLI rather than
             // waiting behind it — the same reason every AgentTeamViewer
             // launch site prefixes its command the same way.
-            var command = "exec " + NewChatCommand.For(cli, binary);
+            var command = "exec " + NewChatCommand.For(cli, binary, configDir);
 
             // In the user's tmux first, for the same reason
             // AgentTeamViewer.AttachSession prefers tmux over a bare window:
@@ -102,6 +108,19 @@ namespace ClaudeBuddy
 
             return Decide(name, binary, directory, NewChatPlatform.MacOS, null, tmuxPane, terminalLaunched);
         }
+
+        // The config directory to hand this launch, given the account the
+        // dialog's picker chose (CB-201) — null for the default account and
+        // for the two CLIs that have no such picker at all. Codex and Grok
+        // use CODEX_HOME/GROK_HOME, a different mechanism this ticket
+        // deliberately leaves alone (see the plan's own "Claude Code only"
+        // decision), so profileDir is simply never consulted for them.
+        //
+        // Delegates to ClaudeProfile.ConfigDirFor rather than repeating its
+        // CB-42 logic — there is exactly one place in this app that decides
+        // "does this profile name the default account", and this is not it.
+        internal static string? ConfigDirFor(NewChatCli cli, string home, string? profileDir) =>
+            cli == NewChatCli.ClaudeCode ? ClaudeProfile.ConfigDirFor(home, profileDir) : null;
 
         // The working directory to actually launch into: the requested one
         // when it's real, the process's own current directory otherwise —

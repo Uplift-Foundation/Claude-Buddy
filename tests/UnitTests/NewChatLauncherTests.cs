@@ -52,7 +52,7 @@ namespace ClaudeBuddy.Tests
         public void LaunchUsesTheTestSeamWhenOneIsInstalled()
         {
             var expected = new LaunchResult(LaunchOutcome.Launched, "started");
-            NewChatLauncher.LaunchForTests = (cli, cwd) => expected;
+            NewChatLauncher.LaunchForTests = (cli, cwd, profileDir) => expected;
 
             try
             {
@@ -71,7 +71,7 @@ namespace ClaudeBuddy.Tests
             NewChatCli? seenCli = null;
             string? seenCwd = null;
 
-            NewChatLauncher.LaunchForTests = (cli, cwd) =>
+            NewChatLauncher.LaunchForTests = (cli, cwd, profileDir) =>
             {
                 seenCli = cli;
                 seenCwd = cwd;
@@ -89,6 +89,99 @@ namespace ClaudeBuddy.Tests
             {
                 NewChatLauncher.LaunchForTests = null;
             }
+        }
+
+        // The profile dir is the third leg of the same seam — a UI test can
+        // assert Start actually passed the picker's choice through without
+        // ever reaching RealLaunch (excluded from coverage; see its own
+        // header).
+        [Fact]
+        public void LaunchPassesTheProfileDirThroughToTheSeam()
+        {
+            string? seenProfileDir = "not set yet";
+
+            NewChatLauncher.LaunchForTests = (cli, cwd, profileDir) =>
+            {
+                seenProfileDir = profileDir;
+                return new LaunchResult(LaunchOutcome.Launched, "ok");
+            };
+
+            try
+            {
+                NewChatLauncher.Launch(NewChatCli.ClaudeCode, "/work/dir", "/Users/me/.claude-work");
+
+                Assert.Equal("/Users/me/.claude-work", seenProfileDir);
+            }
+            finally
+            {
+                NewChatLauncher.LaunchForTests = null;
+            }
+        }
+
+        [Fact]
+        public void LaunchWithNoProfileDirPassesNullThroughToTheSeam()
+        {
+            string? seenProfileDir = "not set yet";
+
+            NewChatLauncher.LaunchForTests = (cli, cwd, profileDir) =>
+            {
+                seenProfileDir = profileDir;
+                return new LaunchResult(LaunchOutcome.Launched, "ok");
+            };
+
+            try
+            {
+                NewChatLauncher.Launch(NewChatCli.ClaudeCode, "/work/dir");
+
+                Assert.Null(seenProfileDir);
+            }
+            finally
+            {
+                NewChatLauncher.LaunchForTests = null;
+            }
+        }
+
+        // --- ConfigDirFor: the one path to CLAUDE_CONFIG_DIR -----------------
+
+        [Fact]
+        public void ConfigDirForDelegatesToClaudeProfileForClaudeCode()
+        {
+            var result = NewChatLauncher.ConfigDirFor(
+                NewChatCli.ClaudeCode, "/Users/me", ".claude-work");
+
+            Assert.Equal("/Users/me/.claude-work", result);
+        }
+
+        [Fact]
+        public void ConfigDirForIsNullForCodexRegardlessOfProfileDir()
+        {
+            Assert.Null(NewChatLauncher.ConfigDirFor(NewChatCli.Codex, "/Users/me", ".claude-work"));
+        }
+
+        [Fact]
+        public void ConfigDirForIsNullForGrokRegardlessOfProfileDir()
+        {
+            Assert.Null(NewChatLauncher.ConfigDirFor(NewChatCli.Grok, "/Users/me", ".claude-work"));
+        }
+
+        // CB-42's own case, reached through this seam: a profile dir that
+        // names the default account, in each spelling ClaudeProfile.ConfigDirFor
+        // already collapses, still resolves to null through ConfigDirFor —
+        // this is the one path there is, so it inherits that behaviour rather
+        // than needing its own copy of it.
+        [Theory]
+        [InlineData(".claude")]
+        [InlineData(".claude/")]
+        [InlineData("/Users/me/.claude")]
+        public void ConfigDirForCollapsesEverySpellingOfTheDefaultAccountToNull(string profileDir)
+        {
+            Assert.Null(NewChatLauncher.ConfigDirFor(NewChatCli.ClaudeCode, "/Users/me", profileDir));
+        }
+
+        [Fact]
+        public void ConfigDirForIsNullForClaudeCodeWithNoProfileDir()
+        {
+            Assert.Null(NewChatLauncher.ConfigDirFor(NewChatCli.ClaudeCode, "/Users/me", null));
         }
 
         // --- ResolveDirectory ------------------------------------------------

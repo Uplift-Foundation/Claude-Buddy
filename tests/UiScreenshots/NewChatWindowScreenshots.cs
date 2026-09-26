@@ -108,7 +108,7 @@ public class NewChatWindowScreenshots : IDisposable
         };
         NewChatWindow.OpenClawAvailabilityForTests = () => OpenClawNewChatAvailability.NoGateway;
         NewChatWindow.CurrentStatusesForTests = () => new Dictionary<string, SessionStatus>();
-        NewChatLauncher.LaunchForTests = (_, _) => new LaunchResult(
+        NewChatLauncher.LaunchForTests = (_, _, _) => new LaunchResult(
             LaunchOutcome.NotFound, "Claude Code not found on PATH or in its usual install locations.");
 
         var window = NewWindow();
@@ -133,6 +133,31 @@ public class NewChatWindowScreenshots : IDisposable
         Assert.False(radios.Single(r => Equals(r.Tag, NewChatWindow.OpenClawTag)).IsEnabled);
 
         ScreenshotHelper.CaptureAlreadyShown(window, "new-chat-window-launch-error.png");
+    }
+
+    // CB-201's Account section: Claude Code selected with two configured
+    // profiles beside Default — the picker sitting between the CLI list and
+    // the Folder section, exactly where BuildCliList's own comment places it.
+    [AvaloniaFact]
+    public void AccountPickerWithTwoProfiles()
+    {
+        NewChatAvailability.CurrentForTests = () => new[]
+        {
+            Enabled(NewChatCli.ClaudeCode), Enabled(NewChatCli.Codex), Enabled(NewChatCli.Grok)
+        };
+        NewChatWindow.OpenClawAvailabilityForTests = () => OpenClawNewChatAvailability.NoGateway;
+        NewChatWindow.CurrentStatusesForTests = () => new Dictionary<string, SessionStatus>();
+
+        var dir = Path.Combine(Path.GetTempPath(), "cb-newchat-screenshot-" + Guid.NewGuid());
+        Directory.CreateDirectory(dir);
+        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
+        ClaudeBuddySettings.ReloadForTests();
+        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-work");
+        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-board");
+
+        var window = NewWindow();
+
+        ScreenshotHelper.Capture(window, "new-chat-window-account-picker.png");
     }
 
     // The OpenClaw row selected, Ready, with agents loaded — the agent

@@ -108,4 +108,63 @@ public class NewChatSettingsTests
 
         Assert.Null(ClaudeBuddySettings.NewChatLastCli);
     }
+
+    // --- NewChatLastProfile (CB-201's Account picker) --------------------
+
+    [Fact]
+    public void WithNothingSavedTheLastProfileIsNull()
+    {
+        FreshSettings();
+
+        Assert.Null(ClaudeBuddySettings.NewChatLastProfile);
+    }
+
+    [Fact]
+    public void TheLastProfileSurvivesARestart()
+    {
+        FreshSettings();
+        var dir = Environment.GetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR")!;
+
+        ClaudeBuddySettings.SetNewChatLastProfile(".claude-work");
+
+        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
+        ClaudeBuddySettings.ReloadForTests();
+
+        Assert.Equal(".claude-work", ClaudeBuddySettings.NewChatLastProfile);
+    }
+
+    // A blank value is not a choice — same rule ABlankLastCliIsStoredAsNull
+    // applies to the CLI setting beside this one.
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData(null)]
+    public void ABlankLastProfileIsStoredAsNull(string? blank)
+    {
+        FreshSettings();
+
+        ClaudeBuddySettings.SetNewChatLastProfile(".claude-work");
+        ClaudeBuddySettings.SetNewChatLastProfile(blank);
+
+        Assert.Null(ClaudeBuddySettings.NewChatLastProfile);
+    }
+
+    // Null means Default was chosen just as much as it means never chosen —
+    // both read the same way, so setting it back to null after a real
+    // profile is the ordinary "picked Default this time" case, not an edge
+    // case of the blank rule above.
+    [Fact]
+    public void SettingTheLastProfileBackToNullReplacesTheSavedOne()
+    {
+        FreshSettings();
+        var dir = Environment.GetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR")!;
+
+        ClaudeBuddySettings.SetNewChatLastProfile(".claude-work");
+        ClaudeBuddySettings.SetNewChatLastProfile(null);
+
+        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
+        ClaudeBuddySettings.ReloadForTests();
+
+        Assert.Null(ClaudeBuddySettings.NewChatLastProfile);
+    }
 }
