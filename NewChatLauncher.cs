@@ -78,16 +78,20 @@ namespace ClaudeBuddy
             // launch site prefixes its command the same way.
             var command = "exec " + NewChatCommand.For(cli, binary);
 
-            // Beside the user's tmux first, for the same reason
-            // AgentTeamViewer.AttachSession prefers PlaceInTmux over a bare
-            // window: someone who lives in tmux gets a pane inside the thing
-            // they use to move between windows, rather than a window outside
-            // it. The terminal-window fallback is only even attempted when
+            // In the user's tmux first, for the same reason
+            // AgentTeamViewer.AttachSession prefers tmux over a bare window:
+            // someone who lives in tmux gets the chat inside the thing they use
+            // to move between windows, rather than a window outside it. But in
+            // a tmux window of its own, not split beside them the way an orb
+            // attach is — a new chat is new work, and halving the window they
+            // are in to make room for it was reported as the wrong thing the
+            // first time it happened (see TerminalScripts.NewChatPlacementFor).
+            // The terminal-window fallback is only even attempted when
             // tmux didn't take the command, which is why terminalLaunched
             // stays null rather than false on the path that never runs it —
             // Decide treats "never tried" and "tried and failed" as the same
             // failure, but RealLaunch itself still only opens one window.
-            var tmuxPane = TerminalLauncher.PlaceInTmux(command, directory);
+            var tmuxPane = TerminalLauncher.PlaceInOwnTmuxWindow(command, directory);
             bool? terminalLaunched = null;
 
             if (string.IsNullOrEmpty(tmuxPane))

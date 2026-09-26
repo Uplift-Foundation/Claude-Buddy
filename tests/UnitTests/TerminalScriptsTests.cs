@@ -1120,12 +1120,105 @@ namespace ClaudeBuddy.Tests
                 TerminalScripts.PlacementFor(session, activeWindow));
         }
 
+        // --- NewChatPlacementFor: a new chat gets a window of its own ---------
+        //
+        // Reported the first time the fixed iTerm2 launch let New chat reach
+        // tmux: it split a pane into the window the user was working in. A new
+        // chat is new work, not an existing conversation brought beside them,
+        // so it gets a window of its own in their session.
+
+        [Fact]
+        public void ANewChatWithAClientGetsItsOwnTmuxWindow()
+        {
+            Assert.Equal(
+                TerminalScripts.AttachPlacement.ItsOwnTmuxWindow,
+                TerminalScripts.NewChatPlacementFor("user"));
+        }
+
+        [Theory]
+        [InlineData(null)]
+        [InlineData("")]
+        public void ANewChatWithNoClientGetsATerminalWindow(string? session)
+        {
+            Assert.Equal(
+                TerminalScripts.AttachPlacement.ATerminalWindow,
+                TerminalScripts.NewChatPlacementFor(session));
+        }
+
+        // The case the report was about: the active window *did* resolve, which
+        // is exactly when the attach rule splits. New chat must not.
+        [Theory]
+        [InlineData("user:3")]
+        [InlineData(null)]
+        [InlineData("")]
+        public void ANewChatNeverSplitsWhateverTheActiveWindow(string? activeWindow)
+        {
+            Assert.Equal(
+                TerminalScripts.AttachPlacement.ItsOwnTmuxWindow,
+                TerminalScripts.NewChatPlacement("user", activeWindow));
+        }
+
+        // And the other caller keeps its split: every orb attach and
+        // AgentTeamViewer launch goes through PlaceInTmux, which applies this
+        // rule. Pinned so giving New chat its own placement cannot quietly move
+        // the attach off round 6a's answer.
+        [Theory]
+        [InlineData("user", "user:3", "BesideTheUser")]
+        [InlineData("user", null, "ItsOwnTmuxWindow")]
+        [InlineData(null, null, "ATerminalWindow")]
+        public void AnOrbAttachStillSplitsBesideTheUser(string? session, string? activeWindow, string want)
+        {
+            Assert.Equal(
+                Enum.Parse<TerminalScripts.AttachPlacement>(want),
+                TerminalScripts.OrbAttachPlacement(session, activeWindow));
+        }
+
+        // --- TmuxPlacementArgs: what each placement asks tmux to do ------------
+
+        [Fact]
+        public void BesideTheUserIsASplitOfTheActiveWindow()
+        {
+            var args = TerminalScripts.TmuxPlacementArgs(
+                TerminalScripts.AttachPlacement.BesideTheUser, "user", "user:3", "/tmp/x", "cmd");
+
+            Assert.Equal(TerminalScripts.TmuxSplitArgs(null, "user:3", "/tmp/x", "cmd"), args);
+        }
+
+        [Fact]
+        public void ItsOwnTmuxWindowIsANewWindowInTheSession()
+        {
+            var args = TerminalScripts.TmuxPlacementArgs(
+                TerminalScripts.AttachPlacement.ItsOwnTmuxWindow, "user", "user:3", "/tmp/x", "cmd");
+
+            Assert.Equal(TerminalScripts.TmuxNewWindowArgs(null, "user", "/tmp/x", "cmd"), args);
+        }
+
+        [Fact]
+        public void ATerminalWindowIsNotTmuxsToMake()
+        {
+            Assert.Null(TerminalScripts.TmuxPlacementArgs(
+                TerminalScripts.AttachPlacement.ATerminalWindow, null, null, "/tmp/x", "cmd"));
+        }
+
+        // New chat end to end through the pure half: a resolved active window,
+        // and still `new-window -t user:` — never `split-window`.
+        [Fact]
+        public void ANewChatAsksTmuxForANewWindowNotASplit()
+        {
+            var args = TerminalScripts.TmuxPlacementArgs(
+                TerminalScripts.NewChatPlacement("user", "user:3"), "user", "user:3", "/tmp/x", "cmd")!;
+
+            Assert.Equal("new-window", args[0]);
+            Assert.Equal("user:", args[Array.IndexOf(args, "-t") + 1]);
+            Assert.DoesNotContain("split-window", args);
+        }
+
         // --- TmuxSplitArgs / TmuxNewWindowArgs --------------------------------
 
-        // The command is the last element and arrives untouched. tmux hands that
-        // element to `sh -c`, so anything this builder did to it would be a
-        // syntax error in a pane that just appeared — see the `sh -n` cases in
-        // tests/IntegrationTests/TmuxAttachScriptTests.
+        // The command is the last element and arrives untouched behind the cd
+        // guard. tmux hands that element to `sh -c`, so anything this builder did
+        // to it would be a syntax error in a pane that just appeared — see the
+        // `sh -n` cases in tests/IntegrationTests/TmuxAttachScriptTests.
         [Fact]
         public void TheSplitPutsTheCommandLastAndUnaltered()
         {
@@ -1133,7 +1226,54 @@ namespace ClaudeBuddy.Tests
 
             var args = TerminalScripts.TmuxSplitArgs(null, "user:3", "/tmp/x", command);
 
-            Assert.Equal(command, args[^1]);
+            Assert.Equal("cd -- '/tmp/x' || exit 1; " + command, args[^1]);
+        }
+
+        // tmux format-expands -c, so a directory named with `#{…}` or `#(…)`
+        // became another path, and one that did not exist started the pane in
+        // $HOME with the pane id returned as if it had worked. Both builders
+        // therefore guard the command with the shell's own cd, which reads the
+        // name literally and exits rather than running somewhere else.
+        [Theory]
+        [InlineData("/Users/user/fmt#{session_name}x")]
+        [InlineData("/Users/user/run#(touch PWNED)x")]
+        [InlineData("/Users/user/it's #")]
+        [InlineData("-leading-dash")]
+        public void BothBuildersGuardTheCommandWithALiteralCd(string cwd)
+        {
+            var guard = "cd -- " + TerminalScripts.ShellQuote(cwd) + " || exit 1; exec 'x'";
+
+            Assert.Equal(guard, TerminalScripts.TmuxSplitArgs(null, "user:3", cwd, "exec 'x'")[^1]);
+            Assert.Equal(guard, TerminalScripts.TmuxNewWindowArgs(null, "user", cwd, "exec 'x'")[^1]);
+        }
+
+        // No cwd, no guard — `cd -- ''` would fail and take the command with it.
+        [Theory]
+        [InlineData(null)]
+        [InlineData("")]
+        public void NoCwdMeansTheBareCommand(string? cwd)
+        {
+            Assert.Equal("exec 'x'", TerminalScripts.TmuxSplitArgs(null, "user:3", cwd, "exec 'x'")[^1]);
+            Assert.Equal("exec 'x'", TerminalScripts.TmuxNewWindowArgs(null, "user", cwd, "exec 'x'")[^1]);
+        }
+
+        // The new window hands back its pane id, which is what the caller treats
+        // as "tmux took it" — the same -P -F contract the split has.
+        [Fact]
+        public void TheNewWindowAsksForItsPaneId()
+        {
+            var args = TerminalScripts.TmuxNewWindowArgs(null, "user", "/tmp/x", "cmd");
+
+            Assert.Contains("-P", args);
+            Assert.Equal("#{pane_id}", args[Array.IndexOf(args, "-F") + 1]);
+        }
+
+        [Fact]
+        public void ACwdIsPassedThroughDashCToTheNewWindowToo()
+        {
+            var args = TerminalScripts.TmuxNewWindowArgs(null, "user", "/tmp/x", "cmd");
+
+            Assert.Equal("/tmp/x", args[Array.IndexOf(args, "-c") + 1]);
         }
 
         // -h so the conversation lands beside their work rather than under it, and
