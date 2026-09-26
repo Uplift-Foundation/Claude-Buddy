@@ -205,13 +205,18 @@ namespace ClaudeBuddy
         // comma is read as a flags OR ("A,B" is B), and a modifier key parses
         // as a key like any other ("Ctrl+Alt+LeftCtrl").
         //
+        // A defined, non-modifier key is still not enough: both native hooks
+        // map only A–Z and D0–D9, and each Register() quietly returns on
+        // anything else, so "Ctrl+Alt+F5" parsed, never fell back, and
+        // registered nothing at all. The rule is therefore the hooks' own
+        // table, RegistrableKeys, and nothing wider.
+        //
         // So: a single digit is the digit key, since that is what anyone
-        // typing "Ctrl+Alt+5" means and both hooks already map D0–D9.
-        // Anything else must be a *name* — ASCII letters and digits, starting
-        // with a letter, which rules out numbers, signs and commas before
-        // Enum.TryParse ever sees them — naming a defined key that is not
-        // itself a modifier. Key.None is rejected with the modifiers: it is
-        // "no key", not one.
+        // typing "Ctrl+Alt+5" means. Anything else must be a *name* — ASCII
+        // letters and digits, starting with a letter, which rules out
+        // numbers, signs and commas before Enum.TryParse ever sees them —
+        // naming a key in RegistrableKeys. That excludes the modifiers, None
+        // and Clear by construction rather than by a list of exceptions.
         private static bool TryParseKey(string token, out Key key)
         {
             key = default;
@@ -223,13 +228,26 @@ namespace ClaudeBuddy
             }
 
             if (!char.IsAsciiLetter(token[0]) || !token.All(char.IsAsciiLetterOrDigit)) return false;
-            if (!Enum.TryParse(token, ignoreCase: true, out key) || !Enum.IsDefined(key)) return false;
+            if (!Enum.TryParse(token, ignoreCase: true, out key)) return false;
 
-            return key is not (Key.None
-                or Key.LeftCtrl or Key.RightCtrl
-                or Key.LeftAlt or Key.RightAlt
-                or Key.LeftShift or Key.RightShift
-                or Key.LWin or Key.RWin);
+            return RegistrableKeys.Contains(key);
+        }
+
+        // Every key a hotkey can end in: the ones both native hooks have a
+        // code for. MacOSGlobalHotkeyHook and WindowsGlobalHotkeyHook each
+        // keep their own table, because the codes differ, and
+        // HotkeyRegistryTests checks both tables against this set, so
+        // widening one without the other and without this fails a test
+        // rather than a user. Widening it at all needs each new key's native
+        // code on both platforms, confirmed by a real key press.
+        public static readonly IReadOnlySet<Key> RegistrableKeys = BuildRegistrableKeys();
+
+        private static HashSet<Key> BuildRegistrableKeys()
+        {
+            var keys = new HashSet<Key>();
+            for (var k = Key.A; k <= Key.Z; k++) keys.Add(k);
+            for (var k = Key.D0; k <= Key.D9; k++) keys.Add(k);
+            return keys;
         }
 
         // The inverse of TryParse, and the form a settings.json author can

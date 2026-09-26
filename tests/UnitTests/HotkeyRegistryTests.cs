@@ -201,13 +201,67 @@ public class HotkeyRegistryTests
         }
     }
 
+    // Defined, non-modifier keys neither native hook has a code for. They
+    // used to parse, so Resolve kept them, and Register() quietly returned —
+    // no hotkey at all and no fallback (QA round 1 on CB-196).
     [Theory]
-    [InlineData("Ctrl+Alt+F5", Key.F5)]  // letters-then-digits names are still names
-    [InlineData("Ctrl+Alt+Space", Key.Space)]
-    public void TryParse_StillAcceptsNamedKeysThatContainDigits(string spec, Key expected)
+    [InlineData("Ctrl+Alt+F5")]
+    [InlineData("Ctrl+Alt+Space")]
+    [InlineData("Ctrl+Alt+Enter")]
+    [InlineData("Ctrl+Alt+Return")]
+    [InlineData("Ctrl+Alt+Escape")]
+    [InlineData("Ctrl+Alt+Tab")]
+    [InlineData("Ctrl+Alt+NumPad1")]
+    [InlineData("Ctrl+Alt+OemComma")]
+    [InlineData("Ctrl+Alt+Clear")]       // Key.Clear by name, the key CB-197 exists to rule out
+    public void TryParse_RejectsKeysNeitherHookCanRegister_AndBothActionsFallBack(string spec)
     {
-        Assert.True(HotkeyRegistry.TryParse(spec, out var combo));
-        Assert.Equal(expected, combo.Key);
+        Assert.False(HotkeyRegistry.TryParse(spec, out _));
+
+        foreach (var action in Enum.GetValues<HotkeyAction>())
+        {
+            Assert.Equal(HotkeyRegistry.Default(action), HotkeyRegistry.Resolve(action, spec));
+        }
+    }
+
+    // The property behind the cases above, over every name Key has: nothing
+    // TryParse returns is outside the registrable set.
+    [Fact]
+    public void EveryKeyTryParseCanReturnIsRegistrable()
+    {
+        foreach (var name in Enum.GetNames<Key>())
+        {
+            if (HotkeyRegistry.TryParse("Ctrl+Alt+" + name, out var combo))
+            {
+                Assert.Contains(combo.Key, HotkeyRegistry.RegistrableKeys);
+            }
+        }
+
+        for (var digit = 0; digit <= 9; digit++)
+        {
+            Assert.True(HotkeyRegistry.TryParse($"Ctrl+Alt+{digit}", out var combo));
+            Assert.Contains(combo.Key, HotkeyRegistry.RegistrableKeys);
+        }
+
+        Assert.Equal(36, HotkeyRegistry.RegistrableKeys.Count);
+        Assert.All(Enum.GetValues<HotkeyAction>(),
+            a => Assert.Contains(HotkeyRegistry.Default(a).Key, HotkeyRegistry.RegistrableKeys));
+    }
+
+    // Both hooks' own tables are exactly the registrable set. Read by
+    // reflection because the hooks are OS-facing and excluded from coverage;
+    // reading a static dictionary makes no OS call on either platform.
+    [Theory]
+    [InlineData(typeof(MacOSGlobalHotkeyHook))]
+    [InlineData(typeof(WindowsGlobalHotkeyHook))]
+    public void EachNativeHookMapsExactlyTheRegistrableKeys(Type hook)
+    {
+        var field = hook.GetField("VirtualKeyCodes",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)
+            ?? throw new MissingFieldException(hook.Name, "VirtualKeyCodes");
+        var table = (System.Collections.IDictionary)field.GetValue(null)!;
+
+        Assert.True(HotkeyRegistry.RegistrableKeys.SetEquals(table.Keys.Cast<Key>()));
     }
 
     // CB-196 AC6: the collision rule, one case per arm. Plan takes the

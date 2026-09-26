@@ -96,9 +96,18 @@ namespace ClaudeBuddy
         [ExcludeFromCodeCoverage]
         private static void OnClosed(object? sender, EventArgs e)
         {
+            Forget();
+            MacOSActivation.SetAccessory();
+        }
+
+        // What closing means to Toggle: stop the orb watch and let the next
+        // call build a fresh window. Split out of OnClosed so the part a test
+        // can observe runs in one — OnClosed itself only fires on a real
+        // Close(), which this suite must not call.
+        internal static void Forget()
+        {
             _open?._watchTimer?.Stop();
             _open = null;
-            MacOSActivation.SetAccessory();
         }
 
         // The seam a UI test satisfies in place of the real session scan —

@@ -106,11 +106,12 @@ public class HotkeyActionsTests : IDisposable
         Dispatcher.UIThread.RunJobs();
         var first = Assert.Single(_presented);
 
-        // A simulation, named as one: the real Closed handler (OnClosed) is
-        // excluded from coverage and never runs here, because Close() is the
-        // call NewChatWindowTests' header says a headless run must not make.
-        // Clearing the singleton is the one thing it does that Toggle reads.
-        NewChatWindow.OpenForTests = null;
+        // What the Closed handler does to the singleton, called directly:
+        // OnClosed itself only fires on a real Close(), which NewChatWindowTests'
+        // header says a headless run must not make, and all it adds to
+        // Forget() is the macOS activation-policy call.
+        NewChatWindow.Forget();
+        Assert.Null(NewChatWindow.OpenForTests);
 
         HotkeyActions.Dispatch(HotkeyAction.OpenNewChat);
         Dispatcher.UIThread.RunJobs();
