@@ -413,6 +413,20 @@ namespace ClaudeBuddy
             DismissItem.IsVisible = SessionPresence.CanDismiss(status);
             EndSessionItem.IsVisible = SessionPresence.CanEndSession(status);
 
+            // CB-170. Asked only of an OpenClaw orb — the context is read off
+            // the live gateway connection, and no other orb has one.
+            var openClaw = status.Source == SessionSource.OpenClaw
+                ? OpenClawCapabilities(SessionId)
+                : OpenClawActionContext.None;
+            InterruptRunItem.IsVisible = SessionPresence.CanInterruptOpenClaw(status, openClaw);
+            EndConversationItem.IsVisible = SessionPresence.CanEndOpenClawConversation(status, openClaw);
+
+            // Left alone while a row is armed, in flight or showing what the
+            // gateway said. This runs every couple of seconds, and resetting the
+            // wording here would erase "Couldn't end: …" before anyone had read
+            // it; the menu closing is what puts the plain wording back.
+            if (!_openClawRowsHeld) RestoreOpenClawRows();
+
             // CB-168: a local-CLI orb pre-fills the dialog with its own cwd
             // and CLI; an OpenClaw orb pre-fills the dialog's agent picker
             // with its own agent (NewChatPrefillFor, via
@@ -2703,6 +2717,160 @@ namespace ClaudeBuddy
         internal void EndSession_Click(object? sender, RoutedEventArgs e)
         {
             SessionManager.Instance?.EndSession(SessionId);
+        }
+
+        // --- CB-170: an OpenClaw conversation's Interrupt and End rows -------
+        //
+        // Seams rather than direct calls, so the UI suite can drive the rows
+        // against a fake the way ChatPanel's suites drive FakeChatSession. The
+        // defaults are the real thing; nothing in the app sets them.
+        internal Func<string, OpenClawActionContext> OpenClawCapabilities { get; set; } =
+            OpenClawSessions.CapabilitiesFor;
+
+        internal Func<string, CancellationToken, Task<(OpenClawActionOutcome Outcome, string? Detail)>>
+            InterruptAction { get; set; } = OpenClawSessions.InterruptAsync;
+
+        internal Func<string, CancellationToken, Task<(OpenClawActionOutcome Outcome, string? Detail)>>
+            EndAction { get; set; } = (id, ct) => OpenClawSessions.EndConversationAsync(id, ct);
+
+        // How long an armed End waits for its second click. The same six
+        // seconds the settings window's profile delete gives — the one confirm
+        // this app already has, and the shape this row copies: the row says
+        // what it is about to do while it waits, and gives up on its own so a
+        // stray click cannot leave it armed.
+        //
+        // Settable per orb only so a test can watch the timer itself fire
+        // instead of waiting six real seconds for it.
+        internal TimeSpan EndDisarmAfter { get; set; } = TimeSpan.FromSeconds(6);
+
+        // Held: the rows are saying something UpdateFrom must not overwrite.
+        // Busy: a request is out, and a second click must not send another.
+        // Release: the menu closed while busy, so the answer, when it lands,
+        // has nobody to be shown to and the rows go back to their plain words.
+        private bool _openClawRowsHeld;
+        private bool _openClawBusy;
+        private bool _openClawReleaseWhenDone;
+        private DispatcherTimer? _endDisarm;
+
+        internal bool EndConversationArmed => _endDisarm is not null;
+
+        internal void RestoreOpenClawRows()
+        {
+            SetRow(InterruptRunItem, OpenClawActionText.Header(OpenClawAction.Interrupt),
+                OpenClawActionText.Tip(OpenClawAction.Interrupt), enabled: true);
+            SetRow(EndConversationItem, OpenClawActionText.Header(OpenClawAction.End),
+                OpenClawActionText.Tip(OpenClawAction.End), enabled: true);
+        }
+
+        private static void SetRow(MenuItem item, string header, string tip, bool enabled)
+        {
+            item.Header = header;
+            ToolTip.SetTip(item, tip);
+            item.IsEnabled = enabled;
+        }
+
+        // async void is the event's shape; the work, and everything a test
+        // awaits, is in the Task-returning methods below.
+        internal async void InterruptRun_Click(object? sender, RoutedEventArgs e) =>
+            await InterruptRunAsync();
+
+        internal async void EndConversation_Click(object? sender, RoutedEventArgs e) =>
+            await EndConversationClickAsync();
+
+        // No arm step: stopping a run loses nothing but the rest of the reply,
+        // and is a no-op when nothing is running.
+        internal async Task InterruptRunAsync()
+        {
+            if (_openClawBusy) return;
+
+            _openClawBusy = true;
+            _openClawRowsHeld = true;
+            SetRow(InterruptRunItem, OpenClawActionText.Working(OpenClawAction.Interrupt),
+                OpenClawActionText.Tip(OpenClawAction.Interrupt), enabled: false);
+
+            var (outcome, detail) = await InterruptAction(SessionId, CancellationToken.None);
+            Report(InterruptRunItem, OpenClawAction.Interrupt, outcome, detail);
+        }
+
+        // First click arms, second click acts. Archiving changes state every
+        // other client of the gateway can see, which is the reason for the
+        // confirm; it is reversible from OpenClaw, which is the reason it is two
+        // clicks on the row rather than a dialog.
+        internal async Task EndConversationClickAsync()
+        {
+            if (_openClawBusy) return;
+
+            if (_endDisarm is null)
+            {
+                _openClawRowsHeld = true;
+                EndConversationItem.Header = OpenClawActionText.Armed;
+
+                _endDisarm = new DispatcherTimer { Interval = EndDisarmAfter };
+                _endDisarm.Tick += (_, _) => DisarmEndConversation();
+                _endDisarm.Start();
+                return;
+            }
+
+            StopEndDisarm();
+            _openClawBusy = true;
+            SetRow(EndConversationItem, OpenClawActionText.Working(OpenClawAction.End),
+                OpenClawActionText.Tip(OpenClawAction.End), enabled: false);
+
+            var (outcome, detail) = await EndAction(SessionId, CancellationToken.None);
+            Report(EndConversationItem, OpenClawAction.End, outcome, detail);
+        }
+
+        // The timer giving up on an armed End. Only the End row's wording goes
+        // back: an Interrupt answer showing beside it is still worth reading.
+        internal void DisarmEndConversation()
+        {
+            StopEndDisarm();
+            EndConversationItem.Header = OpenClawActionText.Header(OpenClawAction.End);
+        }
+
+        private void StopEndDisarm()
+        {
+            _endDisarm?.Stop();
+            _endDisarm = null;
+        }
+
+        // The answer, on the row that asked, with the whole sentence in the
+        // tooltip as well — a gateway refusal can run longer than a menu row is
+        // wide.
+        private void Report(MenuItem item, OpenClawAction action, OpenClawActionOutcome outcome, string? detail)
+        {
+            _openClawBusy = false;
+
+            if (_openClawReleaseWhenDone)
+            {
+                ReleaseOpenClawRows();
+                return;
+            }
+
+            var text = OpenClawActionText.For(outcome, detail, action);
+            SetRow(item, text, text, enabled: true);
+        }
+
+        // The menu closing: whatever the rows were saying was said to someone
+        // who has now looked away. Unless a request is still out, in which case
+        // its answer releases them when it lands.
+        internal void SessionMenu_Closed(object? sender, RoutedEventArgs e)
+        {
+            if (_openClawBusy)
+            {
+                _openClawReleaseWhenDone = true;
+                return;
+            }
+
+            ReleaseOpenClawRows();
+        }
+
+        private void ReleaseOpenClawRows()
+        {
+            StopEndDisarm();
+            _openClawRowsHeld = false;
+            _openClawReleaseWhenDone = false;
+            RestoreOpenClawRows();
         }
 
         // What this orb would pre-fill the "New chat…" dialog with, or null

@@ -76,7 +76,13 @@ namespace ClaudeBuddy
                 // A run's lifecycle as the session roster sees it. Measured: a
                 // run on an agent's main session arrived as exactly two of
                 // these, phase "start" and phase "end", each carrying the
-                // runId, and *no* agent/chat/tool events at all. The rows with
+                // runId, and *no* agent/chat/tool events at all. An aborted run
+                // (CB-170, measured) sends phase "end" with status "killed" and
+                // then, about a second later, a second row for the same runId
+                // with phase "error". Either one ends the run: "error" is as
+                // terminal as "end", and treating it as anything else would
+                // either leave an orb lit when the "end" was missed or, worse,
+                // light it again on the trailing row. The rows with
                 // no phase — the CB-152 reconnect burst, reason "cron-binding"
                 // or "placement", fired for the whole roster at once — carry no
                 // runId either, and stay None. Phase "message" (a transcript row
@@ -85,7 +91,7 @@ namespace ClaudeBuddy
                     return (Str(payload, "phase"), runId) switch
                     {
                         ("start", not null) => new(RunSignal.Open, runId),
-                        ("end", not null) => new(RunSignal.End, runId),
+                        ("end" or "error", not null) => new(RunSignal.End, runId),
                         _ => default
                     };
 
