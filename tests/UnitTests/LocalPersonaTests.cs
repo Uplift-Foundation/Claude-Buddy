@@ -895,6 +895,37 @@ public class LocalPersonaTests : IDisposable
         Assert.Equal(Path.Combine(claudeDir, "cto.png"), persona.AvatarPath);
     }
 
+    // The other way a member file can be "found": naming a picture that
+    // PersonaFiles cannot read (a typo, here — no file at that path). A
+    // group that leaves AvatarPath null is not the same as a group that
+    // said nothing at all, and treating it that way would fall through to
+    // the project's CLAUDE.md and put the project lead's face back on this
+    // member's orb — CB-191's exact symptom, reached through a broken
+    // reference rather than an absent field.
+    [Fact]
+    public void AMemberNamingAnUnreadablePictureStillExcludesTheProjectsFaceEvenThoughItGetsNoPicture()
+    {
+        var project = Dir("tree", "project");
+        var claudeDir = Dir("tree", "project", ".claude");
+        WriteProjectPersona(project, claudeDir);
+
+        // Front matter rather than the colon-less "## Attributes" shape used
+        // elsewhere in this file: RawAvatar — the field this fix reads — is
+        // only set by the labelled arms (front matter, a bullet, a bold
+        // field, a table row), which is what lets PersonaFiles later tell
+        // "named and unreadable" apart from "never named". The section arm's
+        // avatar case does not fill it, so it would not exercise this path.
+        var memberDir = Dir("tree", "project", ".profiles-assets", "ines-harrow");
+        Write(memberDir, "ines-harrow.md", "---", "image: \"typo.png\"", "---");
+
+        var persona = LocalPersona.Resolve(project, SessionSource.ClaudeCode, Array.Empty<string>(), "ines-harrow");
+
+        Assert.NotEqual("Jennifer", persona.Name);
+        Assert.Null(persona.Name);
+        Assert.Null(persona.AvatarPath);
+        Assert.Null(persona.AvatarSource);
+    }
+
     // The monorepo layering TheNearestFileToNameAFieldOwnsIt already pins
     // must survive this ticket untouched: with no agent name anywhere, no
     // candidate is ever IsMemberProfile, so a nearer file's name is still

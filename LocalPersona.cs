@@ -516,9 +516,24 @@ namespace ClaudeBuddy
         // for the member short-circuit above and of the running totals for
         // every other candidate, without two copies of the field-reading body.
         private readonly record struct Group(
-            string? Name, string? Voice, double? Rate, string? AvatarSource, string? AvatarPath, List<string> Files)
+            string? Name, string? Voice, double? Rate, string? AvatarSource, string? AvatarPath,
+            bool AvatarNamed, List<string> Files)
         {
-            internal bool IsEmpty => Name is null && Voice is null && Rate is null && AvatarPath is null;
+            // AvatarNamed is not just AvatarPath is not null — a member file
+            // that names a picture PersonaFiles could not read (missing,
+            // too large, escapes its root) is still a member file that
+            // *found itself*, and must exclude the project's face exactly as
+            // one whose picture did resolve would. Without this, a member
+            // whose only mistake was a typo in `image:` fell through to the
+            // project's CLAUDE.md and wore its face — the same symptom this
+            // ticket exists to fix, reached through a broken reference
+            // instead of an absent field, and no more a non-goal for that.
+            // PersonaMarkdown.Fields.RawAvatar already exists for exactly
+            // this — see its own header comment — so this reads that rather
+            // than inventing a second way to ask "did a file try to name
+            // one".
+            internal bool IsEmpty =>
+                Name is null && Voice is null && Rate is null && AvatarPath is null && !AvatarNamed;
         }
 
         private static Group Fold(
@@ -529,6 +544,7 @@ namespace ClaudeBuddy
             double? rate = null;
             string? avatarSource = null;
             string? avatarPath = null;
+            var avatarNamed = false;
             var files = new List<string>();
 
             for (var i = start; i < end; i++)
@@ -540,6 +556,7 @@ namespace ClaudeBuddy
                 name ??= fields.Name;
                 voice ??= fields.Voice;
                 rate ??= fields.Rate;
+                avatarNamed |= fields.RawAvatar is not null;
 
                 if (avatarPath is not null) continue;
 
@@ -575,7 +592,7 @@ namespace ClaudeBuddy
                 avatarPath = picture;
             }
 
-            return new Group(name, voice, rate, avatarSource, avatarPath, files);
+            return new Group(name, voice, rate, avatarSource, avatarPath, avatarNamed, files);
         }
 
         // What the scan compares to decide whether anything is worth re-reading:
