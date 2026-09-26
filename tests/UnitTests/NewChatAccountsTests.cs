@@ -107,6 +107,27 @@ namespace ClaudeBuddy.Tests
             Assert.Equal(OutsideHome, choices[1].ProfileDir);
         }
 
+        // Pins the fix itself (Tamsin, CB-201): every Home constant above is
+        // already canonical, so reverting NewChatAccounts.Choices back to
+        // ChatHeaderMeta.HomeRelative(resolved, home) — comparing against
+        // the raw, unresolved home instead of ClaudeProfile.Resolve(home,
+        // "") — still passes every one of them. A redundant-but-equivalent
+        // home (a trailing "\." segment) is the one shape that tells the two
+        // apart: resolved collapses the redundancy away via
+        // ClaudeProfile.Resolve's own Path.GetFullPath, but the raw home
+        // string still carries it, so an un-resolved comparison stops
+        // matching the boundary at all and falls through to the full
+        // absolute path instead of "~\...".
+        [Fact]
+        public void ARedundantHomeSegmentStillLabelsAsHomeRelative()
+        {
+            var noncanonicalHome = Home + Path.DirectorySeparatorChar + ".";
+
+            var choices = NewChatAccounts.Choices(noncanonicalHome, new[] { ".claude-work" });
+
+            Assert.Equal(Tilde(".claude-work"), choices[1].Label);
+        }
+
         [Fact]
         public void SeveralRealExtrasAreOfferedInOrderAfterDefault()
         {
