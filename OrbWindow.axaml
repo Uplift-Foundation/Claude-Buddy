@@ -47,7 +47,7 @@
                  of the whole process table, and the question only matters at
                  the instant somebody is aiming at the row. See
                  OrbWindow.SessionMenu_Opening and SessionDependents. -->
-            <ContextMenu Opening="SessionMenu_Opening">
+            <ContextMenu Opening="SessionMenu_Opening" Closed="SessionMenu_Closed">
                 <!-- Chat name, then its directory. The path row hides itself
                      when there's no name yet, since it'd just repeat. -->
                 <MenuItem x:Name="SessionInfoItem" IsEnabled="False"/>
@@ -98,6 +98,26 @@
                           Header="Open agents view"
                           IsVisible="False"
                           Click="AgentsView_Click"/>
+                <!-- CB-170: the OpenClaw conversation's own two verbs, which
+                     are requests to the gateway rather than anything done to a
+                     process here. Hidden unless the gateway will take them —
+                     SessionPresence.CanInterruptOpenClaw /
+                     CanEndOpenClawConversation, set in UpdateFrom.
+
+                     StaysOpenOnClick because the answer is written back onto
+                     the row: "End the conversation" arms on the first click
+                     and acts on the second, and either row then says what the
+                     gateway said. A menu that closed on the click would take
+                     the refusal with it. Header, tooltip and IsEnabled are all
+                     set in code; see OrbWindow.RestoreOpenClawRows. -->
+                <MenuItem x:Name="InterruptRunItem"
+                          IsVisible="False"
+                          StaysOpenOnClick="True"
+                          Click="InterruptRun_Click"/>
+                <MenuItem x:Name="EndConversationItem"
+                          IsVisible="False"
+                          StaysOpenOnClick="True"
+                          Click="EndConversation_Click"/>
                 <!-- The two lifecycle actions, hidden for a session they cannot
                      serve rather than greyed out — see
                      SessionPresence.CanDismiss/CanEndSession, which is also

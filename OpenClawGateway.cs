@@ -109,6 +109,14 @@ namespace ClaudeBuddy
 
         // Set by the handshake, read by callers deciding what to do next.
         public IReadOnlyList<string> GrantedScopes { get; private set; } = Array.Empty<string>();
+
+        // Every method the gateway says it serves, from hello-ok's
+        // features.methods (CB-170). Kept so a menu row that needs a method is
+        // offered only where the method exists — but it is not a statement
+        // about what *this* device may call: measured against 2026.9.2, the
+        // list carries sessions.reset to a device whose scopes cannot use it.
+        // So nothing reads this without also reading GrantedScopes.
+        public IReadOnlySet<string> Methods { get; private set; } = new HashSet<string>();
         public string? ServerVersion { get; private set; }
         public int TickIntervalMs { get; private set; } = 30_000;
         public long MaxPayload { get; private set; } = 26_214_400;
@@ -397,6 +405,8 @@ namespace ClaudeBuddy
                     .ToArray();
             }
 
+            Methods = ParseFeatures(response);
+
             if (response.TryGetProperty("policy", out var policy))
             {
                 if (policy.TryGetProperty("tickIntervalMs", out var tick) && tick.TryGetInt32(out var ms))
@@ -558,6 +568,34 @@ namespace ClaudeBuddy
         // collection with no indication that a timeout was involved at all —
         // reproduced locally by starving the thread pool, where the receive
         // loop's continuation is queued behind whatever else is blocked.
+        // hello-ok's features.methods as a set. Anything missing or malformed
+        // is the empty set, which offers nothing: a row that needs a method the
+        // gateway never named should be absent, not tried.
+        internal static IReadOnlySet<string> ParseFeatures(JsonElement helloOk)
+        {
+            var methods = new HashSet<string>(StringComparer.Ordinal);
+
+            if (helloOk.ValueKind != JsonValueKind.Object
+                || !helloOk.TryGetProperty("features", out var features)
+                || features.ValueKind != JsonValueKind.Object
+                || !features.TryGetProperty("methods", out var list)
+                || list.ValueKind != JsonValueKind.Array)
+            {
+                return methods;
+            }
+
+            foreach (var method in list.EnumerateArray())
+            {
+                if (method.ValueKind == JsonValueKind.String
+                    && method.GetString() is { Length: > 0 } name)
+                {
+                    methods.Add(name);
+                }
+            }
+
+            return methods;
+        }
+
         internal static string DescribeHandshakeFailure(
             Exception ex, bool abandoned, TimeSpan waited) =>
             ex is not OperationCanceledException
@@ -795,7 +833,10 @@ namespace ClaudeBuddy
                     detail = dc.GetString();
             }
 
-            tcs.TrySetException(new OpenClawRequestException(message ?? code ?? "request failed", detail));
+            tcs.TrySetException(new OpenClawRequestException(message ?? code ?? "request failed", detail)
+            {
+                Code = code
+            });
         }
 
         // A dead socket must not leave callers waiting out their own timeouts
@@ -831,5 +872,13 @@ namespace ClaudeBuddy
         // and the only way to tell "approve this device" from "your signature
         // is wrong" without matching on message text.
         public string? DetailCode { get; }
+
+        // The error's own top-level code (INVALID_REQUEST, UNAVAILABLE, …),
+        // beside the detail code rather than instead of it. The gateway marks a
+        // transient refusal UNAVAILABLE — an archive asked for while the run it
+        // just aborted is still settling is the case CB-170 needed — and that is
+        // the one thing that separates "try again" from "no" without reading
+        // the message.
+        public string? Code { get; init; }
     }
 }

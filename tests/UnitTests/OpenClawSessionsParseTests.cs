@@ -49,6 +49,92 @@ namespace ClaudeBuddy.Tests
             return OpenClawSessions.Parse(Json(json), Now);
         }
 
+        // --- CB-170: what the orb's Interrupt and End rows read off a row ---
+
+        // The two fields the End row needs, off the row the gateway sent: the
+        // id sessions.patch demands as expectedSessionId, and the gateway's own
+        // word on whether this is an agent's main session.
+        [Fact]
+        public void ASessionCarriesItsGatewayIdAndWhetherItIsTheAgentsMain()
+        {
+            var json = $$"""
+                {"sessions":[
+                  {"key":"agent:main:main","sessionId":"sid-main","isMain":true,"lastActivityAt":{{JustNow}}},
+                  {"key":"agent:main:dashboard:abc","sessionId":"sid-dash","isMain":false,"lastActivityAt":{{JustNow}}}
+                ]}
+                """;
+
+            var (sessions, _) = Parse(json);
+
+            var main = Assert.Single(sessions, s => s.Key == "agent:main:main");
+            Assert.Equal("sid-main", main.SessionId);
+            Assert.True(main.IsMain);
+
+            var dashboard = Assert.Single(sessions, s => s.Key == "agent:main:dashboard:abc");
+            Assert.Equal("sid-dash", dashboard.SessionId);
+            Assert.False(dashboard.IsMain);
+        }
+
+        // Missing or the wrong type is no id and not main — which offers
+        // Interrupt and hides End, the safe reading of a row that says nothing.
+        [Theory]
+        [InlineData("")]
+        [InlineData(",\"sessionId\":7,\"isMain\":\"yes\"")]
+        public void AMissingIdOrMainFlagIsNoIdAndNotMain(string extra)
+        {
+            var json = $$"""
+                {"sessions":[{"key":"agent:main:dashboard:abc","lastActivityAt":{{JustNow}}{{extra}}}]}
+                """;
+
+            var session = Assert.Single(Parse(json).Sessions);
+
+            Assert.Null(session.SessionId);
+            Assert.False(session.IsMain);
+        }
+
+        // An archived conversation gets no orb. sessions.list already omits
+        // them; this is the row an archive from any client looks like, and
+        // drawing it would put back the orb that was just ended. Not archived,
+        // and archived:false, are both ordinary sessions.
+        [Fact]
+        public void AnArchivedRowGetsNoOrb()
+        {
+            var json = $$"""
+                {"sessions":[
+                  {"key":"agent:main:dashboard:gone","archived":true,"lastActivityAt":{{JustNow}}},
+                  {"key":"agent:main:dashboard:kept","archived":false,"lastActivityAt":{{JustNow}}},
+                  {"key":"agent:main:dashboard:plain","lastActivityAt":{{JustNow}}}
+                ]}
+                """;
+
+            var (sessions, total) = Parse(json);
+
+            Assert.Equal(
+                new[] { "agent:main:dashboard:kept", "agent:main:dashboard:plain" },
+                sessions.Select(s => s.Key).OrderBy(k => k).ToArray());
+            Assert.Equal(3, total);
+        }
+
+        // ...and it is out of its room too, not only off the screen: a channel
+        // whose only session was archived has nobody standing in it. Paired
+        // with the same row un-archived, so an empty room is the flag's doing
+        // and not a key this test got wrong.
+        [Theory]
+        [InlineData(true, 0)]
+        [InlineData(false, 1)]
+        public void AnArchivedRowIsNotAMemberOfItsRoom(bool archived, int members)
+        {
+            var json = $$"""
+                {"sessions":[
+                  {"key":"agent:quill:discord:channel:4242","archived":{{(archived ? "true" : "false")}},"lastActivityAt":{{JustNow}}}
+                ]}
+                """;
+
+            Parse(json);
+
+            Assert.Equal(members, OpenClawSessions.MembersOfRoom("discord:4242").Count);
+        }
+
         // --- the envelope ---
 
         // The list arrives under any of four property names depending on the
