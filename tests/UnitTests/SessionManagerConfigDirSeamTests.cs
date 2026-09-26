@@ -59,10 +59,10 @@ public class SessionManagerConfigDirSeamTests : IDisposable
 
     private IReadOnlyList<string> Candidates(SessionManager manager)
     {
-        var pass = new Dictionary<(string Cwd, SessionSource Source, string Agent), IReadOnlyList<string>>();
+        var pass = new Dictionary<(string Cwd, SessionSource Source, string Agent), IReadOnlyList<LocalPersona.Candidate>>();
         manager.ApplyPersona(_sessionId, Status(), pass);
 
-        return Assert.Single(pass).Value;
+        return Assert.Single(pass).Value.Select(candidate => candidate.Path).ToArray();
     }
 
     // The default. Nothing is given, so the scan asks the machine — which is
@@ -117,7 +117,7 @@ public class SessionManagerConfigDirSeamTests : IDisposable
             userConfigDirs: () => { asked++; return Array.Empty<string>(); });
 
         var second = _sessionId + "-second";
-        var pass = new Dictionary<(string Cwd, SessionSource Source, string Agent), IReadOnlyList<string>>();
+        var pass = new Dictionary<(string Cwd, SessionSource Source, string Agent), IReadOnlyList<LocalPersona.Candidate>>();
 
         try
         {
