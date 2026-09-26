@@ -7,10 +7,33 @@ namespace ClaudeBuddy.Tests
     // blank) is a test rather than a real settings file and a real $HOME.
     public class NewChatAccountsTests
     {
+        // Rooted for the platform the test is running on, the same reason
+        // ClaudeProfileTests.Home is: the label comes from
+        // ChatHeaderMeta.HomeRelative(resolved, homeResolved), and both sides
+        // of that comparison go through Path.GetFullPath first. A Unix-shaped
+        // constant here passed on macOS and failed on windows-latest —
+        // Path.GetFullPath("/Users/me") on Windows resolves against the
+        // current drive rather than staying "/Users/me", so it stopped
+        // reading as "under home" at all. Caught by the CI leg that exists to
+        // catch exactly this.
+        private static readonly string Home =
+            OperatingSystem.IsWindows() ? @"C:\Users\me" : "/Users/me";
+
+        // A rooted path that is not under Home on either platform — a
+        // different drive on Windows, a different top-level directory on
+        // Unix — for the "outside home" cases.
+        private static readonly string OutsideHome =
+            OperatingSystem.IsWindows() ? @"D:\Backup\.claude-mobile" : "/Volumes/Backup/.claude-mobile";
+
+        // The separator HomeRelative's own "~" + rest actually produces on
+        // this platform, so a label assertion never hardcodes the other
+        // platform's slash.
+        private static string Tilde(string rest) => "~" + Path.DirectorySeparatorChar + rest;
+
         [Fact]
         public void WithNoExtrasOnlyDefaultIsOffered()
         {
-            var choices = NewChatAccounts.Choices("/Users/me", Array.Empty<string>());
+            var choices = NewChatAccounts.Choices(Home, Array.Empty<string>());
 
             var only = Assert.Single(choices);
             Assert.Equal(NewChatAccounts.DefaultLabel, only.Label);
@@ -20,10 +43,10 @@ namespace ClaudeBuddy.Tests
         [Fact]
         public void ARealExtraIsOfferedWithATildeLabelAndItsRawProfileDir()
         {
-            var choices = NewChatAccounts.Choices("/Users/me", new[] { ".claude-work" });
+            var choices = NewChatAccounts.Choices(Home, new[] { ".claude-work" });
 
             Assert.Equal(2, choices.Count);
-            Assert.Equal("~/.claude-work", choices[1].Label);
+            Assert.Equal(Tilde(".claude-work"), choices[1].Label);
             Assert.Equal(".claude-work", choices[1].ProfileDir);
         }
 
@@ -37,9 +60,9 @@ namespace ClaudeBuddy.Tests
         [Fact]
         public void ARelativeExtraLabelsAsATildePath()
         {
-            var choices = NewChatAccounts.Choices("/Users/me", new[] { ".claude-work" });
+            var choices = NewChatAccounts.Choices(Home, new[] { ".claude-work" });
 
-            Assert.Equal("~/.claude-work", choices[1].Label);
+            Assert.Equal(Tilde(".claude-work"), choices[1].Label);
         }
 
         // A literal leading "~/" in the raw setting is not tilde-expansion —
@@ -51,9 +74,9 @@ namespace ClaudeBuddy.Tests
         [Fact]
         public void ALiteralLeadingTildeInTheRawSettingIsNotExpanded()
         {
-            var choices = NewChatAccounts.Choices("/Users/me", new[] { "~/x" });
+            var choices = NewChatAccounts.Choices(Home, new[] { "~/x" });
 
-            Assert.Equal("~/~/x", choices[1].Label);
+            Assert.Equal(Tilde("~" + Path.DirectorySeparatorChar + "x"), choices[1].Label);
             Assert.Equal("~/x", choices[1].ProfileDir);
         }
 
@@ -63,32 +86,34 @@ namespace ClaudeBuddy.Tests
         [Fact]
         public void AnAbsoluteExtraUnderHomeLabelsAsATildePath()
         {
-            var choices = NewChatAccounts.Choices("/Users/me", new[] { "/Users/me/.claude-work" });
+            var absolute = Path.Combine(Home, ".claude-work");
+            var choices = NewChatAccounts.Choices(Home, new[] { absolute });
 
-            Assert.Equal("~/.claude-work", choices[1].Label);
-            Assert.Equal("/Users/me/.claude-work", choices[1].ProfileDir);
+            Assert.Equal(Tilde(".claude-work"), choices[1].Label);
+            Assert.Equal(absolute, choices[1].ProfileDir);
         }
 
         // The bug QA caught: an absolute path outside home must never be
-        // trimmed down to something that reads as home-relative — "~/Volumes/
-        // Backup/.claude-mobile" names a path that does not exist. The label
-        // is the resolved absolute path, unchanged.
+        // trimmed down to something that reads as home-relative — a path
+        // like that names something that does not exist. The label is the
+        // resolved absolute path, unchanged.
         [Fact]
         public void AnAbsoluteExtraOutsideHomeLabelsAsTheAbsolutePathUnchanged()
         {
-            var choices = NewChatAccounts.Choices("/Users/me", new[] { "/Volumes/Backup/.claude-mobile" });
+            var choices = NewChatAccounts.Choices(Home, new[] { OutsideHome });
 
-            Assert.Equal("/Volumes/Backup/.claude-mobile", choices[1].Label);
-            Assert.Equal("/Volumes/Backup/.claude-mobile", choices[1].ProfileDir);
+            Assert.Equal(
+                Path.TrimEndingDirectorySeparator(Path.GetFullPath(OutsideHome)), choices[1].Label);
+            Assert.Equal(OutsideHome, choices[1].ProfileDir);
         }
 
         [Fact]
         public void SeveralRealExtrasAreOfferedInOrderAfterDefault()
         {
-            var choices = NewChatAccounts.Choices("/Users/me", new[] { ".claude-work", ".claude-board" });
+            var choices = NewChatAccounts.Choices(Home, new[] { ".claude-work", ".claude-board" });
 
             Assert.Equal(
-                new[] { NewChatAccounts.DefaultLabel, "~/.claude-work", "~/.claude-board" },
+                new[] { NewChatAccounts.DefaultLabel, Tilde(".claude-work"), Tilde(".claude-board") },
                 choices.Select(c => c.Label).ToArray());
         }
 
@@ -99,10 +124,21 @@ namespace ClaudeBuddy.Tests
         [Theory]
         [InlineData(".claude")]
         [InlineData(".claude/")]
-        [InlineData("/Users/me/.claude")]
         public void AnExtraNamingTheDefaultAccountIsDropped(string profileDir)
         {
-            var choices = NewChatAccounts.Choices("/Users/me", new[] { profileDir });
+            var choices = NewChatAccounts.Choices(Home, new[] { profileDir });
+
+            var only = Assert.Single(choices);
+            Assert.Null(only.ProfileDir);
+        }
+
+        // The absolute spelling of the same rule — its own case rather than
+        // a [Theory] entry, since it needs Home rather than a compile-time
+        // constant.
+        [Fact]
+        public void AnAbsoluteSpellingOfTheDefaultAccountIsDropped()
+        {
+            var choices = NewChatAccounts.Choices(Home, new[] { Path.Combine(Home, ".claude") });
 
             var only = Assert.Single(choices);
             Assert.Null(only.ProfileDir);
@@ -111,7 +147,7 @@ namespace ClaudeBuddy.Tests
         [Fact]
         public void ADuplicateExtraIsOfferedOnlyOnce()
         {
-            var choices = NewChatAccounts.Choices("/Users/me", new[] { ".claude-work", ".claude-work" });
+            var choices = NewChatAccounts.Choices(Home, new[] { ".claude-work", ".claude-work" });
 
             Assert.Equal(2, choices.Count);
         }
@@ -121,7 +157,7 @@ namespace ClaudeBuddy.Tests
         [InlineData("   ")]
         public void BlankExtrasAreSkipped(string blank)
         {
-            var choices = NewChatAccounts.Choices("/Users/me", new[] { blank, ".claude-work" });
+            var choices = NewChatAccounts.Choices(Home, new[] { blank, ".claude-work" });
 
             Assert.Equal(2, choices.Count);
             Assert.Equal(".claude-work", choices[1].ProfileDir);

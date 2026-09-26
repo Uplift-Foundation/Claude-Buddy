@@ -143,13 +143,21 @@ namespace ClaudeBuddy.Tests
 
         // --- ConfigDirFor: the one path to CLAUDE_CONFIG_DIR -----------------
 
+        // Rooted for the platform the test runs on, the same reason
+        // ClaudeProfileTests.Home is — ConfigDirFor's answer is a resolved
+        // path (Path.GetFullPath under the hood), and "/Users/me" resolves
+        // against the current drive rather than staying itself on Windows.
+        // A hardcoded Unix expectation here passed on macOS and failed on
+        // windows-latest until this was made platform-aware.
+        private static readonly string Home =
+            OperatingSystem.IsWindows() ? @"C:\Users\me" : "/Users/me";
+
         [Fact]
         public void ConfigDirForDelegatesToClaudeProfileForClaudeCode()
         {
-            var result = NewChatLauncher.ConfigDirFor(
-                NewChatCli.ClaudeCode, "/Users/me", ".claude-work");
+            var result = NewChatLauncher.ConfigDirFor(NewChatCli.ClaudeCode, Home, ".claude-work");
 
-            Assert.Equal("/Users/me/.claude-work", result);
+            Assert.Equal(Path.Combine(Home, ".claude-work"), result);
         }
 
         [Fact]

@@ -119,6 +119,21 @@ namespace ClaudeBuddy
         {
             var choices = new List<Choice> { new(DefaultLabel, null) };
 
+            // Resolved once and reused for every HomeRelative call below,
+            // rather than handing it the raw `home` argument as-is. QA
+            // (CB-201) caught this the hard way: on windows-latest CI, a
+            // caller-supplied home of "/Users/me" is not already in the form
+            // ClaudeProfile.Resolve's own Path.GetFullPath call would produce
+            // ("D:\Users\me", since Windows resolves a leading "/" against
+            // the current drive) — so comparing a resolved profile path
+            // against the *unresolved* home string failed to recognise it as
+            // "under home" at all, and every real entry fell through to its
+            // full absolute path instead of a "~/..." label. Resolving home
+            // the same way makes the two sides of the comparison agree
+            // regardless of what shape the caller's home string was already
+            // in.
+            var homeResolved = ClaudeProfile.Resolve(home, string.Empty);
+
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {
                 ClaudeProfile.Resolve(home, ClaudeBuddySettings.DefaultRemoteControlProfileDir)
@@ -143,7 +158,7 @@ namespace ClaudeBuddy
                 // display; reusing it here is one resolver rather than a
                 // second copy that could disagree with it. ProfileDir stays
                 // the raw, untouched string — the label is display only.
-                choices.Add(new Choice(ChatHeaderMeta.HomeRelative(resolved, home), trimmed));
+                choices.Add(new Choice(ChatHeaderMeta.HomeRelative(resolved, homeResolved), trimmed));
             }
 
             return choices;
