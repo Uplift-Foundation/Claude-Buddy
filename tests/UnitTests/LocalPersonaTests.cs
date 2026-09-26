@@ -826,6 +826,36 @@ public class LocalPersonaTests : IDisposable
         Assert.Equal(Path.Combine(gitignoredDir, "face.png"), persona.AvatarPath);
     }
 
+    // The other half of the split-shape case: both member files exist and
+    // are read together, and *neither* names a picture. The merge above
+    // must not turn "both files read" into "go looking somewhere else" —
+    // the run is still a member's own persona once it says anything, so it
+    // stays exclusive, and the orb wears initials rather than the project's
+    // face even though two files, not one, were tried and came up short on
+    // exactly that field.
+    [Fact]
+    public void TheTwoMemberProfileShapesStillExcludeTheProjectsFaceWhenNeitherNamesAPicture()
+    {
+        var project = Dir("tree", "project");
+        var claudeDir = Dir("tree", "project", ".claude");
+        WriteProjectPersona(project, claudeDir);
+
+        var trackedDir = Dir("tree", "project", "profiles", "ines-harrow");
+        Write(trackedDir, "ines-harrow.md", "## Attributes", "Name Ines Harrow");
+
+        var gitignoredDir = Dir("tree", "project", ".profiles-assets", "ines-harrow");
+        Write(gitignoredDir, "ines-harrow.md", "## Attributes", "Name Ines Harrow Again");
+
+        var persona = LocalPersona.Resolve(project, SessionSource.ClaudeCode, Array.Empty<string>(), "ines-harrow");
+
+        // profiles/ is read first, so it wins the name; .profiles-assets/
+        // is still read (both files are in the run), but has nothing left
+        // to contribute since the name is already taken.
+        Assert.Equal("Ines Harrow", persona.Name);
+        Assert.Null(persona.AvatarPath);
+        Assert.Null(persona.AvatarSource);
+    }
+
     // AC4: voice and rate follow the same rule as name and avatar — a
     // member's own file, once it says anything, is the whole answer, so a
     // member does not inherit the project's voice either.
