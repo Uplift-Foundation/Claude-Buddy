@@ -130,6 +130,44 @@ public class SpeechSummaryTextTests
         Assert.Contains("No preamble", prompt);
     }
 
+    // Reply is the default kind, so the two-argument call above and this one
+    // stay indistinguishable — the negative control for the variant below.
+    [Fact]
+    public void ThePromptDefaultsToTheReplyKind()
+    {
+        Assert.Equal(
+            SpeechSummary.Prompt("some reply"),
+            SpeechSummary.Prompt("some reply", SpeechSummaryKind.Reply));
+    }
+
+    // CB-167's vibe summary: a different question from the reply summary
+    // above — "what's next" rather than "what did it say" — because this is
+    // what gets spoken instead of a chime when a turn finishes, and knowing
+    // whether to come back is the whole reason to prefer it over a Glass
+    // sound.
+    [Fact]
+    public void TheTurnFinishedPromptAsksWhatWasDoneAndWhatsNext()
+    {
+        var prompt = SpeechSummary.Prompt("the assistant did something", SpeechSummaryKind.TurnFinished);
+
+        Assert.Contains("the assistant did something", prompt);
+        Assert.Contains("what's next", prompt);
+        Assert.Contains("one to three", prompt);
+        Assert.Contains("read aloud", prompt);
+        Assert.Contains("No preamble", prompt);
+    }
+
+    // The two kinds ask different questions, not the same question worded
+    // differently — this is what would fail if TurnFinished silently reused
+    // the Reply instruction with the kind parameter ignored.
+    [Fact]
+    public void TheTwoKindsProduceDifferentPrompts()
+    {
+        Assert.NotEqual(
+            SpeechSummary.Prompt("a reply", SpeechSummaryKind.Reply),
+            SpeechSummary.Prompt("a reply", SpeechSummaryKind.TurnFinished));
+    }
+
     // A very long reply is exactly what this mode is for, but its tail adds
     // little to three sentences and costs latency on the slow leg.
     [Fact]
@@ -312,5 +350,20 @@ public class SpeechSummaryOutcomeTests : IDisposable
 
         Assert.NotEqual(reply, spoken);
         Assert.True(spoken.Length < 200);
+    }
+
+    // CB-167's entry point: the two-argument overload SpeechRequest.
+    // SpeakTurnSummary calls. The seam itself is kind-agnostic (it never
+    // builds a prompt), so this proves the overload reaches the same working
+    // path as the reply-kind default rather than a parallel one nobody
+    // exercises.
+    [Fact]
+    public async Task TheTurnFinishedOverloadReachesTheSameSeamAsTheDefault()
+    {
+        Answer(_ => Task.FromResult<string?>("Fixed the bug and pushed it."));
+
+        Assert.Equal(
+            "Fixed the bug and pushed it.",
+            await SpeechSummary.SummarizeOrSayWhyAsync("a very long reply", SpeechSummaryKind.TurnFinished));
     }
 }

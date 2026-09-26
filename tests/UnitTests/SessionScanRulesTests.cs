@@ -478,6 +478,83 @@ public class SessionScanRulesTests
         Assert.Equal("", SessionManager.PositionKeyFor(status, "id-1"));
     }
 
+    // --- SoundKeyFor (CB-167) -------------------------------------------------
+
+    [Fact]
+    public void SoundKeyFor_WithNoAgentNameIsExactlyThePositionKey()
+    {
+        var status = new SessionStatus
+        {
+            Source = SessionSource.ClaudeCode, Cwd = "/Users/user/project", Title = "build"
+        };
+
+        Assert.Equal(
+            SessionManager.PositionKeyFor(status, "id-1"),
+            SessionManager.SoundKeyFor(status, "id-1"));
+    }
+
+    // The gap PositionKeyFor leaves open on purpose: two agents on one team
+    // sharing a cwd and an auto-generated title collide under it, which is
+    // fine for a stacked orb position and wrong for "mute this one agent"
+    // silently muting a teammate too.
+    [Fact]
+    public void SoundKeyFor_TeamMembersSharingACwdAndTitleGetDistinctKeys()
+    {
+        var first = new SessionStatus
+        {
+            Source = SessionSource.ClaudeCode, Cwd = "/Users/user/project", Title = "build",
+            Agent = "engineer-a"
+        };
+        var second = new SessionStatus
+        {
+            Source = SessionSource.ClaudeCode, Cwd = "/Users/user/project", Title = "build",
+            Agent = "engineer-b"
+        };
+
+        // Same PositionKey — this is the collision SoundKeyFor exists to fix.
+        Assert.Equal(
+            SessionManager.PositionKeyFor(first, "id-1"),
+            SessionManager.PositionKeyFor(second, "id-2"));
+
+        Assert.NotEqual(
+            SessionManager.SoundKeyFor(first, "id-1"),
+            SessionManager.SoundKeyFor(second, "id-2"));
+    }
+
+    // An untitled local session keys on its own session id (CB-10), so its
+    // sound override — like its position — lasts only as long as that
+    // session. Named as a known limit in the plan rather than fixed here.
+    [Fact]
+    public void SoundKeyFor_UntitledSessionKeysOnItsOwnSessionId()
+    {
+        var status = new SessionStatus
+        {
+            Source = SessionSource.ClaudeCode, Cwd = "/Users/user/project", Title = ""
+        };
+
+        Assert.Equal("id-9", SessionManager.SoundKeyFor(status, "id-9"));
+    }
+
+    // QA (CB-167): a local session with no cwd has PositionKeyFor == "" —
+    // deliberately "no key," per PositionKeyFor's own early return — but the
+    // original SoundKeyFor turned that into "\n<agent>" whenever an agent
+    // name was set: a real, non-empty key shared by every same-named
+    // teammate in every project, since none of them carry a cwd into it.
+    // Muting one would have silently muted them all, everywhere. Staying
+    // empty whenever PositionKeyFor does is what the accessors on
+    // ClaudeBuddySettings already read as "no override" — see
+    // OrbTurnSoundFor's own guard.
+    [Fact]
+    public void SoundKeyFor_AnAgentWithNoCwdIsNotASharedCrossProjectKey()
+    {
+        var status = new SessionStatus
+        {
+            Source = SessionSource.ClaudeCode, Cwd = "", Title = "build", Agent = "engineer-a"
+        };
+
+        Assert.Equal("", SessionManager.SoundKeyFor(status, "id-1"));
+    }
+
     // --- GatherTeams ---------------------------------------------------------
     //
     // The stacking order the tray menu reads top-to-bottom and the orbs are

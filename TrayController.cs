@@ -262,6 +262,10 @@ namespace ClaudeBuddy
 
             menu.Add(new NativeMenuItemSeparator());
 
+            var newChatItem = new NativeMenuItem("New chat…");
+            newChatItem.Click += (_, _) => OpenNewChat();
+            menu.Add(newChatItem);
+
             var settingsItem = new NativeMenuItem("Settings…");
             settingsItem.Click += (_, _) => OpenSettings();
             menu.Add(settingsItem);
@@ -312,6 +316,16 @@ namespace ClaudeBuddy
         private static void Shutdown(IClassicDesktopStyleApplicationLifetime desktop)
         {
             GlobalHotkeys.Stop();
+
+            // QA (CB-167) round 3, finding 5: the ChimePlayer.StopAll call
+            // that used to live here moved to App.OnFrameworkInitializationCompleted's
+            // desktop.Exit handler, because this Shutdown was only ever the
+            // tray menu's own Quit — the orb menu's "Exit Claude Buddy" and
+            // the OS's Cmd-Q both call desktop.Shutdown() directly and never
+            // ran through here, so either one used to leave a chime
+            // orphaned. Exit fires for every path that ends in
+            // desktop.Shutdown(), this one included, so nothing is lost by
+            // no longer calling it from this one call site specifically.
             desktop.Shutdown();
         }
 
@@ -321,6 +335,15 @@ namespace ClaudeBuddy
         // is the call site, and calling it would do all of that for real.
         [ExcludeFromCodeCoverage]
         internal static void OpenSettings() => SettingsWindow.Toggle();
+
+        // Excluded from coverage for the same reason OpenSettings is:
+        // NewChatWindow.Toggle follows the same singleton-window pattern
+        // (MacOSActivation.SetRegular, Activate, a real window shown and
+        // given key), so calling it for real is not something a headless
+        // test run should do. TrayMenuTests checks the item exists and its
+        // label, and stops there — the same split OpenSettings already has.
+        [ExcludeFromCodeCoverage]
+        internal static void OpenNewChat() => NewChatWindow.Toggle();
 
         // Excluded from coverage: starts a relay, which is a live Claude Code
         // session in a tmux pane on another machine — and that costs the person

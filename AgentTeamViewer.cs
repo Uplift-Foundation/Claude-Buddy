@@ -757,30 +757,21 @@ namespace ClaudeBuddy
         // The launch description is pure so the command can be checked on any
         // runner. Starting it remains in AttachSessionOnWindows, where a real
         // Windows Terminal is the only honest integration test.
+        //
+        // The wt/cmd argument layout itself moved to
+        // NewChatCommand.GeneralWindowsStartInfo for CB-168, which CB-168's
+        // own new-chat launch also needs — this is now a one-line forwarder
+        // supplying "attach <jobId>" as the extra arguments, and produces
+        // exactly the same ProcessStartInfo it did before the move (see
+        // WindowsAttachLaunchTests, unchanged and still green).
         internal static ProcessStartInfo? WindowsAttachStartInfo(
             string? claude, string cwd, string? sessionId, bool useWindowsTerminal)
         {
             if (string.IsNullOrEmpty(claude) || string.IsNullOrEmpty(sessionId)) return null;
 
             var jobId = JobIdOf(sessionId);
-            var start = new ProcessStartInfo(useWindowsTerminal ? "wt.exe" : "cmd.exe")
-            {
-                UseShellExecute = true,
-                WorkingDirectory = cwd
-            };
-
-            if (useWindowsTerminal)
-            {
-                start.ArgumentList.Add("-d");
-                start.ArgumentList.Add(cwd);
-                start.ArgumentList.Add("cmd.exe");
-            }
-
-            start.ArgumentList.Add("/k");
-            start.ArgumentList.Add(claude);
-            start.ArgumentList.Add("attach");
-            start.ArgumentList.Add(jobId);
-            return start;
+            return NewChatCommand.GeneralWindowsStartInfo(
+                claude, cwd, new[] { "attach", jobId }, useWindowsTerminal);
         }
 
         // Opens a terminal attached to an existing tmux server, for a session
@@ -867,61 +858,13 @@ namespace ClaudeBuddy
         // pane goes through, which already knows how to find the client, pick
         // the window and bring its app forward.
         // Excluded from coverage: creates a real tmux window and sends keys to it.
+        // Moved to TerminalLauncher.PlaceInTmux for CB-168, verbatim — see
+        // that file for the mechanism, and the history of this file (round 6a
+        // and round eleven) for why the client and window are chosen the way
+        // they are. Forwarder kept here so every call site below is untouched.
         [ExcludeFromCodeCoverage]
-        private static string? PlaceInTmux(string command, string cwd)
-        {
-            var tmux = ResolveTmux();
-            if (tmux is null) return null;
-
-            // A server with no client attached is a detached session: making a
-            // window in it — let alone splitting one — would put the attach
-            // somewhere with no screen, which is the same nowhere the orb already
-            // pointed at. TerminalScripts.PlacementFor turns that into the
-            // ATerminalWindow answer, and this returning null is how the caller
-            // takes it.
-            //
-            // The default server only: a person's tmux is the one they attached to
-            // by hand, and the swarm sockets are this app's own.
-            //
-            // The client they are most likely sitting at, rather than whichever
-            // `list-clients` printed first. That was the same "any client" mistake
-            // round eleven fixed in ResolveClient, still here because this path
-            // chose its client by its own code — and with two clients attached it
-            // decided which window a pane got split into.
-            var session = TerminalScripts.MostRecentClient(AttachedClients(tmux, ""))?.Session;
-
-            // Which window that client is showing. A second question that can fail
-            // on its own, which is why PlacementFor takes both and has a middle
-            // answer.
-            var activeWindow = session is null ? null : CurrentWindowOf(tmux, "", session);
-
-            // `command` arrives already quoted and already naming an absolute
-            // claude, for the reason its builders record: tmux runs it with
-            // `sh -c`, and the server's environment is whatever it happened to be
-            // started with — which needn't include wherever `claude` lives, and
-            // can't be assumed to match this app's. See ClaudeBinary for why
-            // asking a login shell to resolve it isn't the fix it looks like.
-            var args = TerminalScripts.PlacementFor(session, activeWindow) switch
-            {
-                // The whole of round 6a. "It's taking me to a different tmux
-                // window - not this one" — so the conversation comes to them as a
-                // pane in the window they are already in, and nothing moves.
-                TerminalScripts.AttachPlacement.BesideTheUser =>
-                    TerminalScripts.TmuxSplitArgs(null, activeWindow!, cwd, command),
-
-                TerminalScripts.AttachPlacement.ItsOwnTmuxWindow =>
-                    TerminalScripts.TmuxNewWindowArgs(null, session!, cwd, command),
-
-                _ => null
-            };
-
-            if (args is null) return null;
-
-            if (!TryRun(tmux, out var pane, args)) return null;
-
-            var id = pane.Trim();
-            return id.StartsWith('%') ? id : null;
-        }
+        private static string? PlaceInTmux(string command, string cwd) =>
+            TerminalLauncher.PlaceInTmux(command, cwd);
 
         // The first non-blank line of a tmux answer, trimmed. Both lookups above
         // ask for one field and can be handed several lines — `list-clients`
@@ -942,20 +885,14 @@ namespace ClaudeBuddy
         // Finder it gets the bare system one — and unlike a session's status
         // file there's no recorded location to start from here, so this is the
         // same candidate list TerminalFocuser falls back to.
-        // Excluded from coverage: probes the filesystem for a tmux binary.
+        //
+        // Moved to TerminalLauncher.ResolveTmux for CB-168 (QA caught the two
+        // copies going byte-identical rather than being the same method — the
+        // first fix to one would have silently left the other stale). Kept as
+        // a one-line forwarder so ViewingPane and AttachTmuxSocket below don't
+        // change.
         [ExcludeFromCodeCoverage]
-        private static string? ResolveTmux()
-        {
-            string[] candidates =
-            {
-                "/opt/homebrew/bin/tmux",
-                "/usr/local/bin/tmux",
-                "/usr/bin/tmux",
-                "/opt/local/bin/tmux"
-            };
-
-            return candidates.FirstOrDefault(File.Exists);
-        }
+        private static string? ResolveTmux() => TerminalLauncher.ResolveTmux();
 
         // Whichever terminal is already running, so the viewer opens where the
         // user's other terminals are rather than waking a second app. Ordered
@@ -963,30 +900,13 @@ namespace ClaudeBuddy
         // always exists, not a preference.
         // Excluded from coverage: reads the frontmost terminal application from
         // the OS.
+        //
+        // Moved to TerminalLauncher.TerminalApp for CB-168 — the new-chat
+        // feature needs the same "which terminal is running" answer and this
+        // is a one-line forwarder rather than a second copy of the `ps` scan,
+        // so both features stay in sync automatically.
         [ExcludeFromCodeCoverage]
-        private static string TerminalApp()
-        {
-            string[] candidates =
-            {
-                "/Applications/iTerm.app",
-                "/Applications/Ghostty.app",
-                "/Applications/WezTerm.app"
-            };
-
-            if (TryRun("/bin/ps", out var listing, "-eo", "args="))
-            {
-                foreach (var candidate in candidates)
-                {
-                    if (listing.Contains(candidate, StringComparison.Ordinal)
-                        && System.IO.Directory.Exists(candidate))
-                    {
-                        return candidate;
-                    }
-                }
-            }
-
-            return "/System/Applications/Utilities/Terminal.app";
-        }
+        private static string TerminalApp() => TerminalLauncher.TerminalApp();
 
         // The short form `claude attach` and `claude logs` expect. Split rather
         // than a fixed eight characters so an id that isn't a uuid degrades to
@@ -1077,39 +997,13 @@ namespace ClaudeBuddy
         // comment reasoned about exactly this for one caller — kept here as the
         // record of why a GUID replaces it for all three at once, rather than
         // three separate fixed names.
+        // Moved to TerminalLauncher.LaunchInTerminal for CB-168, verbatim —
+        // see that file for the mechanism and CB-80 for why it exists in this
+        // shape. This stays as a one-line forwarder so every call site below
+        // is untouched.
         [ExcludeFromCodeCoverage]
-        private static bool LaunchInTerminal(string app, string? cwd, string command)
-        {
-            if (TerminalScripts.RunScriptFor(app, cwd, command) is { } appleScript)
-            {
-                return TryRun("/usr/bin/osascript", out _, "-e", appleScript);
-            }
-
-            try
-            {
-                System.IO.Directory.CreateDirectory(ClaudeBuddySettings.Directory);
-                var script = Path.Combine(ClaudeBuddySettings.Directory, Guid.NewGuid() + ".sh");
-
-                File.WriteAllText(script,
-                    "#!/bin/sh\n" + TerminalScripts.ShellCommandLine(cwd, command) + "\n");
-                File.SetUnixFileMode(script,
-                    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-
-                var psi = new ProcessStartInfo("/usr/bin/open") { UseShellExecute = false };
-                psi.ArgumentList.Add("-a");
-                psi.ArgumentList.Add(app);
-                psi.ArgumentList.Add(script);
-                Process.Start(psi);
-
-                return true;
-            }
-            catch
-            {
-                // Same contract as everything else on this path: failing to
-                // open a window is a click that did nothing, never a crash.
-                return false;
-            }
-        }
+        private static bool LaunchInTerminal(string app, string? cwd, string command) =>
+            TerminalLauncher.LaunchInTerminal(app, cwd, command);
 
         // `open -a` on a running app just brings it forward — the same trick
         // TerminalFocuser.ActivateApp uses, kept here rather than shared

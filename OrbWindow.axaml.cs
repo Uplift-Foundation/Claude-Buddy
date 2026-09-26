@@ -284,6 +284,7 @@ namespace ClaudeBuddy
         public void UpdateFrom(SessionStatus status)
         {
             _lastStatus = status;
+            RefreshSoundKey(status);
 
             var folder = string.IsNullOrEmpty(status.Cwd)
                 ? ""
@@ -411,6 +412,14 @@ namespace ClaudeBuddy
             AgentsViewItem.IsVisible = ClickRouting.OffersTheAgentsView(status);
             DismissItem.IsVisible = SessionPresence.CanDismiss(status);
             EndSessionItem.IsVisible = SessionPresence.CanEndSession(status);
+
+            // CB-168: a local-CLI orb pre-fills the dialog with its own cwd
+            // and CLI; an OpenClaw orb pre-fills the dialog's agent picker
+            // with its own agent (NewChatPrefillFor, via
+            // OpenClawSessions.AgentIdOf). A remote-control or Claude-Cloud
+            // orb offers neither — there's no local CLI to relaunch and no
+            // OpenClaw agent to point at.
+            NewChatHereItem.IsVisible = status.IsLocalCli || status.Source == SessionSource.OpenClaw;
 
             // Back to the plain wording on every pass, so a refusal explained
             // once does not outlive the thing it was about. A husk whose job has
@@ -1815,6 +1824,72 @@ namespace ClaudeBuddy
             Dispatcher.UIThread.Post(() => SpeechRequest.Speak(text, SessionId));
         }
 
+        // CB-167's "vibe summary" turn-finished sound. TurnSounds.Deliver
+        // calls this through a callback SessionManager hands it, once the
+        // scan has already decided this orb's turn just finished and that
+        // summary is what should be spoken for it — everything upstream of
+        // this point (coalescing, the rate limit, the busy-speech fallback to
+        // an ordinary chime) has already happened, so this has nothing left
+        // to decide except *which text*, and whether there was any.
+        //
+        // Deliberately not OnSpeakClicked with a flag bolted on: that method
+        // opens with "if already speaking, cancel" because it is a button a
+        // user toggles, and a scan-driven summary is not a button press —
+        // nothing here should ever stop speech that is already in progress on
+        // this orb's own say-so. TurnSoundPolicy's speechBusy check is what
+        // keeps this from being called at all while something else is
+        // talking; this method's job starts after that question is settled.
+        //
+        // Async and bool-returning (QA, CB-167): a caller that gets false
+        // back knows nothing was said — no transcript, no gateway history, or
+        // an orb kind this can't read at all (RemoteControl, ClaudeCloud) —
+        // and TurnSounds uses exactly that to fall back to an ordinary chime
+        // rather than the turn finishing in total silence. The false return
+        // is not an error; a summary that never had anything to summarise is
+        // an ordinary outcome, the same way FindSpeakableText returning null
+        // always has been.
+        internal async Task<bool> SpeakTurnSummaryAsync()
+        {
+            if (_lastStatus?.Source == SessionSource.OpenClaw)
+            {
+                return await SpeakTurnSummaryRemoteAsync().ConfigureAwait(false);
+            }
+
+            // Every other orb kind that isn't a local CLI — RemoteControl,
+            // ClaudeCloud — has no transcript this can read at all.
+            // FindSpeakableText's own guard says the same thing for the same
+            // reason; this is checked first only so the walk below is never
+            // attempted for a kind that can never produce anything from it.
+            if (!(_lastStatus?.IsLocalCli ?? false)) return false;
+
+            // Off whatever thread called this: FindSpeakableText walks a
+            // transcript file and, on the cwd-fallback path, a directory
+            // tree — neither belongs on the Avalonia UI thread
+            // ScanAndUpdateCore runs on, which is exactly the thread QA
+            // found this reaching before this fix.
+            var text = await Task.Run(() => FindSpeakableText()).ConfigureAwait(false);
+            if (text is null) return false;
+
+            // Posted rather than called directly, the same as the remote
+            // branch below and OnSpeakClicked's own local path once did
+            // before CB-165 — SpeechRequest moves TextToSpeech's state,
+            // which every orb's flyout is bound to, and this continuation is
+            // running on a thread pool thread by the time it gets here.
+            Dispatcher.UIThread.Post(() => SpeechRequest.SpeakTurnSummary(text, SessionId));
+            return true;
+        }
+
+        internal async Task<bool> SpeakTurnSummaryRemoteAsync()
+        {
+            var title = _lastStatus?.Title ?? "";
+            var text = await OpenClawSessions.LastAssistantTextAsync(SessionId, title);
+
+            if (string.IsNullOrWhiteSpace(text)) return false;
+
+            Dispatcher.UIThread.Post(() => SpeechRequest.SpeakTurnSummary(text, SessionId));
+            return true;
+        }
+
         // Called by SessionManager when speech starts, changes phase or stops.
         public void SetFlyoutSpeakState(TextToSpeech.SpeakState state) =>
             _flyout?.SetSpeakState(state);
@@ -2237,6 +2312,24 @@ namespace ClaudeBuddy
         // to remember it against.
         public string PositionKey { get; set; } = "";
 
+        // CB-167's key for a per-orb sound override (SessionManager.SoundKeyFor),
+        // cached here the same way PositionKey is. Not PositionKey itself:
+        // SoundKeyFor appends the agent name to close the one gap
+        // PositionKeyFor leaves open — two team members sharing a cwd and an
+        // auto-generated title, which is fine for a shared *position* but
+        // wrong for a sound override, where muting one teammate would
+        // silently mute the other. Read by the Sound submenu on Opening.
+        //
+        // QA round 2 (HIGH): originally set once, in RestoreOrbPosition, on
+        // the theory that it was as stable as PositionKey. It isn't —
+        // SoundKeyFor depends on Title, and an untitled session keys on its
+        // own session id until Claude Code names it — so a menu selection
+        // made before that point wrote an override under a key the scan
+        // stopped looking up under the moment the title arrived. Now
+        // recomputed on every UpdateFrom (see there for the migration this
+        // requires) rather than left to settle once at creation.
+        public string SoundKey { get; set; } = "";
+
         // True once the user has placed this orb by hand, whether in this run or
         // in an earlier one.
         public bool IsPinned { get; private set; }
@@ -2612,6 +2705,40 @@ namespace ClaudeBuddy
             SessionManager.Instance?.EndSession(SessionId);
         }
 
+        // What this orb would pre-fill the "New chat…" dialog with, or null
+        // if there's no session bound here to pre-fill from at all. Pure —
+        // no window, no Toggle() call — so the mapping is testable without
+        // ever opening a real NewChatWindow. NewChatOrbWatch.CliOf is shared
+        // with the dialog's own "did an orb appear" watch, so the two never
+        // map a session's CLI differently.
+        //
+        // sessionId is a separate parameter rather than read off status,
+        // because OpenClawSessions.AgentIdOf parses the session *id*
+        // ("openclaw:agent:<id>:<surface>"), not anything SessionStatus
+        // itself carries — the same reason SessionManager.OrbFor keys off
+        // ids rather than statuses.
+        internal static (NewChatCli? Cli, string Cwd, string? AgentId)? NewChatPrefillFor(
+            SessionStatus? status, string sessionId) =>
+            status is null
+                ? null
+                : (NewChatOrbWatch.CliOf(status.Source), status.Cwd,
+                    status.Source == SessionSource.OpenClaw ? OpenClawSessions.AgentIdOf(sessionId) : null);
+
+        // CB-168: opens NewChatWindow pre-filled per NewChatPrefillFor
+        // above. Excluded from coverage the same way OpenSettings is —
+        // Toggle() does real OS-facing work headless tests have no business
+        // doing — but narrowed to this one call rather than the whole
+        // handler, so the prefill mapping above stays covered.
+        internal void NewChatHere_Click(object? sender, RoutedEventArgs e)
+        {
+            if (NewChatPrefillFor(_lastStatus, SessionId) is not { } prefill) return;
+            OpenNewChatWindow(prefill.Cli, prefill.Cwd, prefill.AgentId);
+        }
+
+        [ExcludeFromCodeCoverage]
+        private static void OpenNewChatWindow(NewChatCli? cli, string cwd, string? agentId) =>
+            NewChatWindow.Toggle(cli, cwd, agentId);
+
         // What is running underneath this session, asked once, as the menu
         // opens — CB-26.
         //
@@ -2629,10 +2756,163 @@ namespace ClaudeBuddy
         [ExcludeFromCodeCoverage]
         internal void SessionMenu_Opening(object? sender, System.ComponentModel.CancelEventArgs e)
         {
+            // Ahead of the manager-null guard below, and unconditionally —
+            // the Sound submenus have nothing to do with DependentsOf and
+            // should still populate for a test or a standalone window that
+            // never made a SessionManager current.
+            RebuildSoundSubmenus();
+
             var manager = SessionManager.Instance;
             if (manager is null) return;
 
             ApplyEndSessionGuard(manager.DependentsOf(SessionId));
+        }
+
+        // internal so a test can drive it directly rather than through the
+        // real ContextMenu.Opening event, which needs a shown window with a
+        // working popup — the same reason ApplyEndSessionGuard above is
+        // exercised the same way.
+        //
+        // Rebuilt from scratch on every open rather than cached: the disk
+        // listing and the saved override can both have changed since this
+        // orb's menu was last shown (a file picked from another orb, a
+        // system sound removed), and a MenuItem tree is cheap enough to
+        // throw away and redo that caching it would only optimise a cost
+        // this doesn't have.
+        internal void RebuildSoundSubmenus()
+        {
+            var over = ClaudeBuddySettings.OrbTurnSoundFor(SoundKey);
+
+            BuildSoundSubmenu(SoundFinishedMenuItem, over?.Finished,
+                SystemSoundCatalog.DefaultFinishedSoundName, includeSummary: true,
+                SetFinishedSoundOverride);
+
+            BuildSoundSubmenu(SoundAttentionMenuItem, over?.Attention,
+                SystemSoundCatalog.DefaultAttentionSoundName, includeSummary: false,
+                SetAttentionSoundOverride);
+        }
+
+        // The same Default/Off/[Vibe summary]/system sounds/Choose file…
+        // list SettingsWindow's pickers offer, reused rather than
+        // reimplemented — SettingsWindow.SoundChoices' own comment says why
+        // a second copy of this list is exactly the kind of drift CB-153's
+        // doubled colour switch already cost this project once.
+        //
+        // MenuItemToggleType.CheckBox rather than a "✓ " text prefix on the
+        // active item's Header: CB-173 is an open bug about a font glyph
+        // rendering as a colour emoji on Windows for the settings-disclosure
+        // chevron, and a checkmark character is exactly that kind of small,
+        // easy-to-miss-in-review glyph. The toggle check Avalonia draws for
+        // CheckBox is template chrome, not a font lookup, so it can't have
+        // that problem.
+        private void BuildSoundSubmenu(
+            MenuItem parent, string? current, string defaultName, bool includeSummary, Action<string?> write)
+        {
+            parent.Items.Clear();
+
+            foreach (var (label, value) in SettingsWindow.SoundChoices(current, defaultName, includeSummary))
+            {
+                if (value == SettingsWindow.ChooseFileValue)
+                {
+                    var chooseItem = new MenuItem { Header = label };
+
+                    // async void: a MenuItem's Click has nowhere to return a
+                    // Task to, the same reason SettingsWindow.SoundPicker's
+                    // own SelectionChanged handler is. A cancelled pick
+                    // (null) leaves the override exactly as it was — there
+                    // is no combo selection to revert here, unlike the
+                    // settings picker, since a context menu simply closes
+                    // rather than sitting on a stale choice.
+                    chooseItem.Click += async (_, _) =>
+                    {
+                        var path = await SettingsWindow.ChooseSoundFile(this);
+                        if (path is not null) write(path);
+                    };
+
+                    parent.Items.Add(chooseItem);
+                    continue;
+                }
+
+                var item = new MenuItem
+                {
+                    Header = label,
+                    ToggleType = MenuItemToggleType.CheckBox,
+                    IsChecked = value == current
+                };
+                item.Click += (_, _) => write(value);
+                parent.Items.Add(item);
+            }
+        }
+
+        // Reads the other trigger's current override so writing one never
+        // clobbers the other — ClaudeBuddySettings.SetOrbTurnSound takes
+        // both fields together, and OrbTurnSound has no "leave unchanged"
+        // value of its own to pass instead.
+        private void SetFinishedSoundOverride(string? value)
+        {
+            var over = ClaudeBuddySettings.OrbTurnSoundFor(SoundKey);
+            ClaudeBuddySettings.SetOrbTurnSound(SoundKey, value, over?.Attention);
+        }
+
+        private void SetAttentionSoundOverride(string? value)
+        {
+            var over = ClaudeBuddySettings.OrbTurnSoundFor(SoundKey);
+            ClaudeBuddySettings.SetOrbTurnSound(SoundKey, over?.Finished, value);
+        }
+
+        // QA round 2 (HIGH): called from UpdateFrom on every poll rather
+        // than once at creation — see SoundKey's own comment for why a
+        // one-time value goes stale the moment an untitled session gets its
+        // real title.
+        //
+        // A changed key migrates its override rather than simply moving on:
+        // if the old key still carries one and the new key doesn't already
+        // have its own (an orb that never had an override at all, or one
+        // whose new key happens to collide with an existing choice, is left
+        // alone either way), it is copied onto the new key. Without this, a
+        // choice a user already made — "Off" clicked from the menu before
+        // the title arrived — would keep silently reverting to the default
+        // the instant Claude Code named the session, which is exactly the
+        // bug QA found: the menu showed Off ticked while the orb went on
+        // chiming.
+        //
+        // QA round 3, finding 2 (LOW-MEDIUM): a blank key reads as "free" to
+        // both OrbTurnSoundFor (its own empty-key guard returns null) and
+        // SetOrbTurnSound (an empty-key guard that makes the write a
+        // no-op) — so migrating *into* one used to look exactly like a safe
+        // migration onto an unoccupied key, write nothing there, and still
+        // clear the override out from under the old key on the way out.
+        // Reachable on a real machine, not a contrived edge case: the hook
+        // writes cwd with no fallback (ClaudeBuddyHook.sh:70), so a single
+        // status write missing it is enough to blank the key for one poll.
+        // Skipped entirely instead — the window keeps using its last real
+        // key, the same resilience a missing title already gets by falling
+        // back to the session id rather than an empty string.
+        //
+        // QA round 3, finding 3 (LOW-MEDIUM): migration used to clear the
+        // old key on the way out, which is exactly wrong when two orbs
+        // share one key (same cwd and title, no agent name to tell them
+        // apart, which is exactly the case SoundKeyFor cannot distinguish).
+        // Renaming one of them moved the shared override onto its own new
+        // key and cleared the shared key out from under the other, silently
+        // unmuting a session that never asked to be. Copied rather than
+        // moved now: an orphaned entry under a key nothing looks up any
+        // more is harmless, and losing a mute is not.
+        internal void RefreshSoundKey(SessionStatus status)
+        {
+            var key = SessionManager.SoundKeyFor(status, SessionId);
+            if (key == SoundKey || string.IsNullOrEmpty(key)) return;
+
+            if (!string.IsNullOrEmpty(SoundKey))
+            {
+                var stale = ClaudeBuddySettings.OrbTurnSoundFor(SoundKey);
+                if (stale is not null && ClaudeBuddySettings.OrbTurnSoundFor(key) is null)
+                {
+                    ClaudeBuddySettings.SetOrbTurnSound(key, stale.Finished, stale.Attention);
+                }
+            }
+
+            SoundKey = key;
         }
 
         // The row that says what it will do, or why it will not.

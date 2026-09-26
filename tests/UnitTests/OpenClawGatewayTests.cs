@@ -476,15 +476,28 @@ public class OpenClawGatewayTests
     // as the timeout above and means the opposite thing. Nobody needs telling
     // that a connection they cancelled did not finish; they very much need
     // telling that one they did not cancel ran out of patience.
+    // Seeing the connect request land in socket.Requests proves the send was
+    // issued; it does not hold anything there, because the fake's SendAsync
+    // returns synchronously by default. Left that way, there is a real
+    // window — between the request being recorded and RequestAsync
+    // registering its own per-request cancellation handling — in which the
+    // receive loop's own reaction to the same cancelled token can race
+    // RequestAsync to the pending entry and fail it with "gateway connection
+    // closed" instead. See ParkSendUntilCancelled's comment in
+    // FakeGatewaySocket for how CB-175 reproduced that reliably.
+    //
+    // ParkSendUntilCancelled closes the window rather than narrowing it: the
+    // send itself is what stays outstanding, so ConnectAsync's cancellation
+    // is observed through the one await RequestAsync is actually sitting on
+    // — no deadline of its own, and nothing for the receive loop to race,
+    // because RequestAsync never reaches the point where it would register
+    // anything for the loop to beat.
     [Fact]
     public async Task ACancelledHandshakeSaysItWasAbandonedRatherThanTimedOut()
     {
-        var socket = new FakeGatewaySocket();
+        var socket = new FakeGatewaySocket { ParkSendUntilCancelled = true };
         socket.PushEvent("connect.challenge", new { nonce = "n" });
 
-        // Answers nothing, so the connect is still in flight when the caller
-        // withdraws. No deadline of its own — the cancellation is what ends it,
-        // which is exactly what the assertion is about.
         using var gateway = Gateway(socket);
         using var caller = new CancellationTokenSource();
 

@@ -427,6 +427,61 @@ the chat panel — it is exactly the "TurnUpdated carries the whole turn, not a
 delta" property the panel design asked the transport to guarantee, so a dropped
 or coalesced event cannot desync the view.
 
+## A run outside a cron session (CB-169)
+
+The section above was a cron run on the cron job's own session, and the orb's "working" rule was built from it. CB-169 (an OpenClaw orb never glows while its conversation replies) is what a run on any *other* session looks like. Captured 25 Sep 2026 against OpenClaw 2026.9.2 with `dotnet run --project tools/openclaw-probe -- events <seconds> - <out.jsonl> [messagesKey]`, which subscribes exactly as the app does. Two windows: 300 s on `sessions.subscribe` alone, and 400 s with `sessions.messages.subscribe` added for `agent:main:main`.
+
+**What was captured is a heartbeat, not a person.** The run on `agent:main:main` is the gateway's own every-300-s heartbeat job injecting into the agent's main session (`sessionTarget: "main"`, `systemSent: true` on the session record, 4.5 s runtime). No human Discord turn happened in either window, and none was sent to make one — see the end of this section.
+
+### On `sessions.subscribe` alone, a run is two rows
+
+```
++122.29s sessions.changed agent:main:main  phase=message
++122.29s sessions.changed agent:main:main  phase=start  runId=<run>
++126.78s sessions.changed agent:main:main  phase=message
++126.78s sessions.changed agent:main:main  phase=end    runId=<run>
+```
+
+That is everything that named the session. There were **no `agent`, `chat` or `session.tool` events at all**, where the cron run in the same window (on its own `…:cron:<job>` session) streamed thinking, assistant, tool and chat events as in the table above. And the app dropped every `sessions.changed` (CB-152), so for a run like this it received nothing it used. That is the whole of CB-169.
+
+The rows that CB-152 was about have a different shape, and it is what tells them apart: `reason: "cron-binding"` or `"placement"`, **no `phase` and no `runId`**, fired for sessions across the roster at once — the capture has one naming a Discord DM, a Discord channel and six cron sessions inside 2.2 s, none of them doing anything. Phase `message` does carry the session but no runId; it is a transcript row being appended, and it arrives immediately before the start *and* before the end.
+
+### `task/upserted` cannot end a run
+
+Every `task` event in both windows has **no top-level `sessionKey`**. The session is `task.childSessionKey`, and `task.runId` is the cron scheduler's id (`cron:<job>:<ms>:<uuid>`), not the agent run's. So the old rule that cleared a session's glow on a task upsert never fired on a real payload, and could not have named the right run if it had. That rules out one of CB-169's three candidates. The run's own `cron` `finished` already ends it, and that one does carry the run-scoped key.
+
+### `sessions.messages.subscribe` does add the stream — not needed, not wired
+
+Same job, same session, same kind of run, with `sessions.messages.subscribe {key: "agent:main:main"}` added (two runs, 300 s apart, identical):
+
+```
++86.21s agent            agent:main:main runId=<run> stream=lifecycle phase=start
++86.21s sessions.changed agent:main:main runId=<run> phase=start
++90.36s agent            agent:main:main runId=<run> stream=lifecycle phase=end
++90.37s chat             agent:main:main runId=<run> state=final
++90.37s sessions.changed agent:main:main runId=<run> phase=end
+```
+
+So the per-session subscription is what carries `agent`/`chat` for a non-cron session. The paired control is the capture above: same heartbeat job, same session, no subscription, and none of these events. A heartbeat produces no thinking or assistant text, so whether a real reply's mid-run deltas arrive this way is **still unmeasured**. First measured terminal `chat` state: `"final"`.
+
+Scope, both ways. **Declared** in `dist/method-scopes-K6J_UQGL.js`: `["sessions.messages.subscribe", "sessions-subscriptions", "operator.read", …]`, the same group and scope as `sessions.subscribe`. **Measured** on one token: `{key}` returns `{"subscribed": true}`. The same method with `includeApprovals: true` is refused with "requires a paired device and gateway scope: operator.approvals", and `tasks.flows` with "missing scope: operator.admin". That token held `operator.read` *and* `operator.write`, because reply was on for the machine, so the acceptance was measured at read+write and the read-only claim rests on the declaration.
+
+It is not wired in. The phase start and end rows already light the orb, and a subscription per session would be one more thing to hold open for every session on the roster.
+
+### How long a run lasts — the number behind `RunCeiling`
+
+The start/end pair has nothing between it, so "no event for 20 s means it stopped" (`RunIdle`) would put out a reply's glow 20 s in. An opened run has to wait for its end. The ceiling on that wait came from the live gateway, not a guess:
+
+- The gateway's own declared run timeout is `DEFAULT_AGENT_TIMEOUT_SECONDS = 172800` (two days), which bounds nothing useful.
+- `runtimeMs` for the last run of every session on `sessions.list` that reports one (39 of 71): Discord sessions n=25, median 11.2 s, 12 of 25 over 20 s, three over 5 min, **longest 1812 s**. Main sessions n=5, longest 153.6 s. Subagents n=3, longest 199.4 s.
+
+A 10-minute ceiling would have put the longest run out two-thirds of the way through. `RunCeiling` is 45 minutes: the longest measured run with half as much again on top. It is only a safety net. The run's own end clears it at once. A dropped connection clears every run, because an end sent while the socket was down is never seen.
+
+### Still open
+
+- **Whether a person's Discord DM turn produces the same start/end pair on its `…:discord:direct:<id>` key.** Every run measured was a heartbeat on `agent:main:main` or a cron job. The fix assumes the pair is emitted for any session's run. The source supports that reading without proving it. Both `sessions.changed` sites that set `phase` from a run lifecycle are in `dist/server-chat-*.js`. The one read in context returns early only when `parseCronRunScopeSuffix(sessionKey).runId` is set, which is exactly why the cron session in the capture never shows a phase row. No channel condition appears within ten lines of either site. The full functions were not read, because the gateway host stopped answering ssh partway through. So a Discord key's run is expected to produce the pair, and that is not measured.
+- **These rows can be dropped.** Every `sessions.changed` broadcast in `server-session-events-*.js` is sent with `dropIfSlow: true`. A client the gateway judges slow can miss a run's end, and that is what `RunCeiling` and the clear-on-disconnect are for. Nothing was sent to provoke one: this is a read-only investigation, and `chat.send` into a real conversation is out of bounds for it. The check is to leave the `events` probe running while someone DMs an agent.
+
 ## Reading and writing a conversation
 
 Two methods beyond the session index, both confirmed working against the real
@@ -634,10 +689,14 @@ nouns. `chatType` at the top level is a more reliable source for
   exists in the protocol and requires `includeApprovals: true` on
   `sessions.messages.subscribe`, which in turn needs `operator.approvals` —
   a scope this device did not request. Unverified end to end.
-- Whether a Discord-originated turn *streams* identically to a cron one. Only
-  cron activity occurred while watching. Sending into either is now known to
-  work (above); what is untested is whether the event sequence differs.
-- What a terminal `chat` state looks like (only `state: "delta"` was seen).
+- Whether a Discord-originated turn *streams* identically to a cron one.
+  **Partly answered by CB-169** (see "A run outside a cron session"): it does
+  not. A run on a non-cron session sends only a `sessions.changed` start/end
+  pair to a `sessions.subscribe` client, with no agent/chat/tool events. That
+  was measured on a heartbeat run on a main session, though, and a person's
+  Discord DM turn has still not been captured.
+- ~~What a terminal `chat` state looks like~~ — `state: "final"`, measured by
+  CB-169 on both a cron run and a main-session run.
 
 ## Incidental
 
@@ -707,3 +766,155 @@ a machine on a private network with no route to it from outside, and it is
 load-bearing in examples about peer discovery and multi-machine behaviour —
 including the mkcert issuer strings quoted earlier in this file. Left alone for
 the same cost/benefit reason.
+
+## CB-168: starting a new conversation — confirmed working
+
+Asked because CB-168 needs to know, before building a picker, whether the
+OpenClaw arm of "start a new chat" is possible at all. Measured against the
+same live gateway (OpenClaw 2026.9.2 at time of this probe — the `dist/`
+filenames below carry that version's hashes, not 2026.7.1-2's), from this
+Mac's own already-paired device (`fa8df53b…`, `operator.read` +
+`operator.write`, the scope the app already requests when "Allow replying to
+agents" is on).
+
+**The probe first had to be made to compile again.** `ClaudeBuddySettings.cs`
+grew a reference to `SpeakScope` (the turn-sounds feature, landed after the
+Sep 6 fix that added `ChatZoom`/`StatusDirectory` to this same csproj's
+compile list). Same shape as that fix: `SpeakScope` is a two-value enum in
+`SpeechSummary.cs`, but that file also pulls in `ClaudeBinary` and
+`InternalSessions`, so the enum is restated in `Shims.cs` rather than the
+whole file compiled in. `tools/openclaw-probe/OpenClawProbe.csproj` and
+`Shims.cs` both changed; no other file did.
+
+**Also confirmed, incidentally: this Mac's own terminal can reach the
+gateway.** `dotnet run --project tools/openclaw-probe` connected and returned
+real data on the first attempt, no `EHOSTUNREACH`, no `--restart` needed for
+Local Network — CLAUDE.md's "the terminal lacks the grant" note evidently
+doesn't hold universally on this machine at this time; not chased further, it
+made everything below reachable from here without ssh.
+
+### There is a dedicated `sessions.create`, and it needs only `operator.write`
+
+Read straight from the gateway's own `dist/method-scopes-*.js` on the gateway
+host (`avatar.internal`, ssh alias `mini`) — the declared policy, not a
+reimplementation of it:
+
+```js
+function resolveSessionsCreateRequiredScope(params) {
+  if (!isRecord(params)) return "operator.write";
+  if (params.incognito === true || typeof params.key === "string" && isIncognitoSessionKey(params.key)
+      || typeof params.parentSessionKey === "string" && isIncognitoSessionKey(params.parentSessionKey)
+      || Object.hasOwn(params, "execNode") || Object.hasOwn(params, "toolOverrides")
+      || params.permissionMode === "full") return "operator.admin";
+  return "operator.write";
+}
+```
+
+So an ordinary create — no incognito, no `execNode`/`toolOverrides`, no full
+permission mode — needs exactly the scope this app already requests when
+replying is on. `SessionsCreateParamsSchema` (`src-BiL5aQto.js`) makes `key`
+*and* `agentId` both optional, so **`{agentId: "main"}` alone is a valid
+call** — this is the "or with `agentId` and no key" half of the plan's
+question, and it is the one that matters: no message required, and no
+pre-existing session key to invent.
+
+**Verified live, not just read from source**, via `tools/openclaw-probe raw`:
+
+```
+$ dotnet run --project tools/openclaw-probe -- raw sessions.create \
+    '{"agentId":"main","label":"CB-168 probe — please ignore"}'
+{
+  "ok": true,
+  "key": "agent:main:dashboard:b4a6ca53-9197-4ebe-b811-776b82cc3027",
+  "sessionId": "71032889-…",
+  "runStarted": false,
+  ...
+}
+```
+
+`sessions.list` (a second, independent call) then returned that exact key —
+the positive half of the pair. `runStarted: false` and no message sent means
+this created an inert conversation shell, not a turn: exactly the shape
+CB-168 needs, since the dialog itself takes no prompt and the first thing the
+user does after Start is send a message into an already-existing key.
+
+**Negative control**, on the *same* device and the *same* method — flipping
+one param instead of swapping credentials, which is the safer probe (see
+below for why a second credential wasn't used):
+
+```
+$ dotnet run --project tools/openclaw-probe -- raw sessions.create \
+    '{"agentId":"main","incognito":true,"label":"CB-168 negative control — should be refused"}'
+OpenClawRequestException: missing scope: operator.admin
+```
+
+Refused exactly as the source predicts: this device holds `operator.write`
+but not `operator.admin`, and the gateway's dynamic scope check catches the
+`incognito` flag and demands the higher scope, live, not just in the
+declaration. That is the paired positive/negative this file's own rules ask
+for, sourced from one device and one method, which is what makes it a clean
+pair rather than "two different things happened to both come out as
+expected."
+
+**Cleanup used `sessions.patch{archived:true}` then `sessions.delete
+{archivedOnly:true}`, both at `operator.write`** — a plain `sessions.delete`
+on a non-archived session demands `operator.admin` (`resolveSessionsDeleteRequiredScope`
+returns `operator.admin` unless `archivedOnly` is already true *and* every
+other field is in a small write-safe set), so archive-then-delete is the
+scope-appropriate cleanup path for a device that can create sessions but
+isn't an admin. Verified: the throwaway session no longer appears in
+`sessions.list` afterward.
+
+### `chat.send` on a brand-new key also creates the session, no `sessions.create` first
+
+Tested separately, since the plan asked about this path too: `chat.send`
+with `sessionKey: "agent:main:dashboard:cb168-freshkey-test"` — a key that
+had never been created — succeeded (`{"status":"started"}`) without a prior
+`sessions.create` call, and the key then showed up in `sessions.list`. So
+either path works: a dedicated create call, or just sending into an unseen
+key. **`sessions.create` is still the better fit for this feature**, because
+it needs no message (the dialog has no prompt field) and creates an inert
+shell rather than kicking off a real agent turn — the `chat.send` route
+necessarily starts a run the moment it's called, which is a heavier and
+noisier way to get the same "a key now exists" outcome. This throwaway key
+was cleaned up the same way (archive, then delete).
+
+**One correction to CLAUDE.md's own worked example for this ticket**, made
+honestly rather than silently: it named `agent:<id>:<new-surface>` as the
+fresh-key shape to test. The real gateway generates its own key on
+`sessions.create` (`agent:main:dashboard:<uuid>` above) rather than accepting
+a caller-chosen surface name; a caller-supplied `key` is accepted too (per
+the schema) but wasn't the shape exercised here, since the auto-generated
+one is what `OpenClawSessions.StartConversation` will actually receive back
+and bind to.
+
+### Why no second credential was used for the negative control
+
+The original plan asked for "the same call with Buddy's read-only
+credential" refused. This gateway already has such a device paired
+(`gateway-client` at IP matching the gateway host itself, `operator.read`
+only) — but its private key lives with whatever client paired it, not with
+this one, so it can't be impersonated. The alternative — generating a fresh
+device identity in a scratch settings directory, using the same gateway
+token, and getting it approved on the live gateway to manufacture a
+read-only credential — was attempted and stopped: it would have created a
+new permanent entry in this production gateway's paired-device table (nine
+real agents, real Discord conversations, real cron jobs behind it) purely to
+prove a point the source and the params-based negative control above already
+prove. The `incognito`-flag control above tests the same enforcement
+mechanism (`authorizeOperatorScopesForRequiredScope`, live, against a real
+refusal) without that side effect, so it was preferred instead.
+
+### What this settles for CB-168 Phase 2
+
+- **Build it.** `OpenClawSessions.StartConversation(agentId)` should call
+  `sessions.create({agentId})`, bind a `ChatPanel` to the returned `key`, and
+  let the first user message go through the existing `chat.send` path
+  unchanged — nothing about sending into an already-created key is new.
+- Needs `operator.write`, exactly as the plan assumed: disabled with "turn on
+  Allow replying to agents" when `OpenClawReplyEnabled` is off, "no gateway
+  configured" when there isn't one. No new scope request, no new pairing.
+- `agents.list` (already used elsewhere in this file) is confirmed as the
+  source for the picker's agent list — `defaultId: "main"` on this gateway,
+  eight agents total, names distinct from ids (`main` → Lilibeth, `kubernetes`
+  → Amber, etc., same shape already documented above).

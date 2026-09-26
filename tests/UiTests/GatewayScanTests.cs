@@ -535,8 +535,10 @@ public class GatewayScanTests
         const string busyKey = "agent:busy:discord:channel:99184";
         try
         {
-            OpenClawSessions.OnEvent("message",
-                JsonDocument.Parse($$"""{"sessionKey":"{{busyKey}}"}""").RootElement);
+            // A real streaming shape: since CB-169 an event name nobody has
+            // measured ("message" was one) is not evidence of work.
+            OpenClawSessions.OnEvent("agent",
+                JsonDocument.Parse($$"""{"sessionKey":"{{busyKey}}","stream":"thinking"}""").RootElement);
 
             var quietIsNewer = new DateTimeOffset(Now.AddMinutes(2)).ToUnixTimeMilliseconds();
 
@@ -803,6 +805,62 @@ public class GatewayScanTests
         }
         finally
         {
+            PublishNothing();
+        }
+    }
+
+    // CB-169, end to end through the app: a run on an agent's main session
+    // lights its orb from the run's start to its end. Those two rows are the
+    // whole of what such a run sends (the capture is in docs/openclaw-findings.md,
+    // "A run outside a cron session"; the payloads here are those rows reduced
+    // to the fields read), so before CB-169 dropped every sessions.changed this
+    // orb never glowed at all. Driven through the real OnEvent, a published
+    // listing and a scan, and asserted on the orb's Glow — what an owner sees.
+    [AvaloniaFact]
+    public void AMainSessionRunLightsItsOrbFromStartToEnd()
+    {
+        using var scratch = new Scratch();
+        const string key = "agent:cb169glow:main";
+        const string run = "00000000-0000-4000-8000-000000000003";
+
+        void Row(string phase) => OpenClawSessions.OnEvent("sessions.changed",
+            JsonDocument.Parse($$"""{"sessionKey":"{{key}}","runId":"{{run}}","phase":"{{phase}}"}""").RootElement);
+
+        SessionStatus Scanned()
+        {
+            Publish($$"""
+                {"sessions":[{"key":"{{key}}","chatType":"direct","lastActivityAt":{{JustNow}}}]}
+                """);
+            var manager = Manager(scratch.Dir);
+            manager.ScanAndUpdate();
+            return manager.StatusFor("openclaw:" + key)!;
+        }
+
+        var orb = new OrbWindow("openclaw:" + key);
+        try
+        {
+            orb.Show();
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+
+            orb.UpdateFrom(Scanned());
+            Assert.False(orb.Glow.IsVisible);
+
+            Row("start");
+            var during = Scanned();
+            orb.UpdateFrom(during);
+            Assert.Equal("generating", during.State);
+            Assert.True(orb.Glow.IsVisible);
+
+            Row("end");
+            var after = Scanned();
+            orb.UpdateFrom(after);
+            Assert.Equal("idle", after.State);
+            Assert.False(orb.Glow.IsVisible);
+        }
+        finally
+        {
+            orb.Close();
+            Row("end");
             PublishNothing();
         }
     }

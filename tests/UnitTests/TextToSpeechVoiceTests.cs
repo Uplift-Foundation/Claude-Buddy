@@ -461,5 +461,25 @@ namespace ClaudeBuddy.Tests
 
             Assert.False(IsSpeaking);
         }
+
+        // CB-168: the guard every test assembly's TestBootstrap turns on —
+        // proves it actually holds, rather than trusting that a field being
+        // set somewhere means a call site actually checks it. With it on, a
+        // real Speak call (a real voice name, real text, on the thread that
+        // would otherwise start `say`/SAPI) must produce no state change at
+        // all: State stays Idle and IsSpeaking stays false, which is only
+        // possible if Speak returned before its own Cancel()/Enter(Speaking)
+        // calls, i.e. before it could have started a process.
+        [Fact]
+        public void SilenceForTestsStopsSpeakBeforeItProducesAnyStateChange()
+        {
+            Assert.True(SilenceForTests, "expected TestBootstrap to have already turned this on");
+            Assert.Equal(SpeakState.Idle, State);
+
+            Speak("this must never be spoken", DefaultVoice);
+
+            Assert.Equal(SpeakState.Idle, State);
+            Assert.False(IsSpeaking);
+        }
     }
 }

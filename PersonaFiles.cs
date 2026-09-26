@@ -207,41 +207,63 @@ namespace ClaudeBuddy
                 : picture[..QuotedHead] + "…" + picture[^QuotedTail..]
                     + " (" + picture.Length.ToString("N0", CultureInfo.InvariantCulture) + " characters)";
 
-        // bothRootsSearched defaults to false so every existing call site and
-        // every existing asserted string in the test suite is byte-identical
-        // (CB-147, D6) — this only ever reads true when AvatarAt has actually
-        // run the guard chain against two distinct roots and both refused the
-        // value, which is the one case where naming just one of them would be
-        // telling half the story. TooLarge and NotAPicturePath do not vary on
-        // it: TooLarge already names the file that was found, and
-        // NotAPicturePath is decided before any root is tried at all.
+        // workspaceSearched and levelSearched both default to false so
+        // every single-root call site says exactly what it always said
+        // (CB-147, D6). Each reads true only when AvatarAt actually ran the
+        // guard chain against that root as a distinct directory and it
+        // refused the value too — the case where naming only the first root
+        // would be telling part of the story. TooLarge and NotAPicturePath do
+        // not vary on either: TooLarge already names the file that was found,
+        // and NotAPicturePath is decided before any root is tried at all.
+        //
+        // workspaceSearched was bothRootsSearched until the walk-level
+        // directory became a third root (CB-187); with three, "both" stopped naming a count and
+        // had to name which root. The two-root strings it produced are
+        // unchanged byte for byte.
         internal static string RejectionMessage(
-            AvatarRejection reason, string picture, long bytes, bool bothRootsSearched = false)
+            AvatarRejection reason, string picture, long bytes,
+            bool workspaceSearched = false, bool levelSearched = false)
         {
+            var searched = SearchedAnchors(workspaceSearched, levelSearched);
             var detail = reason switch
             {
                 AvatarRejection.TooLarge =>
                     "too large — " + bytes.ToString("N0", CultureInfo.InvariantCulture) + " bytes",
-                AvatarRejection.EscapesRoot => bothRootsSearched
-                    ? "escapes root — it resolves outside both the directory of the markdown that named it "
-                        + "and the workspace"
-                    : "escapes root — it resolves outside the directory of the markdown that named it",
+                AvatarRejection.EscapesRoot => searched is null
+                    ? "escapes root — it resolves outside the directory of the markdown that named it"
+                    : "escapes root — it resolves outside " + searched,
                 AvatarRejection.NotAPicturePath =>
                     "not a picture path — a persona picture is a relative or absolute path ending in "
                     + ".png, .jpg, .jpeg, .gif or .webp, never a URL or a data: URI",
-                _ => bothRootsSearched
-                    ? "unreadable — it is missing under both the directory of the markdown that named it "
-                        + "and the workspace, empty, or this process may not open it"
-                    : "unreadable — it is missing, empty, or this process may not open it",
+                _ => searched is null
+                    ? "unreadable — it is missing, empty, or this process may not open it"
+                    : "unreadable — it is missing under " + searched + ", empty, or this process may not open it",
             };
 
             return "persona picture ignored: \"" + Quoted(picture) + "\" (" + detail + "); cap is "
                 + MaxAvatarBytes.ToString("N0", CultureInfo.InvariantCulture) + " bytes";
         }
 
+        // The roots a refused value was tried under, in the order they were
+        // tried, as the words a reader of persona.log would use for them.
+        // Null for the file's own directory alone, which has its own wording
+        // above and keeps it.
+        private static string? SearchedAnchors(bool workspaceSearched, bool levelSearched) =>
+            (workspaceSearched, levelSearched) switch
+            {
+                (false, false) => null,
+                (true, false) => "both the directory of the markdown that named it and the workspace",
+                (false, true) =>
+                    "both the directory of the markdown that named it and the project directory it was found from",
+                (true, true) =>
+                    "the directory of the markdown that named it, the project directory it was found from, "
+                    + "and the workspace",
+            };
+
         private static void Reject(
-            AvatarRejection reason, string picture, long bytes = 0, bool bothRootsSearched = false) =>
-            PersonaLog.Record(RejectionMessage(reason, picture, bytes, bothRootsSearched));
+            AvatarRejection reason, string picture, long bytes = 0,
+            bool workspaceSearched = false, bool levelSearched = false) =>
+            PersonaLog.Record(RejectionMessage(reason, picture, bytes, workspaceSearched, levelSearched));
 
         // Where a picture named in markdown actually lives, with every guard
         // applied and no bytes kept.
@@ -263,22 +285,24 @@ namespace ClaudeBuddy
             return path;
         }
 
-        // The CB-147 counterparts, taking a second candidate root: the
-        // session's workspace root, alongside the directory of the markdown
-        // that named the picture. Everything said about the single-root
-        // overloads above applies unchanged to whichever root actually
-        // resolves it — these exist so LocalPersona.ResolveFrom can offer a
-        // workspace-relative convention without a second implementation of
-        // the resolution.
-        internal static string? AvatarPathAt(string fileDirectory, string? workspaceRoot, PersonaMarkdown.Fields fields)
+        // The counterparts taking the other candidate roots: the walk-level
+        // directory the naming file was found from (CB-187), and the session's
+        // workspace root (CB-147), alongside the directory of the markdown
+        // that named it. Everything said about the single-root overloads above
+        // applies unchanged to whichever root actually resolves it — these
+        // exist so LocalPersona.ResolveFrom can offer the other conventions
+        // without a second implementation of the resolution.
+        internal static string? AvatarPathAt(
+            string fileDirectory, string? levelDirectory, string? workspaceRoot, PersonaMarkdown.Fields fields)
         {
             if (fields.Avatar is null) { RejectUnusableValue(fields); return null; }
-            return AvatarPathAt(fileDirectory, workspaceRoot, fields.Avatar);
+            return AvatarPathAt(fileDirectory, levelDirectory, workspaceRoot, fields.Avatar);
         }
 
-        internal static string? AvatarPathAt(string fileDirectory, string? workspaceRoot, string? avatar)
+        internal static string? AvatarPathAt(
+            string fileDirectory, string? levelDirectory, string? workspaceRoot, string? avatar)
         {
-            AvatarAt(fileDirectory, workspaceRoot, avatar, out var path);
+            AvatarAt(fileDirectory, levelDirectory, workspaceRoot, avatar, out var path);
             return path;
         }
 
@@ -374,7 +398,33 @@ namespace ClaudeBuddy
         // from today's single-root behaviour, named in the PR body rather
         // than hidden in this diff.
         internal static byte[]? AvatarAt(
-            string fileDirectory, string? workspaceRoot, string? avatar, out string? path)
+            string fileDirectory, string? workspaceRoot, string? avatar, out string? path) =>
+            AvatarAt(fileDirectory, null, workspaceRoot, avatar, out path);
+
+        // CB-187: the walk-level directory is the third root, between the
+        // other two, and it is what profile-gen actually writes against: a
+        // persona's `image:` is relative to the project directory whose
+        // CLAUDE.md (or .claude/CLAUDE.md, or profiles/<name>/<name>.md) the
+        // walk found — LocalPersona.Candidate has the cases. CB-147's
+        // workspace root only stood in for that, and only while the session
+        // sat in that same directory — one level down, the name still
+        // resolved and the picture was lost.
+        //
+        // Second rather than first, for D1/D2's reason one step removed: the
+        // file that named the picture is the most specific thing that said
+        // anything about it, so a picture beside it still wins outright. Ahead
+        // of the workspace for the same reason the file directory is: the
+        // level is where markdown somebody wrote on purpose was found, and the
+        // cwd is wherever the session happened to be, so the narrower anchor
+        // is tried first and a same-named file in the cwd cannot shadow it —
+        // a deliberate change from CB-147, where the cwd's copy was the only
+        // second root there was. D3 holds
+        // unchanged — every root gets the whole guard chain against itself
+        // alone — and D4's widening of an absolute value extends to this root
+        // too: it is accepted if it is contained in any of the three.
+        internal static byte[]? AvatarAt(
+            string fileDirectory, string? levelDirectory, string? workspaceRoot, string? avatar,
+            out string? path)
         {
             path = null;
 
@@ -382,7 +432,7 @@ namespace ClaudeBuddy
             // rejection worth writing down.
             if (string.IsNullOrWhiteSpace(avatar)) return null;
 
-            var roots = CandidateRoots(fileDirectory, workspaceRoot);
+            var roots = CandidateRoots(fileDirectory, levelDirectory, workspaceRoot);
 
             var haveRejection = false;
             var bestRejection = AvatarRejection.Unreadable;
@@ -412,10 +462,18 @@ namespace ClaudeBuddy
                 }
             }
 
-            // bothRootsSearched is true only when there were genuinely two
-            // distinct roots to search (CandidateRoots already deduped a
-            // workspace root that equals fileDirectory down to one) — see D6.
-            Reject(bestRejection, avatar, bestLength, bothRootsSearched: roots.Count > 1);
+            // Each anchor is named only if it was genuinely searched as a
+            // root of its own — see D6. A workspace root equal to the
+            // walk-level directory is one search, and it is reported as the
+            // workspace, which is the wording CB-147 already gave that exact
+            // case (a CLAUDE.md in the cwd importing a persona file). A level
+            // equal to the file's own directory is likewise no search of its
+            // own.
+            var workspaceSearched = workspaceRoot is not null && !SameDirectory(workspaceRoot, fileDirectory);
+            var levelSearched = levelDirectory is not null
+                && !SameDirectory(levelDirectory, fileDirectory)
+                && !(workspaceRoot is not null && SameDirectory(levelDirectory, workspaceRoot));
+            Reject(bestRejection, avatar, bestLength, workspaceSearched, levelSearched);
             return null;
         }
 
@@ -429,9 +487,27 @@ namespace ClaudeBuddy
         // Ordinal on the trimmed strings, consistent with IsWithin and Trim,
         // since those are the same strings this is comparing.
         internal static IReadOnlyList<string> CandidateRoots(string fileDirectory, string? workspaceRoot) =>
-            workspaceRoot is null || string.Equals(Trim(fileDirectory), Trim(workspaceRoot), StringComparison.Ordinal)
-                ? new[] { fileDirectory }
-                : new[] { fileDirectory, workspaceRoot };
+            CandidateRoots(fileDirectory, null, workspaceRoot);
+
+        // The same, with the walk-level directory between the two. Each root
+        // is dropped if it repeats one already in the list, so a persona
+        // written straight into a CLAUDE.md (at its own level) or a level that
+        // is the session's cwd (the workspace) costs no second search of the
+        // same directory.
+        internal static IReadOnlyList<string> CandidateRoots(
+            string fileDirectory, string? levelDirectory, string? workspaceRoot)
+        {
+            var roots = new List<string> { fileDirectory };
+            foreach (var root in new[] { levelDirectory, workspaceRoot })
+            {
+                if (root is not null && !roots.Any(existing => SameDirectory(existing, root))) roots.Add(root);
+            }
+
+            return roots;
+        }
+
+        private static bool SameDirectory(string a, string b) =>
+            string.Equals(Trim(a), Trim(b), StringComparison.Ordinal);
 
         // D5's ranking, as a number: how far a rejection got toward finding
         // the file. NotAPicturePath cannot arise here — it is decided in

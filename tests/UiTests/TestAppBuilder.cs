@@ -5,6 +5,35 @@ using Avalonia.Threading;
 
 [assembly: AvaloniaTestApplication(typeof(ClaudeBuddy.Tests.TestAppBuilder))]
 
+// CB-183: one application and one dispatcher for the whole assembly, not a
+// fresh pair per test. Avalonia.Headless.XUnit 12.x defaults to PerTest, and
+// PerTest is what made this suite drop a test from its count on roughly one
+// run in three.
+//
+// The mechanism, read out of Avalonia 12.1.1 itself rather than inferred:
+// PerTest isolation calls Dispatcher.ResetBeforeUnitTests() around every test,
+// which nulls the process-wide `Dispatcher.s_uiThread`. The UIThread getter
+// treats null as "nobody has claimed it yet" and builds a new dispatcher owned
+// by *whichever thread asks next*. Every test here leaves pool threads behind
+// it — file watchers, timers, fire-and-forget Task.Run continuations — that
+// call Dispatcher.UIThread.Post, and when one of them lands between the reset
+// and the session thread's own setup, it owns the UI thread. The session thread
+// then reaches DefaultRenderLoop.Add while building the next test's Compositor,
+// VerifyAccess throws "The calling thread cannot access this object because a
+// different thread owns it", and xUnit v3 records that as an assembly error in
+// place of the test's result: one fewer test, zero failures, exit 0. It is the
+// same race CB-28 fixed in the app with Startup.ClaimUiThread, recreated before
+// every test by the isolation mode.
+//
+// No test-level fix exists inside PerTest: the reset clears every thread's
+// claim before setup, so there is nothing to claim first, and the victim is
+// whichever test happens to be next — which is why it was a different test on
+// every short run. PerAssembly never nulls s_uiThread, so a pool thread asking
+// for it gets the real one and the race has no window left to land in. That
+// matches what TestBootstrap's comment and WarmUpFontManager below already
+// assumed this suite did; UiDispatcherIsolationTests pins it.
+[assembly: AvaloniaTestIsolation(AvaloniaTestIsolationLevel.PerAssembly)]
+
 namespace ClaudeBuddy.Tests;
 
 // The real App, not a stand-in built for tests. Confirmed by spike: under

@@ -473,6 +473,14 @@ namespace ClaudeBuddy
         private readonly Dictionary<string, SessionStatus> _statuses = new();
         private readonly List<string> _order = new(); // stable stacking order
 
+        // CB-167's memory of what state each session was last seen in, so the
+        // scan can tell a turn actually finishing from a poll that simply
+        // found the same idle orb again. Per manager rather than static for
+        // the identical reason SweepGrace is: a test that scans a session
+        // through generating → idle must not have that transition also
+        // observed by some other test's tracker running in the same process.
+        private readonly TurnSignalTracker _turnSignals = new();
+
         private TrayController? _tray;
 
         // Orbs can be hidden from the tray menu; sessions keep being tracked
@@ -1101,18 +1109,31 @@ namespace ClaudeBuddy
             // away. Pruning it would hide the orb exactly when it matters
             // most. Use "Reset this session to idle" to clear a genuinely
             // abandoned one manually.
-            // "generating" is exempt for gateway and cloud sessions for the
-            // same reason "waiting" is exempt for local ones: it is the state
-            // where hiding the orb is worst. A local session can't be caught
-            // by this because its file is being rewritten as it works, which
-            // neither a gateway nor a cloud session has an equivalent of —
-            // both are a roster read on a timer, so "still working" and
-            // "nothing has been heard for a while" look identical from here.
+            // "generating" is exempt for gateway sessions for the same reason
+            // "waiting" is exempt for local ones: it is the state where hiding
+            // the orb is worst. A local session can't be caught by this because
+            // its file is being rewritten as it works, which a gateway session
+            // has no equivalent of — it is a roster read on a timer, so "still
+            // working" and "nothing has been heard for a while" look identical
+            // from here.
+            //
+            // **A cloud session is exempt in every state, not just that one**
+            // (CB-182). "Keep orbs for" is a rule about local sessions, where a
+            // quiet status file means the process has probably exited and the
+            // orb left behind is a husk nothing will ever clean up. A cloud
+            // session has no process to have exited: it is a durable
+            // server-side resource that can be resumed at any time, so a clock
+            // measuring silence here is measuring the wrong thing entirely.
+            // Retention for these is already decided by ClaudeCloudRoster.Keep,
+            // whose `!archived` half is the user's own signal in the product
+            // that owns the sessions — and a second retention rule, on a clock,
+            // is what made an idle cloud session nineteen hours quiet draw no
+            // orb at all until somebody typed into the web UI to move its
+            // `updated_at` back inside the window.
             if (staleAfter is not null
+                && status.Source != SessionSource.ClaudeCloud
                 && status.State != "waiting"
-                && !((status.Source == SessionSource.OpenClaw
-                        || status.Source == SessionSource.ClaudeCloud)
-                    && status.State == "generating")
+                && !(status.Source == SessionSource.OpenClaw && status.State == "generating")
                 && now - written > staleAfter)
             {
                 return ScanVerdict.Expired;
@@ -1578,7 +1599,7 @@ namespace ClaudeBuddy
         internal void ApplyPersona(
             string sessionId,
             SessionStatus status,
-            Dictionary<(string Cwd, SessionSource Source, string Agent), IReadOnlyList<string>> candidatesByCwd)
+            Dictionary<(string Cwd, SessionSource Source, string Agent), IReadOnlyList<LocalPersona.Candidate>> candidatesByCwd)
         {
             // A gateway session's identity comes from the gateway, and a
             // remote-control relay is not a conversation at all. Neither has a
@@ -1614,10 +1635,15 @@ namespace ClaudeBuddy
             // whether CandidateFiles found a member-specific file for any of
             // them. status.Agent is "" for anything that isn't a team member,
             // which reproduces today's one-entry-per-cwd behaviour exactly.
+            //
+            // Candidates rather than bare paths (CB-187): each carries the
+            // walk level it was found at, which the fold needs to resolve a
+            // picture profile-gen wrote relative to the project directory.
+            // The signature below stats the paths alone, exactly as before.
             var key = (status.Cwd, status.Source, status.Agent);
             if (!candidatesByCwd.TryGetValue(key, out var candidates))
             {
-                candidates = LocalPersona.CandidateFiles(
+                candidates = LocalPersona.Candidates(
                     status.Cwd, _userConfigDirs(), status.Source, status.Agent);
                 candidatesByCwd[key] = candidates;
             }
@@ -1642,9 +1668,10 @@ namespace ClaudeBuddy
             // face until the app restarts. Persona.Watched is Files plus the
             // picture for exactly that reason, and it costs one extra stat per
             // tick and only for a session that has a portrait at all.
+            var candidatePaths = candidates.Select(candidate => candidate.Path);
             var watched = known.Persona is null
-                ? candidates
-                : candidates.Concat(known.Persona.Watched);
+                ? candidatePaths
+                : candidatePaths.Concat(known.Persona.Watched);
 
             var signature = LocalPersona.Signature(watched);
 
@@ -1689,7 +1716,7 @@ namespace ClaudeBuddy
             // signature differ for no reason and resolve a second time, every
             // time, forever. One more round of stats here is what stops that.
             _personas[sessionId] =
-                (LocalPersona.Signature(candidates.Concat(persona.Watched)), persona);
+                (LocalPersona.Signature(candidatePaths.Concat(persona.Watched)), persona);
 
             LocalPersonas.Set(sessionId, persona);
         }
@@ -1911,6 +1938,13 @@ namespace ClaudeBuddy
             var seen = new HashSet<string>();
             bool setChanged = false;
 
+            // What CB-167's tracker noticed this pass. Collected rather than
+            // acted on inline, because the decision is coalesced across the
+            // whole scan — four orbs finishing at once is one sound, not
+            // four — so nothing plays until every session in this pass has
+            // been observed.
+            var turnSoundEvents = new List<TurnSoundEvent>();
+
             // Which files a persona could be written in, per working directory,
             // for the length of this one pass. Local rather than a field on
             // purpose: building the list is pure string work over a path walk —
@@ -1920,7 +1954,7 @@ namespace ClaudeBuddy
             // nothing measurable. Several sessions in one repo is the common
             // case and is what this actually saves.
             var candidatesByCwd =
-                new Dictionary<(string Cwd, SessionSource Source, string Agent), IReadOnlyList<string>>();
+                new Dictionary<(string Cwd, SessionSource Source, string Agent), IReadOnlyList<LocalPersona.Candidate>>();
 
             // The gateway's sessions join the same list the status files
             // produced, so everything downstream — ordering, stacking, pinning,
@@ -2150,14 +2184,27 @@ namespace ClaudeBuddy
                             : OrbPresence.Present,
                     },
 
-                    // The session's own last activity, never `now`. The account
-                    // API lists every cloud session the account has ever had —
-                    // 578 rows on the machine this was measured against — so
-                    // stamping the time of the read would give all of them a
-                    // permanent orb. Stamping real activity lets the user's own
-                    // "Keep orbs for" setting do the filtering, which is the
-                    // same argument the gateway block above makes at length and
-                    // the same trap it was written to avoid.
+                    // The session's own last activity, never `now` — a scan
+                    // entry's stamp is a claim about when something last
+                    // happened, and the headless-drop diagnostic prints it as
+                    // one. Inventing a time would make every cloud session log
+                    // as having been worked in this second.
+                    //
+                    // **The argument this used to carry was the wrong one, and
+                    // it had a bug behind it (CB-182):** that stamping real
+                    // activity is what lets the user's "Keep orbs for" setting
+                    // filter these, on the strength of the account API listing
+                    // 578 rows. Those 578 are the *unfiltered* roster; 573 of
+                    // them are `bridge` rows that ClaudeCloudRoster.Keep drops
+                    // long before this loop sees one, so the volume being
+                    // defended against is a set that never reaches the sweep.
+                    // What does reach it is a handful of non-archived cloud
+                    // sessions — five on that account, one of them not archived
+                    // — and letting a lifetime clock filter those took the orb
+                    // away from the only one there was. JudgeLiveness exempts
+                    // cloud sessions from expiry outright now, so nothing on
+                    // this path reads the stamp as a retention decision any
+                    // more; it stays because it is true.
                     session.LastActivity));
             }
 
@@ -2464,6 +2511,21 @@ namespace ClaudeBuddy
                 // persona changed.
                 ApplyPersona(sessionId, status, candidatesByCwd);
 
+                // Immediately before the dictionary is overwritten, so the
+                // tracker is comparing against exactly the state this
+                // session was in on the previous tick — the same
+                // TryGetValue(_statuses, ...) above is reading, just for a
+                // different question. After the liveness and reachability
+                // continues above, which is what makes CB-167's "husks can't
+                // chime" guarantee true by construction: a session that
+                // never reaches this line is never observed at all.
+                var turnSignal = _turnSignals.Observe(sessionId, status.State);
+                if (turnSignal != TurnSignal.None)
+                {
+                    turnSoundEvents.Add(new TurnSoundEvent(
+                        turnSignal, SoundKeyFor(status, sessionId), sessionId));
+                }
+
                 _statuses[sessionId] = status;
 
                 var isNew = !_windows.TryGetValue(sessionId, out var window);
@@ -2518,6 +2580,61 @@ namespace ClaudeBuddy
                 LocalPersonas.Forget(id);
                 PeerPersonas.Forget(id);
             }
+
+            // Drops anything this pass never saw, so a session that vanished
+            // mid-generation and comes back later starts from a baseline
+            // rather than being compared against whatever it was doing when
+            // it dropped out of sight. After the removal pass above rather
+            // than before it, though the two do not actually interact: this
+            // just keeps every "after the loop, once" step grouped together.
+            _turnSignals.Prune(seen);
+
+            // QA (CB-167): a deferred signal still waiting out the rate
+            // limit for a session that has just dropped out of `seen` — a
+            // backgrounded husk, one genuinely gone — must not fire once its
+            // two seconds are up. The signal was real when it was raised,
+            // but by the time the timer would fire the session it was about
+            // is no longer one the scan is willing to say anything about.
+            TurnSounds.CancelPendingUnlessSeen(seen);
+
+            // One sound for the whole pass, decided from everything the loop
+            // above noticed. The callback is how this reaches an orb without
+            // TurnSounds ever holding a window reference of its own — see its
+            // own header comment. Async and bool-returning (QA, CB-167): the
+            // window is the only thing that can say whether it actually had
+            // something to speak, and TurnSounds needs that answer, off this
+            // thread, to decide whether to fall back to a chime.
+            //
+            // The dictionary lookup itself goes through Dispatcher.UIThread.
+            // InvokeAsync rather than reading _windows directly, because this
+            // callback is not always called from the UI thread: a deferred
+            // decision (the rate-limit gap was still closed) fires later off
+            // TurnSounds' own timer, and _windows is otherwise only ever
+            // touched from the scan itself. Reading it from a background
+            // thread at the same moment a live scan mutates it is exactly
+            // the kind of race that would show up once in a great while and
+            // be unreproducible.
+            //
+            // currentStateFor (QA round 2, finding 5) exists for the same
+            // reason: a deferred event's session may have moved on — reset,
+            // pruned, or an attention resolved some way other than the
+            // reactive Cancel calls above catch — by the time TurnSounds'
+            // timer actually fires, and this is how FirePending asks "does
+            // that still hold" instead of trusting whatever was true when
+            // the event was first deferred. TurnSounds only ever calls this
+            // off its own timer thread, never the UI thread, so it dispatches
+            // the same way the summary callback above does — synchronously
+            // here rather than awaited, since FirePending's validation loop
+            // is itself synchronous and a Dictionary this scan owns is not
+            // safe to read from a second thread without going through it.
+            TurnSounds.Deliver(turnSoundEvents, async id =>
+            {
+                var window = await Dispatcher.UIThread.InvokeAsync(
+                    () => _windows.TryGetValue(id, out var w) ? w : null);
+                if (window is null) return false;
+                return await window.SpeakTurnSummaryAsync().ConfigureAwait(false);
+            }, currentStateFor: id => Dispatcher.UIThread.Invoke(
+                () => _statuses.TryGetValue(id, out var s) ? s.State : null), now: now);
 
             // After the removal pass, so an orb has already gone before its file
             // does and the two never disagree on screen. Inside the scan rather
@@ -2947,6 +3064,27 @@ namespace ClaudeBuddy
 
         public SessionStatus? StatusFor(string? sessionId) =>
             string.IsNullOrEmpty(sessionId) ? null : _statuses.GetValueOrDefault(sessionId);
+
+        // The orb window for a session, if the scan has created one — CB-168's
+        // OpenClaw new-chat flow uses this to find the real, scan-owned orb
+        // for a session it just asked the gateway to create, rather than
+        // building its own OrbWindow: this dictionary is the only place an
+        // orb is created and tracked, and a second one built outside it would
+        // be a genuine duplicate the moment the next scan discovers the same
+        // session and creates its own.
+        public OrbWindow? OrbFor(string? sessionId) =>
+            string.IsNullOrEmpty(sessionId) ? null : _windows.GetValueOrDefault(sessionId);
+
+        // A snapshot copy, keyed by session id — CB-168's "New chat…" dialog
+        // uses this twice: to seed its folder combo (RecentFolders.Merge
+        // wants the live cwds) and to tell which orb, if any, is new once a
+        // launch has gone out (NewChatOrbWatch wants the ids that already
+        // existed). A copy rather than the live dictionary, the same
+        // reasoning ClaudeCodeProfileDirs' own accessor gives: a caller
+        // holding a reference to _statuses directly could observe — or in a
+        // future change, mutate — state out from under the next scan.
+        public IReadOnlyDictionary<string, SessionStatus> AllStatuses =>
+            new Dictionary<string, SessionStatus>(_statuses);
 
         // Make this session's orb acknowledge a click that was answered without
         // creating anything.
@@ -3404,10 +3542,59 @@ namespace ClaudeBuddy
         internal static string DirectoryKeyFor(SessionStatus status) =>
             string.IsNullOrEmpty(status.Cwd) ? "" : status.Cwd.TrimEnd('\\', '/');
 
+        // CB-167's per-orb key for turn sounds. Built on PositionKeyFor
+        // rather than invented fresh, because PositionKeyFor is already this
+        // app's answer to "which agent is this across scans and restarts" —
+        // it carries the CB-10 fix for an untitled session keying on its own
+        // id, and reusing it means a sound override and a pinned position
+        // agree about which orb they are talking about, the same way
+        // ChatPanelSizes already agrees with OrbPositions.
+        //
+        // The one gap PositionKeyFor leaves open is team members: two agents
+        // sharing one cwd and one auto-generated title collide under it,
+        // which is fine for a *position* — stacking rules already handle two
+        // orbs wanting one slot — but wrong for a sound override, where
+        // "make agent A quiet" silently muting agent B too is a real
+        // correctness bug, not a cosmetic one. Appending the agent name (set
+        // from AgentTeam membership earlier in the scan, before this is ever
+        // called) closes that gap without touching PositionKeyFor itself,
+        // since nothing about orb placement cares which teammate it is.
+        internal static string SoundKeyFor(SessionStatus status, string sessionId)
+        {
+            var key = PositionKeyFor(status, sessionId);
+
+            // QA (CB-167): an empty PositionKeyFor is a deliberate "no key"
+            // — a local session with no cwd, per PositionKeyFor's own early
+            // return — and the accessors on ClaudeBuddySettings already read
+            // an empty key as "no override, don't bother looking." Appending
+            // the agent name onto that empty string used to turn it into
+            // "\n<agent>", a real, non-empty key with no cwd in it at all —
+            // shared by every session anywhere naming that same agent, in
+            // every project. Muting one teammate would have silently muted
+            // them everywhere. Staying empty whenever PositionKeyFor does is
+            // what keeps this a per-orb key rather than a per-agent-name one.
+            if (key.Length == 0 || string.IsNullOrEmpty(status.Agent)) return key;
+
+            return key + "\n" + status.Agent;
+        }
+
         private void RestoreOrbPosition(OrbWindow window, SessionStatus status)
         {
             var key = PositionKeyFor(status, window.SessionId);
             window.PositionKey = key;
+
+            // window.SoundKey is no longer set here. QA round 2 (HIGH):
+            // SoundKeyFor depends on Title, which can arrive after this
+            // method's one-time call (RestoreOrbPosition only runs for a
+            // brand-new orb) — an untitled session keys on its own id until
+            // Claude Code names it, so a value set only here would go stale
+            // the moment a title showed up. OrbWindow.UpdateFrom now
+            // recomputes it on every poll instead, and this same status
+            // already reached UpdateFrom before this method ever runs
+            // (SessionManager.cs's per-session loop calls UpdateFrom first),
+            // so window.SoundKey is already correct by the time execution
+            // gets here.
+
             if (string.IsNullOrEmpty(key)) return;
 
             // A sibling session in the same directory already sits there;
@@ -3611,6 +3798,20 @@ namespace ClaudeBuddy
             catch { }
 
             _statuses[sessionId] = reset;
+
+            // Silent, not Observe: a manual reset is a person clearing a
+            // stuck orb, not a turn finishing, and the tracker has to agree
+            // or the next real scan would find "idle" already on record and
+            // never notice the actual generating → idle transition that
+            // follows. See TurnSignalTracker.Settle's own comment.
+            _turnSignals.Settle(sessionId, "idle");
+
+            // QA (CB-167): the same silence Settle just gave the tracker
+            // applies to a sound still waiting on this session — a person
+            // clearing a stuck orb should not have it ding a couple of
+            // seconds later for a turn they just told the app to forget
+            // about.
+            TurnSounds.CancelPendingFor(sessionId);
 
             if (_windows.TryGetValue(sessionId, out var window))
             {

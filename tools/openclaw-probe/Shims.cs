@@ -24,4 +24,17 @@ namespace ClaudeBuddy
     {
         public const int DefaultPort = 7677;
     }
+
+    // ClaudeBuddySettings.SpeakScope is typed against this enum (added by the
+    // turn-sounds feature, CB-168 found the probe broken by it again). The
+    // real type lives in SpeechSummary.cs, which also drags in ClaudeBinary
+    // and InternalSessions — window/process-adjacent, and unrelated to what
+    // the probe needs, which is only the two names the setting compares
+    // against a string. Restated rather than compiled in, same reasoning as
+    // PeerLink above.
+    internal enum SpeakScope
+    {
+        Full,
+        Summary,
+    }
 }

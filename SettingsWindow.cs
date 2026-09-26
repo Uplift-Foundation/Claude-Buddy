@@ -692,6 +692,15 @@ namespace ClaudeBuddy
 
             root.Children.Add(Group("voice", "Voice", Card(VoiceRows())));
 
+            // Right after Voice: a turn sound and a spoken summary are both
+            // "how this app tells you something happened without you looking
+            // at it", and they share half their vocabulary (Off, the vibe
+            // summary, a chosen file) — putting the row that hears you a turn
+            // finished directly under the row that reads it to you is the
+            // same walk-through order a new user would want either explained
+            // in.
+            root.Children.Add(Group("sounds", "Sounds", Card(SoundRows())));
+
             // One section per agent, each starting with whether it is tracked
             // at all and then everything about it — the panel, replying, extra
             // accounts, and on Windows the WSL distros.
@@ -2614,6 +2623,455 @@ namespace ClaudeBuddy
                 });
             });
         }
+
+        // --- Turn sounds (CB-167) ----------------------------------------------
+        // Two triggers, four settings (master switch plus a picker per
+        // trigger), one shared picker builder — the same shape SpeakScope's
+        // row takes above, widened because a sound setting has more than two
+        // named values. SoundChoices is internal (not private) because
+        // OrbWindow's context-menu submenu builds the identical list for the
+        // per-orb override, and a second copy of "Default / Off / [Vibe
+        // summary] / the system sounds / Choose file…" is exactly the kind of
+        // drift CB-153's doubled colour switch already cost this project once.
+
+        private const string SoundOffValue = "off";
+        private const string SoundSummaryValue = "summary";
+
+        // Never written to a setting — SoundPicker's SelectionChanged
+        // intercepts this value and starts the file-open flow instead of
+        // ever handing it to `set`. Null-character-prefixed so it can never
+        // collide with a real system-sound name or an absolute path, both of
+        // which are ordinary text.
+        internal const string ChooseFileValue = "\u0000choose-file";
+        private const string ChooseFileLabel = "Choose file…";
+        private const string OffLabel = "Off";
+        internal const string VibeSummaryLabel = "Vibe summary";
+
+        // The seam a headless test satisfies in place of the OS file picker —
+        // unlike BrowseForProfileDir above, which is excluded from coverage
+        // wholesale because nothing about it can be driven headless, this is
+        // a single Func a test can point at a canned "the user picked this
+        // path" or "the user cancelled" (null) answer. That is what makes
+        // SoundPicker's own branching — write the path, or leave the previous
+        // selection alone — provable rather than merely excluded. Set and
+        // cleared by the test, never by production code.
+        internal static Func<Task<string?>>? ChooseSoundFileForTests;
+
+        internal static ComboBox TurnFinishedSoundPicker() => SoundPicker(
+            () => ClaudeBuddySettings.TurnFinishedSound,
+            v => ClaudeBuddySettings.TurnFinishedSound = v,
+            SystemSoundCatalog.DefaultFinishedSoundName,
+            includeSummary: true);
+
+        internal static ComboBox NeedsAttentionSoundPicker() => SoundPicker(
+            () => ClaudeBuddySettings.NeedsAttentionSound,
+            v => ClaudeBuddySettings.NeedsAttentionSound = v,
+            SystemSoundCatalog.DefaultAttentionSoundName,
+            includeSummary: false);
+
+        // The full offered list for one trigger, in display order: the
+        // platform default (named, not just "Default" — a user choosing
+        // between two unlabelled defaults for two different triggers is the
+        // usability bug this parenthetical exists to avoid), Off, the vibe
+        // summary (finished only — needsAttentionSound has no such value,
+        // see the settings comment on it), every system sound this machine
+        // actually has, whatever `current` already is if that is none of the
+        // above, and Choose file… last, matching a native picker's own
+        // convention of putting "Other…" at the bottom.
+        internal static List<(string Label, string? Value)> SoundChoices(
+            string? current, string defaultName, bool includeSummary)
+        {
+            var choices = new List<(string Label, string? Value)>
+            {
+                ($"Default ({defaultName})", null),
+                (OffLabel, SoundOffValue)
+            };
+
+            if (includeSummary) choices.Add((VibeSummaryLabel, SoundSummaryValue));
+
+            foreach (var name in SystemSoundCatalog.List(
+                SystemSoundCatalog.DefaultDirectory, SystemSoundCatalog.DefaultExtensions))
+            {
+                choices.Add((name, name));
+            }
+
+            // A name or path this list doesn't otherwise offer — a sound
+            // removed since it was chosen, a hand-edited settings file, or a
+            // file the user picked this session — shown under its own name
+            // rather than silently dropped, the same courtesy ClickPicker's
+            // unknown-value entry extends above.
+            if (current is not null && choices.All(c => c.Value != current))
+            {
+                var label = Path.IsPathRooted(current) ? Path.GetFileName(current) : current;
+                choices.Add((label, current));
+            }
+
+            choices.Add((ChooseFileLabel, ChooseFileValue));
+            return choices;
+        }
+
+        // Static, like SpeakScopePicker: nothing it builds reads `this`, and
+        // keeping it that way is what lets a test drive
+        // TurnFinishedSoundPicker()/NeedsAttentionSoundPicker() directly
+        // without constructing a window.
+        //
+        // `lastGood` — not the original `current` — is what a cancelled
+        // Choose file… reverts to, because a picker driven for a while (a
+        // real system sound chosen, then Choose file… opened and cancelled)
+        // must land back on the sound just chosen, not jump all the way back
+        // to whatever was saved when the row was built.
+        //
+        // `suppress` guards every place this method assigns
+        // combo.SelectedIndex or combo.ItemsSource itself: either raises
+        // SelectionChanged again (a plain assignment does, in Avalonia, the
+        // same as ColorRow's picker.Color above), and without the guard that
+        // re-entrant call would run this whole body a second time — writing
+        // the setting twice and, worse, playing the preview twice for one
+        // choice.
+        private static ComboBox SoundPicker(
+            Func<string?> get, Action<string?> set, string defaultName, bool includeSummary)
+        {
+            var lastGood = get();
+            var choices = SoundChoices(lastGood, defaultName, includeSummary);
+
+            var combo = new ComboBox
+            {
+                ItemsSource = choices.Select(c => c.Label).ToList(),
+                SelectedIndex = choices.FindIndex(c => c.Value == lastGood),
+                MinWidth = 200
+            };
+
+            var suppress = false;
+
+            // async void: an Avalonia routed event has nowhere to return a
+            // Task to, the same reason BrowseInto's Click handler above is.
+            // Everything this can throw is inside PickSoundFileAsync
+            // (ExcludeFromCodeCoverage's whole job) or inside a test's own
+            // ChooseSoundFileForTests, which is the test's responsibility.
+            combo.SelectionChanged += async (_, _) =>
+            {
+                if (suppress) return;
+
+                var index = combo.SelectedIndex;
+                if (index < 0) return;
+
+                var picked = choices[index];
+
+                if (picked.Value != ChooseFileValue)
+                {
+                    lastGood = picked.Value;
+                    set(picked.Value);
+                    PreviewSound(picked.Value, defaultName);
+                    return;
+                }
+
+                var path = await ChooseSoundFile(combo);
+
+                suppress = true;
+                try
+                {
+                    if (path is null)
+                    {
+                        // Cancelled: back to whatever was chosen before, not
+                        // left sitting on "Choose file…" showing a value
+                        // nothing wrote.
+                        combo.SelectedIndex = choices.FindIndex(c => c.Value == lastGood);
+                        return;
+                    }
+
+                    // Rebuilt so the picked file's own name replaces "Choose
+                    // file…" as the selected entry, and is still offered
+                    // under that name if the picker is reopened without the
+                    // window being rebuilt from settings first.
+                    lastGood = path;
+                    choices = SoundChoices(path, defaultName, includeSummary);
+                    combo.ItemsSource = choices.Select(c => c.Label).ToList();
+                    combo.SelectedIndex = choices.FindIndex(c => c.Value == path);
+                }
+                finally
+                {
+                    suppress = false;
+                }
+
+                if (path is not null)
+                {
+                    set(path);
+                    PreviewSound(path, defaultName);
+                }
+            };
+
+            return combo;
+        }
+
+        // internal: OrbWindow's Sound submenu builds the identical
+        // Default/Off/[Vibe summary]/system sounds/Choose file… list this
+        // picker does (see SoundChoices' own comment), and reuses this
+        // rather than opening a second file dialog with its own filter list
+        // that could quietly drift from this one's.
+        internal static Task<string?> ChooseSoundFile(Control owner)
+        {
+            var seam = ChooseSoundFileForTests;
+            return seam is not null ? seam() : PickSoundFileAsync(owner);
+        }
+
+        // Excluded from coverage: opens the OS's own file picker and waits
+        // for a human to answer it, the same reason BrowseForProfileDir above
+        // is excluded — there is no headless storage provider to satisfy
+        // OpenFilePickerAsync. ChooseSoundFile's own branching (which of
+        // these two paths runs) and SoundPicker's handling of either answer
+        // are both covered through ChooseSoundFileForTests instead, which is
+        // the point of that seam existing rather than excluding this whole
+        // path the way the folder picker is.
+        //
+        // Widened past DefaultExtensions on purpose: that list is what this
+        // machine's own sound drawer already contains (aiff on macOS, wav on
+        // Windows), but a user's own file is not limited to that — the plan's
+        // decision is wav/aiff/mp3/m4a on macOS (afplay opens all four) and
+        // wav only on Windows (Media.SoundPlayer opens nothing else).
+        [ExcludeFromCodeCoverage]
+        private static async Task<string?> PickSoundFileAsync(Control owner)
+        {
+            var storageProvider = TopLevel.GetTopLevel(owner)?.StorageProvider;
+            if (storageProvider is null) return null;
+
+            var patterns = OperatingSystem.IsWindows()
+                ? new[] { "*.wav" }
+                : new[] { "*.wav", "*.aiff", "*.aif", "*.mp3", "*.m4a" };
+
+            var result = await storageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+            {
+                Title = "Choose a sound",
+                AllowMultiple = false,
+                FileTypeFilter = new[] { new FilePickerFileType("Sounds") { Patterns = patterns } }
+            });
+
+            return result.Count == 0 ? null : result[0].TryGetLocalPath();
+        }
+
+        // How long a preview waits for the selection to settle before it
+        // actually plays — see PreviewSound's own comment for why, and
+        // ClaudeBuddySettings.SaveDelay a few hundred lines up in that file
+        // for the sibling problem (a colour wheel drag) this same shape of
+        // fix already solves there.
+        private static readonly TimeSpan PreviewDebounce = TimeSpan.FromMilliseconds(250);
+
+        // A DispatcherTimer rather than Task.Delay, on purpose, after an
+        // earlier draft of this fix used Task.Delay(ms, CancellationToken)
+        // inside a Task.Run and it produced two genuine test-case-cleanup
+        // failures in unrelated suites under `dotnet test -c Release`
+        // (AccountOrbsTests, SettingsWindowCoverageTests) — a stray
+        // background continuation still winding down its delay after a
+        // test's own teardown reached into shared Avalonia state it no
+        // longer owned. ClaudeBuddySettings' own deferred-write timer
+        // (_deferred, a few hundred lines up in that file) solves the
+        // identical "debounce something that changes fast" problem the
+        // same way for exactly that reason, and its own comment there is
+        // explicit that no test should ever wait on a real tick — this
+        // reuses that same shape, including a Flush...ForTests seam rather
+        // than a sleep, instead of reinventing a worse one.
+        private static DispatcherTimer? _previewTimer;
+        private static string? _pendingPreviewPath;
+
+        // Off and the vibe summary both resolve to nothing playable — Off by
+        // the plan's own rule, and the vibe summary because there is no
+        // static audio for it, only a per-session sentence SpeechRequest
+        // writes at the moment a turn actually finishes — so both are silent
+        // no-ops here rather than special-cased by the caller. Everything
+        // else resolves exactly the way TurnSounds.Snapshot resolves it for
+        // real playback, so a preview genuinely previews what the scan would
+        // play, not an approximation of it.
+        internal static void PreviewSound(string? setting, string defaultName)
+        {
+            if (setting is not null && (
+                    string.Equals(setting, SoundOffValue, StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(setting, SoundSummaryValue, StringComparison.OrdinalIgnoreCase)))
+            {
+                return;
+            }
+
+            var path = SystemSoundCatalog.Resolve(
+                setting ?? defaultName, SystemSoundCatalog.DefaultDirectory, SystemSoundCatalog.DefaultExtensions);
+
+            if (path is null) return;
+
+            // QA round 2 (HIGH): ChimePlayer.Play blocks its caller on
+            // WaitForExit for the length of the sound — about 2.4 s for a
+            // short system chime, the full 5 s cap for a long user file —
+            // and this used to call it straight from SelectionChanged and
+            // the ▶ click, both on the Avalonia UI thread. Arrowing through
+            // the picker froze the settings window for that long on every
+            // step.
+            //
+            // QA round 3, finding 4: moving that call to a background
+            // Task.Run on its own was not enough either — arrow-key steps
+            // taken at an ordinary human pace, not just a fast burst, each
+            // settle past the 250ms debounce below and each used to start
+            // its own independent ChimePlayer.Play call, so several
+            // deliberate choices in a row still stacked. That half of the
+            // fix now lives in ChimePlayer.PlayPreview itself (a channel
+            // that kills whatever preview is already playing before
+            // starting the next), not here — this debounce still matters on
+            // top of it, since it is what keeps a fast burst from calling
+            // PlayPreview at all for the choices nobody stopped on, rather
+            // than calling it and immediately killing it again.
+            _pendingPreviewPath = path;
+            RestartThePreviewDebounce();
+        }
+
+        private static void RestartThePreviewDebounce()
+        {
+            if (_previewTimer is null)
+            {
+                _previewTimer = new DispatcherTimer { Interval = PreviewDebounce };
+                _previewTimer.Tick += OnPreviewTick;
+            }
+
+            _previewTimer.Stop();
+            _previewTimer.Start();
+        }
+
+        // Excluded from coverage: fires only when the debounce interval
+        // actually elapses, and no test waits on a real timer — see the
+        // class comment on _previewTimer for the exact shape of flake that
+        // already cost this file one broken fix. What it does when it fires
+        // is PlayPendingPreview, which is covered every other way, and
+        // FlushPendingPreviewForTests is the seam a test uses instead.
+        [ExcludeFromCodeCoverage]
+        private static void OnPreviewTick(object? sender, EventArgs e)
+        {
+            _previewTimer!.Stop();
+            PlayPendingPreview();
+        }
+
+        // internal: a test calls this instead of waiting out the real 250ms
+        // — the identical role ClaudeBuddySettings.FlushPendingSave plays
+        // for the deferred write, and named the same way on purpose.
+        internal static void FlushPendingPreviewForTests()
+        {
+            if (_previewTimer is null || !_previewTimer.IsEnabled) return;
+
+            _previewTimer.Stop();
+            PlayPendingPreview();
+        }
+
+        // internal: puts the debounce back in its pre-any-preview state.
+        // _previewTimer is a process-wide static that is created once and
+        // never reverts to null on its own, so FlushPendingPreviewForTests'
+        // `_previewTimer is null` arm is otherwise unreachable from a test
+        // the moment any other test anywhere in the process has triggered a
+        // preview first — which, given xUnit does not guarantee run order,
+        // is not a case a test can otherwise arrange to be first.
+        // ClaudeBuddySettings' identical _deferred field has the same shape
+        // and no equivalent reset; this is the local fix for it rather than
+        // leaving the arm permanently unreachable.
+        internal static void ResetPreviewDebounceForTests()
+        {
+            _previewTimer?.Stop();
+            _previewTimer = null;
+            _pendingPreviewPath = null;
+        }
+
+        private static void PlayPendingPreview()
+        {
+            var path = _pendingPreviewPath;
+            _pendingPreviewPath = null;
+
+            // PlayPreview, not Play — the whole point of round 3's fix.
+            // Cheap enough to call directly rather than from its own
+            // Task.Run: it only ever locks, at most kills one process
+            // (fast) and either sets a field or starts its own worker the
+            // first time in a while, never blocks on WaitForExit itself.
+            if (path is not null) ChimePlayer.PlayPreview(path);
+        }
+
+        // A drawn triangle rather than the "▶" text glyph it stands in for —
+        // CB-173 is an open bug about exactly this rendering as a colour
+        // emoji on Windows for the disclosure chevron above, and a preview
+        // button is the same kind of tiny, easy-to-miss-in-review icon that
+        // bug slipped through as. Filled rather than stroked, since a
+        // triangle this small reads better solid than outlined.
+        private Control PlayGlyph() => new Shapes.Path
+        {
+            Data = Geometry.Parse("M 0,0 L 7,4 L 0,8 Z"),
+            Fill = new SolidColorBrush(IsDark ? Colors.White : Colors.Black) { Opacity = 0.75 },
+            Width = 7,
+            Height = 8,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(1, 0, 0, 0)
+        };
+
+        // internal: a test drives this directly to assert what a click
+        // previews, the same reason ResetColorsButton is internal rather than
+        // private. Takes the picker's own getter rather than the row's
+        // `set`/`get` pair, so the button always previews whatever is
+        // currently selected — including a selection not yet committed by a
+        // still-running Choose file… flow, which never applies here since the
+        // button ignores that entirely and just reads the setting.
+        internal Control PreviewButton(Func<string?> get, string defaultName)
+        {
+            var button = new Button
+            {
+                Content = PlayGlyph(),
+                Padding = new Thickness(9, 5),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            ToolTip.SetTip(button, "Preview");
+            button.Click += (_, _) => PreviewSound(get(), defaultName);
+            return button;
+        }
+
+        private Control SoundPickerRow(string label, ComboBox picker, Func<string?> get,
+            string defaultName, string help) =>
+            Row(label, new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Spacing = 6,
+                Children = { picker, PreviewButton(get, defaultName) }
+            }, help);
+
+        // internal, like VoiceRows and ClickRows above: a test drives each
+        // row's control directly rather than hunting it through a template
+        // whose shape depends on which theme loaded.
+        // Named rather than an inline lambda, like OnVoiceInputToggled and
+        // OnAutoColorToggled above it — SettingsWindowRowTests drives every
+        // switch's handler directly rather than synthesizing a click on the
+        // control, since which control a row holds (ToggleSwitch or its
+        // CheckBox fallback) is a property of the theme rather than of the
+        // setting, and this keeps that row testable the same way.
+        internal void OnTurnSoundsToggled(bool enabled) => ClaudeBuddySettings.TurnSoundsEnabled = enabled;
+
+        internal Control[] SoundRows() => new[]
+        {
+            // QA round 2 (copy): the old wording named the JSON keys this
+            // switch and its two rows write — needsAttentionSound,
+            // turnFinishedSound, settings.json — which means nothing to
+            // someone reading the settings window rather than the source.
+            // Said the same thing in plain terms instead.
+            Row("Play a sound", Switch(ClaudeBuddySettings.TurnSoundsEnabled, OnTurnSoundsToggled),
+                "Off silences both rows below, whatever sound each one is set to."),
+
+            // QA round 2 (copy): "it never interrupts speech already
+            // playing, and falls back to the chime below it if it would
+            // have to" described the mechanism rather than what a user
+            // would actually hear. Says the outcome instead — Dmitri's QA
+            // round 2 fix is what makes this true rather than aspirational,
+            // by only marking the sound "played" once something real was
+            // actually about to be heard.
+            SoundPickerRow("When a turn finishes", TurnFinishedSoundPicker(),
+                () => ClaudeBuddySettings.TurnFinishedSound, SystemSoundCatalog.DefaultFinishedSoundName,
+                "Plays once a reply is done and Claude Buddy is waiting on you again. "
+                + "Vibe summary speaks one to three sentences on what just happened and "
+                + "what's next, in that orb's own voice — if you're already listening to "
+                + "something else, it plays the chime below instead of talking over it."),
+
+            SoundPickerRow("When a session needs you", NeedsAttentionSoundPicker(),
+                () => ClaudeBuddySettings.NeedsAttentionSound, SystemSoundCatalog.DefaultAttentionSoundName,
+                "Plays when a session is waiting on a permission prompt or a question — "
+                + "the state that most needs your attention, so it always wins over a "
+                + "turn finishing elsewhere on the same scan. Set an individual orb's "
+                + "sound from its right-click menu; that override beats this default for "
+                + "that orb alone.")
+        };
 
         // --- Mac-ish chrome ---------------------------------------------------
         // System Settings' shape: a small dimmed label, then a rounded card whose

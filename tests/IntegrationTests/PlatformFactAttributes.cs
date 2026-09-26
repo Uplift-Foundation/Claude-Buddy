@@ -187,3 +187,22 @@ public sealed class SymlinkFactAttribute : FactAttribute
         }
     }
 }
+
+// ITermCommand's payload is decoded by /usr/bin/base64 -D, which is macOS's
+// spelling — GNU coreutils' base64 wants -d and rejects -D — and iTerm2, the
+// only thing that ever runs it, is macOS-only too. A run on Linux would be
+// reporting on a different base64.
+public sealed class MacITermShellFactAttribute : FactAttribute
+{
+    public MacITermShellFactAttribute()
+    {
+        if (!OperatingSystem.IsMacOS())
+        {
+            Skip = "iTerm2's command runs on macOS only";
+            return;
+        }
+
+        if (!File.Exists("/usr/bin/base64") || !File.Exists("/bin/zsh"))
+            Skip = "no /usr/bin/base64 or /bin/zsh on this machine";
+    }
+}

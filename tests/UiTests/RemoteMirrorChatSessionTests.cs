@@ -18,6 +18,17 @@ namespace ClaudeBuddy.Tests;
 // Only the relay is faked, and only because the real one is a live Claude Code
 // session on somebody's account. Same seam as MirrorRoundTripTests, and for the
 // same reason.
+//
+// [Collection("Settings")] for the same reason every other ChatPanel-touching
+// suite carries it (see SettingsCollection.cs and ChatPanelStaticApiTests'
+// header): this class opens real ChatPanels bound to a remote-mirror session,
+// and ChatPanel.Panels is a process-wide static that OpenFor reuses rather
+// than replacing. Missing this attribute let the class run in a separate
+// parallel group from the rest of the ChatPanel* suites, which was one of two
+// files responsible for a flaky
+// ChatPanelPinTests.IsOpenForFindsAPinnedPanelToo failure that only showed up
+// in the full suite, in Release, never standalone (CB-168).
+[Collection("Settings")]
 public class RemoteMirrorChatSessionTests : IDisposable
 {
     private const string Account = ".claude-board";

@@ -73,6 +73,53 @@ public class PersonaAvatarRootsTests
         Assert.Equal(new[] { "/ws/project", "/WS/PROJECT" }, roots);
     }
 
+    // --- CB-187's walk-level directory, between the other two -------------
+
+    [Fact]
+    public void ThreeDistinctDirectoriesGiveThreeRootsNarrowestFirst()
+    {
+        var roots = PersonaFiles.CandidateRoots("/ws/.claude/persona", "/ws", "/ws/a/b");
+
+        Assert.Equal(new[] { "/ws/.claude/persona", "/ws", "/ws/a/b" }, roots);
+    }
+
+    // A persona written straight into a CLAUDE.md sits at its own level: the
+    // level Load hands down for <dir>/CLAUDE.md is <dir>.
+    [Fact]
+    public void ALevelThatIsTheFilesOwnDirectoryDedupes()
+    {
+        var roots = PersonaFiles.CandidateRoots("/ws/project", "/ws/project/", "/ws/project/a");
+
+        Assert.Equal(new[] { "/ws/project", "/ws/project/a" }, roots);
+    }
+
+    // The case CB-187's fixture sits in when the session is at the
+    // repository root: the level is the cwd, so the workspace root is the
+    // level a second time.
+    [Fact]
+    public void AWorkspaceThatIsTheLevelDedupes()
+    {
+        var roots = PersonaFiles.CandidateRoots("/ws/.claude/persona", "/ws", "/ws");
+
+        Assert.Equal(new[] { "/ws/.claude/persona", "/ws" }, roots);
+    }
+
+    [Fact]
+    public void ANullLevelLeavesCb147sTwoRoots()
+    {
+        Assert.Equal(
+            PersonaFiles.CandidateRoots("/ws/.claude/persona", "/ws/a"),
+            PersonaFiles.CandidateRoots("/ws/.claude/persona", null, "/ws/a"));
+    }
+
+    [Fact]
+    public void AllThreeTheSameIsOneRoot()
+    {
+        var roots = PersonaFiles.CandidateRoots("/ws", "/ws", "/ws");
+
+        Assert.Equal(new[] { "/ws" }, roots);
+    }
+
     // PersonaFiles.Rank — D5's ranking, asserted as the ordering contract it
     // actually is rather than as three hardcoded integers: AvatarAt only ever
     // asks "did this rejection get strictly further than the best one so

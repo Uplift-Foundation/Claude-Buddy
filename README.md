@@ -999,6 +999,26 @@ would be worse than no button. That parsing has a test suite of its own
 (`dotnet run --project tests/TranscriptTests`) whose fixtures are transcribed
 from real captures.
 
+## Starting a new chat
+
+Start a fresh conversation without opening a terminal by hand first, from the tray's **New chat…** item or an orb's right-click menu.
+
+An orb's context menu offers **New chat here**, shown for a local CLI's orb (Claude Code, Codex or Grok) or an OpenClaw orb, and opens the dialog already pointed at that orb's own conversation: a local CLI's orb pre-fills its CLI and folder, and an OpenClaw orb pre-fills the OpenClaw row with that orb's own agent already selected in the picker. It's hidden for anything else — a remote-control orb's session lives on another machine, so there's nothing local or gateway-side to relaunch it from here.
+
+The dialog lists four entries: Claude Code, Codex, Grok, and OpenClaw.
+
+For the three local CLIs, it checks whichever it can actually find on this machine — fresh every time the dialog opens, so installing one and reopening the dialog picks it up without restarting the app — and pairs each with a folder to start it in, offered as a combo of recently-used folders with a **Browse…** button for anywhere else.
+
+A local CLI shows up disabled, with a reason, when it can't be found on PATH or in its usual install locations — the same install locations `ClaudeBinary`, `CodexBinary` and `GrokBinary` already check for everything else in this app.
+
+A local CLI can also be enabled but carry a warning instead: this means the binary was found but its Claude Buddy hook isn't installed, so **Start** will open a real terminal running it, but no orb will appear until the hook is wired up (Settings → the CLI's own section, or `install-hooks.sh`/`.ps1` from a terminal).
+
+That's the same rule every orb in this app already depends on: an orb is drawn from a status file the CLI's own hook writes, so a CLI running with no hook installed is genuinely running and genuinely invisible to Claude Buddy at the same time.
+
+**OpenClaw is the odd one of the four, because there's no local binary and no terminal to open.** Choosing it replaces the folder combo with a picker over the agents your gateway already knows about, sorted by the name you'd recognise rather than by its config id. **Start** doesn't open a terminal at all — it asks the gateway to create a brand-new conversation with the chosen agent and opens it straight into a chat panel, the same panel every other agent conversation in this app already uses.
+
+OpenClaw shows up disabled, with a reason stated directly under the row rather than only in a tooltip, in the two cases where starting a conversation with it can't work at all: **No gateway configured.**, when there's nothing to ask; and **Turn on "Allow replying to agents" in Settings.**, when there's a gateway but this app isn't allowed to start anything on it. That second reason is the same permission `OpenClawChatSession`'s own reply path already requires — creating a conversation needs the same scope replying to an existing one does, so there is no separate toggle to look for. A local CLI's own disabled/warning text is stated the same way, so all four rows read consistently.
+
 ## Global hotkeys
 
 **Ctrl+Alt+H** hides or shows every orb, from anywhere — the same toggle as
@@ -1820,6 +1840,8 @@ There is nothing to sign in to. It reads the login the Claude Code CLI already s
 
 Two things a cloud orb draws that a local one does not. It wears a ring showing how full its context window is, in the same green/amber/red the usage orbs use, so a session close to the end of its window is visible before you open it — and no ring at all when nothing reported a number, which is not the same as a session at zero. And its hover text is the roster's own words for what it is doing, with the last thing it was seen to do beside them, in the slot a local orb spends on its directory.
 
+**"Keep orbs for" does not apply to cloud sessions, and deliberately so.** That setting is about local sessions, where a status file that has gone quiet usually means the process behind it is gone and the orb left over is a husk. A cloud session has no process to have exited — it lives on Anthropic's servers and can be resumed whenever you go back to it — so an orb for one stays until you archive the session, however long ago it was last touched. Archiving is the retention control, in the product that owns those sessions; before CB-182 the lifetime clock was a second one, and a session idle overnight lost its orb until somebody typed into the web UI.
+
 Like every other source here it is read-only, and off means off: with the switch down the app asks the OS for no credential and opens no connection.
 
 ## 1. Install it
@@ -2537,7 +2559,22 @@ outside the app (a launchd agent, an installer replacing the bundle) stopped it.
   — plain activation already works for anything that lives in an `.app`.
   Focus work runs on a background thread (it shells out and waits), so a
   click can't stall the orb animations.
-- **Sound**: no audio right now, purely visual per your original ask. If
-  you later want a soft sound on the waiting transition, that's one line
-  in `OrbWindow.ApplyState()` — e.g. shell out to `afplay` on macOS or
-  play a system sound on Windows.
+- **Turn sounds**: a chime on three transitions — `generating → idle` and
+  `waiting → idle` (both read as a turn finishing) and any known state
+  `→ waiting` (a session needs you) — decided by pure classifiers in
+  `TurnSignals.cs` and `TurnSoundPolicy.cs`, so the scan wiring in
+  `SessionManager.cs` only has to hand over what happened and never has to
+  decide whether to make noise. `waiting → idle` counts because Claude Code
+  and Grok wire no `PostToolUse` hook, so approving the last permission
+  prompt of a turn never re-asserts `generating` before `Stop` moves the
+  status straight from `waiting` to `idle` — without this arm, that turn
+  finished with no sound at all. `ChimePlayer.cs` plays the
+  actual sound (`afplay` on macOS, `Media.SoundPlayer` via PowerShell on
+  Windows), capped at 5 seconds and never sharing a process slot with
+  `TextToSpeech`, so a chime can never cancel speech. `SystemSoundCatalog.cs`
+  lists and resolves the platform's own sound drawer — no audio ships with
+  the app. Settings live under "Sounds" (master switch, plus a picker per
+  trigger offering Off, a spoken vibe-code summary for the finished trigger
+  only, every system sound, or a chosen file); an individual orb can override
+  either trigger from its right-click "Sound" submenu, keyed by
+  `SessionManager.SoundKeyFor`.

@@ -52,6 +52,16 @@
                      when there's no name yet, since it'd just repeat. -->
                 <MenuItem x:Name="SessionInfoItem" IsEnabled="False"/>
                 <MenuItem x:Name="SessionPathItem" IsEnabled="False"/>
+                <!-- CB-168: opens NewChatWindow pre-filled with this orb's
+                     cwd and CLI. Shown only for a local-CLI orb (IsLocalCli)
+                     — an OpenClaw orb pre-fills its agent instead, on the
+                     slot ines-carvalho's OpenClaw picker fills in; visibility
+                     for both is set in UpdateFrom, next to the other
+                     session-dependent rows. -->
+                <MenuItem x:Name="NewChatHereItem"
+                          Header="New chat here"
+                          IsVisible="False"
+                          Click="NewChatHere_Click"/>
                 <Separator/>
                 <!-- Only shown for an orb the user has dragged; see
                      OrbWindow.SetPinned. -->
@@ -68,6 +78,16 @@
                           Header="Reset this session to idle"
                           ToolTip.Tip="Changes this orb's displayed state only; the next hook event may update it again."
                           Click="ResetIdle_Click"/>
+                <!-- CB-167's per-orb sound override. Both submenus start
+                     empty and are (re)built in SessionMenu_Opening rather
+                     than here or in UpdateFrom — listing the system sound
+                     drawer means reading the disk, and Opening is the one
+                     moment that actually costs something, same reasoning as
+                     ApplyEndSessionGuard just above. -->
+                <MenuItem x:Name="SoundMenuItem" Header="Sound">
+                    <MenuItem x:Name="SoundFinishedMenuItem" Header="When a turn finishes"/>
+                    <MenuItem x:Name="SoundAttentionMenuItem" Header="When it needs you"/>
+                </MenuItem>
                 <!-- The `claude agents` roster, for the orbs it lists. Above
                      the two lifecycle items because it is the harmless one of
                      the three, and hidden rather than greyed for the same

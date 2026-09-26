@@ -111,9 +111,11 @@ jobs:
       #
       # CB-119: the retry loop above used to trust `dotnet test`'s own exit
       # code, and that is exactly what a short run defeats. An [AvaloniaFact]
-      # in [Collection("Settings")] occasionally passes and then throws
-      # InvalidOperationException out of its *cleanup*
-      # (Avalonia.Headless.HeadlessUnitTestSession.EnsureIsolatedApplication);
+      # occasionally throws InvalidOperationException out of the per-test
+      # isolation scope around it
+      # (Avalonia.Headless.HeadlessUnitTestSession.EnsureIsolatedApplication) —
+      # not only in [Collection("Settings")], which this comment used to say,
+      # and see CB-84/CB-183 below for which half of the scope it really is;
       # xUnit v3 records that as an assembly ERROR, not a test failure, which
       # REPLACES the test's own result — so the report's `errors` attribute
       # goes to 1, the total test count drops by one, and `dotnet test`
@@ -143,23 +145,34 @@ jobs:
       # describes — an assembly error that replaces a test's own result — so
       # this guard already covers it without any change; the point of this
       # paragraph is only to save the next person from re-diagnosing it from
-      # scratch. The victim test name is not fixed: across those 6 hits it
-      # was AccountOrbsTests, RemoteMirrorChatSessionTests and
-      # SettingsWindowCoverageTests, in different runs — which is what says
-      # this is a scheduling race in Avalonia's own per-test isolation, not a
-      # defect in any one test. Tried bumping Avalonia/Avalonia.Headless/
-      # Avalonia.Headless.XUnit/Avalonia.Themes.Fluent 12.1.1 -> 12.1.2 on the
-      # theory that "Core – Fix dispatcher frame capturing wrong dispatcher"
+      # scratch. The victim test name is not fixed — it is whichever test
+      # happens to be next, a different one on nearly every short run — so
+      # a victim's name says nothing about where the defect is and should
+      # not be recorded as its location. This is a scheduling race in
+      # Avalonia's own per-test isolation, not a defect in any one test.
+      # Tried bumping Avalonia/Avalonia.Headless/Avalonia.Headless.XUnit/
+      # Avalonia.Themes.Fluent 12.1.1 -> 12.1.2 on the theory that "Core –
+      # Fix dispatcher frame capturing wrong dispatcher"
       # (AvaloniaUI/Avalonia#22086) was this bug; it was not — the identical
       # stack trace reproduced on 12.1.2 too, twice in a 12-run batch (runs 5
       # and 7, no improvement over the 12.1.1 rate), so the bump was reverted
-      # rather than landed as an unverified fix. No seam exists
-      # at the application or test level to force the previous isolated
-      # scope's render-loop thread to finish before the next one's setup
-      # runs — `HeadlessUnitTestSession` and `DefaultRenderLoop` are sealed
-      # Avalonia.Headless types with no extensibility point for it — so this
-      # guard, not a code fix, is the correct mitigation until upstream
-      # Avalonia addresses it.
+      # rather than landed as an unverified fix.
+      #
+      # CB-183: CB-84's closing claim — that no seam exists and this guard is
+      # the only mitigation — was wrong, and so was the render-loop-thread
+      # theory behind it. The headless render timer runs on the UI thread.
+      # What actually happens, read out of the 12.1.1 assemblies: PerTest
+      # isolation (the package default) nulls Dispatcher.s_uiThread around
+      # every test, and the next thread to read Dispatcher.UIThread becomes
+      # its owner. A pool thread left behind by an earlier test wins that
+      # race often enough to make one run in three short. The seam is the
+      # assembly's AvaloniaTestIsolation level; tests/UiTests/TestAppBuilder.cs
+      # sets PerAssembly and says why. Measured on osx-arm64: 2 of 30 Release
+      # runs short before, 0 of 30 after; a scratch thread reading
+      # Dispatcher.UIThread in a loop turned ~1350 of 1412 tests into this
+      # exact error under PerTest and none under PerAssembly.
+      # The guard stays regardless: it is what makes a count-flake of any
+      # cause visible, and costs nothing when the count is whole.
       #
       # All filename options use space-separated `--flag value`, not
       # `--flag=value`: the MTP CLI parser mis-consumes arguments when two or
@@ -206,6 +219,15 @@ jobs:
       # own csproj comment) was specifically to fix that race, not just
       # paper over it. Same trx/copy dance as UI tests above, same retry
       # loop for the same not-yet-Windows-CI-proven reason.
+      #
+      # CB-183: this suite stays on Avalonia.Headless's default PerTest
+      # isolation ON PURPOSE, unlike tests/UiTests. PerAssembly lets fallback
+      # fonts loaded by one test persist into the next, so SemiBold text
+      # changed weight with test order (50 of 112 captures, pixel deltas up to
+      # 229/255; the same test run alone drew what develop draws). The
+      # dispatcher race UiTests' attribute closes is therefore still possible
+      # here; the CB-119 guard and the retry below are what catch it. It was
+      # never seen short in the 2 runs measured, which is not a rate.
       #
       # CB-119: this step's shape matches "UI tests" above exactly — same
       # 3-attempt retry, same trx-copy-before-giving-up — so it gets the same

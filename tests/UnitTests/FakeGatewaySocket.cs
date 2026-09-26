@@ -40,6 +40,29 @@ internal sealed class FakeGatewaySocket : WebSocket
     // nothing", which is how the request-timeout path is reached.
     public Func<Request, object?>? OnRequest { get; set; }
 
+    // Set to make the next SendAsync record the frame and then never
+    // complete on its own — only the caller's own cancellation token can end
+    // it. This exists for the cancelled-mid-handshake test: with the send
+    // itself the thing left hanging, ConnectAsync's cancellation observes it
+    // through RequestAsync's `await _socket!.SendAsync(...)`, the same
+    // un-shared await SendAsync's caller is already sitting on, rather than
+    // through the receive loop noticing the same token and racing
+    // RequestAsync's own per-request timeout registration to the punch.
+    //
+    // That race is real, not theoretical: parking the *receive* side instead
+    // (answering nothing, as the test used to) leaves a window between "the
+    // request was recorded" and "RequestAsync has registered its own
+    // cancellation handling" during which the receive loop's reaction to the
+    // same cancelled token can get there first and fail the pending call
+    // with "gateway connection closed" rather than the caller's own
+    // "abandoned" message — CB-175 reproduced this reliably (500/500) by
+    // injecting a few milliseconds of delay at exactly that point, standing
+    // in for the scheduling jitter a loaded CI runner already provides for
+    // free. Parking the send instead removes the shared state race
+    // entirely: the only writer of the outcome is the one await this flag
+    // controls.
+    public bool ParkSendUntilCancelled { get; set; }
+
     public override WebSocketState State { get; } = WebSocketState.Open;
     public override WebSocketCloseStatus? CloseStatus => null;
     public override string? CloseStatusDescription => null;
@@ -105,6 +128,13 @@ internal sealed class FakeGatewaySocket : WebSocket
             root.GetProperty("params").Clone());
 
         Requests.Add(request);
+
+        if (ParkSendUntilCancelled)
+        {
+            var parked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            cancellationToken.Register(() => parked.TrySetCanceled(cancellationToken));
+            return parked.Task;
+        }
 
         var answer = OnRequest?.Invoke(request);
         if (answer is not null) PushJson(JsonSerializer.Serialize(answer));
