@@ -123,6 +123,41 @@ public class HotkeyActionsTests : IDisposable
     }
 
     [AvaloniaFact]
+    public void Forget_WithNothingOpen_IsANoOp()
+    {
+        Assert.Null(NewChatWindow.OpenForTests);
+
+        NewChatWindow.Forget();
+
+        Assert.Null(NewChatWindow.OpenForTests);
+    }
+
+    // Closing New chat while it is still watching for the new orb must stop
+    // that watch — otherwise a window nobody can see keeps ticking, and
+    // reaching for its controls, every second until the deadline. The timer
+    // is planted the way NewChatWindowTests.TheWatchStopsTheTimerWhenNothingIsArmed
+    // does it, rather than through a real Start.
+    [AvaloniaFact]
+    public void Forget_WhileTheOrbWatchIsRunning_StopsIt()
+    {
+        HotkeyActions.Dispatch(HotkeyAction.OpenNewChat);
+        Dispatcher.UIThread.RunJobs();
+        var window = NewChatWindow.OpenForTests!;
+
+        var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        timer.Start();
+        typeof(NewChatWindow)
+            .GetField("_watchTimer", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+            .SetValue(window, timer);
+        Assert.True(timer.IsEnabled);
+
+        NewChatWindow.Forget();
+
+        Assert.False(timer.IsEnabled);
+        Assert.Null(NewChatWindow.OpenForTests);
+    }
+
+    [AvaloniaFact]
     public void OpenNewChat_WithTheWindowMinimised_RestoresItBeforeBringingItForward()
     {
         HotkeyActions.Dispatch(HotkeyAction.OpenNewChat);

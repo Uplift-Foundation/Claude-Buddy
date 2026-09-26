@@ -227,7 +227,14 @@ namespace ClaudeBuddy
                 return true;
             }
 
-            if (!char.IsAsciiLetter(token[0]) || !token.All(char.IsAsciiLetterOrDigit)) return false;
+            // A loop rather than token.All(char.IsAsciiLetterOrDigit): the
+            // method group compiles to a cached delegate whose null check the
+            // MTP coverage engine reports as two phantom branch arcs.
+            if (!char.IsAsciiLetter(token[0])) return false;
+            foreach (var c in token)
+            {
+                if (!char.IsAsciiLetterOrDigit(c)) return false;
+            }
             if (!Enum.TryParse(token, ignoreCase: true, out key)) return false;
 
             return RegistrableKeys.Contains(key);
