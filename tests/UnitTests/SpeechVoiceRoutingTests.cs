@@ -20,6 +20,13 @@ namespace ClaudeBuddy.UnitTests;
 // The registries are set through their own test seams and restored afterwards:
 // they are process-wide, and the ids are freshly generated per case so nothing
 // here depends on what another suite left behind.
+//
+// In the Settings collection for the same reason LocalPersonaTests is: every
+// SetForTests call below replaces the *whole* registry, not just this test's
+// key, so running alongside another class doing the same is a wipe, not an
+// overlap. CB-188 is a class left out of this collection that raced exactly
+// that way against LocalPersonaTests.
+[Collection("Settings")]
 public class SpeechVoiceRoutingTests : IDisposable
 {
     private static readonly TextToSpeech.VoiceOption Bella =
