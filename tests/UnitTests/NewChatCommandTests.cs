@@ -48,6 +48,50 @@ namespace ClaudeBuddy.Tests
             Assert.DoesNotContain(" ", command.Trim('\''));
         }
 
+        // --- For: CB-201's account picker prefix -------------------------
+
+        [Fact]
+        public void ANullConfigDirLeavesTheCommandUnchanged()
+        {
+            Assert.Equal(
+                "'/usr/local/bin/claude'",
+                NewChatCommand.For(NewChatCli.ClaudeCode, "/usr/local/bin/claude", configDir: null));
+        }
+
+        [Fact]
+        public void AConfigDirPrefixesTheCommandWithTheAssignment()
+        {
+            var command = NewChatCommand.For(
+                NewChatCli.ClaudeCode, "/usr/local/bin/claude", configDir: "/Users/me/.claude-work");
+
+            Assert.Equal("CLAUDE_CONFIG_DIR='/Users/me/.claude-work' '/usr/local/bin/claude'", command);
+        }
+
+        // A space in the config dir has to survive as one shell word, same
+        // guarantee ASpaceInThePathStaysOneWord already gives the binary
+        // path itself.
+        [Fact]
+        public void ASpaceInTheConfigDirStaysOneWord()
+        {
+            var command = NewChatCommand.For(
+                NewChatCli.ClaudeCode, "/usr/local/bin/claude", configDir: "/Users/me/My Claude Work");
+
+            Assert.Equal("CLAUDE_CONFIG_DIR='/Users/me/My Claude Work' '/usr/local/bin/claude'", command);
+        }
+
+        // An apostrophe in the config dir needs the same shell-safe escaping
+        // AnApostropheInThePathIsEscapedTheShellWay already proves for the
+        // binary path.
+        [Fact]
+        public void AnApostropheInTheConfigDirIsEscapedTheShellWay()
+        {
+            var command = NewChatCommand.For(
+                NewChatCli.ClaudeCode, "/usr/local/bin/claude", configDir: "/Users/o'brien/.claude-work");
+
+            Assert.Equal(
+                "CLAUDE_CONFIG_DIR='/Users/o'\\''brien/.claude-work' '/usr/local/bin/claude'", command);
+        }
+
         // --- GeneralWindowsStartInfo / WindowsProcessStartInfo ------------
 
         [Fact]
@@ -145,6 +189,79 @@ namespace ClaudeBuddy.Tests
             // mode; the cmd.exe fallback carries it solely via
             // WorkingDirectory; asserted above, kept here as the case's own
             // point rather than folded into a different-named test.
+        }
+
+        // --- WindowsProcessStartInfo: CB-201's account picker ----------------
+
+        // No config dir: the start info is exactly what the general builder
+        // would have produced — UseShellExecute untouched (true, since
+        // GeneralWindowsStartInfo always sets it) and the same ArgumentList
+        // wt mode already proves elsewhere in this file. Not asserted on
+        // Environment.ContainsKey here: ProcessStartInfo.Environment starts
+        // out holding whatever this test process itself inherited, which on
+        // this repo's own dev machines is routinely a real CLAUDE_CONFIG_DIR
+        // (this very run's shell has one) — the interesting claim is that
+        // WindowsProcessStartInfo never *writes* the key, which UseShellExecute
+        // staying true already establishes, since the write always comes
+        // paired with flipping it to false.
+        [Fact]
+        public void NoConfigDirLeavesTheStartInfoUnchanged()
+        {
+            var start = NewChatCommand.WindowsProcessStartInfo(
+                NewChatCli.ClaudeCode, @"C:\Program Files\Claude\claude.exe", @"C:\work",
+                useWindowsTerminal: true, configDir: null);
+
+            Assert.NotNull(start);
+            Assert.True(start.UseShellExecute);
+            Assert.Equal(new[] { "-d", @"C:\work", "cmd.exe", "/k", @"C:\Program Files\Claude\claude.exe" },
+                start.ArgumentList);
+        }
+
+        // A config dir switches UseShellExecute to false — the only way
+        // ProcessStartInfo.Environment is actually honoured — and carries
+        // CLAUDE_CONFIG_DIR, in the wt.exe arm.
+        [Fact]
+        public void AConfigDirSetsTheEnvironmentEntryAndDisablesShellExecuteInWtMode()
+        {
+            var start = NewChatCommand.WindowsProcessStartInfo(
+                NewChatCli.ClaudeCode, @"C:\Program Files\Claude\claude.exe", @"C:\work",
+                useWindowsTerminal: true, configDir: @"C:\Users\me\.claude-work");
+
+            Assert.NotNull(start);
+            Assert.Equal("wt.exe", start.FileName);
+            Assert.False(start.UseShellExecute);
+            Assert.Equal(@"C:\Users\me\.claude-work", start.Environment["CLAUDE_CONFIG_DIR"]);
+
+            // The measured wt.exe passthrough (this file's own comment on
+            // WindowsProcessStartInfo) means a profiled launch still routes
+            // through wt.exe first, same as an unprofiled one — the
+            // ArgumentList shape is untouched by configDir.
+            Assert.Equal(new[] { "-d", @"C:\work", "cmd.exe", "/k", @"C:\Program Files\Claude\claude.exe" },
+                start.ArgumentList);
+        }
+
+        // Same, in the cmd.exe arm (no Windows Terminal installed) — the
+        // environment entry and UseShellExecute flip apply there too.
+        [Fact]
+        public void AConfigDirSetsTheEnvironmentEntryAndDisablesShellExecuteInCmdMode()
+        {
+            var start = NewChatCommand.WindowsProcessStartInfo(
+                NewChatCli.Codex, @"C:\Users\me\.local\bin\codex.cmd", @"C:\work",
+                useWindowsTerminal: false, configDir: @"C:\Users\me\.codex-work");
+
+            Assert.NotNull(start);
+            Assert.Equal("cmd.exe", start.FileName);
+            Assert.False(start.UseShellExecute);
+            Assert.Equal(@"C:\Users\me\.codex-work", start.Environment["CLAUDE_CONFIG_DIR"]);
+        }
+
+        // A config dir on a null binary is still no start info at all — the
+        // "not found" case wins over anything the picker chose.
+        [Fact]
+        public void AConfigDirWithANullBinaryStillProducesNoStartInfo()
+        {
+            Assert.Null(NewChatCommand.WindowsProcessStartInfo(
+                NewChatCli.ClaudeCode, null, @"C:\work", useWindowsTerminal: true, configDir: @"C:\Users\me\.claude-work"));
         }
 
         [Fact]

@@ -165,8 +165,10 @@ namespace ClaudeBuddy
         internal static readonly object OpenClawTag = new();
 
         private readonly StackPanel _cliList = new() { Spacing = 6 };
+        private readonly StackPanel _accountSection = new() { Spacing = 6, IsVisible = false };
         private readonly StackPanel _folderSection = new() { Spacing = 6 };
         private readonly StackPanel _agentSection = new() { Spacing = 6, IsVisible = false };
+        private readonly ComboBox _accountCombo = new() { MinWidth = 260, HorizontalAlignment = HorizontalAlignment.Stretch };
         private readonly ComboBox _folderCombo = new() { MinWidth = 260, HorizontalAlignment = HorizontalAlignment.Stretch };
         private readonly ComboBox _agentCombo = new() { MinWidth = 260, HorizontalAlignment = HorizontalAlignment.Stretch };
         private readonly TextBlock _statusLine = new() { TextWrapping = TextWrapping.Wrap, Opacity = 0.8 };
@@ -241,6 +243,16 @@ namespace ClaudeBuddy
             BuildCliList();
             root.Children.Add(_cliList);
 
+            // Between the CLI list and the Folder section, the same reading
+            // order the plan's own mockup gives: which CLI, then which
+            // account it runs under, then where. Hidden by default and only
+            // ever shown by UpdateTargetSectionVisibility — CB-201's "empty
+            // list means no picker" decision, and never for anything but
+            // Claude Code (see that method's own comment).
+            _accountSection.Children.Add(new TextBlock { Text = "Account", FontWeight = FontWeight.SemiBold });
+            _accountSection.Children.Add(_accountCombo);
+            root.Children.Add(_accountSection);
+
             // Folder (local CLIs) and Agent (OpenClaw) occupy the same slot —
             // "OpenClaw selected: an agent picker replaces the folder field"
             // is the plan's own wording — so both sections are built once
@@ -274,6 +286,8 @@ namespace ClaudeBuddy
         // TrayMenuTests etc. use to reach a window's own children without a
         // synthesized click on each one.
         internal StackPanel CliList => _cliList;
+        internal StackPanel AccountSection => _accountSection;
+        internal ComboBox AccountCombo => _accountCombo;
         internal ComboBox FolderCombo => _folderCombo;
         internal StackPanel FolderSection => _folderSection;
         internal ComboBox AgentCombo => _agentCombo;
@@ -323,6 +337,7 @@ namespace ClaudeBuddy
                     if (radio.IsChecked != true) return;
                     _selectedCli = capturedCli;
                     _openClawSelected = false;
+                    BuildAccountCombo();
                     UpdateTargetSectionVisibility();
                 };
 
@@ -356,6 +371,7 @@ namespace ClaudeBuddy
                 _selectedCli = null;
                 _openClawSelected = true;
                 BuildAgentCombo();
+                BuildAccountCombo();
                 UpdateTargetSectionVisibility();
             };
 
@@ -380,6 +396,7 @@ namespace ClaudeBuddy
                 _openClawSelected = true;
                 openClawRadio.IsChecked = true;
                 BuildAgentCombo(wantedAgent);
+                BuildAccountCombo();
                 UpdateTargetSectionVisibility();
                 return;
             }
@@ -411,6 +428,43 @@ namespace ClaudeBuddy
         {
             _folderSection.IsVisible = !_openClawSelected;
             _agentSection.IsVisible = _openClawSelected;
+
+            // Claude Code only (CB-201's "Claude Code only" decision — Codex
+            // and Grok use CODEX_HOME/GROK_HOME, a separate mechanism this
+            // ticket leaves alone), never alongside OpenClaw, and never shown
+            // for a one-entry list (Default alone) — CB-201's "empty list
+            // means no picker" decision. Read off the combo's own item count
+            // rather than a separate field, so this can never drift out of
+            // sync with what BuildAccountCombo actually populated.
+            var accountChoiceCount = (_accountCombo.ItemsSource as IEnumerable<NewChatAccounts.Choice>)?.Count() ?? 0;
+            _accountSection.IsVisible =
+                !_openClawSelected && _selectedCli == NewChatCli.ClaudeCode && accountChoiceCount > 1;
+        }
+
+        // Populates the Account combo for whichever CLI is now selected —
+        // every real choice from ClaudeCodeProfileDirs when it's Claude Code,
+        // cleared otherwise so a stale list from a previous selection can
+        // never leak into UpdateTargetSectionVisibility's item count. Restores
+        // the last-chosen account, falling back to Default when that entry
+        // has since been removed from settings (CB-201's own restore rule).
+        private void BuildAccountCombo()
+        {
+            if (_selectedCli != NewChatCli.ClaudeCode)
+            {
+                _accountCombo.ItemsSource = null;
+                return;
+            }
+
+            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            var choices = NewChatAccounts.Choices(home, ClaudeBuddySettings.ClaudeCodeProfileDirs).ToList();
+            _accountCombo.ItemsSource = choices;
+
+            var saved = ClaudeBuddySettings.NewChatLastProfile;
+            var preferredIndex = saved is { Length: > 0 }
+                ? choices.FindIndex(c => c.ProfileDir == saved)
+                : -1;
+
+            _accountCombo.SelectedIndex = preferredIndex >= 0 ? preferredIndex : 0;
         }
 
         // The stated reason/warning line under a CLI row — small, secondary
@@ -520,18 +574,28 @@ namespace ClaudeBuddy
                 ? chosen
                 : Environment.CurrentDirectory;
 
+            // Only Claude Code ever shows the Account section (CB-201), so
+            // this reads as "the account combo's real selection when that
+            // section is what's on screen, otherwise Default" rather than
+            // needing its own visibility check.
+            var profileDir = cli == NewChatCli.ClaudeCode && _accountCombo.SelectedItem is NewChatAccounts.Choice choice
+                ? choice.ProfileDir
+                : null;
+
             _startButton.IsEnabled = false;
             _statusLine.Text = "Starting…";
 
             var priorIds = new HashSet<string>(CurrentStatuses().Keys, StringComparer.Ordinal);
 
-            var launch = NewChatLauncher.LaunchForTests?.Invoke(cli, folder) ?? NewChatLauncher.Launch(cli, folder);
+            var launch = NewChatLauncher.LaunchForTests?.Invoke(cli, folder, profileDir)
+                ?? NewChatLauncher.Launch(cli, folder, profileDir);
             _statusLine.Text = launch.Message;
             _startButton.IsEnabled = true;
 
             if (launch.Outcome != LaunchOutcome.Launched) return;
 
             ClaudeBuddySettings.SetNewChatLastCli(cli.ToString());
+            ClaudeBuddySettings.SetNewChatLastProfile(profileDir);
 
             var updatedFolders = RecentFolders.Merge(
                 CurrentStatuses().Values,
