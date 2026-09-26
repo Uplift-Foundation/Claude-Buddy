@@ -437,36 +437,73 @@ namespace ClaudeBuddy
             string? avatarPath = null;
             var files = new List<string>();
 
-            foreach (var candidate in candidates)
+            var index = 0;
+            while (index < candidates.Count && read.Count < MaxFiles)
             {
-                if (read.Count >= MaxFiles) break;
+                var candidate = candidates[index];
 
-                var start = read.Count;
-                ReadCandidates(new[] { candidate }, read, visited);
-                if (read.Count == start) continue;
-
-                var group = Fold(read, start, read.Count, workspaceRoot);
-
-                if (candidate.IsMemberProfile && !group.IsEmpty)
+                if (!candidate.IsMemberProfile)
                 {
-                    // The member's own persona, once it says anything at all,
-                    // is the whole answer — see the comment above. Whatever
-                    // was already folded in from an earlier, shallower
-                    // candidate above this loop is dropped rather than used
-                    // to fill in what this file leaves blank.
+                    var start = read.Count;
+                    ReadCandidates(new[] { candidate }, read, visited);
+                    index++;
+                    if (read.Count == start) continue;
+
+                    var group = Fold(read, start, read.Count, workspaceRoot);
+                    files.AddRange(group.Files);
+                    name ??= group.Name;
+                    voice ??= group.Voice;
+                    rate ??= group.Rate;
+                    if (avatarPath is null)
+                    {
+                        avatarSource = group.AvatarSource;
+                        avatarPath = group.AvatarPath;
+                    }
+
+                    continue;
+                }
+
+                // A run of one or more consecutive member-profile candidates
+                // — Candidates() offers both profiles/<name>/<name>.md and
+                // .profiles-assets/<name>/<name>.md back to back at every
+                // level, profile-gen's two --output layouts for one agent —
+                // is read and folded together as *one* persona before the
+                // exclusivity check below runs, not candidate by candidate.
+                //
+                // Tightened here after QA measured the regression a
+                // candidate-at-a-time version of this fix produced: a name
+                // in profiles/... and a picture in .profiles-assets/... for
+                // the same agent used to resolve together, as two
+                // independent first-wins races landing on develop today.
+                // Deciding exclusivity on the first of the two candidates
+                // alone would return with the name and never even read the
+                // second file, silently losing a picture that worked before
+                // this ticket. The two shapes name the same agent, so they
+                // are the same persona, not two competing ones — unlike a
+                // member file against the project's, which is the mixing
+                // this ticket exists to stop.
+                var runStart = read.Count;
+                while (index < candidates.Count && candidates[index].IsMemberProfile && read.Count < MaxFiles)
+                {
+                    ReadCandidates(new[] { candidates[index] }, read, visited);
+                    index++;
+                }
+
+                if (read.Count == runStart) continue;
+
+                var member = Fold(read, runStart, read.Count, workspaceRoot);
+                if (!member.IsEmpty)
+                {
+                    // The member's own persona, once the run says anything at
+                    // all, is the whole answer — see the comment above.
+                    // Whatever was already folded in from an earlier,
+                    // shallower candidate above this loop is dropped rather
+                    // than used to fill in what this run leaves blank.
                     return new Persona(
-                        group.Name, group.Voice, group.Rate, group.AvatarSource, group.AvatarPath, group.Files);
+                        member.Name, member.Voice, member.Rate, member.AvatarSource, member.AvatarPath, member.Files);
                 }
 
-                files.AddRange(group.Files);
-                name ??= group.Name;
-                voice ??= group.Voice;
-                rate ??= group.Rate;
-                if (avatarPath is null)
-                {
-                    avatarSource = group.AvatarSource;
-                    avatarPath = group.AvatarPath;
-                }
+                files.AddRange(member.Files);
             }
 
             return new Persona(name, voice, rate, avatarSource, avatarPath, files);

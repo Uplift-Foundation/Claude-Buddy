@@ -796,6 +796,36 @@ public class LocalPersonaTests : IDisposable
         Assert.Equal(Path.Combine(memberDir, "face.png"), persona.AvatarPath);
     }
 
+    // The two shapes profile-gen's --output can write for one agent —
+    // profiles/<name>/<name>.md (tracked) and .profiles-assets/<name>/<name>.md
+    // (gitignored) — split across both, same as CB-6's own storage.py cases.
+    // On develop this already worked, as two independent first-wins races
+    // over the whole candidate list; a version of this fix that decided
+    // exclusivity candidate by candidate regressed it, returning as soon as
+    // profiles/ alone said anything and never even reading the second file.
+    // Both member candidates are read and folded together before that
+    // decision runs, so this is the control that pins the regression QA
+    // found rather than the ticket's own AC.
+    [Fact]
+    public void TheTwoMemberProfileShapesCombineAsOnePersonaRatherThanRacing()
+    {
+        var project = Dir("tree", "project");
+        var claudeDir = Dir("tree", "project", ".claude");
+        WriteProjectPersona(project, claudeDir);
+
+        var trackedDir = Dir("tree", "project", "profiles", "ines-harrow");
+        Write(trackedDir, "ines-harrow.md", "## Attributes", "Name Ines Harrow");
+
+        var gitignoredDir = Dir("tree", "project", ".profiles-assets", "ines-harrow");
+        File.WriteAllBytes(Path.Combine(gitignoredDir, "face.png"), Png());
+        Write(gitignoredDir, "ines-harrow.md", "## Attributes", "Profile Photo face.png");
+
+        var persona = LocalPersona.Resolve(project, SessionSource.ClaudeCode, Array.Empty<string>(), "ines-harrow");
+
+        Assert.Equal("Ines Harrow", persona.Name);
+        Assert.Equal(Path.Combine(gitignoredDir, "face.png"), persona.AvatarPath);
+    }
+
     // AC4: voice and rate follow the same rule as name and avatar — a
     // member's own file, once it says anything, is the whole answer, so a
     // member does not inherit the project's voice either.
