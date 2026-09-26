@@ -506,9 +506,14 @@ public class HeadlessSnapshotTests
                 SessionPid = 0
             });
 
+            // onWindows: false because the fixture is a Mac-shaped path. On
+            // Windows a pid-less file with a '/' path is a WSL session, which
+            // the listing cannot speak for (CB-194) — the Windows shape of this
+            // case, a drive-letter leftover, is
+            // APidlessNativeWindowsFileIsStillDroppedAsNotALiveJob below.
             Assert.Empty(SessionManager.HeadlessSnapshot(
                 dir, NoJobs, isRunning: _ => true, nowUtc: DateTime.UtcNow,
-                honourOrbLifetime: false));
+                honourOrbLifetime: false, onWindows: false));
         }
         finally
         {
@@ -535,9 +540,12 @@ public class HeadlessSnapshotTests
 
             var jobs = new Dictionary<string, string> { ["background"] = "blocked" };
 
+            // Platform pinned for the reason the case above gives: on Windows
+            // this file would be kept as WSL rather than because the daemon
+            // names it, and the test would pass without asserting its point.
             Assert.Equal("background", Assert.Single(SessionManager.HeadlessSnapshot(
                 dir, () => jobs, isRunning: _ => true, nowUtc: DateTime.UtcNow,
-                honourOrbLifetime: false)).SessionId);
+                honourOrbLifetime: false, onWindows: false)).SessionId);
         }
         finally
         {
@@ -624,6 +632,85 @@ public class HeadlessSnapshotTests
         }
         finally
         {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    // With lifetime ignored — the path that answers a paired machine before the
+    // scan has started — a WSL session still goes by the lifetime, because it
+    // is the only evidence there is: Windows cannot probe its process and its
+    // daemon is in the VM. Without this, a WSL session killed without a
+    // SessionEnd would be offered to every peer forever.
+    [Fact]
+    public void AWslSessionPastTheOrbLifetimeIsNotOfferedEvenWithLifetimeIgnored()
+    {
+        var dir = NewStatusDir();
+        var before = ClaudeBuddySettings.OrbLifetimeMinutes;
+        try
+        {
+            ClaudeBuddySettings.OrbLifetimeMinutes = 30;
+            WriteStatus(dir, "wsl1", WslShaped());
+            File.SetLastWriteTimeUtc(Path.Combine(dir, "wsl1.txt"), DateTime.UtcNow.AddHours(-2));
+
+            Assert.Empty(SessionManager.HeadlessSnapshot(
+                dir, NoJobs, isRunning: _ => true, nowUtc: DateTime.UtcNow,
+                honourOrbLifetime: false, onWindows: true));
+        }
+        finally
+        {
+            ClaudeBuddySettings.OrbLifetimeMinutes = before;
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    // ...and the controls either side of it: inside the lifetime it is offered,
+    // and a native session whose process is alive is still offered past it —
+    // ignoring the lifetime is only suspended where nothing else can speak.
+    [Fact]
+    public void AWslSessionInsideTheOrbLifetimeIsOfferedWithLifetimeIgnored()
+    {
+        var dir = NewStatusDir();
+        var before = ClaudeBuddySettings.OrbLifetimeMinutes;
+        try
+        {
+            ClaudeBuddySettings.OrbLifetimeMinutes = 30;
+            WriteStatus(dir, "wsl1", WslShaped());
+
+            Assert.Equal("wsl1", Assert.Single(SessionManager.HeadlessSnapshot(
+                dir, NoJobs, isRunning: _ => true, nowUtc: DateTime.UtcNow,
+                honourOrbLifetime: false, onWindows: true)).SessionId);
+        }
+        finally
+        {
+            ClaudeBuddySettings.OrbLifetimeMinutes = before;
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ALiveNativeSessionPastTheOrbLifetimeIsStillOfferedWithLifetimeIgnored()
+    {
+        var dir = NewStatusDir();
+        var before = ClaudeBuddySettings.OrbLifetimeMinutes;
+        try
+        {
+            ClaudeBuddySettings.OrbLifetimeMinutes = 30;
+            WriteStatus(dir, "native", new SessionStatus
+            {
+                State = "idle",
+                Cwd = @"C:\Users\k\project",
+                TermProgram = "WindowsTerminal",
+                SessionPid = 4242
+            });
+            File.SetLastWriteTimeUtc(Path.Combine(dir, "native.txt"), DateTime.UtcNow.AddHours(-2));
+
+            Assert.Equal("native", Assert.Single(SessionManager.HeadlessSnapshot(
+                dir, NoJobs, isRunning: _ => true, nowUtc: DateTime.UtcNow,
+                honourOrbLifetime: false, onWindows: true)).SessionId);
+        }
+        finally
+        {
+            ClaudeBuddySettings.OrbLifetimeMinutes = before;
             Directory.Delete(dir, recursive: true);
         }
     }

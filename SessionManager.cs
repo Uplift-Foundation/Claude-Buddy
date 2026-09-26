@@ -1294,8 +1294,8 @@ namespace ClaudeBuddy
                 // Windows — reads Unknown here as it does there, or a paired
                 // machine would be told this one's WSL sessions do not exist.
                 var status = entry.Status;
-                var phase = status.Source == SessionSource.ClaudeCode
-                            && SessionPresence.LocalDaemonCanAnswerFor(status, windows)
+                var daemonCanAnswer = SessionPresence.LocalDaemonCanAnswerFor(status, windows);
+                var phase = status.Source == SessionSource.ClaudeCode && daemonCanAnswer
                     ? BackgroundJobs.Phase(jobs, entry.SessionId)
                     : JobPhase.Unknown;
 
@@ -1323,9 +1323,20 @@ namespace ClaudeBuddy
                 // backgrounded-husk are *facts* about whether the session is
                 // there. Only expiry is a preference about how long to keep
                 // showing one, and only expiry is dropped here.
+                //
+                // Except for a session with no fact left to go on. A WSL
+                // session seen from Windows names no process this machine can
+                // probe, and the daemon that could vouch for it is in the VM —
+                // so once the listing stops being asked (above), the lifetime
+                // is the only thing that can ever say it is gone. Dropping it
+                // here too would offer a WSL session that was killed without a
+                // SessionEnd to every peer forever, which is the exact failure
+                // the pid-less rule below exists to prevent. It is the same
+                // rule the visible scan applies to that session, so the two
+                // still agree about which sessions exist.
                 var verdict = JudgeLiveness(
                     entry.SessionId, entry.Status, entry.Written,
-                    now, honourOrbLifetime ? StaleAfter : null,
+                    now, honourOrbLifetime || !daemonCanAnswer ? StaleAfter : null,
                     superseded, running, handedToBackground);
 
                 // Ignoring orb lifetime answers a narrower question than
