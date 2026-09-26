@@ -33,7 +33,7 @@ public class OrbWindowOpenClawMenuScreenshots
         {
             Source = SessionSource.OpenClaw,
             State = "idle",
-            Title = "Lilibeth — dashboard",
+            Title = "Nova — dashboard",
         });
 
         return orb;
