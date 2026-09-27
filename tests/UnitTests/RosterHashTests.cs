@@ -72,20 +72,78 @@ public class RosterHashTests
     }
 
     [Fact]
-    public void ADifferentRosterIsCompressedAndReplacesTheOldOne()
+    public void ADifferentRosterIsCompressedAndBothAreKept()
     {
+        // Two rosters at once is the mixed-version case: one peer is sent
+        // picture ids, another the pictures inline, and neither may evict the
+        // other's compressed roster on every ask.
         var compressions = 0;
         var memo = new RosterGzipMemo(raw => { compressions++; return MirrorProtocol.Gzip(raw); });
 
         memo.For("h1", Encoding.UTF8.GetBytes("one"));
         var two = memo.For("h2", Encoding.UTF8.GetBytes("two"));
+        memo.For("h1", Encoding.UTF8.GetBytes("one"));
 
         Assert.Equal(2, compressions);
         Assert.Equal("two", Encoding.UTF8.GetString(MirrorProtocol.Gunzip(two)));
+    }
 
-        // One slot: going back to the first roster compresses it again.
-        memo.For("h1", Encoding.UTF8.GetBytes("one"));
-        Assert.Equal(3, compressions);
+    [Fact]
+    public void TheOldestRosterGoesFirstPastCapacity()
+    {
+        var compressions = 0;
+        var memo = new RosterGzipMemo(raw => { compressions++; return MirrorProtocol.Gzip(raw); });
+
+        for (var i = 0; i <= RosterGzipMemo.Capacity; i++) memo.For("h" + i, Encoding.UTF8.GetBytes("r" + i));
+        Assert.Equal(RosterGzipMemo.Capacity + 1, compressions);
+
+        memo.For("h" + RosterGzipMemo.Capacity, Encoding.UTF8.GetBytes("r"));   // newest: kept
+        Assert.Equal(RosterGzipMemo.Capacity + 1, compressions);
+
+        memo.For("h0", Encoding.UTF8.GetBytes("r0"));                           // oldest: gone
+        Assert.Equal(RosterGzipMemo.Capacity + 2, compressions);
+    }
+
+    // --- picture ids ------------------------------------------------------------
+
+    [Fact]
+    public void APictureIdIsItsHashAndLength()
+    {
+        var bytes = new byte[] { 71, 73, 70, 56, 57, 97 };
+
+        Assert.Equal(MirrorProtocol.Hash(bytes) + ":6", MirrorProtocol.AvatarIdOf(bytes));
+    }
+
+    [Fact]
+    public void OnlyTheBytesAPictureIdNamesMatchIt()
+    {
+        var bytes = new byte[] { 1, 2, 3 };
+        var id = MirrorProtocol.AvatarIdOf(bytes);
+
+        Assert.True(MirrorProtocol.AvatarMatches(id, bytes));
+        Assert.False(MirrorProtocol.AvatarMatches(id, new byte[] { 1, 2, 4 }));
+        Assert.False(MirrorProtocol.AvatarMatches(id, new byte[] { 1, 2, 3, 0 }));
+        Assert.False(MirrorProtocol.AvatarMatches(id, null));
+        Assert.False(MirrorProtocol.AvatarMatches(null, bytes));
+        Assert.False(MirrorProtocol.AvatarMatches("", bytes));
+    }
+
+    [Fact]
+    public void APersonaWithOnlyAPictureIdIsNotEmpty() =>
+        Assert.False(new MirrorProtocol.PeerPersona(AvatarId: "abc:3").IsEmpty);
+
+    [Fact]
+    public void APictureIdSurvivesTheWireAndCarriesNoBytes()
+    {
+        var back = MirrorProtocol.DecodeRoster(MirrorProtocol.EncodeRoster(new[]
+        {
+            new MirrorProtocol.MirrorRosterEntry("far-session", MirrorProtocol.CliClaudeCode, true, true,
+                Persona: new MirrorProtocol.PeerPersona("Ava", AvatarId: "abc:3")),
+        }));
+
+        var persona = Assert.Single(back!).Persona!;
+        Assert.Equal("abc:3", persona.AvatarId);
+        Assert.Null(persona.Avatar);
     }
 
     [Fact]

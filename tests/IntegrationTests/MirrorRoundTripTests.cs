@@ -1609,6 +1609,175 @@ public class MirrorRoundTripTests : IDisposable
         Assert.Contains(harness.ToClient, line => line.Contains(";t=" + MirrorProtocol.Chunk));
     }
 
+    // --- CB-216: pictures cross once, by id ----------------------------------------
+
+    private static readonly byte[] Face = { 137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3 };
+    private static readonly byte[] NewFace = { 137, 80, 78, 71, 13, 10, 26, 10, 9, 9, 9, 9 };
+
+    private void WritePersona(byte[] picture, DateTime? written = null)
+    {
+        var path = Path.Combine(_dir, "face.png");
+        File.WriteAllBytes(path, picture);
+        if (written is not null) File.SetLastWriteTimeUtc(path, written.Value);
+        File.WriteAllText(Path.Combine(_dir, "CLAUDE.md"),
+            "## Attributes\nName Faraday\nProfile Photo face.png\n");
+    }
+
+    [Fact]
+    public async Task APictureCrossesOnceAndIsNotSentAgain()
+    {
+        WritePersona(Face);
+        var harness = new Harness(_dir);
+        harness.AddSession("first", WriteTranscript("first.jsonl", Conversation(2)));
+
+        await harness.Client.AskWhatTheyHaveAsync(harness.Peers);
+
+        Assert.Equal(1, harness.PictureAsks);
+        var persona = Assert.Single(harness.Client.Known()).Entry.Persona!;
+        Assert.Equal(Face, persona.Avatar);
+        Assert.Equal(MirrorProtocol.AvatarIdOf(Face), persona.AvatarId);
+
+        harness.ForgetFramesSoFar();
+        await harness.Client.AskWhatTheyHaveAsync(harness.Peers);
+
+        Assert.Equal(1, harness.PictureAsks);
+        Assert.Equal(0, harness.ChunkFrames);
+        Assert.Equal(Face, Assert.Single(harness.Client.Known()).Entry.Persona!.Avatar);
+    }
+
+    // The case the ticket's decision named: a picture that changes on the
+    // serving machine reaches the peer, by a new id, on the next poll.
+    [Fact]
+    public async Task AChangedPersonaPictureReachesThePeer()
+    {
+        WritePersona(Face, written: new DateTime(2026, 9, 27, 12, 0, 0, DateTimeKind.Utc));
+        var harness = new Harness(_dir);
+        harness.AddSession("first", WriteTranscript("first.jsonl", Conversation(2)));
+        await harness.Client.AskWhatTheyHaveAsync(harness.Peers);
+
+        WritePersona(NewFace, written: new DateTime(2026, 9, 27, 12, 5, 0, DateTimeKind.Utc));
+        await harness.Client.AskWhatTheyHaveAsync(harness.Peers);
+
+        Assert.Equal(2, harness.PictureAsks);
+        var persona = Assert.Single(harness.Client.Known()).Entry.Persona!;
+        Assert.Equal(NewFace, persona.Avatar);
+        Assert.Equal(MirrorProtocol.AvatarIdOf(NewFace), persona.AvatarId);
+    }
+
+    // A roster that changes for another reason is sent again, but it names the
+    // same picture id, so the picture is not asked for again. This is the busy
+    // case that A alone could not reach: a state flip used to resend every
+    // picture.
+    [Fact]
+    public async Task ARosterChangeThatKeepsThePictureDoesNotFetchItAgain()
+    {
+        WritePersona(Face);
+        var harness = new Harness(_dir);
+        harness.AddSession("first", WriteTranscript("first.jsonl", Conversation(2)));
+        await harness.Client.AskWhatTheyHaveAsync(harness.Peers);
+
+        harness.AddSession("second", WriteTranscript("second.jsonl", Conversation(2)));
+        harness.ForgetFramesSoFar();
+        await harness.Client.AskWhatTheyHaveAsync(harness.Peers);
+
+        Assert.True(harness.ChunkFrames > 0);
+        Assert.Equal(1, harness.PictureAsks);
+        Assert.All(harness.Client.Known(), known => Assert.Equal(Face, known.Entry.Persona!.Avatar));
+    }
+
+    // A fetch that fails leaves the picture missing this poll, keeps no roster
+    // hash, and so asks again, and gets the picture, on the next one.
+    [Fact]
+    public async Task AFailedPictureFetchIsRetriedOnTheNextPoll()
+    {
+        WritePersona(Face);
+        var harness = new Harness(_dir) { RefusePictures = true };
+        harness.AddSession("first", WriteTranscript("first.jsonl", Conversation(2)));
+
+        await harness.Client.AskWhatTheyHaveAsync(harness.Peers);
+        Assert.Null(Assert.Single(harness.Client.Known()).Entry.Persona!.Avatar);
+
+        harness.RefusePictures = false;
+        harness.ForgetFramesSoFar();
+        harness.ToServer.Clear();
+        await harness.Client.AskWhatTheyHaveAsync(harness.Peers);
+
+        Assert.DoesNotContain(MirrorProtocol.RosterHashField + "=", AskedWith(harness));
+        Assert.True(harness.ChunkFrames > 0);
+        Assert.Equal(Face, Assert.Single(harness.Client.Known()).Entry.Persona!.Avatar);
+    }
+
+    // ...and one that fails for a picture that changed keeps the face the peer
+    // was already showing, rather than dropping to letters.
+    [Fact]
+    public async Task AFailedFetchOfAChangedPictureKeepsTheOldOne()
+    {
+        WritePersona(Face, written: new DateTime(2026, 9, 27, 12, 0, 0, DateTimeKind.Utc));
+        var harness = new Harness(_dir);
+        harness.AddSession("first", WriteTranscript("first.jsonl", Conversation(2)));
+        await harness.Client.AskWhatTheyHaveAsync(harness.Peers);
+
+        WritePersona(NewFace, written: new DateTime(2026, 9, 27, 12, 5, 0, DateTimeKind.Utc));
+        harness.RefusePictures = true;
+        await harness.Client.AskWhatTheyHaveAsync(harness.Peers);
+
+        Assert.Equal(Face, Assert.Single(harness.Client.Known()).Entry.Persona!.Avatar);
+    }
+
+    // An AVATAR naming a picture this machine never offered is refused, so an
+    // id cannot be used to read anything else off the serving machine.
+    [Fact]
+    public async Task APictureThisMachineNeverOfferedIsRefused()
+    {
+        var harness = new Harness(_dir);
+
+        await harness.Server.HandleAsync(Harness.NearRelay, MirrorProtocol.TryParseFrame(
+            MirrorProtocol.BuildFrame(MirrorProtocol.Avatar, "dddd4444",
+                new Dictionary<string, string>
+                {
+                    [MirrorProtocol.AvatarIdField] = MirrorProtocol.AvatarIdOf(new byte[] { 1 })
+                }))!);
+
+        Assert.Contains(harness.ToClient, line => line.Contains("code=" + MirrorProtocol.ErrNoAvatar));
+    }
+
+    // Soren's mixed-version case: one server, an older peer that sends neither
+    // `av` nor `rh`, and a newer one, asking in turn. The older peer is sent the
+    // picture inline every time, as it always was; the newer one is sent an id,
+    // fetches the picture once, and is then told "unchanged".
+    [Fact]
+    public async Task AnOlderAndANewerPeerAreEachAnsweredTheirOwnWay()
+    {
+        WritePersona(Face);
+        var harness = new Harness(_dir);
+        harness.AddSession("first", WriteTranscript("first.jsonl", Conversation(2)));
+
+        for (var round = 0; round < 2; round++)
+        {
+            harness.ToClient.Clear();
+            await harness.Server.HandleAsync(Harness.NearRelay, OldHello("old" + round));
+            var old = MirrorProtocol.DecodeRoster(ReassembledPayload(harness.ToClient, "old" + round))!;
+            var oldPersona = Assert.Single(old).Persona!;
+            Assert.Equal(Face, oldPersona.Avatar);
+            Assert.Null(oldPersona.AvatarId);
+
+            harness.ForgetFramesSoFar();
+            await harness.Client.AskWhatTheyHaveAsync(harness.Peers);
+            Assert.Equal(Face, Assert.Single(harness.Client.Known()).Entry.Persona!.Avatar);
+
+            // The newer peer's first ask is answered in full; its second is not.
+            Assert.Equal(round == 0, harness.ChunkFrames > 0);
+        }
+
+        Assert.Equal(1, harness.PictureAsks);
+    }
+
+    private static byte[] ReassembledPayload(IEnumerable<string> lines, string id) =>
+        lines.Select(MirrorProtocol.TryParseFrame)
+            .Where(frame => frame!.Type == MirrorProtocol.Chunk && frame.Id == id)
+            .SelectMany(frame => frame!.Payload!)
+            .ToArray();
+
     private static MirrorProtocol.MirrorFrame OldHello(string id) =>
         MirrorProtocol.TryParseFrame(MirrorProtocol.BuildFrame(
             MirrorProtocol.Hello, id, new Dictionary<string, string> { ["pv"] = "1" }))!;
@@ -1659,6 +1828,14 @@ public class MirrorRoundTripTests : IDisposable
         // A server that predates CB-216's roster hash: its answers carry no
         // `rh` field, so the client never learns one to send back.
         public bool StripRosterHash { get; set; }
+
+        // A server that cannot find the picture asked for: every AVATAR is
+        // answered no-avatar, which is what a picture forgotten between the
+        // roster and the fetch looks like.
+        public bool RefusePictures { get; set; }
+
+        // How many pictures the client has asked for.
+        public int PictureAsks => ToServer.Count(line => line.Contains(";t=" + MirrorProtocol.Avatar + ";"));
 
         public int ChunkFrames { get; private set; }
 
@@ -1845,6 +2022,14 @@ public class MirrorRoundTripTests : IDisposable
             if (frame is null) return false;
 
             if (frame.Type == MirrorProtocol.Resend) Resends++;
+
+            if (RefusePictures && frame.Type == MirrorProtocol.Avatar)
+            {
+                await Client.OnFrameAsync(FarRelay, MirrorProtocol.TryParseFrame(MirrorProtocol.BuildFrame(
+                    MirrorProtocol.Err, frame.Id,
+                    new Dictionary<string, string> { ["code"] = MirrorProtocol.ErrNoAvatar }))!);
+                return true;
+            }
 
             await Server.HandleAsync(NearRelay, frame);
             return true;

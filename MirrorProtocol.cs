@@ -61,6 +61,7 @@ namespace ClaudeBuddy
         public const string Unwatch = "UNWATCH";   // client → server: stop
         public const string Input = "INPUT";       // client → server: type this into that session
         public const string Resend = "RESEND";     // client → server: that piece failed its hash
+        public const string Avatar = "AVATAR";     // client → server: a persona picture, by its id (CB-216)
         public const string Ok = "OK";             // server → client: done
         public const string Err = "ERR";           // server → client: couldn't
 
@@ -68,6 +69,7 @@ namespace ClaudeBuddy
         // what to do with it and the user reads wording chosen on this side of
         // the wire, not whatever the far machine happened to phrase.
         public const string ErrNoSession = "no-session";
+        public const string ErrNoAvatar = "no-avatar";
         public const string ErrNoTranscript = "no-transcript";
         public const string ErrNoPane = "no-pane";
 
@@ -527,10 +529,28 @@ namespace ClaudeBuddy
             [property: JsonPropertyName("name")] string? Name = null,
             [property: JsonPropertyName("voice")] string? Voice = null,
             [property: JsonPropertyName("rate")] double? Rate = null,
-            [property: JsonPropertyName("avatar")] byte[]? Avatar = null)
+            [property: JsonPropertyName("avatar")] byte[]? Avatar = null,
+            [property: JsonPropertyName("avatarId")] string? AvatarId = null)
         {
-            public bool IsEmpty => Name is null && Voice is null && Rate is null && Avatar is null;
+            public bool IsEmpty => Name is null && Voice is null && Rate is null && Avatar is null && AvatarId is null;
         }
+
+        // CB-216: a persona picture named by what it is instead of carried in
+        // full. An asker that says it can fetch pictures by id (AvatarsByIdField)
+        // gets AvatarId in the roster and no bytes, and asks for the bytes once
+        // with an AVATAR request, only for an id it has not seen. An asker that
+        // does not say so gets the bytes inline, exactly as before.
+        //
+        // Hash and length both, so an id cannot be mistaken for another picture's,
+        // and so the receiver can check what it is handed before it keeps it.
+        public const string AvatarsByIdField = "av";
+        public const string AvatarIdField = "a";
+
+        public static string AvatarIdOf(byte[] bytes) => Hash(bytes) + ":" + bytes.LongLength;
+
+        public static bool AvatarMatches(string? id, byte[]? bytes) =>
+            !string.IsNullOrEmpty(id) && bytes is not null
+            && string.Equals(id, AvatarIdOf(bytes), StringComparison.Ordinal);
 
         public const string CliClaudeCode = "claude";
         public const string CliCodex = "codex";
