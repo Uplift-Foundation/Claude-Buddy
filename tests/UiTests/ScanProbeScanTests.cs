@@ -115,6 +115,40 @@ public class ScanProbeScanTests
     }
 
     [AvaloniaFact]
+    public async Task TheDispatcherKeepsRunningWorkWhileTheScanIsWaitingOnASubprocess()
+    {
+        // What the user felt: a menu, a drag or a chat panel waiting on `ps`.
+        // Deterministic rather than timed. The pane question posts a job to the
+        // dispatcher from inside itself and does not return until that job has
+        // run. With the question on the background thread, the dispatcher is
+        // free and the job runs straight away. With it on the UI thread, the job
+        // cannot run until the question returns, so the wait times out and the
+        // assertion names it. The ten seconds bounds a failure, never a pass.
+        //
+        // Posted from inside the question on purpose. A job the test posted
+        // right after calling ScheduleScan would be queued ahead of the scan's
+        // UI-thread continuation, so it would run first even if every question
+        // were asked in that continuation, and the test would pass against the
+        // very bug it exists for.
+        using var scratch = new Scratch();
+        scratch.Write("in-tmux", LivePid, termProgram: "iTerm.app", tmuxPane: "%1");
+
+        using var dispatcherRan = new ManualResetEventSlim();
+        var ranWhileAsking = false;
+
+        var manager = Manager(scratch, paneOwners: claims =>
+        {
+            Dispatcher.UIThread.Post(dispatcherRan.Set);
+            ranWhileAsking = dispatcherRan.Wait(TimeSpan.FromSeconds(10));
+            return Owners(claims, null);
+        });
+
+        await manager.ScheduleScan();
+
+        Assert.True(ranWhileAsking, "a dispatcher job waited for the scan's subprocess question");
+    }
+
+    [AvaloniaFact]
     public void AStalePaneClaimIsDroppedWhenItsPanesVerifiedOwnerIsInTheSameScan()
     {
         // "old" claims %9, and the pane's live process names "new". Both files

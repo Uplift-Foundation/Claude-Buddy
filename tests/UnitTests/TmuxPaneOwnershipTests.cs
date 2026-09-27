@@ -413,6 +413,20 @@ public class TmuxPaneOwnershipTests
     }
 
     [Fact]
+    public void NoClaimsAsksNeitherTmuxNorPs()
+    {
+        // TmuxPaneOwners gates an empty list before it gets here; this pins the
+        // rule itself for any caller that does not.
+        var owners = TmuxPaneOwnershipRules.OwnersFor(
+            Array.Empty<SessionStatus>(),
+            panesOf: (_, _) => throw new InvalidOperationException("no server to list"),
+            panePidOf: (_, _, _) => throw new InvalidOperationException("no target to ask"),
+            processes: () => throw new InvalidOperationException("no process table wanted"));
+
+        Assert.Empty(owners);
+    }
+
+    [Fact]
     public void APaneKeyTreatsAMissingFieldAsEmpty()
     {
         // Status files are JSON, and a null in one deserializes as null over the

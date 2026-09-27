@@ -62,14 +62,16 @@ namespace ClaudeBuddy
         // calls this from its background half, only for the directories
         // ScanProbePlan names, and applies the answer on the UI thread through
         // ScanProbes.AdoptViewer. Off macOS there is no `claude agents` window
-        // to find; that was TryAdopt's first check and is now the scan's default
-        // seam's.
+        // to find, and without a directory there is nothing to match on: those
+        // were TryAdopt's first two checks, and they are still this one's.
         //
         // Excluded from coverage: a wall-clock cache around the process scan
         // below.
         [ExcludeFromCodeCoverage]
         internal static AgentViewer? For(string cwd)
         {
+            if (!OperatingSystem.IsMacOS() || string.IsNullOrEmpty(cwd)) return null;
+
             var key = cwd.TrimEnd('/');
             var now = Environment.TickCount64;
 

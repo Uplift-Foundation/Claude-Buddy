@@ -415,8 +415,7 @@ namespace ClaudeBuddy
             _dependents = dependents ?? SessionDependents.Of;
             _onWindows = onWindows ?? OperatingSystem.IsWindows();
             _paneOwners = paneOwners ?? TerminalFocuser.TmuxPaneOwners;
-            _agentViewer = agentViewer
-                ?? (cwd => OperatingSystem.IsMacOS() ? AgentTeamViewer.For(cwd) : null);
+            _agentViewer = agentViewer ?? AgentTeamViewer.For;
         }
 
         // Who is running in each claimed tmux pane, and which `claude agents`
@@ -2334,7 +2333,11 @@ namespace ClaudeBuddy
             // not the same as "nobody is attached" —
             // SessionPresence.HasAttachClient is where that direction is decided
             // and why.
-            var attachClients = worthAsking ? probes.AttachClients : null;
+            //
+            // Null unless worthAsking, by construction: ScanProbePlan's attach
+            // gate is worthAsking itself, computed from the same files, so the
+            // scan never had the answer to throw away.
+            var attachClients = probes.AttachClients;
 
             var superseded = Superseded(found, isLiveJob);
 
