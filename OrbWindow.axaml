@@ -225,6 +225,27 @@
             <Path x:Name="ContextArc" StrokeThickness="3" StrokeLineCap="Round"/>
         </Canvas>
 
+        <!-- An agent's picture, beneath the Orb ellipse so that ellipse's ring
+             still draws on top of it. Its own Image rather than an ImageBrush
+             on the ellipse's fill (which it was until CB-198): Avalonia's Skia
+             backend rasterises a tile brush into an intermediate surface sized
+             to its target in DIPs at the screen's DPI, and never counts the
+             render transform above it — so under the orb-size LayoutTransform
+             a 2x orb drew a 36-pixel picture stretched over 72, a visible
+             mosaic on the first real Windows install. An Image is drawn
+             through the whole transform with no intermediate, and stays sharp
+             at every size. Width, Height and the clip follow SetTeamRole;
+             the pulse shares the Orb's transform. -->
+        <Image x:Name="AvatarImage"
+               Width="36" Height="36"
+               Stretch="UniformToFill"
+               IsVisible="False"
+               IsHitTestVisible="False">
+            <Image.Clip>
+                <EllipseGeometry Rect="0,0,36,36"/>
+            </Image.Clip>
+        </Image>
+
         <!-- The buddy itself -->
         <Ellipse x:Name="Orb"
                  Width="36" Height="36"

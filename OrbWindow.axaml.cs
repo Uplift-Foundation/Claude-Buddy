@@ -186,6 +186,10 @@ namespace ClaudeBuddy
             Glow.Fill = _glowBrush;
             Orb.RenderTransform = _orbScale;
 
+            // One transform for both, so an agent's picture breathes with the
+            // ring drawn around it rather than holding still inside it.
+            AvatarImage.RenderTransform = _orbScale;
+
             // Centred, so the acknowledgment halo expands evenly out of the orb
             // rather than growing towards one corner.
             Glow.RenderTransform = _glowScale;
@@ -1020,6 +1024,8 @@ namespace ClaudeBuddy
             var scale = isTeamMember ? MemberScale : 1.0;
 
             Orb.Width = Orb.Height = 36 * scale;
+            AvatarImage.Width = AvatarImage.Height = 36 * scale;
+            AvatarImage.Clip = new EllipseGeometry(new Rect(0, 0, 36 * scale, 36 * scale));
             Glow.Width = Glow.Height = 56 * scale;
 
             // Kept on the orb's edge rather than in the window's corner. The
@@ -1092,7 +1098,6 @@ namespace ClaudeBuddy
         // which is why both paths stay.
         private bool _hasAvatar;
         private string? _agentEmoji;
-        private ImageBrush? _avatarBrush;
 
         // The state ring on an avatar orb. One brush with its own transition,
         // rather than a fresh SolidColorBrush per state change: the fill it
@@ -1166,9 +1171,13 @@ namespace ClaudeBuddy
 
             Glyph.IsVisible = false;
 
-            _avatarBrush ??= new ImageBrush { Stretch = Stretch.UniformToFill };
-            _avatarBrush.Source = avatar.Frames[0];
-            Orb.Fill = _avatarBrush;
+            // Drawn by AvatarImage beneath the ellipse, not as its fill — see the
+            // axaml for why an ImageBrush goes soft under the orb-size
+            // transform. The ellipse goes clear so the picture shows through,
+            // and keeps drawing the ring.
+            AvatarImage.Source = avatar.Frames[0];
+            AvatarImage.IsVisible = true;
+            Orb.Fill = Brushes.Transparent;
 
             _ringBrush ??= new SolidColorBrush(_orbBrush.Color)
             {
@@ -1208,6 +1217,8 @@ namespace ClaudeBuddy
             _avatar = null;
             StopAvatarAnimation();
 
+            AvatarImage.IsVisible = false;
+            AvatarImage.Source = null;
             Orb.Fill = _orbBrush;
             Orb.Stroke = new SolidColorBrush(Color.Parse("#22FFFFFF"));
             Orb.StrokeThickness = 1;
@@ -1233,10 +1244,10 @@ namespace ClaudeBuddy
 
             _avatarTimer.Tick += (_, _) =>
             {
-                if (_avatar is null || _avatarBrush is null) return;
+                if (_avatar is null) return;
 
                 _avatarFrame = (_avatarFrame + 1) % _avatar.Frames.Count;
-                _avatarBrush.Source = _avatar.Frames[_avatarFrame];
+                AvatarImage.Source = _avatar.Frames[_avatarFrame];
                 _avatarTimer!.Interval = TimeSpan.FromMilliseconds(_avatar.DelaysMs[_avatarFrame]);
             };
 

@@ -115,7 +115,7 @@ public class OrbRoomAvatarTests
             var orb = new OrbWindow(SessionManager.RoomId(room));
             orb.UpdateFrom(RoomStatus());
 
-            Assert.IsType<ImageBrush>(orb.Orb.Fill);
+            Assert.True(orb.AvatarImage.IsVisible && orb.AvatarImage.Source is not null);
             Assert.False(orb.Glyph.IsVisible, "the channel's initials should give way to the faces");
         }
         finally
@@ -228,7 +228,7 @@ public class OrbRoomAvatarTests
 
             Assert.Null(OpenClawSessions.RoomAvatar(room));
             Assert.True(orb.Glyph.IsVisible, "the channel's initials are the fallback");
-            Assert.IsNotType<ImageBrush>(orb.Orb.Fill);
+            Assert.False(orb.AvatarImage.IsVisible);
         }
         finally
         {

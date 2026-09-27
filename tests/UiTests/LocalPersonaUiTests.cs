@@ -226,7 +226,7 @@ public class LocalPersonaUiTests : IDisposable
         orb.UpdateFrom(Local());
 
         Assert.False(orb.Glyph.IsVisible, "the letters should give way to the picture");
-        Assert.IsType<ImageBrush>(orb.Orb.Fill);
+        Assert.True(orb.AvatarImage.IsVisible && orb.AvatarImage.Source is not null);
     }
 
     // The other side of CB-135's change, and the one only a file can ask: the
@@ -255,7 +255,7 @@ public class LocalPersonaUiTests : IDisposable
 
         Assert.True(orb.Glyph.IsVisible);
         Assert.Equal("Le", orb.GlyphText);
-        Assert.IsNotType<ImageBrush>(orb.Orb.Fill);
+        Assert.False(orb.AvatarImage.IsVisible);
     }
 
     // A persona whose picture has been deleted since it was resolved is the
@@ -308,7 +308,7 @@ public class LocalPersonaUiTests : IDisposable
 
         Assert.Equal("No", orb.GlyphText);
         Assert.True(orb.Glyph.IsVisible);
-        Assert.IsNotType<ImageBrush>(orb.Orb.Fill);
+        Assert.False(orb.AvatarImage.IsVisible);
     }
 
     // --- the chat panel's header ---
@@ -457,7 +457,7 @@ public class LocalPersonaUiTests : IDisposable
 
         Assert.True(
             orb.Glyph.IsVisible, "a member with no picture of its own must not wear the project's face");
-        Assert.IsNotType<ImageBrush>(orb.Orb.Fill);
+        Assert.False(orb.AvatarImage.IsVisible);
         Assert.Equal("Ih", orb.GlyphText);
     }
 
@@ -588,7 +588,7 @@ public class LocalPersonaUiTests : IDisposable
 
             var orb = OrbFor(manager, sessionId);
             Assert.False(orb.Glyph.IsVisible, "the letters should give way to the picture");
-            Assert.IsType<ImageBrush>(orb.Orb.Fill);
+            Assert.True(orb.AvatarImage.IsVisible && orb.AvatarImage.Source is not null);
 
             var fake = new FakeChatSession(null)
             {
@@ -705,7 +705,7 @@ public class LocalPersonaUiTests : IDisposable
             // was decoded rather than merely named.
             var orb = OrbFor(manager, sessionId);
             Assert.False(orb.Glyph.IsVisible, "the letters should give way to the picture");
-            Assert.IsType<ImageBrush>(orb.Orb.Fill);
+            Assert.True(orb.AvatarImage.IsVisible && orb.AvatarImage.Source is not null);
 
             // And the header of the panel that opens under it, which is where
             // the *name* shows up rather than the picture.
@@ -824,7 +824,7 @@ public class LocalPersonaUiTests : IDisposable
 
             var orb = OrbFor(manager, sessionId);
             Assert.True(orb.Glyph.IsVisible, "an unmarked yaml example must not dress an orb");
-            Assert.IsNotType<ImageBrush>(orb.Orb.Fill);
+            Assert.False(orb.AvatarImage.IsVisible);
         }
         finally
         {
@@ -878,7 +878,7 @@ public class LocalPersonaUiTests : IDisposable
 
             var orb = OrbFor(manager, sessionId);
             Assert.True(orb.Glyph.IsVisible);
-            Assert.IsNotType<ImageBrush>(orb.Orb.Fill);
+            Assert.False(orb.AvatarImage.IsVisible);
         }
         finally
         {
