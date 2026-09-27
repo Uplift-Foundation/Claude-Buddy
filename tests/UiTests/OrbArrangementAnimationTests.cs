@@ -635,4 +635,69 @@ public class OrbArrangementAnimationTests
             ClaudeBuddySettings.ArrangeAnchor = anchorBefore;
         }
     }
+
+    // The one behaviour CB-211 changes on purpose, pinned so it stays a
+    // decision rather than an accident. A shape that *grows* into an edge —
+    // here the spacing slider, through the same ReapplyArrangement the
+    // Settings slider drives — is pushed back by OrbArrangement, and the saved
+    // anchor now follows it to where it landed. Shrinking it again leaves the
+    // anchor there: the shape stays where it was last seen rather than
+    // creeping back out toward the edge, which is what it did before, when
+    // the overshoot was kept.
+    [AvaloniaFact]
+    public void AShapeThatGrowsIntoTheEdgeKeepsItsLandedAnchorWhenItShrinksAgain()
+    {
+        var anchorBefore = ClaudeBuddySettings.ArrangeAnchor;
+        var spacingBefore = ClaudeBuddySettings.ArrangeSpacing;
+        var shapeBefore = ClaudeBuddySettings.ArrangeShape;
+        try
+        {
+            ClaudeBuddySettings.ArrangeSpacing = 0.1;
+            ClaudeBuddySettings.ArrangeShape = "heart";
+
+            using var scratch = new Scratch();
+            scratch.Write("a");
+            scratch.Write("b", cli: "codex");
+            scratch.Write("c", cli: "grok");
+
+            var manager = Manager(scratch.Dir);
+            manager.ScanAndUpdate();
+
+            var work = WorkOf(manager);
+            // 55px in: three orbs in a heart reach 44px right of their anchor at
+            // the tightest spacing and 65px at the widest (measured at Scale
+            // 1), so the tight shape clears the edge and the wide one cannot.
+            var nearEdge = new ClaudeBuddySettings.OrbPlacement(work.Right - 55, work.Y + work.Height / 2);
+            ClaudeBuddySettings.ArrangeAnchor = nearEdge;
+
+            manager.ArrangeOrbsInPattern();
+            CompleteTheGlide(manager);
+
+            // Fixture: tight, the shape fits where it was put, so nothing moved.
+            Assert.Equal(nearEdge, ClaudeBuddySettings.ArrangeAnchor);
+
+            ClaudeBuddySettings.ArrangeSpacing = 1.0;
+            manager.ReapplyArrangement();
+
+            var landed = ClaudeBuddySettings.ArrangeAnchor!;
+            Assert.True(landed.X < nearEdge.X, $"growing into the edge left the anchor at {landed.X}");
+            Assert.Equal(nearEdge.Y, landed.Y);
+
+            ClaudeBuddySettings.ArrangeSpacing = 0.1;
+            manager.ReapplyArrangement();
+
+            Assert.Equal(landed, ClaudeBuddySettings.ArrangeAnchor);
+
+            // And the shrunk shape is drawn around that landed centre, clear of
+            // the edge it was pushed off, rather than back where it started.
+            var rightmost = Windows(manager).Values.Max(w => w.Position.X + (int)Math.Round(w.Bounds.Width * w.RenderScaling));
+            Assert.True(rightmost < work.Right, $"shrunk shape reaches {rightmost}, the edge is {work.Right}");
+        }
+        finally
+        {
+            ClaudeBuddySettings.ArrangeAnchor = anchorBefore;
+            ClaudeBuddySettings.ArrangeSpacing = spacingBefore;
+            ClaudeBuddySettings.ArrangeShape = shapeBefore;
+        }
+    }
 }
