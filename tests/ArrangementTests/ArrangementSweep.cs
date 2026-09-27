@@ -48,6 +48,14 @@ namespace ClaudeBuddy.Tests
         // group and is the only thing the first two sweeps ever exercised.
         internal readonly record struct Split(string Name, Func<int, int[]> Build);
 
+        // One user size per orb (CB-198), when the orbs are not all the same
+        // size. A function of the count for the same reason as the two above.
+        internal readonly record struct SizeMix(string Name, Func<int, double[]> Build);
+
+        // Size is every orb's user size when Mix is null, and is ignored when it
+        // is not. 1.0 with no Mix is the arrangement as it was before sizes
+        // existed, and is run through Compute with no sizes at all — the call
+        // every caller made until CB-198, which has to keep meaning the same.
         internal readonly record struct Case(
             Screen Screen,
             string Shape,
@@ -55,12 +63,24 @@ namespace ClaudeBuddy.Tests
             int Count,
             TeamShape Team,
             Anchor? Anchor,
-            Split? Split = null)
+            Split? Split = null,
+            double Size = 1.0,
+            SizeMix? Mix = null)
         {
             public override string ToString()
                 => $"{Screen.Name} / {Shape} / spacing {Spacing:0.00} / {Count} orbs / {Team.Name}"
                  + (Anchor is null ? "" : $" / anchor {Anchor.Value.Name}")
-                 + (Split is null ? "" : $" / groups {Split.Value.Name}");
+                 + (Split is null ? "" : $" / groups {Split.Value.Name}")
+                 + (Mix is { } mix ? $" / sizes {mix.Name}" : Size == 1.0 ? "" : $" / size {Size:0.00}");
+
+            // What every orb in this case is drawn at, and what Compute is
+            // handed — null for the plain 1.0 case, deliberately, per the note
+            // on the record.
+            internal double[] SizesOf(int count) =>
+                Mix?.Build(count) ?? Enumerable.Repeat(Size, count).ToArray();
+
+            internal double[]? SizeArgument(int count) =>
+                Mix is null && Size == 1.0 ? null : SizesOf(count);
         }
 
         internal static readonly string[] Shapes =
@@ -69,6 +89,47 @@ namespace ClaudeBuddy.Tests
         internal static readonly double[] Spacings = { 0.3, 0.85, 2.0 };
 
         internal static readonly int[] Counts = { 1, 2, 3, 5, 8, 13, 20, 30 };
+
+        // Both ends of the orb-size slider and the size orbs always were.
+        // Taken from OrbSizing rather than written out, so the slider's range
+        // and the range verified here cannot drift apart.
+        //
+        // Both platforms' floors, on whichever runner this is — not
+        // OrbSizing.Min, which is the current platform's. The matrix has to be
+        // the same on both CI legs, or a Windows-only geometry failure at 0.6
+        // could never be seen and a macOS one at 0.7 would never be looked for;
+        // and the geometry is platform-free, so there is no reason for either
+        // leg to verify less than both.
+        internal static readonly double[] Sizes =
+            new[] { OrbSizing.MinMacOS, OrbSizing.MinWindows, OrbSizing.Default, OrbSizing.Max }
+                .Distinct()
+                .OrderBy(s => s)
+                .ToArray();
+
+        // The smallest orb any platform can draw, and the largest.
+        internal static readonly double MinSize = Math.Min(OrbSizing.MinMacOS, OrbSizing.MinWindows);
+        internal const double MaxSize = OrbSizing.Max;
+
+        // Mixed sizes, each chosen for the way it could break the "lay out for
+        // the largest" rule: a ramp that puts every size next to every other
+        // across the shape and the teams; one orb at the top of the slider among
+        // a crowd at the bottom, which is the case that spreads them out most
+        // and is orb 0 — the lead, in every team shape that has one; and the
+        // reverse, one small orb in a crowd of big ones, at the end where team
+        // shapes put members.
+        internal static readonly SizeMix[] Mixes =
+        {
+            new("ramp, smallest to largest", n =>
+                Enumerable.Range(0, n).Select(i => MinSize + (MaxSize - MinSize) * (i % 5) / 4.0).ToArray()),
+
+            new("one big lead among small orbs", n =>
+                Enumerable.Range(0, n).Select(i => i == 0 ? MaxSize : MinSize).ToArray()),
+
+            new("one small orb among big ones", n =>
+                Enumerable.Range(0, n).Select(i => i == n - 1 ? MinSize : MaxSize).ToArray()),
+        };
+
+        internal static readonly int[] MixedCounts = { 2, 5, 13, 30 };
 
         internal static readonly Screen[] Screens =
         {
@@ -211,7 +272,8 @@ namespace ClaudeBuddy.Tests
             foreach (var spacing in Spacings)
             foreach (var count in Counts)
             foreach (var team in TeamShapes)
-                yield return new Case(screen, shape, spacing, count, team, null);
+            foreach (var size in Sizes)
+                yield return new Case(screen, shape, spacing, count, team, null, Size: size);
 
             foreach (var screen in Screens)
             foreach (var anchor in AnchorsFor(screen))
@@ -248,6 +310,25 @@ namespace ClaudeBuddy.Tests
             foreach (var team in groupedTeams)
             foreach (var split in Splits)
                 yield return new Case(screen, shape, spacing, count, team, anchor, split);
+
+            // And with orbs of different sizes side by side (CB-198). Every
+            // shape, spacing, screen and team shape, since a member drawn at a
+            // different size from its lead is exactly what could break a fan;
+            // four counts rather than eight, spanning a pair to a crowd, and both
+            // entry points — ungrouped, and grouped across all three bands — each
+            // unanchored and anchored into a corner, the anchor that has broken
+            // things most often.
+            var mixedSplits = new Split?[] { null, Splits.First(s => s.Name == "all three, evenly") };
+
+            foreach (var screen in Screens)
+            foreach (var anchor in new Anchor?[] { null, AnchorsFor(screen)[2] })
+            foreach (var split in mixedSplits)
+            foreach (var shape in Shapes)
+            foreach (var spacing in Spacings)
+            foreach (var count in MixedCounts)
+            foreach (var team in TeamShapes)
+            foreach (var mix in Mixes)
+                yield return new Case(screen, shape, spacing, count, team, anchor, split, Mix: mix);
         }
 
         // One copy of the invariants, run for every case in both sweeps. An
@@ -277,10 +358,13 @@ namespace ClaudeBuddy.Tests
             var groups = test.Split?.Build(count);
             var shapes = ShapesFor(test.Shape);
 
+            var sizes = test.SizesOf(count);
+            var sizeArgument = test.SizeArgument(count);
+
             PixelPoint[] Arrange(int[] withLeads, OrbArrangement.Layout with) =>
                 groups is null
-                    ? OrbArrangement.Compute(count, withLeads, with)
-                    : OrbArrangement.Compute(count, withLeads, groups, shapes, with);
+                    ? OrbArrangement.Compute(count, withLeads, with, sizeArgument)
+                    : OrbArrangement.Compute(count, withLeads, groups, shapes, with, sizeArgument);
 
             PixelPoint[] pts;
 
@@ -300,16 +384,26 @@ namespace ClaudeBuddy.Tests
                 return failures;
             }
 
-            var window = (int)Math.Round(OrbArrangement.WindowDip * screen.Scale);
-            var circle = OrbArrangement.CircleDip * screen.Scale;
-            var memberCircle = circle * OrbArrangement.MemberScale;
+            // Every orb measured at its own size. Written out here rather than
+            // asked of OrbArrangement.WindowFor, so the check is not the code it
+            // is checking: a window is 56 DIP, times the display's scale, times
+            // the orb's own user size; a circle is 36 DIP by the same two, and a
+            // team member's is 72% of that again.
+            var windowOf = sizes.Select(s => (int)Math.Round(OrbArrangement.WindowDip * screen.Scale * s)).ToArray();
+            var window = windowOf.Max();
+            var circleOf = sizes.Select(s => OrbArrangement.CircleDip * screen.Scale * s).ToArray();
+
+            // Centres, not corners: two orbs of different sizes at the same
+            // top-left are not at the same place.
+            double CentreX(PixelPoint[] p, int i) => p[i].X + windowOf[i] / 2.0;
+            double CentreY(PixelPoint[] p, int i) => p[i].Y + windowOf[i] / 2.0;
 
             // 1. Every orb fully on screen. An orb you cannot see is worse than
             //    an arrangement you do not like.
             foreach (var (p, i) in pts.Select((p, i) => (p, i)))
             {
                 if (p.X < screen.Work.X || p.Y < screen.Work.Y
-                    || p.X + window > screen.Work.Right || p.Y + window > screen.Work.Bottom)
+                    || p.X + windowOf[i] > screen.Work.Right || p.Y + windowOf[i] > screen.Work.Bottom)
                 {
                     Fail($"orb {i} at ({p.X},{p.Y}) is outside the work area");
                     break;
@@ -318,31 +412,48 @@ namespace ClaudeBuddy.Tests
 
             // 2. Nothing sitting on top of anything else. Measured on the
             //    circles that are drawn, at their own sizes — a member's is
-            //    smaller than a lead's.
-            double RadiusOf(int i) => (leads[i] >= 0 && leads[i] < count ? memberCircle : circle) / 2;
+            //    smaller than a lead's, and a 60% orb's smaller than a 200% one's.
+            double RadiusOf(int i) =>
+                (leads[i] >= 0 && leads[i] < count ? circleOf[i] * OrbArrangement.MemberScale : circleOf[i]) / 2;
+
+            // At the very bottom of the slider the shape is meant to be a tight
+            // cluster, so a little overlap there is the setting doing its job.
+            // Anywhere else, circles must not touch.
+            //
+            // The allowance is a fraction of a lead's circle, and with mixed
+            // sizes it is the larger of the pair's two — the strictest reading
+            // that is still the same rule, since the arrangement's own slack is
+            // cut from the largest orb present. With every orb the same size it
+            // is the number this check always used.
+            double AllowedOverlap(int i, int j) =>
+                test.Spacing <= 0.3 ? -Math.Max(circleOf[i], circleOf[j]) * 0.45 : 0;
 
             var worst = double.MaxValue;
+            var worstGap = 0.0;
+            var worstAllowed = 0.0;
             var worstPair = (-1, -1);
 
             for (var i = 0; i < count; i++)
             for (var j = i + 1; j < count; j++)
             {
-                var dx = pts[i].X - pts[j].X;
-                var dy = pts[i].Y - pts[j].Y;
+                var dx = CentreX(pts, i) - CentreX(pts, j);
+                var dy = CentreY(pts, i) - CentreY(pts, j);
                 var gap = Math.Sqrt(dx * dx + dy * dy) - RadiusOf(i) - RadiusOf(j);
+                var allowed = AllowedOverlap(i, j);
 
-                if (gap < worst) { worst = gap; worstPair = (i, j); }
+                if (gap - allowed < worst)
+                {
+                    worst = gap - allowed;
+                    worstGap = gap;
+                    worstAllowed = allowed;
+                    worstPair = (i, j);
+                }
             }
 
-            // At the very bottom of the slider the shape is meant to be a tight
-            // cluster, so a little overlap there is the setting doing its job.
-            // Anywhere else, circles must not touch.
-            var allowedOverlap = test.Spacing <= 0.3 ? -circle * 0.45 : 0;
-
-            if (count > 1 && worst < allowedOverlap)
+            if (count > 1 && worst < 0)
             {
-                Fail($"orbs {worstPair.Item1} and {worstPair.Item2} overlap by {-worst:0}px "
-                   + $"(allowed {-allowedOverlap:0})");
+                Fail($"orbs {worstPair.Item1} and {worstPair.Item2} overlap by {-worstGap:0}px "
+                   + $"(allowed {-worstAllowed:0})");
             }
 
             // 3. Every team member close enough to its lead that TeamLinks will
@@ -356,8 +467,8 @@ namespace ClaudeBuddy.Tests
                 // Cycles are broken by the arrangement, so only check pairs it
                 // still treats as a team: a member sits within a sane distance
                 // of its lead.
-                var dx = pts[i].X - pts[lead].X;
-                var dy = pts[i].Y - pts[lead].Y;
+                var dx = CentreX(pts, i) - CentreX(pts, lead);
+                var dy = CentreY(pts, i) - CentreY(pts, lead);
                 var apart = Math.Sqrt(dx * dx + dy * dy);
 
                 if (apart > screen.Work.Width * 0.6)
@@ -426,11 +537,22 @@ namespace ClaudeBuddy.Tests
                 // there would be demanding orbs walk off the screen. "Slid" is
                 // read off the result rather than asked of Slide: a margin on
                 // all four sides means there was nothing to push.
+                //
+                // With mixed sizes the margin is measured on each orb's *slot*
+                // — the largest window, centred where the orb is — because the
+                // arrangement is laid out in slots and that is what gets pushed.
+                // A 60% orb sits inset in its slot, so a slot jammed against the
+                // edge still shows the small orb a margin away from it, and
+                // reading that margin as "nothing was pushed" demanded the delta
+                // from an arrangement that had correctly stopped honouring the
+                // anchor. With every orb one size the slot is the orb's own
+                // window and this is the check it always was.
                 bool Clear(PixelPoint[] p)
-                    => p.Min(q => q.X) > screen.Work.X
-                    && p.Min(q => q.Y) > screen.Work.Y
-                    && p.Max(q => q.X) + window < screen.Work.Right
-                    && p.Max(q => q.Y) + window < screen.Work.Bottom;
+                    => Enumerable.Range(0, count).All(i =>
+                        CentreX(p, i) - window / 2.0 > screen.Work.X
+                        && CentreY(p, i) - window / 2.0 > screen.Work.Y
+                        && CentreX(p, i) + window / 2.0 < screen.Work.Right
+                        && CentreY(p, i) + window / 2.0 < screen.Work.Bottom);
 
                 if (moved.Length == count && Clear(pts) && Clear(moved))
                 {
@@ -463,7 +585,8 @@ namespace ClaudeBuddy.Tests
             //    says. Resolves is the same question Compute asks to tell the
             //    two apart.
             //
-            //    Non-strict, with a window's slack. The separation pass runs
+            //    Non-strict, with a window's slack — the largest orb's, which is
+            //    what the lattice is laid out in. The separation pass runs
             //    after the bands are cut and is allowed to push a crowded orb
             //    across a boundary — that is it doing its job, and thirty orbs
             //    in three groups on a 1280-wide screen genuinely have nowhere
@@ -481,7 +604,7 @@ namespace ClaudeBuddy.Tests
                     var g = i < groups.Length ? groups[i] : 0;
                     if (g < 0 || g >= shapes.Length) g = 0;
 
-                    sumX[g] += pts[i].X;
+                    sumX[g] += CentreX(pts, i);
                     anchors[g]++;
                 }
 
