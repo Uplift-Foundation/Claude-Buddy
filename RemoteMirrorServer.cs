@@ -516,14 +516,14 @@ namespace ClaudeBuddy
         // only when the file changes, and is sent as its id to an asker that can
         // fetch by id (picturesById) and as bytes to one that cannot.
         internal static MirrorProtocol.PeerPersona? ResolvePeerPersona(
-            SessionStatus status, bool picturesById = false, PeerAvatarStore? store = null)
+            SessionStatus status, bool picturesById = false)
         {
             if (!status.IsLocalCli || string.IsNullOrWhiteSpace(status.Cwd)) return null;
 
             var candidates = LocalPersona.Candidates(
                 status.Cwd, LocalPersona.UserConfigDirs(), status.Source, status.Agent);
             var local = LocalPersona.ResolveFrom(candidates, status.Cwd);
-            var picture = local.AvatarPath is null ? null : (store ?? PeerAvatarStore.Shared).At(local.AvatarPath);
+            var picture = local.AvatarPath is null ? null : PeerAvatarStore.Shared.At(local.AvatarPath);
             var peer = picture is not { } found
                 ? new MirrorProtocol.PeerPersona(local.Name, local.Voice, local.Rate)
                 : picturesById

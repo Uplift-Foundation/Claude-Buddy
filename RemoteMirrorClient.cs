@@ -191,8 +191,7 @@ namespace ClaudeBuddy
         // file share one entry. Bounded for the reason PeerAvatarStore is: the
         // pictures are large. Forgetting one costs a single fetch.
         internal const int PictureCapacity = 16;
-        private readonly Dictionary<string, byte[]> _pictures = new(StringComparer.Ordinal);
-        private readonly Queue<string> _pictureAge = new();
+        private readonly PictureCache _pictures = new(PictureCapacity);
 
         // Asks a machine what it has, naming nothing.
         //
@@ -294,11 +293,8 @@ namespace ClaudeBuddy
                 // again with the whole roster on the next poll.
                 lock (_gate)
                 {
-                    if (allPictures
-                        && reply.Fields?.GetValueOrDefault(MirrorProtocol.RosterHashField) is { Length: > 0 } sent)
-                        _rosterHashes[peer] = sent;
-                    else
-                        _rosterHashes.Remove(peer);
+                    if (HashToHold(reply.Fields, allPictures) is { } sent) _rosterHashes[peer] = sent;
+                    else _rosterHashes.Remove(peer);
                 }
 
                 var offered = new Dictionary<string, MirrorProtocol.MirrorRosterEntry>(
@@ -463,6 +459,18 @@ namespace ClaudeBuddy
             }
         }
 
+        // The roster hash to hand back on the next ask, or null to hold none: only
+        // a hash the server actually sent, and only once every picture the
+        // roster named has arrived. An older server sends none, and a roster
+        // this side has not fully taken in must be asked for in full again.
+        internal static string? HashToHold(IReadOnlyDictionary<string, string>? fields, bool allPictures) =>
+            allPictures
+            && fields is not null
+            && fields.TryGetValue(MirrorProtocol.RosterHashField, out var sent)
+            && sent.Length > 0
+                ? sent
+                : null;
+
         // Gives every entry named by picture id its picture's bytes, from those
         // already held or with one AVATAR request per id not yet seen. Returns
         // whether every picture arrived.
@@ -487,7 +495,7 @@ namespace ClaudeBuddy
                 }
 
                 byte[]? bytes;
-                lock (_gate) bytes = _pictures.GetValueOrDefault(id);
+                lock (_gate) bytes = _pictures.Get(id);
 
                 bytes ??= await FetchPictureAsync(peer, id).ConfigureAwait(false);
 
@@ -517,14 +525,7 @@ namespace ClaudeBuddy
                 return null;
             }
 
-            lock (_gate)
-            {
-                if (_pictures.TryAdd(id, reply.Payload!))
-                {
-                    _pictureAge.Enqueue(id);
-                    while (_pictures.Count > PictureCapacity) _pictures.Remove(_pictureAge.Dequeue());
-                }
-            }
+            lock (_gate) _pictures.Add(id, reply.Payload!);
 
             return reply.Payload;
         }

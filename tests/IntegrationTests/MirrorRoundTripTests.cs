@@ -1743,6 +1743,42 @@ public class MirrorRoundTripTests : IDisposable
         Assert.Equal(Face, Assert.Single(harness.Client.Known()).Entry.Persona!.Avatar);
     }
 
+    // A session that had no picture, then gains one that fails to arrive, keeps
+    // wearing its letters: there is no earlier face to fall back to.
+    [Fact]
+    public async Task AFirstPictureThatFailsToArriveLeavesTheLetters()
+    {
+        var harness = new Harness(_dir);
+        harness.AddSession("first", WriteTranscript("first.jsonl", Conversation(2)));
+        await harness.Client.AskWhatTheyHaveAsync(harness.Peers);
+        Assert.Null(Assert.Single(harness.Client.Known()).Entry.Persona);
+
+        WritePersona(Face);
+        harness.RefusePictures = true;
+        await harness.Client.AskWhatTheyHaveAsync(harness.Peers);
+
+        var persona = Assert.Single(harness.Client.Known()).Entry.Persona!;
+        Assert.Equal(MirrorProtocol.AvatarIdOf(Face), persona.AvatarId);
+        Assert.Null(persona.Avatar);
+    }
+
+    // Codex and Grok sessions reach the roster by a second path, straight from
+    // the status files, and their pictures travel by id there too.
+    [Fact]
+    public async Task ACodexSessionsPictureAlsoTravelsById()
+    {
+        WritePersona(Face);
+        var harness = new Harness(_dir);
+        harness.AddCodexSession("codex work", WriteTranscript("codex.jsonl", Conversation(2)));
+
+        await harness.Client.AskWhatTheyHaveAsync(harness.Peers);
+
+        var entry = Assert.Single(harness.Client.Known()).Entry;
+        Assert.Equal(MirrorProtocol.CliCodex, entry.Cli);
+        Assert.Equal(Face, entry.Persona!.Avatar);
+        Assert.Equal(1, harness.PictureAsks);
+    }
+
     // An AVATAR naming a picture this machine never offered is refused, so an
     // id cannot be used to read anything else off the serving machine.
     [Fact]
@@ -1980,6 +2016,19 @@ public class MirrorRoundTripTests : IDisposable
         // `claude agents --json` listing the same sessions in another order,
         // which nothing about the real listing rules out between two polls.
         public void ReverseAgentOrder() => _agents.Reverse();
+
+        // A Codex session: a status file with no agent-registry row, which the
+        // full roster offers from the status files directly.
+        public void AddCodexSession(string title, string transcriptPath) =>
+            _sessions.Add((Guid.NewGuid().ToString(), new SessionStatus
+            {
+                Title = title,
+                Cwd = _dir,
+                Source = SessionSource.Codex,
+                TranscriptPath = transcriptPath,
+                TmuxPane = "%2",
+                SessionPid = 2000 + _sessions.Count,
+            }));
 
         public void AddSession(string name, string transcriptPath)
         {
