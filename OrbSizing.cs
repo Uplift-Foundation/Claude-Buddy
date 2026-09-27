@@ -47,8 +47,9 @@ namespace ClaudeBuddy
         // Not measured at other DPIs; SM_CYMINTRACK scales with DPI, so the
         // floor is expected to stay ~39 DIP, but that is an expectation.
         //
-        // The width was honoured at every size (33 DIP asked, 33 got), which
-        // is not what OrbWindow.axaml's older 120x56 note describes; see there.
+        // The width floors too, at 32 (asked 26, got 32x39, on the real
+        // OrbWindow class), so 0.7's 39.2 DIP clears both. OrbWindow.axaml's
+        // older claim of a 136x39 floor landing as 120x56 was wrong; see there.
         //
         // macOS has no such floor for a borderless window, so 0.6 there —
         // assumed from that, not measured with a click.

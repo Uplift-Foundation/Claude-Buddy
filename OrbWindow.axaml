@@ -14,49 +14,43 @@
         WindowStartupLocation="Manual">
 
     <!-- Root is pinned to 56x56 and anchored top-left rather than left to
-         fill the window, because on Windows this window is *not* 56x56 no
-         matter what it asks for. Windows enforces a minimum size on a
-         top-level window (SM_CXMINTRACK/SM_CYMINTRACK, 136x39 on a stock
-         Windows 11 desktop), which lands here as a 120x56 client area —
-         measured on a real machine, and confirmed unbeatable: Width/Height,
-         MinWidth/MaxWidth, and even an outside SetWindowPos asking for 26x26
-         all leave it at the floor. (Min/Max used to be set here for exactly
-         that purpose; they did nothing and are gone.)
+         fill the window, so the orb's geometry does not depend on the window
+         being the size it asked for. Windows enforces a minimum size on a
+         top-level window, and a window below it is inflated rather than
+         refused; its *position* is still set exactly, so pinning the real
+         56x56 box to the top-left corner keeps a 36px circle centred at DIP
+         (28,28) — the point the mic flyout (OrbWindow.OrbCentre) and the team
+         arrows (TeamLinks, PointToScreen of the orb's CentreDip) anchor on —
+         wherever the window is bigger than its content.
 
-         So the window's own size can't be a layout input. Its *position*
-         still can — that Avalonia sets exactly — which is why anchoring the
-         real 56x56 box to the top-left corner is what restores the geometry
-         every other part of the app already assumes: a 36px circle centred
-         at DIP (28,28). Centred in the inflated client area instead, the orb
-         was drawn 32px right of that point, which is what put the mic flyout
-         (anchored on OrbWindow.OrbCentre) and the team arrows (TeamLinks,
-         which anchors at PointToScreen of the orb's CentreDip — (28,28) at
-         the default size) nowhere near the orb they belong
-         to, and stretched the hover/drag square below to 120px wide.
+         This comment used to say the floor was SM_CXMINTRACK/SM_CYMINTRACK
+         (136x39) and that it landed as a 120x56 client area, even for a
+         window asking for 26x26. That was wrong on the axis and on the size.
+         Measured 2026-09-26 for CB-198 on a Windows 11 box at 96 DPI
+         (SM_CXMINTRACK=136, SM_CYMINTRACK=39, which the window does not
+         follow), with this very class: OrbWindow hosted by a harness that
+         skips Program.Main's single-instance claim, its Win32 style 0x16020000
+         and ex-style 0x200008 identical to the installed 0.5.7-beta's orbs.
+         Asked 56 → 56x56. Asked 33.6 → 33x39. Asked 36.4 → 36x39. Asked 26 →
+         32x39. So the floor is about 32 wide by 39 tall, and at the default
+         size neither applies: the window is exactly 56x56, as the installed
+         app's own orbs also read. Every figure is a window and client
+         rectangle, not a picture of the drawn circle — GetWindowRect and
+         GetClientRect on the window handle (EnumWindows by pid, via
+         PowerShell Add-Type P/Invoke, for the installed app), agreeing with
+         Avalonia's ClientSize — run as an interactive scheduled task in the
+         console session, since an ssh session is session 0 and cannot see
+         the desktop's windows at all.
+
+         The 39-DIP height is the floor that matters to an orb. The strip it
+         adds below a smaller one is not click-through — it swallows clicks,
+         right-clicks and hover rather than passing them to the window
+         behind — which is why OrbSizing.MinWindows is 0.7, the smallest size
+         whose window clears both floors; its comment has that measurement.
 
          Transparent (not null) background so the whole 56x56 area is
          hit-testable: hover tooltip, drag, and right-click work anywhere
-         on the orb's square, not just the ellipse pixels. Now genuinely that
-         square, rather than the window's full width.
-
-         Re-measured 2026-09-26 for CB-198, on the same kind of box (Windows
-         11, 96 DPI, SM_CXMINTRACK=136, SM_CYMINTRACK=39): the installed
-         0.5.7-beta's orb windows read a 56x56 client area, and a test window
-         with these exact flags asking for 33.6 DIP got 33x39 — the width
-         honoured, only the height floored. Both are window and client
-         rectangles, not pictures of the drawn circle: for the installed app,
-         EnumWindows filtered to ClaudeBuddy.exe's pid, then GetWindowRect and
-         GetClientRect through PowerShell Add-Type P/Invoke into user32; for
-         the test window, the same two calls on its platform handle alongside
-         Avalonia's own ClientSize, which agreed. Both ran as an interactive
-         scheduled task in the console session — an ssh session is session 0
-         and cannot see the desktop's windows at all. So the 120x56 above does not
-         reproduce today; what does is a 39-DIP height floor, and the strip it
-         adds below a smaller orb swallows clicks, right-clicks and hover
-         rather than passing them through. That floor is why OrbSizing.MinWindows
-         is 0.7, and its comment has the measurement. The Left/Top pinning
-         stays either way: it is harmless where the window is exactly its
-         requested size, and correct wherever it is not.
+         on the orb's square, not just the ellipse pixels.
 
          CB-198: the user's orb size is a LayoutTransform over Root, not a
          change to anything inside it. Root keeps its 56x56 geometry — circle,
