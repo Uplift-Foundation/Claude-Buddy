@@ -175,6 +175,16 @@ namespace ClaudeBuddy
         // rather than on every ten-second tick.
         private readonly HashSet<string> _askingAll = new(StringComparer.OrdinalIgnoreCase);
 
+        // CB-216: the hash of the roster each peer last sent in full, handed back
+        // on the next ask so an unchanged roster comes back as a bare OK instead
+        // of 17 MB of persona pictures. See MirrorProtocol.RosterHashField.
+        //
+        // Held only while the roster it describes is exactly what this side
+        // holds for that peer. Anything else that changes that peer's entries
+        // forgets it (a disconnect, a relay answer), so the next ask is answered
+        // in full and the result is always the one a full answer would give.
+        private readonly Dictionary<string, string> _rosterHashes = new(StringComparer.OrdinalIgnoreCase);
+
         // Asks a machine what it has, naming nothing.
         //
         // **A separate method because DiscoverAsync cannot express this, and
@@ -218,6 +228,11 @@ namespace ClaudeBuddy
                     _answeredNo.Add(displayName);
                     disconnectedChanged = true;
                 }
+
+                foreach (var gone in _rosterHashes.Keys.Where(peer => !connected.Contains(peer)).ToList())
+                {
+                    _rosterHashes.Remove(gone);
+                }
             }
 
             if (disconnectedChanged) RosterUpdated?.Invoke();
@@ -234,11 +249,17 @@ namespace ClaudeBuddy
 
                 Reply reply;
 
+                var fields = new Dictionary<string, string> { ["pv"] = "1" };
+                lock (_gate)
+                {
+                    if (_rosterHashes.TryGetValue(peer, out var held))
+                        fields[MirrorProtocol.RosterHashField] = held;
+                }
+
                 try
                 {
                     reply = await RequestAsync(
-                        peer, MirrorProtocol.Hello,
-                        new Dictionary<string, string> { ["pv"] = "1" },
+                        peer, MirrorProtocol.Hello, fields,
                         payload: null, TimeSpan.FromSeconds(30))
                         .ConfigureAwait(false);
                 }
@@ -251,6 +272,16 @@ namespace ClaudeBuddy
 
                 var entries = MirrorProtocol.DecodeRoster(reply.Payload);
                 if (entries is null) continue;
+
+                // Only once the roster has decoded, so a hash never stands for
+                // a roster this side failed to take in.
+                lock (_gate)
+                {
+                    if (reply.Fields?.GetValueOrDefault(MirrorProtocol.RosterHashField) is { Length: > 0 } sent)
+                        _rosterHashes[peer] = sent;
+                    else
+                        _rosterHashes.Remove(peer);
+                }
 
                 var offered = new Dictionary<string, MirrorProtocol.MirrorRosterEntry>(
                     StringComparer.OrdinalIgnoreCase);
@@ -395,6 +426,11 @@ namespace ClaudeBuddy
                         _servedBy[key] = relay;
                         _answeredNo.Remove(key);
                     }
+
+                    // This relay's entries just changed by a route other than
+                    // its full roster, so a hash held for it no longer
+                    // describes what this side holds.
+                    _rosterHashes.Remove(relay);
 
                     // Asked about and not mentioned means that Buddy does not
                     // have it — a session on a third machine, most likely.

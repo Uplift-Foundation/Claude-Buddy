@@ -1455,6 +1455,168 @@ public class MirrorRoundTripTests : IDisposable
             harness.Client.StateFor("second").Availability);
     }
 
+    // --- CB-216: an unchanged roster is not sent again ----------------------------
+
+    // The measured bug: a peer asks every ten seconds, and each answer carried
+    // every persona picture again — about 17 MB, gzipped fresh, for a roster that
+    // had not changed. The second ask here holds the hash of the first answer,
+    // so it is told "unchanged" and nothing but a bare OK crosses the wire.
+    [Fact]
+    public async Task AnUnchangedRosterIsNotSentAgain()
+    {
+        var harness = new Harness(_dir);
+        harness.AddSession("first", WriteTranscript("first.jsonl", Conversation(2)));
+        var rosterUpdates = 0;
+        harness.Client.RosterUpdated += () => rosterUpdates++;
+
+        await harness.Client.AskWhatTheyHaveAsync(harness.Peers);
+        Assert.True(harness.ChunkFrames > 0);
+        Assert.DoesNotContain(MirrorProtocol.RosterHashField + "=", AskedWith(harness));
+
+        harness.ForgetFramesSoFar();
+        harness.ToClient.Clear();
+        await harness.Client.AskWhatTheyHaveAsync(harness.Peers);
+
+        Assert.Contains(";" + MirrorProtocol.RosterHashField + "=", AskedWith(harness));
+        Assert.Equal(0, harness.ChunkFrames);
+        var answer = MirrorProtocol.TryParseFrame(Assert.Single(harness.ToClient))!;
+        Assert.Equal(MirrorProtocol.Ok, answer.Type);
+        Assert.Null(answer.Payload);
+
+        // And the roster the client holds is untouched, with nothing announced.
+        Assert.Equal("first", Assert.Single(harness.Client.Known()).Entry.Name);
+        Assert.Equal(1, rosterUpdates);
+    }
+
+    [Fact]
+    public async Task AChangedRosterIsSentInFullAgainstAStaleHash()
+    {
+        var harness = new Harness(_dir);
+        harness.AddSession("first", WriteTranscript("first.jsonl", Conversation(2)));
+        await harness.Client.AskWhatTheyHaveAsync(harness.Peers);
+
+        harness.AddSession("second", WriteTranscript("second.jsonl", Conversation(2)));
+        harness.ForgetFramesSoFar();
+        await harness.Client.AskWhatTheyHaveAsync(harness.Peers);
+
+        Assert.True(harness.ChunkFrames > 0);
+        Assert.Equal(2, harness.Client.Known().Count);
+
+        // The new answer's hash replaces the old one, so a third ask with
+        // nothing changed is unchanged again.
+        harness.ForgetFramesSoFar();
+        await harness.Client.AskWhatTheyHaveAsync(harness.Peers);
+        Assert.Equal(0, harness.ChunkFrames);
+    }
+
+    // A reconnect starts again from nothing, so its first ask must be answered
+    // in full — it is the only answer that puts the peer's orbs back.
+    [Fact]
+    public async Task ADisconnectForgetsTheHashSoTheNextAskIsAnsweredInFull()
+    {
+        var harness = new Harness(_dir);
+        harness.AddSession("first", WriteTranscript("first.jsonl", Conversation(2)));
+        await harness.Client.AskWhatTheyHaveAsync(harness.Peers);
+
+        await harness.Client.AskWhatTheyHaveAsync(Array.Empty<string>());
+        Assert.Empty(harness.Client.Known());
+
+        harness.ForgetFramesSoFar();
+        harness.ToServer.Clear();
+        await harness.Client.AskWhatTheyHaveAsync(harness.Peers);
+
+        Assert.DoesNotContain(MirrorProtocol.RosterHashField + "=", AskedWith(harness));
+        Assert.True(harness.ChunkFrames > 0);
+        Assert.Equal("first", Assert.Single(harness.Client.Known()).Entry.Name);
+    }
+
+    // A relay answer changes this peer's entries by a route other than its
+    // full roster, so the hash no longer describes what the client holds.
+    [Fact]
+    public async Task ARelayAnswerForgetsTheHashSoTheNextAskIsAnsweredInFull()
+    {
+        var harness = new Harness(_dir);
+        harness.AddSession("first", WriteTranscript("first.jsonl", Conversation(2)));
+        await harness.Client.AskWhatTheyHaveAsync(harness.Peers);
+
+        harness.AddSession("second", WriteTranscript("second.jsonl", Conversation(2)));
+        await harness.Client.DiscoverAsync(harness.Peers, new[] { "second" });
+
+        harness.ToServer.Clear();
+        await harness.Client.AskWhatTheyHaveAsync(harness.Peers);
+
+        Assert.DoesNotContain(MirrorProtocol.RosterHashField + "=", AskedWith(harness));
+    }
+
+    // An older server never sends a hash, so the client never has one to send
+    // back and every ask gets the roster in full — the cost before this
+    // change, and nothing worse.
+    [Fact]
+    public async Task AgainstAServerThatSendsNoHashEveryAskGetsTheRosterInFull()
+    {
+        var harness = new Harness(_dir) { StripRosterHash = true };
+        harness.AddSession("first", WriteTranscript("first.jsonl", Conversation(2)));
+
+        await harness.Client.AskWhatTheyHaveAsync(harness.Peers);
+        harness.ForgetFramesSoFar();
+        harness.ToServer.Clear();
+        await harness.Client.AskWhatTheyHaveAsync(harness.Peers);
+
+        Assert.DoesNotContain(MirrorProtocol.RosterHashField + "=", AskedWith(harness));
+        Assert.True(harness.ChunkFrames > 0);
+        Assert.Equal("first", Assert.Single(harness.Client.Known()).Entry.Name);
+    }
+
+    // An older *client* never sends a hash either, and is answered in full
+    // every time. What it is sent is the same compressed bytes both times: the
+    // server compresses an identical roster once, which is where its CPU went.
+    [Fact]
+    public async Task AnAskWithNoHashIsAnsweredInFullWithTheSameCompressedBytes()
+    {
+        var harness = new Harness(_dir);
+        harness.AddSession("first", WriteTranscript("first.jsonl", Conversation(2)));
+
+        await harness.Server.HandleAsync(Harness.NearRelay, OldHello("aaaa1111"));
+        await harness.Server.HandleAsync(Harness.NearRelay, OldHello("bbbb2222"));
+
+        var payloads = harness.ToClient
+            .Select(MirrorProtocol.TryParseFrame)
+            .Where(frame => frame!.Type == MirrorProtocol.Chunk)
+            .GroupBy(frame => frame!.Id)
+            .Select(transfer => Convert.ToBase64String(
+                transfer.SelectMany(frame => frame!.Payload!).ToArray()))
+            .ToList();
+
+        Assert.Equal(2, payloads.Count);
+        Assert.Equal(payloads[0], payloads[1]);
+    }
+
+    // A hash that is present and wrong is a stale one, not a match.
+    [Fact]
+    public async Task AnAskHoldingSomeOtherHashIsAnsweredInFull()
+    {
+        var harness = new Harness(_dir);
+        harness.AddSession("first", WriteTranscript("first.jsonl", Conversation(2)));
+
+        await harness.Server.HandleAsync(Harness.NearRelay, MirrorProtocol.TryParseFrame(
+            MirrorProtocol.BuildFrame(MirrorProtocol.Hello, "cccc3333",
+                new Dictionary<string, string>
+                {
+                    ["pv"] = "1",
+                    [MirrorProtocol.RosterHashField] = new string('0', 64)
+                }))!);
+
+        Assert.Contains(harness.ToClient, line => line.Contains(";t=" + MirrorProtocol.Chunk));
+    }
+
+    private static MirrorProtocol.MirrorFrame OldHello(string id) =>
+        MirrorProtocol.TryParseFrame(MirrorProtocol.BuildFrame(
+            MirrorProtocol.Hello, id, new Dictionary<string, string> { ["pv"] = "1" }))!;
+
+    // The HELLO lines the client sent since ToServer was last cleared.
+    private static string AskedWith(Harness harness) =>
+        string.Join("\n", harness.ToServer.Where(line => line.Contains(";t=" + MirrorProtocol.Hello + ";")));
+
     // A failed refresh is not a roster saying "none": keep the last answer
     // until the peer either sends a verified replacement or disconnects.
     [Fact]
@@ -1490,6 +1652,13 @@ public class MirrorRoundTripTests : IDisposable
         public List<(string Name, string Why)> Failures { get; } = new();
         public List<(string Name, string Text)> Typed { get; } = new();
         public List<string> ToClient { get; } = new();
+
+        // Every line the client sent, for asserting what it asked with.
+        public List<string> ToServer { get; } = new();
+
+        // A server that predates CB-216's roster hash: its answers carry no
+        // `rh` field, so the client never learns one to send back.
+        public bool StripRosterHash { get; set; }
 
         public int ChunkFrames { get; private set; }
 
@@ -1668,6 +1837,8 @@ public class MirrorRoundTripTests : IDisposable
         {
             Assert.Equal(FarRelay, peer);
 
+            ToServer.Add(line);
+
             if (CourierThrows) throw new IOException("the relay went away");
 
             var frame = MirrorProtocol.TryParseFrame(line);
@@ -1690,6 +1861,16 @@ public class MirrorRoundTripTests : IDisposable
 
             var frame = MirrorProtocol.TryParseFrame(line);
             if (frame is null) return false;
+
+            if (StripRosterHash)
+            {
+                frame = frame with
+                {
+                    Fields = frame.Fields
+                        .Where(field => field.Key != MirrorProtocol.RosterHashField)
+                        .ToDictionary(field => field.Key, field => field.Value, StringComparer.Ordinal)
+                };
+            }
 
             if (frame.Type == MirrorProtocol.Chunk)
             {

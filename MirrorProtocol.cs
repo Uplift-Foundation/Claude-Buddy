@@ -542,7 +542,38 @@ namespace ClaudeBuddy
         };
 
         public static byte[] EncodeRoster(IReadOnlyList<MirrorRosterEntry> entries) =>
-            Gzip(JsonSerializer.SerializeToUtf8Bytes(entries, RosterJson));
+            Gzip(RosterBytes(entries));
+
+        // The roster before compression: what RosterHash is taken over, and what
+        // EncodeRoster gzips. Hashing this rather than the gzip is what lets an
+        // unchanged roster be recognised without compressing it at all.
+        public static byte[] RosterBytes(IReadOnlyList<MirrorRosterEntry> entries) =>
+            JsonSerializer.SerializeToUtf8Bytes(entries, RosterJson);
+
+        // CB-216: the field a HELLO and its answer carry the roster's hash in.
+        //
+        // A peer asks every ten seconds, and a roster embeds each persona's
+        // picture, which is an animated GIF of 11-15 MB on the machine this was
+        // measured on. Answering every ask in full sent about 17 MB per ask to
+        // each peer (106 MB a minute), and gzipping it was about 30 points of
+        // the serving machine's CPU, for a roster that had not changed. Now the
+        // answer carries the hash of what it sent, the next ask carries it back,
+        // and a match is answered with a bare OK and no roster at all.
+        //
+        // An optional field, the same negotiation openclaw-identity-get uses: a
+        // Buddy that predates it ignores a field it has never heard of and sends
+        // the roster in full, and one that never receives the hash never sends
+        // it, so it is always sent the roster in full. Mixed versions degrade to
+        // the old cost, never to a missing roster.
+        public const string RosterHashField = "rh";
+
+        // Whether an ask may be answered "unchanged". Only a hash the asker
+        // actually sent, equal to what would be sent now: an absent or empty
+        // field is an asker with nothing to compare against, which is every
+        // asker's first question and every older Buddy's every question.
+        public static bool RosterUnchanged(string? askerHash, string currentHash) =>
+            !string.IsNullOrEmpty(askerHash)
+            && string.Equals(askerHash, currentHash, StringComparison.Ordinal);
 
         // Null rather than an exception for anything unreadable, which is this
         // repo's rule for a format it does not own: a roster that will not parse

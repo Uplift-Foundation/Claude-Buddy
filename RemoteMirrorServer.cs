@@ -470,11 +470,29 @@ namespace ClaudeBuddy
                 }
             }
 
-            await SendTransferAsync(
-                fromPeer, frame.Id, MirrorProtocol.EncodeRoster(entries),
-                new Dictionary<string, string>(), sub: null)
+            // CB-216: hashed before it is compressed, so an asker holding this
+            // exact roster is told so with a bare OK and no roster at all. See
+            // MirrorProtocol.RosterHashField for what that saved and why it is
+            // safe against a Buddy that has never heard of the field.
+            var raw = MirrorProtocol.RosterBytes(entries);
+            var hash = MirrorProtocol.Hash(raw);
+            var reply = new Dictionary<string, string> { [MirrorProtocol.RosterHashField] = hash };
+
+            if (MirrorProtocol.RosterUnchanged(frame.Get(MirrorProtocol.RosterHashField), hash))
+            {
+                MirrorLog.Say("hello-unchanged", $"from={fromPeer} entries={entries.Count}");
+                await SendAsync(fromPeer, MirrorProtocol.BuildFrame(MirrorProtocol.Ok, frame.Id, reply))
+                    .ConfigureAwait(false);
+                return;
+            }
+
+            await SendTransferAsync(fromPeer, frame.Id, _rosterGzip.For(hash, raw), reply, sub: null)
                 .ConfigureAwait(false);
         }
+
+        // Shared by every peer, for the reason RosterGzipMemo gives: they are
+        // all sent the same roster.
+        private readonly RosterGzipMemo _rosterGzip = new(MirrorProtocol.Gzip);
 
         // This is intentionally on the serving side of the protocol. The
         // receiving Buddy must never ask LocalPersona to resolve a remote cwd:
