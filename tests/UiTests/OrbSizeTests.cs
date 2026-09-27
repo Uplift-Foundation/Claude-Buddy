@@ -243,7 +243,12 @@ public class OrbSizeTests : IDisposable
         Assert.NotEmpty(SizeItems(orb));
     }
 
-    [Fact]
+    // AvaloniaFact although nothing here needs a window: this class's Dispose
+    // flushes the dispatcher, and a plain [Fact] runs that on a pool thread —
+    // which is CB-183's hazard exactly (a stray thread reaching
+    // Dispatcher.UIThread). The first version was a [Fact], threw from
+    // Dispose in Release, and took four OrbFlyoutTests clicks down after it.
+    [AvaloniaFact]
     public void SizeLabelsAreWholePercentagesInAnyCulture()
     {
         var before = System.Globalization.CultureInfo.CurrentCulture;
