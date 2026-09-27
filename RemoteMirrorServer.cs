@@ -482,6 +482,7 @@ namespace ClaudeBuddy
             // exact roster is told so with a bare OK and no roster at all. See
             // MirrorProtocol.RosterHashField for what that saved and why it is
             // safe against a Buddy that has never heard of the field.
+            entries = MirrorProtocol.CanonicalRoster(entries);
             var raw = MirrorProtocol.RosterBytes(entries);
             var hash = MirrorProtocol.Hash(raw);
             var reply = new Dictionary<string, string> { [MirrorProtocol.RosterHashField] = hash };

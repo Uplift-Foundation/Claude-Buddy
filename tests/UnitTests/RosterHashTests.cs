@@ -46,6 +46,39 @@ public class RosterHashTests
             MirrorProtocol.Hash(MirrorProtocol.RosterBytes(repainted)));
     }
 
+    [Fact]
+    public void TheSameEntriesInAnotherOrderHashTheSameOnceCanonical()
+    {
+        var a = new MirrorProtocol.MirrorRosterEntry("alpha", MirrorProtocol.CliClaudeCode, true, true, Route: "r1");
+        var b = new MirrorProtocol.MirrorRosterEntry("beta", MirrorProtocol.CliClaudeCode, true, true, Route: "r2");
+
+        // The QA finding: raw order leaks into the hash...
+        Assert.NotEqual(
+            MirrorProtocol.Hash(MirrorProtocol.RosterBytes(new[] { a, b })),
+            MirrorProtocol.Hash(MirrorProtocol.RosterBytes(new[] { b, a })));
+
+        // ...and the canonical order takes it out.
+        Assert.Equal(
+            MirrorProtocol.Hash(MirrorProtocol.RosterBytes(MirrorProtocol.CanonicalRoster(new[] { a, b }))),
+            MirrorProtocol.Hash(MirrorProtocol.RosterBytes(MirrorProtocol.CanonicalRoster(new[] { b, a }))));
+    }
+
+    [Fact]
+    public void CanonicalOrderIsRouteThenNameWithNoRouteFirst()
+    {
+        var entries = new[]
+        {
+            new MirrorProtocol.MirrorRosterEntry("b", MirrorProtocol.CliCodex, true, true, Route: "z"),
+            new MirrorProtocol.MirrorRosterEntry("b", MirrorProtocol.CliClaudeCode, true, true),
+            new MirrorProtocol.MirrorRosterEntry("a", MirrorProtocol.CliClaudeCode, true, true),
+            new MirrorProtocol.MirrorRosterEntry("a", MirrorProtocol.CliGrok, true, true, Route: "Z"),
+        };
+
+        Assert.Equal(
+            new[] { ("", "a"), ("", "b"), ("Z", "a"), ("z", "b") },
+            MirrorProtocol.CanonicalRoster(entries).Select(e => (e.Route ?? "", e.Name)));
+    }
+
     [Theory]
     [InlineData("abc", "abc", true)]
     [InlineData("abc", "abd", false)]

@@ -1609,6 +1609,25 @@ public class MirrorRoundTripTests : IDisposable
         Assert.Contains(harness.ToClient, line => line.Contains(";t=" + MirrorProtocol.Chunk));
     }
 
+    // QA's repro on 0d427c22, verbatim: two sessions, nothing about either
+    // changes, and the agent registry lists them the other way round on the
+    // second poll. Content is identical, so the answer must be "unchanged".
+    [Fact]
+    public async Task TheSameSessionsListedInAnotherOrderAreUnchanged()
+    {
+        var harness = new Harness(_dir);
+        harness.AddSession("first", WriteTranscript("first.jsonl", Conversation(2)));
+        harness.AddSession("second", WriteTranscript("second.jsonl", Conversation(2)));
+        await harness.Client.AskWhatTheyHaveAsync(harness.Peers);
+
+        harness.ReverseAgentOrder();
+        harness.ForgetFramesSoFar();
+        await harness.Client.AskWhatTheyHaveAsync(harness.Peers);
+
+        Assert.Equal(0, harness.ChunkFrames);
+        Assert.Equal(2, harness.Client.Known().Count);
+    }
+
     // --- CB-216: pictures cross once, by id ----------------------------------------
 
     private static readonly byte[] Face = { 137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3 };
@@ -1957,6 +1976,10 @@ public class MirrorRoundTripTests : IDisposable
         // connected to; the relay-shaped list this replaced had to be filtered
         // down to that same answer.
         public IReadOnlyList<string> Peers => new[] { FarRelay };
+
+        // `claude agents --json` listing the same sessions in another order,
+        // which nothing about the real listing rules out between two polls.
+        public void ReverseAgentOrder() => _agents.Reverse();
 
         public void AddSession(string name, string transcriptPath)
         {

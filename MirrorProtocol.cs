@@ -570,6 +570,26 @@ namespace ClaudeBuddy
         public static byte[] RosterBytes(IReadOnlyList<MirrorRosterEntry> entries) =>
             JsonSerializer.SerializeToUtf8Bytes(entries, RosterJson);
 
+        // The roster in one fixed order, whatever order it was built in.
+        //
+        // The server builds it in the order `claude agents --json` listed the
+        // sessions that tick, and nothing makes that order stable between polls.
+        // Hashing the roster in that order made "unchanged" depend on
+        // enumeration rather than content: the same two sessions listed the
+        // other way round hashed differently and were sent again in full, which
+        // on any machine with more than one session could defeat the no-op
+        // silently. (Found by QA on 0d427c22.) Route first, because it is the
+        // round-trip identity; name second, for entries without one. Ordinal on
+        // both, so the order is the same on every machine and every culture.
+        //
+        // No receiver depends on the order. Every client keys the entries by
+        // name and route.
+        public static List<MirrorRosterEntry> CanonicalRoster(IEnumerable<MirrorRosterEntry> entries) =>
+            entries
+                .OrderBy(e => e.Route ?? "", StringComparer.Ordinal)
+                .ThenBy(e => e.Name, StringComparer.Ordinal)
+                .ToList();
+
         // CB-216: the field a HELLO and its answer carry the roster's hash in.
         //
         // A peer asks every ten seconds, and a roster embeds each persona's
