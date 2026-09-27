@@ -4174,12 +4174,13 @@ namespace ClaudeBuddy
             var screen = allOrbs[0].Screens.Primary ?? allOrbs[0].Screens.All.FirstOrDefault();
             var work = screen?.WorkingArea ?? new PixelRect(0, 0, 1920, 1080);
 
+            var anchor = ArrangementAnchor(work);
             var layout = new OrbArrangement.Layout(
                 work,
                 screen?.Scaling ?? 1.0,
                 ClaudeBuddySettings.ArrangeShape,
                 ClaudeBuddySettings.ArrangeSpacing,
-                ArrangementAnchor(work));
+                anchor);
 
             var heartbeats = ClaudeBuddySettings.OpenClawHeartbeatMode;
             var crons = ClaudeBuddySettings.OpenClawCronMode;
@@ -4199,7 +4200,27 @@ namespace ClaudeBuddy
             // — ReapplyOrbSizes applies the sizes before it arranges.
             var sizeOf = allOrbs.Select(orb => orb.OrbSize).ToArray();
 
-            var placed = OrbArrangement.Compute(allOrbs.Count, leadOf, groupOf, Shapes(), layout, sizeOf);
+            var shapes = Shapes();
+            var placed = OrbArrangement.Compute(allOrbs.Count, leadOf, groupOf, shapes, layout, sizeOf);
+
+            // CB-211: save where the shape actually landed, not where it was
+            // asked to go. The two can differ only while the shape sits against
+            // an edge of the screen, which is where a saved anchor dragged past
+            // what the screen honours ends up — and left alone, that overshoot
+            // would swallow the next drag back. See
+            // OrbArrangement.LandedCenter. Done on every arrange, so a value
+            // that drifted out before this existed is repaired the first time
+            // the shape is drawn rather than only prevented from here on.
+            //
+            // One consequence, and a change from before: a shape that *grows*
+            // into an edge — a wider spacing, an orb joining, a bigger orb —
+            // has its anchor pulled in with it, and keeps that centre when it
+            // shrinks again rather than drifting back out toward the edge. The
+            // shape stays where it is on the screen, which is what the saved
+            // anchor exists to do.
+            var landed = OrbArrangement.LandedCenter(placed, allOrbs.Count, leadOf, groupOf, shapes, layout, sizeOf);
+            if (landed != anchor)
+                ClaudeBuddySettings.ArrangeAnchor = new ClaudeBuddySettings.OrbPlacement(landed.X, landed.Y);
 
             return allOrbs.Select((orb, i) => (orb, placed[i])).ToList();
         }
@@ -4235,6 +4256,12 @@ namespace ClaudeBuddy
         // arranged orb by the same delta, so the shape's saved centre needs
         // the same nudge or the next membership change would snap it back to
         // wherever it was before the drag.
+        //
+        // Unbounded here on purpose. A drag can carry the shape toward an edge
+        // further than the screen will draw it, and clamping at this point
+        // would mean repeating the whole arrangement's geometry to know where
+        // "too far" is. The next arrange does know, and saves the anchor it
+        // actually honoured (CB-211) — so the overshoot lasts only until then.
         public void ShiftArrangementAnchor(int dx, int dy)
         {
             if (dx == 0 && dy == 0) return;
