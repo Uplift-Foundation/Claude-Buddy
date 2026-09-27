@@ -85,6 +85,7 @@ namespace ClaudeBuddy
             "orbColors", "claudeCodeProfileDirs", "codexHomes", "grokHomes", "profiles", "orbPositions",
             "collapsedSettingsSections",
             "chatPanelSizes", "pinnedChatPanels", "arrangeAnchor", "chatTextScale",
+            "orbSize", "orbSizes",
             "openclawEnabled", "openclawHost", "openclawPort", "openclawFingerprint",
             "openclawReplyEnabled", "openclawActiveWithinMinutes",
             "claudeCloudEnabled",
@@ -627,6 +628,16 @@ namespace ClaudeBuddy
             public Dictionary<string, OrbTurnSound> OrbTurnSounds { get; init; } =
                 new(StringComparer.OrdinalIgnoreCase);
 
+            // CB-198's per-orb size override. Borrows OrbTurnSounds' key —
+            // SessionManager.SoundKeyFor, the per-agent identity CB-167 built
+            // precisely so teammates sharing one cwd are told apart — rather
+            // than PositionKeyFor, which cannot tell them apart and would size
+            // every member of a team together. Case-insensitive for the same
+            // Windows-path reason. No entry means the orb follows the global
+            // OrbSize slider.
+            public Dictionary<string, double> OrbSizes { get; init; } =
+                new(StringComparer.OrdinalIgnoreCase);
+
             // CB-111: which chat panels were pinned when the app last quit,
             // and where each one was — the two things CB-110 deliberately did
             // not persist, because a pin then died with the process. Presence
@@ -699,6 +710,11 @@ namespace ClaudeBuddy
             // How much bigger or smaller than shipped the chat panel draws its
             // text. A multiplier, not a point size — see ChatZoom.
             public double ChatTextScale { get; set; } = ChatZoom.Default;
+
+            // How big every session orb is drawn, as a multiplier over the
+            // shipped 56-DIP orb — see OrbSizing. An orb's own entry in
+            // OrbSizes wins over this.
+            public double OrbSize { get; set; } = OrbSizing.Default;
 
             // Where the arranged shape is centred on screen — physical pixels,
             // same space as OrbPlacement above. Null means "never arranged
@@ -900,6 +916,34 @@ namespace ClaudeBuddy
         // default for both triggers" — named so a caller doing that doesn't
         // have to spell out SetOrbTurnSound(key, null, null) to mean it.
         internal static void ClearOrbTurnSound(string key) => SetOrbTurnSound(key, null, null);
+
+        // Null when this orb has no size of its own and follows the global
+        // slider — the same "absent means default" reading OrbTurnSoundFor
+        // gives.
+        internal static double? OrbSizeFor(string key)
+        {
+            if (string.IsNullOrEmpty(key)) return null;
+
+            Load();
+            lock (Gate) return _model.OrbSizes.TryGetValue(key, out var size) ? size : null;
+        }
+
+        // Null removes the override, which is what the Size menu's "Default"
+        // row means. A value is clamped on the way in, so a size written here
+        // is always one the orb can be drawn at.
+        internal static void SetOrbSize(string key, double? size)
+        {
+            if (string.IsNullOrEmpty(key)) return;
+
+            Load();
+            lock (Gate)
+            {
+                if (size is null) _model.OrbSizes.Remove(key);
+                else _model.OrbSizes[key] = OrbSizing.Clamp(size.Value);
+            }
+
+            Save();
+        }
 
         // Turning this on or off takes effect immediately rather than at the
         // next launch: SessionManager asks OpenClawSessions for a snapshot every
@@ -1353,6 +1397,17 @@ namespace ClaudeBuddy
             set { Load(); lock (Gate) _model.ChatTextScale = ChatZoom.Clamp(value); Save(); }
         }
 
+        // Every session orb's size, as a multiplier over the shipped orb.
+        // Clamped both ways for ChatTextScale's reason — and on read against
+        // *this* platform's floor, so a file written on a Mac at 0.6 and
+        // carried to Windows draws at Windows' 0.7 instead of with a dead
+        // click strip under it.
+        public static double OrbSize
+        {
+            get { Load(); lock (Gate) return OrbSizing.Clamp(_model.OrbSize); }
+            set { Load(); lock (Gate) _model.OrbSize = OrbSizing.Clamp(value); Save(); }
+        }
+
         public static OrbPlacement? ArrangeAnchor
         {
             get { Load(); lock (Gate) return _model.ArrangeAnchor; }
@@ -1786,6 +1841,13 @@ namespace ClaudeBuddy
                         ChatTextScale = ChatZoom.Clamp(
                             root["chatTextScale"]?.GetValue<double>() ?? ChatZoom.Default),
 
+                        // Number() rather than GetValue<double>(): a new key,
+                        // so it gets the defence Number's comment describes
+                        // from the start — a hand-edited "big" costs the orb
+                        // size and nothing else. Clamped here too, for
+                        // ChatTextScale's reason just above.
+                        OrbSize = OrbSizing.Clamp(Number(root["orbSize"]) ?? OrbSizing.Default),
+
                         // speakVoice was declared on the model and written by its
                         // property from the start, but never read here and never
                         // written by Save — so every voice anyone picked was
@@ -1984,6 +2046,18 @@ namespace ClaudeBuddy
                             if (finished is null && attention is null) continue;
 
                             model.OrbTurnSounds[key] = new OrbTurnSound(finished, attention);
+                        }
+                    }
+
+                    if (root["orbSizes"] is JsonObject orbSizes)
+                    {
+                        foreach (var (key, node) in orbSizes)
+                        {
+                            // Not clamped here, for ChatPanelSizes' reason:
+                            // OrbSizing.Effective clamps what it is handed
+                            // against this build's range, and a size a build
+                            // with a wider range wrote should survive this one.
+                            if (Number(node) is double size) model.OrbSizes[key] = size;
                         }
                     }
 
@@ -2206,6 +2280,9 @@ namespace ClaudeBuddy
                         };
                     }
 
+                    var orbSizes = new JsonObject();
+                    foreach (var (key, size) in _model.OrbSizes) orbSizes[key] = size;
+
                     var pinnedChatPanels = new JsonObject();
                     foreach (var (key, placement) in _model.PinnedChatPanels)
                     {
@@ -2308,6 +2385,7 @@ namespace ClaudeBuddy
                         ["arrangeShape"] = _model.ArrangeShape,
                         ["arrangeSpacing"] = _model.ArrangeSpacing,
                         ["chatTextScale"] = _model.ChatTextScale,
+                        ["orbSize"] = _model.OrbSize,
                         // Null when never chosen, like the colours below rather
                         // than a copy of the current default — so changing which
                         // voice ships as the default still reaches everyone who
@@ -2347,6 +2425,7 @@ namespace ClaudeBuddy
                         ["orbPositions"] = positions,
                         ["chatPanelSizes"] = panelSizes,
                         ["orbTurnSounds"] = turnSounds,
+                        ["orbSizes"] = orbSizes,
                         ["pinnedChatPanels"] = pinnedChatPanels,
                         ["arrangeAnchor"] = arrangeAnchor
                     };
