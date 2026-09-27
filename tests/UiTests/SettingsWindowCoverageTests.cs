@@ -92,13 +92,14 @@ public class SettingsWindowCoverageTests
     // --- the "Orbs" rows, previously inline in Body() -----------------------
 
     [AvaloniaFact]
-    public void OrbsRowsBuildsThreeRowsWithoutThrowing()
+    public void OrbsRowsBuildsFourRowsWithoutThrowing()
     {
+        // Four since CB-198 added the Size slider after "Two-letter initials".
         var window = NewWindow();
 
         var rows = window.OrbsRows();
 
-        Assert.Equal(3, rows.Length);
+        Assert.Equal(4, rows.Length);
     }
 
     // SessionManager.Instance is always null under the headless test lifetime

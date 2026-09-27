@@ -29,14 +29,39 @@
          every other part of the app already assumes: a 36px circle centred
          at DIP (28,28). Centred in the inflated client area instead, the orb
          was drawn 32px right of that point, which is what put the mic flyout
-         (OrbWindow.MicFlyoutOffset) and the team arrows (TeamLinks, which
-         anchors at PointToScreen(28,28)) nowhere near the orb they belong
+         (anchored on OrbWindow.OrbCentre) and the team arrows (TeamLinks,
+         which anchors at PointToScreen of the orb's CentreDip — (28,28) at
+         the default size) nowhere near the orb they belong
          to, and stretched the hover/drag square below to 120px wide.
 
          Transparent (not null) background so the whole 56x56 area is
          hit-testable: hover tooltip, drag, and right-click work anywhere
          on the orb's square, not just the ellipse pixels. Now genuinely that
-         square, rather than the window's full width. -->
+         square, rather than the window's full width.
+
+         Re-measured 2026-09-26 for CB-198, on the same kind of box (Windows
+         11, 96 DPI, SM_CXMINTRACK=136, SM_CYMINTRACK=39): the installed
+         0.5.7-beta's orb windows read a 56x56 client area, and a test window
+         with these exact flags asking for 33.6 DIP got 33x39 — the width
+         honoured, only the height floored. So the 120x56 above does not
+         reproduce today; what does is a 39-DIP height floor, and the strip it
+         adds below a smaller orb swallows clicks, right-clicks and hover
+         rather than passing them through. That floor is why OrbSizing.MinWindows
+         is 0.7, and its comment has the measurement. The Left/Top pinning
+         stays either way: it is harmless where the window is exactly its
+         requested size, and correct wherever it is not.
+
+         CB-198: the user's orb size is a LayoutTransform over Root, not a
+         change to anything inside it. Root keeps its 56x56 geometry — circle,
+         glow, context ring, badges and SetTeamRole's 0.72 all mean exactly
+         what they did — and the window is sized to WindowDip(OrbSize) around
+         it; see OrbWindow.ApplyOrbSize. The transform control is anchored
+         Left/Top for the same floor reason Root is. -->
+    <LayoutTransformControl x:Name="SizeTransform"
+                            HorizontalAlignment="Left" VerticalAlignment="Top">
+        <LayoutTransformControl.LayoutTransform>
+            <ScaleTransform ScaleX="1" ScaleY="1"/>
+        </LayoutTransformControl.LayoutTransform>
     <Grid x:Name="Root" Background="Transparent"
           Width="56" Height="56"
           HorizontalAlignment="Left" VerticalAlignment="Top">
@@ -88,6 +113,11 @@
                     <MenuItem x:Name="SoundFinishedMenuItem" Header="When a turn finishes"/>
                     <MenuItem x:Name="SoundAttentionMenuItem" Header="When it needs you"/>
                 </MenuItem>
+                <!-- CB-198's per-orb size: Default (follow the slider) plus
+                     OrbSizing.Presets, rebuilt on Opening beside the Sound
+                     submenus for the same reason — see
+                     OrbWindow.RebuildSizeSubmenu. -->
+                <MenuItem x:Name="SizeMenuItem" Header="Size"/>
                 <!-- The `claude agents` roster, for the orbs it lists. Above
                      the two lifecycle items because it is the harmless one of
                      the three, and hidden rather than greyed for the same
@@ -356,4 +386,5 @@
                    VerticalAlignment="Center"
                    IsHitTestVisible="False"/>
     </Grid>
+    </LayoutTransformControl>
 </Window>

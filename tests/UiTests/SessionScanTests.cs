@@ -712,6 +712,185 @@ public class SessionScanTests
         }
     }
 
+    // --- CB-198: orb sizes ---------------------------------------------------
+
+    [AvaloniaFact]
+    public void ReapplyingSizesResizesEveryOrbAndTheStackAdvancesByEachOrbsOwnSize()
+    {
+        var before = ClaudeBuddySettings.OrbSize;
+        string? key = null;
+        try
+        {
+            using var scratch = new Scratch();
+            scratch.Write("a");
+            scratch.Write("b", cli: "codex");
+
+            var manager = Scan(scratch);
+            var a = WindowFor(manager, "a");
+            var b = WindowFor(manager, "b");
+            key = b.SoundKey;
+
+            ClaudeBuddySettings.OrbSize = 1.5;
+            ClaudeBuddySettings.SetOrbSize(key, 2.0);
+            manager.ReapplyOrbSizes();
+
+            Assert.Equal(1.5, a.OrbSize);
+            Assert.Equal(2.0, b.OrbSize);
+
+            // The unarranged stack: right edges line up a margin in from the
+            // screen, and whichever orb is lower sits below the other's *own*
+            // height plus the spacing, not below a shared 56.
+            var screen = a.Screens.Primary ?? a.Screens.All.First();
+            var scale = screen.Scaling;
+            var margin = (int)(24 * scale);
+            Assert.Equal(screen.WorkingArea.Right - margin, a.Position.X + SessionManager.OrbPixels(a, scale));
+            Assert.Equal(screen.WorkingArea.Right - margin, b.Position.X + SessionManager.OrbPixels(b, scale));
+
+            var (upper, lower) = a.Position.Y < b.Position.Y ? (a, b) : (b, a);
+            Assert.Equal(upper.Position.Y + SessionManager.OrbPixels(upper, scale) + (int)(12 * scale), lower.Position.Y);
+        }
+        finally
+        {
+            ClaudeBuddySettings.OrbSize = before;
+            if (key is not null) ClaudeBuddySettings.SetOrbSize(key, null);
+        }
+    }
+
+    [AvaloniaFact]
+    public void ReapplyingSizesWhileArrangedReArrangesAroundTheNewSizes()
+    {
+        var beforeSize = ClaudeBuddySettings.OrbSize;
+        var beforeAnchor = ClaudeBuddySettings.ArrangeAnchor;
+        try
+        {
+            ClaudeBuddySettings.ArrangeAnchor = null;
+
+            using var scratch = new Scratch();
+            scratch.Write("a");
+            scratch.Write("b", cli: "codex");
+
+            var manager = Scan(scratch);
+            manager.ArrangeOrbsInPattern();
+            FinishArrangeAnimation(manager);
+
+            var a = WindowFor(manager, "a");
+            var b = WindowFor(manager, "b");
+
+            static double CentreDistance(OrbWindow p, OrbWindow q)
+            {
+                var sp = SessionManager.OrbPixels(p, p.DesktopScaling) / 2.0;
+                var sq = SessionManager.OrbPixels(q, q.DesktopScaling) / 2.0;
+                var dx = (p.Position.X + sp) - (q.Position.X + sq);
+                var dy = (p.Position.Y + sp) - (q.Position.Y + sq);
+                return Math.Sqrt(dx * dx + dy * dy);
+            }
+
+            var atDefault = CentreDistance(a, b);
+
+            ClaudeBuddySettings.OrbSize = OrbSizing.Max;
+            manager.ReapplyOrbSizes();
+
+            Assert.Equal(OrbSizing.Max, a.OrbSize);
+
+            // The control: the layout must actually have opened up for the
+            // bigger orbs. Without it, a 1.0 layout that happens to clear two
+            // 2x circles would pass the check below with no sizes reaching
+            // OrbArrangement at all.
+            Assert.True(CentreDistance(a, b) > atDefault,
+                $"centres {CentreDistance(a, b):0.0}px apart at 2x, {atDefault:0.0}px at 1x — the arrangement did not grow");
+
+            // Two orbs at the largest size must not overlap — the arrangement
+            // was asked for their real sizes. *Circles*, not windows: that is
+            // the invariant ArrangementSweep holds the arrangement to, and
+            // windows already overlap at 1.0 whenever the spacing is tight. (A
+            // first version of this test compared window rectangles and failed
+            // on a correct arrangement.)
+            var scale = (a.Screens.Primary ?? a.Screens.All.First()).Scaling;
+            var radii = 2 * OrbSizing.Max * 18 * scale;
+            Assert.True(CentreDistance(a, b) >= radii - 1,
+                $"centres {CentreDistance(a, b):0.0}px apart, two {OrbSizing.Max}x circles need {radii:0.0}");
+        }
+        finally
+        {
+            ClaudeBuddySettings.OrbSize = beforeSize;
+            ClaudeBuddySettings.ArrangeAnchor = beforeAnchor;
+        }
+    }
+
+    [AvaloniaFact]
+    public void AnOrbLeftOffscreenAtDoubleSizeIsClampedBackWithItsWholeWindowOnScreen()
+    {
+        var before = ClaudeBuddySettings.OrbSize;
+        try
+        {
+            using var scratch = new Scratch();
+            scratch.Write("session-a");
+
+            var manager = Scan(scratch);
+            ClaudeBuddySettings.OrbSize = 2.0;
+            manager.ReapplyOrbSizes();
+
+            var window = WindowFor(manager, "session-a");
+            window.Position = new PixelPoint(999_999, 999_999);
+            manager.ScanAndUpdate();
+
+            var screen = window.Screens.Primary ?? window.Screens.All.First();
+            var size = SessionManager.OrbPixels(window, screen.Scaling);
+            Assert.True(screen.WorkingArea.Contains(new PixelRect(window.Position, new PixelSize(size, size))),
+                $"{window.Position} + {size} is not inside {screen.WorkingArea}");
+        }
+        finally
+        {
+            ClaudeBuddySettings.OrbSize = before;
+        }
+    }
+
+    [AvaloniaFact]
+    public void ALaterKeyCarryingADifferentSizeReLaysTheOrbsOut()
+    {
+        var before = ClaudeBuddySettings.OrbSize;
+        var titledKey = "";
+        try
+        {
+            using var scratch = new Scratch();
+            scratch.Write("session-a");
+
+            var manager = Scan(scratch);
+            var window = WindowFor(manager, "session-a");
+            Assert.Equal(1.0, window.OrbSize);
+
+            titledKey = SessionManager.SoundKeyFor(
+                new SessionStatus { Source = SessionSource.ClaudeCode, Cwd = "/Users/user/project", Title = "named" },
+                "session-a");
+            ClaudeBuddySettings.SetOrbSize(titledKey, 2.0);
+
+            scratch.Write("session-a", title: "named");
+            manager.ScanAndUpdate();
+
+            Assert.Equal(titledKey, window.SoundKey);
+            Assert.Equal(2.0, window.OrbSize);
+
+            var screen = window.Screens.Primary ?? window.Screens.All.First();
+            Assert.Equal(screen.WorkingArea.Right - (int)(24 * screen.Scaling),
+                window.Position.X + SessionManager.OrbPixels(window, screen.Scaling));
+        }
+        finally
+        {
+            ClaudeBuddySettings.OrbSize = before;
+            if (titledKey.Length > 0) ClaudeBuddySettings.SetOrbSize(titledKey, null);
+        }
+    }
+
+    // OrbArrangementAnimationTests.CompleteTheGlide's technique: rewind the
+    // start so the next tick reports the glide finished, and fire that tick.
+    private static void FinishArrangeAnimation(SessionManager manager)
+    {
+        typeof(SessionManager).GetField("_arrangeAnimStart", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .SetValue(manager, Environment.TickCount64 - 700);
+        typeof(SessionManager).GetMethod("OnArrangeAnimTick", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .Invoke(manager, new object?[] { null, EventArgs.Empty });
+    }
+
     private static OrbWindow WindowFor(SessionManager manager, string sessionId)
     {
         var field = typeof(SessionManager).GetField(

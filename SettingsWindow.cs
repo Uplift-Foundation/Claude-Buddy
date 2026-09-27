@@ -771,7 +771,9 @@ namespace ClaudeBuddy
                 }),
                 "One letter from each of the first two words of a chat's name, or the "
                 + "first two letters of it when there's only one word — instead of just "
-                + "the one letter every orb shows today.")
+                + "the one letter every orb shows today."),
+            Row("Size", OrbSizeSlider(),
+                "How big every orb is. Right-click an orb to size just that one.")
         };
 
         // internal for the same reason OrbsRows() above is: a test can drive
@@ -1036,6 +1038,32 @@ namespace ClaudeBuddy
 
                 ClaudeBuddySettings.ChatTextScale = ChatZoom.At((int)Math.Round(slider.Value));
                 ChatPanel.ReapplyTextScale();
+            };
+            return slider;
+        }
+
+        // CB-198's global orb size. SpacingSlider's shape, with its range read
+        // from OrbSizing rather than written here, so the slider, the Size menu
+        // and the arrangement sweep can never disagree about which sizes exist
+        // — and so Windows' measured 0.7 floor reaches the slider by itself.
+        internal Slider OrbSizeSlider()
+        {
+            var slider = new Slider
+            {
+                Minimum = OrbSizing.Min,
+                Maximum = OrbSizing.Max,
+                Value = ClaudeBuddySettings.OrbSize,
+                MinWidth = 160,
+                SmallChange = OrbSizing.Step,
+                LargeChange = 0.25,
+                TickFrequency = OrbSizing.Step,
+                IsSnapToTickEnabled = true
+            };
+            slider.PropertyChanged += (_, e) =>
+            {
+                if (e.Property != Slider.ValueProperty) return;
+                ClaudeBuddySettings.OrbSize = slider.Value;
+                SessionManager.Instance?.ReapplyOrbSizes();
             };
             return slider;
         }

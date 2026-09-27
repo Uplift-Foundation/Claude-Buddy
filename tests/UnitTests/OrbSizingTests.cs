@@ -95,4 +95,15 @@ public class OrbSizingTests
         Assert.Equal(centre, OrbSizing.CentreDip(size), 6);
         Assert.Equal(gap, OrbSizing.ChatPanelGap(size), 6);
     }
+
+    [Fact]
+    public void TheFlyoutsButtonsStillClearTheLargestOrb()
+    {
+        // OrbFlyout's arc is a fixed 56 DIP from the orb's centre, and it is not
+        // scaled with the orb: the buttons are the same size at every orb size.
+        // Their inner edge has to stay outside the biggest orb's circle, or a
+        // 2x orb would draw under its own buttons.
+        Assert.True(OrbFlyout.ArcRadius - OrbFlyout.ButtonHalf > 18 * OrbSizing.Max,
+            $"{OrbFlyout.ArcRadius - OrbFlyout.ButtonHalf} does not clear {18 * OrbSizing.Max}");
+    }
 }
