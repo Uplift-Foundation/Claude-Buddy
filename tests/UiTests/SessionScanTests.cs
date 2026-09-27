@@ -881,6 +881,185 @@ public class SessionScanTests
         }
     }
 
+    [AvaloniaFact]
+    public void AnOrbSavedAtDoubleSizeComesBackCentredWhereItWasAtTheDefault()
+    {
+        var before = ClaudeBuddySettings.OrbSize;
+        using var scratch = new Scratch();
+        scratch.Write("session-a", title: "sized");
+        var key = SessionManager.PositionKeyFor(
+            new SessionStatus { Source = SessionSource.ClaudeCode, Cwd = "/Users/user/project", Title = "sized" },
+            "session-a");
+        try
+        {
+            ClaudeBuddySettings.OrbSize = 2.0;
+            var manager = Scan(scratch);
+            var window = WindowFor(manager, "session-a");
+            window.PinAt(new PixelPoint(300, 200));
+            manager.RememberOrbPosition(window);
+            Assert.Equal(2.0, ClaudeBuddySettings.OrbPositionFor(key)!.Size);
+
+            var scale = (window.Screens.ScreenFromPoint(window.Position) ?? window.Screens.Primary)!.Scaling;
+            var centreThen = 300 + OrbSizing.CentreDip(2.0) * scale;
+
+            ClaudeBuddySettings.OrbSize = 1.0;
+            var restored = WindowFor(Scan(scratch), "session-a");
+
+            Assert.Equal(1.0, restored.OrbSize);
+            Assert.Equal(centreThen, restored.Position.X + OrbSizing.CentreDip(1.0) * scale, 0);
+            Assert.Equal(200 + OrbSizing.CentreDip(2.0) * scale, restored.Position.Y + OrbSizing.CentreDip(1.0) * scale, 0);
+        }
+        finally
+        {
+            ClaudeBuddySettings.OrbSize = before;
+            ClaudeBuddySettings.ClearOrbPosition(key);
+        }
+    }
+
+    [AvaloniaFact]
+    public void ASpotSavedBeforeOrbsHadASizeIsReadAsTheDefaultSize()
+    {
+        var before = ClaudeBuddySettings.OrbSize;
+        using var scratch = new Scratch();
+        scratch.Write("session-a", title: "legacy");
+        var key = SessionManager.PositionKeyFor(
+            new SessionStatus { Source = SessionSource.ClaudeCode, Cwd = "/Users/user/project", Title = "legacy" },
+            "session-a");
+        try
+        {
+            // No size, exactly as an older build writes it.
+            ClaudeBuddySettings.SetOrbPosition(key, 300, 200);
+            ClaudeBuddySettings.OrbSize = 1.0;
+
+            Assert.Equal(new PixelPoint(300, 200), WindowFor(Scan(scratch), "session-a").Position);
+
+            // And at 2x it grows around the centre a 1.0 orb had there.
+            ClaudeBuddySettings.OrbSize = 2.0;
+            var big = WindowFor(Scan(scratch), "session-a");
+            var scale = (big.Screens.ScreenFromPoint(big.Position) ?? big.Screens.Primary)!.Scaling;
+            Assert.Equal(300 + 28 * scale, big.Position.X + 56 * scale, 0);
+        }
+        finally
+        {
+            ClaudeBuddySettings.OrbSize = before;
+            ClaudeBuddySettings.ClearOrbPosition(key);
+        }
+    }
+
+    [AvaloniaFact]
+    public void ResizingAPinnedOrbReSavesItsSpotAndSize()
+    {
+        var before = ClaudeBuddySettings.OrbSize;
+        using var scratch = new Scratch();
+        scratch.Write("session-a", title: "pinned");
+        var key = SessionManager.PositionKeyFor(
+            new SessionStatus { Source = SessionSource.ClaudeCode, Cwd = "/Users/user/project", Title = "pinned" },
+            "session-a");
+        try
+        {
+            ClaudeBuddySettings.OrbSize = 1.0;
+            var manager = Scan(scratch);
+            var window = WindowFor(manager, "session-a");
+            window.PinAt(new PixelPoint(300, 200));
+            manager.RememberOrbPosition(window);
+
+            ClaudeBuddySettings.OrbSize = 2.0;
+            manager.ReapplyOrbSizes();
+
+            var saved = ClaudeBuddySettings.OrbPositionFor(key)!;
+            Assert.Equal(2.0, saved.Size);
+            Assert.Equal(window.Position, new PixelPoint(saved.X, saved.Y));
+        }
+        finally
+        {
+            ClaudeBuddySettings.OrbSize = before;
+            ClaudeBuddySettings.ClearOrbPosition(key);
+        }
+    }
+
+    [AvaloniaFact]
+    public void ResizingNeverLetsAPinnedOrbOverwriteASpotItSharesWithAnother()
+    {
+        // The drag code's rule: two pinned orbs on one key (a lead and a member
+        // dragged together) never have the member's spot written over the
+        // lead's. The saved entry keeps the size it was saved at, so it restores
+        // correctly without the re-save.
+        var before = ClaudeBuddySettings.OrbSize;
+        using var scratch = new Scratch();
+        scratch.Write("second", title: "shared name");
+        var key = SessionManager.PositionKeyFor(
+            new SessionStatus { Source = SessionSource.ClaudeCode, Cwd = "/Users/user/project", Title = "shared name" },
+            "first");
+        try
+        {
+            ClaudeBuddySettings.OrbSize = 1.0;
+            var manager = Scan(scratch);
+            var second = WindowFor(manager, "second");
+            second.PinAt(new PixelPoint(500, 250));
+
+            // Injected after the scan, not before: "first" has no status file,
+            // so a scan would prune it (the first version of this test did
+            // exactly that, and then measured a lone pinned orb).
+            var first = new OrbWindow("first");
+            first.PinAt(new PixelPoint(400, 250));
+            first.PositionKey = key;
+            WindowsDict(manager)["first"] = first;
+            ClaudeBuddySettings.SetOrbPosition(key, 400, 250, 1.0);
+
+            ClaudeBuddySettings.OrbSize = 2.0;
+            manager.ReapplyOrbSizes();
+
+            Assert.Equal(key, second.PositionKey);
+            Assert.Same(first, WindowFor(manager, "first"));
+            Assert.Equal(new ClaudeBuddySettings.OrbPlacement(400, 250, 1.0), ClaudeBuddySettings.OrbPositionFor(key));
+
+            // The control: take the sibling away and the same call does re-save.
+            WindowsDict(manager).Remove("first");
+            ClaudeBuddySettings.OrbSize = 1.5;
+            manager.ReapplyOrbSizes();
+            Assert.Equal(1.5, ClaudeBuddySettings.OrbPositionFor(key)!.Size);
+        }
+        finally
+        {
+            ClaudeBuddySettings.OrbSize = before;
+            ClaudeBuddySettings.ClearOrbPosition(key);
+        }
+    }
+
+    [AvaloniaFact]
+    public void TheSizeMenuOnAManagedOrbReLaysTheStackOut()
+    {
+        var before = ClaudeBuddySettings.OrbSize;
+        string? soundKey = null;
+        try
+        {
+            ClaudeBuddySettings.OrbSize = 1.0;
+            using var scratch = new Scratch();
+            scratch.Write("session-a");
+            var manager = Scan(scratch);
+            var window = WindowFor(manager, "session-a");
+            soundKey = window.SoundKey;
+
+            window.RebuildSizeSubmenu();
+            var item = window.FindControl<MenuItem>("SizeMenuItem")!.Items.OfType<MenuItem>()
+                .Single(i => Equals(i.Header, "200%"));
+            item.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(MenuItem.ClickEvent));
+
+            Assert.Equal(2.0, window.OrbSize);
+
+            // Re-laid out by the manager, not just resized around its centre:
+            // the stack's right edge is back a margin in from the screen.
+            var screen = window.Screens.Primary ?? window.Screens.All.First();
+            Assert.Equal(screen.WorkingArea.Right - (int)(24 * screen.Scaling),
+                window.Position.X + SessionManager.OrbPixels(window, screen.Scaling));
+        }
+        finally
+        {
+            ClaudeBuddySettings.OrbSize = before;
+            if (soundKey is not null) ClaudeBuddySettings.SetOrbSize(soundKey, null);
+        }
+    }
+
     // OrbArrangementAnimationTests.CompleteTheGlide's technique: rewind the
     // start so the next tick reports the glide finished, and fire that tick.
     private static void FinishArrangeAnimation(SessionManager manager)

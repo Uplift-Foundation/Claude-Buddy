@@ -153,4 +153,67 @@ public class OrbSizeSettingTests
         Assert.Equal(OrbSizing.Default, ClaudeBuddySettings.OrbSize);
         Assert.Null(ClaudeBuddySettings.OrbSizeFor("anything"));
     }
+
+    // --- CB-198: the size a spot was saved at ---------------------------------
+
+    [Fact]
+    public void ASavedSpotKeepsTheSizeItWasSavedAt()
+    {
+        var dir = NewSettingsDir();
+        PointSettingsAt(dir);
+
+        ClaudeBuddySettings.SetOrbPosition("spot", 300, 200, 2.0);
+
+        var written = ReadBack(dir)["orbPositions"]!["spot"]!;
+        Assert.Equal(2.0, written["size"]!.GetValue<double>(), 3);
+
+        PointSettingsAt(dir);
+        Assert.Equal(new ClaudeBuddySettings.OrbPlacement(300, 200, 2.0), ClaudeBuddySettings.OrbPositionFor("spot"));
+    }
+
+    [Fact]
+    public void ASpotFromAnOlderBuildHasNoSizeAndIsWrittenBackWithoutOne()
+    {
+        // The legacy shape, exactly as a pre-CB-198 build wrote it.
+        var dir = NewSettingsDir();
+        File.WriteAllText(Path.Combine(dir, "settings.json"),
+            "{ \"version\": 1, \"orbPositions\": { \"old\": { \"x\": 10, \"y\": 20 } } }");
+
+        PointSettingsAt(dir);
+        Assert.Equal(new ClaudeBuddySettings.OrbPlacement(10, 20, null), ClaudeBuddySettings.OrbPositionFor("old"));
+
+        // Some other write makes Save run; the old spot must round-trip as it was.
+        ClaudeBuddySettings.OrbSize = 1.5;
+        var old = ReadBack(dir)["orbPositions"]!["old"]!.AsObject();
+        Assert.False(old.ContainsKey("size"));
+        Assert.Equal(10, old["x"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ABadSavedSizeCostsTheSizeNotTheSpot()
+    {
+        var dir = NewSettingsDir();
+        File.WriteAllText(Path.Combine(dir, "settings.json"),
+            "{ \"version\": 1, \"orbPositions\": { \"s\": { \"x\": 10, \"y\": 20, \"size\": \"huge\" } } }");
+
+        PointSettingsAt(dir);
+
+        Assert.Equal(new ClaudeBuddySettings.OrbPlacement(10, 20, null), ClaudeBuddySettings.OrbPositionFor("s"));
+    }
+
+    [Fact]
+    public void ResavingTheSameCornerAtANewSizeIsAChange()
+    {
+        // SetOrbPosition skips a write that changes nothing; a size change at
+        // the same corner is not nothing.
+        var dir = NewSettingsDir();
+        PointSettingsAt(dir);
+
+        ClaudeBuddySettings.SetOrbPosition("spot", 5, 5, 1.0);
+        ClaudeBuddySettings.SetOrbPosition("spot", 5, 5, 1.0);
+        ClaudeBuddySettings.SetOrbPosition("spot", 5, 5, 2.0);
+
+        PointSettingsAt(dir);
+        Assert.Equal(2.0, ClaudeBuddySettings.OrbPositionFor("spot")!.Size);
+    }
 }

@@ -34,7 +34,11 @@ namespace ClaudeBuddy
         //
         // Measured 2026-09-26 on the Windows 11 box (96 DPI, Avalonia 12.1.1,
         // this window's exact flags, real SendInput clicks, the installed
-        // 0.5.7-beta's orbs as the control): SM_CYMINTRACK=39, and a window
+        // 0.5.7-beta's orbs as the control). Sizes are Win32 GetWindowRect /
+        // GetClientRect on the window handle, cross-checked against Avalonia's
+        // ClientSize; "took" and "passed" are pointer events logged on the
+        // orb's Root, on the orb window, and on an opaque window behind it,
+        // while SendInput moved the real cursor. SM_CYMINTRACK=39, and a window
         // asking for 33.6 DIP (0.6) got a 33x39 client area whose bottom strip
         // took left-click, right-click and hover itself and passed none of them
         // to the window behind. 0.65 (36.4 DIP) still got 36x39 with a dead

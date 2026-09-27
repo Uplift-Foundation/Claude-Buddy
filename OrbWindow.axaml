@@ -43,7 +43,14 @@
          11, 96 DPI, SM_CXMINTRACK=136, SM_CYMINTRACK=39): the installed
          0.5.7-beta's orb windows read a 56x56 client area, and a test window
          with these exact flags asking for 33.6 DIP got 33x39 — the width
-         honoured, only the height floored. So the 120x56 above does not
+         honoured, only the height floored. Both are window and client
+         rectangles, not pictures of the drawn circle: for the installed app,
+         EnumWindows filtered to ClaudeBuddy.exe's pid, then GetWindowRect and
+         GetClientRect through PowerShell Add-Type P/Invoke into user32; for
+         the test window, the same two calls on its platform handle alongside
+         Avalonia's own ClientSize, which agreed. Both ran as an interactive
+         scheduled task in the console session — an ssh session is session 0
+         and cannot see the desktop's windows at all. So the 120x56 above does not
          reproduce today; what does is a 39-DIP height floor, and the strip it
          adds below a smaller orb swallows clicks, right-clicks and hover
          rather than passing them through. That floor is why OrbSizing.MinWindows

@@ -166,7 +166,15 @@ namespace ClaudeBuddy
         // instead would survive a scaling change, but there's no coherent
         // desktop-wide DIP space on a mixed-DPI setup, so raw pixels it is —
         // SessionManager clamps a restored point back onto a real screen.
-        internal sealed record OrbPlacement(int X, int Y);
+        //
+        // Size (CB-198) is the orb's user size when the spot was saved, and only
+        // orb positions ever set it. The point is a top-left corner, so the same
+        // spot restored at a different size is off by half the size difference
+        // unless the restore knows what size it was saved at — see
+        // SessionManager.RestoredTopLeft. Null means "saved before orbs had a
+        // size", which is 1.0. The chat-panel and arrange-anchor uses of this
+        // record leave it null and never write it.
+        internal sealed record OrbPlacement(int X, int Y, double? Size = null);
 
         // How big one agent's chat panel is, in DIPs. Doubles rather than the
         // ints above because this is a layout size and not a screen coordinate:
@@ -1453,14 +1461,14 @@ namespace ClaudeBuddy
             lock (Gate) return _model.OrbPositions.GetValueOrDefault(key);
         }
 
-        public static void SetOrbPosition(string key, int x, int y)
+        public static void SetOrbPosition(string key, int x, int y, double? size = null)
         {
             Load();
             lock (Gate)
             {
-                var existing = _model.OrbPositions.GetValueOrDefault(key);
-                if (existing is not null && existing.X == x && existing.Y == y) return;
-                _model.OrbPositions[key] = new OrbPlacement(x, y);
+                var placement = new OrbPlacement(x, y, size);
+                if (_model.OrbPositions.GetValueOrDefault(key) == placement) return;
+                _model.OrbPositions[key] = placement;
             }
 
             Save();
@@ -2001,7 +2009,10 @@ namespace ClaudeBuddy
                             var y = entry["y"]?.GetValue<int>();
                             if (x is null || y is null) continue;
 
-                            model.OrbPositions[key] = new OrbPlacement(x.Value, y.Value);
+                            // Number(), not GetValue: "size" is new with CB-198,
+                            // so it gets Number's defence from the start — a bad
+                            // one costs the size (read as 1.0), not the spot.
+                            model.OrbPositions[key] = new OrbPlacement(x.Value, y.Value, Number(entry["size"]));
                         }
                     }
 
@@ -2253,11 +2264,19 @@ namespace ClaudeBuddy
                     var positions = new JsonObject();
                     foreach (var (key, placement) in _model.OrbPositions)
                     {
-                        positions[key] = new JsonObject
+                        var entry = new JsonObject
                         {
                             ["x"] = placement.X,
                             ["y"] = placement.Y
                         };
+
+                        // Only when known, so a spot saved before CB-198 is
+                        // written back exactly as it was read. An older build
+                        // reading this file takes x and y by name and never
+                        // looks at "size".
+                        if (placement.Size is double size) entry["size"] = size;
+
+                        positions[key] = entry;
                     }
 
                     var panelSizes = new JsonObject();

@@ -2568,7 +2568,7 @@ namespace ClaudeBuddy
                 if (isNew)
                 {
                     window = new OrbWindow(sessionId);
-                    window.SizeChangedByKey += ReapplyOrbSizes;
+                    window.SizeRelayoutRequested += ReapplyOrbSizes;
                     _windows[sessionId] = window;
                     _order.Add(sessionId);
                     if (OrbsVisible) window.Show();
@@ -3306,8 +3306,26 @@ namespace ClaudeBuddy
             else ReflowPositions();
 
             RescueOffscreenOrbs();
+            RememberResizedPins();
             TeamLinks.Refresh();
             ChatPanel.FollowOrbResize();
+        }
+
+        // A pinned orb that just resized kept its centre, so its saved corner and
+        // size are stale; write the new pair. Only for a key no other pinned orb
+        // shares — the drag code's rule (OrbWindow.OnPointerReleased) that a team
+        // member must never overwrite its lead's spot with an offset copy. A
+        // shared key's saved entry stays right anyway: it carries the size it
+        // was saved at, and RestoredTopLeft corrects from that.
+        private void RememberResizedPins()
+        {
+            var pinned = _windows.Values.Where(w => w.IsPinned && !string.IsNullOrEmpty(w.PositionKey)).ToList();
+
+            foreach (var window in pinned)
+            {
+                if (pinned.Count(other => other.PositionKey == window.PositionKey) == 1)
+                    RememberOrbPosition(window);
+            }
         }
 
         // An orb's window in physical pixels at a screen's scaling — what
@@ -3701,14 +3719,16 @@ namespace ClaudeBuddy
 
             if (saved is null) return;
 
-            var point = new PixelPoint(saved.X, saved.Y);
-
             // The monitor it was dragged onto may be gone, or its layout
             // changed. Anything that no longer lands on a screen falls back to
-            // the default stack rather than being stranded off-canvas.
-            var screen = window.Screens.ScreenFromPoint(point);
+            // the default stack rather than being stranded off-canvas. Asked of
+            // the saved corner itself, before the size correction below, which
+            // is at most half a 2x orb and should not decide which screen this
+            // was.
+            var screen = window.Screens.ScreenFromPoint(new PixelPoint(saved.X, saved.Y));
             if (screen is null) return;
 
+            var point = RestoredTopLeft(saved, window.OrbSize, screen.Scaling);
             window.PinAt(ClampIntoWork(point, screen.WorkingArea, OrbPixels(window, screen.Scaling)));
         }
 
@@ -3813,7 +3833,21 @@ namespace ClaudeBuddy
             if (string.IsNullOrEmpty(window.PositionKey)) return;
 
             var position = window.Position;
-            ClaudeBuddySettings.SetOrbPosition(window.PositionKey, position.X, position.Y);
+            ClaudeBuddySettings.SetOrbPosition(window.PositionKey, position.X, position.Y, window.OrbSize);
+        }
+
+        // CB-198: a saved spot is a top-left corner, and the same *centre* at a
+        // different size has a different corner. Shifted by half the difference
+        // between the window it was saved at and the window it is now, so the
+        // orb comes back centred where it was left. No saved size means it was
+        // saved before orbs had one, which is 1.0.
+        internal static PixelPoint RestoredTopLeft(
+            ClaudeBuddySettings.OrbPlacement saved, double currentSize, double scaling)
+        {
+            var shift = (OrbSizing.WindowDip(saved.Size ?? OrbSizing.Default) - OrbSizing.WindowDip(currentSize))
+                        / 2 * scaling;
+            var d = (int)Math.Round(shift);
+            return new PixelPoint(saved.X + d, saved.Y + d);
         }
 
         public void ReturnOrbToStack(string sessionId)

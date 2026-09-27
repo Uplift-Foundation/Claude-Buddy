@@ -962,9 +962,14 @@ namespace ClaudeBuddy
 
         internal double OrbSize { get; private set; } = OrbSizing.Default;
 
-        // Raised when a changed SoundKey brought a different size with it —
-        // see RefreshSoundKey. SessionManager re-lays the orbs out on it.
-        internal event Action? SizeChangedByKey;
+        // Raised when this orb's size changed in a way the orbs around it have
+        // to make room for — a changed SoundKey bringing a different override
+        // (RefreshSoundKey), or the Size menu (SetSizeOverride). The owning
+        // SessionManager subscribes when it creates the window and re-lays
+        // every orb out. An event rather than SessionManager.Instance: the orb
+        // has no business knowing which manager is current, and a test's
+        // manager never is.
+        internal event Action? SizeRelayoutRequested;
 
         // The orb's centre in this window's own DIPs — what every (28,28)
         // outside Root used to hard-code.
@@ -3117,14 +3122,14 @@ namespace ClaudeBuddy
             $"{Math.Round(size * 100).ToString(System.Globalization.CultureInfo.InvariantCulture)}%";
 
         // Every orb, not just this one: a size change moves the stack or the
-        // arrangement around the orb that changed. Without a manager (a test,
-        // a standalone window) there is nothing else to move, so this orb
-        // resizes itself.
+        // arrangement around the orb that changed, so the owning manager does
+        // it (SizeRelayoutRequested). With no manager listening — a standalone
+        // window — there is nothing else to move, so this orb resizes itself.
         private void SetSizeOverride(double? size)
         {
             ClaudeBuddySettings.SetOrbSize(SoundKey, size);
 
-            if (SessionManager.Instance is { } manager) manager.ReapplyOrbSizes();
+            if (SizeRelayoutRequested is { } relayout) relayout();
             else ApplyEffectiveOrbSize();
         }
 
@@ -3217,12 +3222,10 @@ namespace ClaudeBuddy
             // *later* key can carry a different override on an orb already in
             // a stack or an arrangement, and nothing else would re-lay those
             // out around its new size — so that case says so, to whichever
-            // manager owns this orb. An event rather than a call on
-            // SessionManager.Instance: the orb has no business knowing which
-            // manager is the current one, and a test's manager never is.
+            // manager owns this orb; see SizeRelayoutRequested.
             if (ApplyEffectiveOrbSize() && hadKey)
             {
-                SizeChangedByKey?.Invoke();
+                SizeRelayoutRequested?.Invoke();
             }
         }
 
