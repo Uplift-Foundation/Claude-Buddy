@@ -55,6 +55,14 @@ the other stacks normally, so they never land on top of each other. An orb
 whose remembered spot is on a monitor you no longer have starts out back in
 the stack.
 
+**Orbs come in sizes.** Settings → Orbs → **Size** makes every orb bigger or smaller, live as you drag it, from 60% up to 200% of the shipped orb (70% on Windows — see below). Right-click an orb → **Size** to give just that one its own size: *Default* follows the slider and says what the slider is set to, and 75%, 100%, 125%, 150% and 200% pin that orb there whatever the slider does. An orb resizes around its own centre, so it grows in place rather than out of its corner, and everything placed relative to it follows — the stack or the arranged shape re-lays itself around the new sizes, team arrows re-aim at the rims, the flyout's buttons stay concentric, and an open chat panel keeps its distance.
+
+The slider lives in `orbSize` in `settings.json` as a multiplier over the shipped orb, and each orb's own size in `orbSizes`, keyed by the same per-agent key the right-click **Sound** menu uses, so two teammates in one directory can be sized apart. A hand-edited value outside the range is pinned back into it, the same as `chatTextScale`. An orb that had a size chosen before Claude Code named its session keeps that size when the name arrives.
+
+When orbs of different sizes are arranged, the shape is laid out for the largest one present and each orb is centred in its slot. Nothing can overlap that way, at the cost of small orbs sitting as far apart as the biggest one does. The size is the orb's alone: team members are still drawn smaller than their lead at every size, and the account usage orbs are not sized by this setting at all.
+
+**Why Windows stops at 70%.** Windows will not let a top-level window be shorter than 39 pixels at 100% scaling, and the strip that floor adds below a smaller orb is not click-through: measured on a real Windows 11 machine, it took clicks, right-clicks and hover itself and passed none of them to whatever was behind it. 70% is the smallest size whose window clears the floor, so the slider and the menu simply do not offer anything below it there.
+
 If you've given a session a color with **`/color`**, that color becomes the
 orb's **border and letter**. The fill is left alone deliberately — it's the
 state signal, and amber-means-Claude-needs-you only works if it means that on
@@ -2422,7 +2430,8 @@ outside the app (a launchd agent, an installer replacing the bundle) stopped it.
   is also why the hook scripts carry nothing about teams.
 
   Downstream, that one value does three things: `OrbWindow.SetTeamRole` draws a
-  member smaller (the *window* stays 56x56, so stacking, dragging and remembered
+  member smaller (the *window* keeps the orb's size — 56x56 at the default, or
+  whatever the Size setting makes it — so stacking, dragging and remembered
   positions are untouched), `SessionManager.DisplayOrder()` gathers each team
   behind its lead, and `TeamLinks.cs` draws the arrows, one click-through window
   per arrow, parked and reused rather than closed (see `ClaudeDesktopOverlay`
