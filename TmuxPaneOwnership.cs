@@ -17,8 +17,127 @@ namespace ClaudeBuddy
 
     internal sealed record ProcessCommand(int Pid, int ParentPid, string Arguments);
 
+    // What a pane claim is probed by: the tmux the hook recorded, the server it
+    // recorded, and the pane. Taken raw off the status file rather than after
+    // the binary is resolved, so the scan can look an answer up with nothing
+    // but the status in hand — which is the whole point of gathering answers
+    // on one thread and reading them on another.
+    internal readonly record struct TmuxPaneKey(string Bin, string Socket, string Pane)
+    {
+        internal static TmuxPaneKey Of(SessionStatus status) =>
+            new(status.TmuxBin ?? "", status.TmuxSocket ?? "", status.TmuxPane ?? "");
+    }
+
     internal static class TmuxPaneOwnershipRules
     {
+        // `ps -eo pid=,ppid=,args=`, one row per process. A row that does not
+        // parse is skipped rather than failing the listing: the table is read
+        // while it changes, and one torn row says nothing about the others.
+        internal static List<ProcessCommand> ParseProcessListing(string? listing)
+        {
+            var processes = new List<ProcessCommand>();
+            if (string.IsNullOrEmpty(listing)) return processes;
+
+            foreach (var line in listing.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var parts = line.Trim().Split((char[]?)null, 3, StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length != 3
+                    || !int.TryParse(parts[0], out var pid)
+                    || !int.TryParse(parts[1], out var parentPid)) continue;
+                processes.Add(new ProcessCommand(pid, parentPid, parts[2]));
+            }
+
+            return processes;
+        }
+
+        // The format ListPanesFormat asks tmux for.
+        internal const string ListPanesFormat = "#{pane_id} #{pane_pid}";
+
+        // `list-panes -a -F ListPanesFormat`: every pane on one server, keyed
+        // by id. One call per server where the scan used to make one
+        // `display-message` per pane, and the answer is the same answer — a
+        // pane that has gone is simply absent, exactly as display-message
+        // against it would have failed.
+        internal static Dictionary<string, int> ParsePanePids(string? listing)
+        {
+            var panes = new Dictionary<string, int>(StringComparer.Ordinal);
+            if (string.IsNullOrEmpty(listing)) return panes;
+
+            foreach (var line in listing.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var parts = line.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length != 2 || !parts[0].StartsWith('%')
+                    || !int.TryParse(parts[1], out var pid) || pid <= 0) continue;
+                panes[parts[0]] = pid;
+            }
+
+            return panes;
+        }
+
+        // Every pane claim in one pass, answered with one process listing and
+        // one pane listing per tmux server, where the scan used to spend a
+        // `display-message` *and* a whole `ps` on each claim. On the machine
+        // this was measured on that was about fifteen claims and 890 processes
+        // every two seconds, on the UI thread.
+        //
+        // Each answer means what TerminalFocuser.TmuxPaneOwner's always did —
+        // the one session id in the pane's live Claude process, or null for
+        // anything the probe could not establish — because it is decided by the
+        // same SessionIdIn over the same kind of listing. Only the plumbing is
+        // shared.
+        //
+        // panesOf lists one server's panes, or returns null when it could not
+        // (no tmux, no server). panePidOf answers a single target that is not a
+        // pane id, which list-panes cannot key on; the hook only ever records
+        // $TMUX_PANE, which always is one, so that arm is for a status file
+        // somebody wrote by hand and exists so that it keeps the answer it
+        // always got. processes is asked at most once, and only once some pane
+        // has resolved to a pid, so a machine whose recorded panes are all gone
+        // does not pay for the process table at all.
+        internal static Dictionary<TmuxPaneKey, string?> OwnersFor(
+            IEnumerable<SessionStatus> claims,
+            Func<string, string, IReadOnlyDictionary<string, int>?> panesOf,
+            Func<string, string, string, int?> panePidOf,
+            Func<IReadOnlyList<ProcessCommand>?> processes)
+        {
+            var panePids = new Dictionary<TmuxPaneKey, int>();
+            var servers = new Dictionary<(string Bin, string Socket), IReadOnlyDictionary<string, int>?>();
+
+            foreach (var key in claims.Select(TmuxPaneKey.Of).Distinct())
+            {
+                if (key.Pane.Length == 0) continue;
+
+                int? pid;
+                if (key.Pane.StartsWith('%'))
+                {
+                    if (!servers.TryGetValue((key.Bin, key.Socket), out var panes))
+                    {
+                        panes = panesOf(key.Bin, key.Socket);
+                        servers[(key.Bin, key.Socket)] = panes;
+                    }
+
+                    pid = panes is not null && panes.TryGetValue(key.Pane, out var found) ? found : null;
+                }
+                else
+                {
+                    pid = panePidOf(key.Bin, key.Socket, key.Pane);
+                }
+
+                if (pid is > 0) panePids[key] = pid.Value;
+            }
+
+            var owners = new Dictionary<TmuxPaneKey, string?>();
+            if (panePids.Count == 0) return owners;
+
+            var table = processes();
+            foreach (var (key, pid) in panePids)
+            {
+                owners[key] = SessionIdIn(table, pid);
+            }
+
+            return owners;
+        }
+
         internal static string? SessionIdIn(IEnumerable<ProcessCommand>? processes, int panePid)
         {
             if (panePid <= 0 || processes is null) return null;

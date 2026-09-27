@@ -27,6 +27,7 @@
          arrow needs. -->
     <Compile Include="../../OrbArrangement.cs" />
     <Compile Include="../../TeamLinkGeometry.cs" />
+    <Compile Include="../../OrbSizing.cs" />
   </ItemGroup>
 
 </Project>

@@ -240,6 +240,205 @@ public class TmuxPaneOwnershipTests
         Assert.Equal("/current/tmux", current.Status.TmuxSocket);
     }
 
+    // --- one listing per pass (the scan-stall fix) ----------------------------
+
+    [Fact]
+    public void AProcessListingParsesEveryWellFormedRowAndSkipsTornOnes()
+    {
+        var processes = TmuxPaneOwnershipRules.ParseProcessListing(
+            "  10     1 /bin/zsh\n" +
+            "   11   10 /Users/w/.local/bin/claude --session-id " + A + "\n" +
+            "garbage\n" +
+            "x 1 /bin/zsh\n" +
+            "12 y /bin/zsh\n" +
+            "13 1\n");
+
+        Assert.Equal(
+            new[] { new ProcessCommand(10, 1, "/bin/zsh"),
+                    new ProcessCommand(11, 10, "/Users/w/.local/bin/claude --session-id " + A) },
+            processes);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public void AnEmptyProcessListingIsAnEmptyTable(string? listing) =>
+        Assert.Empty(TmuxPaneOwnershipRules.ParseProcessListing(listing));
+
+    [Fact]
+    public void APaneListingKeysEveryPaneIdToItsPid()
+    {
+        var panes = TmuxPaneOwnershipRules.ParsePanePids(
+            "%1 501\n%12 777\n" +
+            "1 900\n" +       // not a pane id
+            "%3 abc\n" +      // not a pid
+            "%4 0\n" +        // no process
+            "%5\n" +          // torn
+            "%6 1 2\n");      // too many fields
+
+        Assert.Equal(2, panes.Count);
+        Assert.Equal(501, panes["%1"]);
+        Assert.Equal(777, panes["%12"]);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public void AnEmptyPaneListingHasNoPanes(string? listing) =>
+        Assert.Empty(TmuxPaneOwnershipRules.ParsePanePids(listing));
+
+    [Fact]
+    public void EveryClaimOnOneServerIsAnsweredWithOnePaneListingAndOneProcessListing()
+    {
+        // The shape of the bug: fifteen claims used to cost fifteen
+        // display-messages and fifteen whole `ps` runs. Counted, because the
+        // point is the number of calls and an outcome check would pass either
+        // way.
+        var claims = new[] { Claim("%1"), Claim("%2"), Claim("%3") };
+        var paneListings = 0;
+        var processListings = 0;
+
+        var owners = TmuxPaneOwnershipRules.OwnersFor(
+            claims,
+            panesOf: (_, _) =>
+            {
+                paneListings++;
+                return new Dictionary<string, int> { ["%1"] = 10, ["%2"] = 20, ["%3"] = 30 };
+            },
+            panePidOf: (_, _, _) => throw new InvalidOperationException("not a pane id target"),
+            processes: () =>
+            {
+                processListings++;
+                return new[]
+                {
+                    new ProcessCommand(10, 1, "/bin/zsh"), Claude(11, 10, A),
+                    new ProcessCommand(20, 1, "/bin/zsh"), Claude(21, 20, B),
+                    new ProcessCommand(30, 1, "/bin/zsh"),
+                };
+            });
+
+        Assert.Equal(1, paneListings);
+        Assert.Equal(1, processListings);
+        Assert.Equal(A, owners[TmuxPaneKey.Of(claims[0])]);
+        Assert.Equal(B, owners[TmuxPaneKey.Of(claims[1])]);
+
+        // A pane whose process names no session is an answer of "unknown",
+        // which is what the per-pane probe said about it too.
+        Assert.Null(owners[TmuxPaneKey.Of(claims[2])]);
+    }
+
+    [Fact]
+    public void EachServerIsListedOnceAndOnlyItsOwnPanesAreReadFromIt()
+    {
+        // A pane id is only unique on its own server, so %1 on two sockets is
+        // two different panes and must be looked up in two different listings.
+        var first = Claim("%1", socket: "/tmp/a");
+        var second = Claim("%1", socket: "/tmp/b");
+        var asked = new List<string>();
+
+        var owners = TmuxPaneOwnershipRules.OwnersFor(
+            new[] { first, second, Claim("%1", socket: "/tmp/a") },
+            panesOf: (_, socket) =>
+            {
+                asked.Add(socket);
+                return new Dictionary<string, int> { ["%1"] = socket == "/tmp/a" ? 10 : 20 };
+            },
+            panePidOf: (_, _, _) => null,
+            processes: () => new[] { Claude(11, 10, A), Claude(21, 20, B) });
+
+        Assert.Equal(new[] { "/tmp/a", "/tmp/b" }, asked);
+        Assert.Equal(A, owners[TmuxPaneKey.Of(first)]);
+        Assert.Equal(B, owners[TmuxPaneKey.Of(second)]);
+    }
+
+    [Fact]
+    public void AGonePaneAndAnUnreachableServerLeaveNoAnswerAndCostNoProcessListing()
+    {
+        // A pane that has closed is absent from its server's listing, the same
+        // fact display-message against it reported by failing. With nothing
+        // resolved, there is nothing to look up in the process table, so it is
+        // not read.
+        var processListings = 0;
+
+        var owners = TmuxPaneOwnershipRules.OwnersFor(
+            new[] { Claim("%9"), Claim("%1", socket: "/tmp/no-server") },
+            panesOf: (_, socket) => socket == "/tmp/no-server"
+                ? null
+                : new Dictionary<string, int> { ["%1"] = 10 },
+            panePidOf: (_, _, _) => null,
+            processes: () => { processListings++; return Array.Empty<ProcessCommand>(); });
+
+        Assert.Empty(owners);
+        Assert.Equal(0, processListings);
+    }
+
+    [Fact]
+    public void AFailedProcessListingLeavesEveryResolvedPaneUnknown()
+    {
+        var claim = Claim("%1");
+
+        var owners = TmuxPaneOwnershipRules.OwnersFor(
+            new[] { claim },
+            panesOf: (_, _) => new Dictionary<string, int> { ["%1"] = 10 },
+            panePidOf: (_, _, _) => null,
+            processes: () => null);
+
+        Assert.Null(owners[TmuxPaneKey.Of(claim)]);
+    }
+
+    [Fact]
+    public void ATargetThatIsNotAPaneIdIsStillAskedAboutOnItsOwn()
+    {
+        // The hook records $TMUX_PANE, which is always a pane id; a hand-written
+        // file can name `session:window.pane` instead, which list-panes cannot
+        // key on. That target gets the single-target probe it always did,
+        // rather than quietly becoming "unknown".
+        var byName = Claim("work:1.0", tmux: "/opt/tmux", socket: "/tmp/s");
+        var unresolvable = Claim("work:2.0");
+        var asked = new List<(string, string, string)>();
+
+        var owners = TmuxPaneOwnershipRules.OwnersFor(
+            new[] { byName, unresolvable, Claim("") },
+            panesOf: (_, _) => throw new InvalidOperationException("no pane id here"),
+            panePidOf: (bin, socket, pane) =>
+            {
+                asked.Add((bin, socket, pane));
+                return pane == "work:1.0" ? 10 : null;
+            },
+            processes: () => new[] { Claude(11, 10, A) });
+
+        Assert.Equal(new[] { ("/opt/tmux", "/tmp/s", "work:1.0"), ("", "", "work:2.0") }, asked);
+        Assert.Equal(A, owners[TmuxPaneKey.Of(byName)]);
+        Assert.False(owners.ContainsKey(TmuxPaneKey.Of(unresolvable)));
+    }
+
+    [Fact]
+    public void NoClaimsAsksNeitherTmuxNorPs()
+    {
+        // TmuxPaneOwners gates an empty list before it gets here; this pins the
+        // rule itself for any caller that does not.
+        var owners = TmuxPaneOwnershipRules.OwnersFor(
+            Array.Empty<SessionStatus>(),
+            panesOf: (_, _) => throw new InvalidOperationException("no server to list"),
+            panePidOf: (_, _, _) => throw new InvalidOperationException("no target to ask"),
+            processes: () => throw new InvalidOperationException("no process table wanted"));
+
+        Assert.Empty(owners);
+    }
+
+    [Fact]
+    public void APaneKeyTreatsAMissingFieldAsEmpty()
+    {
+        // Status files are JSON, and a null in one deserializes as null over the
+        // property's "" default.
+        var status = new SessionStatus { TmuxBin = null!, TmuxSocket = null!, TmuxPane = null! };
+
+        Assert.Equal(new TmuxPaneKey("", "", ""), TmuxPaneKey.Of(status));
+    }
+
+    private static SessionStatus Claim(string pane, string tmux = "", string socket = "") =>
+        new() { Source = SessionSource.ClaudeCode, TmuxPane = pane, TmuxSocket = socket, TmuxBin = tmux };
+
     private static SessionManager.ScanEntry Entry(string id, string pane, string socket, string tmux) =>
         new(id, new SessionStatus
         {

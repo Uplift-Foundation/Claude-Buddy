@@ -1001,9 +1001,12 @@ namespace ClaudeBuddy
             return TmuxPaneOwnershipRules.PermitsAction(status.SessionId, owner);
         }
 
-        // Exposed for the scan's reconciliation pass. Null is intentionally not
-        // a negative answer: tmux or ps can fail while a session is otherwise
-        // healthy, so callers must fail closed for actions and keep status data.
+        // One pane, asked now — the click path's form. The scan's reconciliation
+        // pass used to call this once per claim, on the UI thread; it asks
+        // TmuxPaneOwners below instead, from its background half. Null is
+        // intentionally not a negative answer: tmux or ps can fail while a
+        // session is otherwise healthy, so callers must fail closed for actions
+        // and keep status data.
         internal static string? TmuxPaneOwner(SessionStatus status)
         {
             if (!OperatingSystem.IsMacOS() || string.IsNullOrEmpty(status.TmuxPane)) return null;
@@ -1019,17 +1022,43 @@ namespace ClaudeBuddy
 
             if (!TryRun("/bin/ps", out var listing, "-eo", "pid=,ppid=,args=")) return null;
 
-            var processes = new List<ProcessCommand>();
-            foreach (var line in listing.Split('\n', StringSplitOptions.RemoveEmptyEntries))
-            {
-                var parts = line.Trim().Split((char[]?)null, 3, StringSplitOptions.RemoveEmptyEntries);
-                if (parts.Length != 3
-                    || !int.TryParse(parts[0], out var pid)
-                    || !int.TryParse(parts[1], out var parentPid)) continue;
-                processes.Add(new ProcessCommand(pid, parentPid, parts[2]));
-            }
+            return TmuxPaneOwnershipRules.SessionIdIn(
+                TmuxPaneOwnershipRules.ParseProcessListing(listing), panePid);
+        }
 
-            return TmuxPaneOwnershipRules.SessionIdIn(processes, panePid);
+        // Every pane claim a scan pass holds, answered at once — see
+        // TmuxPaneOwnershipRules.OwnersFor, which decides everything and is
+        // where the batching is tested. What is left here is running tmux and
+        // ps. The scan calls this from its background half, never the UI
+        // thread; the single-pane form above stays for a click, which wants an
+        // answer about this instant rather than about the last pass.
+        //
+        // Excluded from coverage: three real subprocesses and nothing else.
+        [ExcludeFromCodeCoverage]
+        internal static IReadOnlyDictionary<TmuxPaneKey, string?> TmuxPaneOwners(
+            IReadOnlyList<SessionStatus> claims)
+        {
+            if (!OperatingSystem.IsMacOS() || claims.Count == 0)
+                return new Dictionary<TmuxPaneKey, string?>();
+
+            return TmuxPaneOwnershipRules.OwnersFor(
+                claims,
+                panesOf: (bin, socket) =>
+                    ResolveTmuxBinary(bin) is { } tmux
+                    && TryRun(tmux, out var listing, TerminalScripts.TmuxArgs(
+                        socket, "list-panes", "-a", "-F", TmuxPaneOwnershipRules.ListPanesFormat))
+                        ? TmuxPaneOwnershipRules.ParsePanePids(listing)
+                        : null,
+                panePidOf: (bin, socket, pane) =>
+                    ResolveTmuxBinary(bin) is { } tmux
+                    && TryRun(tmux, out var text, TerminalScripts.TmuxArgs(
+                        socket, "display-message", "-p", "-t", pane, "#{pane_pid}"))
+                    && int.TryParse(text.Trim(), out var pid)
+                        ? pid
+                        : null,
+                processes: () => TryRun("/bin/ps", out var listing, "-eo", "pid=,ppid=,args=")
+                    ? TmuxPaneOwnershipRules.ParseProcessListing(listing)
+                    : null);
         }
         //
         // Two separate jobs, and skipping either one leaves you looking at the

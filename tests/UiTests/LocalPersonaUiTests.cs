@@ -226,7 +226,7 @@ public class LocalPersonaUiTests : IDisposable
         orb.UpdateFrom(Local());
 
         Assert.False(orb.Glyph.IsVisible, "the letters should give way to the picture");
-        Assert.IsType<ImageBrush>(orb.Orb.Fill);
+        Assert.True(orb.AvatarImage.IsVisible && orb.AvatarImage.Source is not null);
     }
 
     // The other side of CB-135's change, and the one only a file can ask: the
@@ -255,7 +255,7 @@ public class LocalPersonaUiTests : IDisposable
 
         Assert.True(orb.Glyph.IsVisible);
         Assert.Equal("Le", orb.GlyphText);
-        Assert.IsNotType<ImageBrush>(orb.Orb.Fill);
+        Assert.False(orb.AvatarImage.IsVisible);
     }
 
     // A persona whose picture has been deleted since it was resolved is the
@@ -308,7 +308,7 @@ public class LocalPersonaUiTests : IDisposable
 
         Assert.Equal("No", orb.GlyphText);
         Assert.True(orb.Glyph.IsVisible);
-        Assert.IsNotType<ImageBrush>(orb.Orb.Fill);
+        Assert.False(orb.AvatarImage.IsVisible);
     }
 
     // --- the chat panel's header ---
@@ -413,6 +413,52 @@ public class LocalPersonaUiTests : IDisposable
         Assert.True(panel.AvatarEmoji.IsVisible);
         Assert.True(panel.Avatar.IsVisible);
         Assert.Equal(orb.OrbColor, ((ISolidColorBrush)panel.Avatar.Fill!).Color);
+    }
+
+    // --- CB-191: a team member's own persona resolves as a unit ------------
+
+    // Before this, a member profile naming itself and no picture still won
+    // the avatar race against the project's own CLAUDE.md/PERSONA.MD a few
+    // candidates later — the orb kept its own letters (an agent's name
+    // already beats a persona's in OrbLabel's own precedence, see
+    // APersonaBeatsTheTitleAndAnAgentNameBeatsThePersona above), but its
+    // *face* was borrowed from the project. This resolves through the real
+    // LocalPersona.Resolve, exactly as the screenshot capture does, so it
+    // fails if the reading half regresses and not only if the drawing half
+    // does.
+    [AvaloniaFact]
+    public void ATeamMembersOrbKeepsItsOwnLettersRatherThanTheProjectsFace()
+    {
+        ClaudeBuddySettings.TwoLetterGlyphs = true;
+
+        var project = Path.Combine(Path.GetTempPath(), "cb-persona-member-ui-" + Guid.NewGuid());
+        var claudeDir = Path.Combine(project, ".claude");
+        var memberDir = Path.Combine(project, ".profiles-assets", "ines-harrow");
+        Directory.CreateDirectory(claudeDir);
+        Directory.CreateDirectory(memberDir);
+        _dirsToClean.Add(project);
+
+        File.WriteAllBytes(Path.Combine(claudeDir, "cto.png"), Portrait());
+        File.WriteAllLines(Path.Combine(claudeDir, "PERSONA.MD"),
+            new[] { "## Attributes", "Name Jennifer", "Profile Photo cto.png" });
+        File.WriteAllText(Path.Combine(project, "CLAUDE.md"), "@.claude/PERSONA.MD\n");
+        File.WriteAllLines(Path.Combine(memberDir, "ines-harrow.md"),
+            new[] { "## Attributes", "Name Ines Harrow" });
+
+        var persona = LocalPersona.Resolve(
+            project, SessionSource.ClaudeCode, Array.Empty<string>(), "ines-harrow");
+        Assert.Equal("Ines Harrow", persona.Name);
+        Assert.Null(persona.AvatarPath);
+
+        var sessionId = PublishPersona(persona);
+        var orb = NewOrb(sessionId);
+
+        orb.UpdateFrom(Local(agent: "ines-harrow"));
+
+        Assert.True(
+            orb.Glyph.IsVisible, "a member with no picture of its own must not wear the project's face");
+        Assert.False(orb.AvatarImage.IsVisible);
+        Assert.Equal("Ih", orb.GlyphText);
     }
 
     // --- the whole way through ---
@@ -542,7 +588,7 @@ public class LocalPersonaUiTests : IDisposable
 
             var orb = OrbFor(manager, sessionId);
             Assert.False(orb.Glyph.IsVisible, "the letters should give way to the picture");
-            Assert.IsType<ImageBrush>(orb.Orb.Fill);
+            Assert.True(orb.AvatarImage.IsVisible && orb.AvatarImage.Source is not null);
 
             var fake = new FakeChatSession(null)
             {
@@ -659,7 +705,7 @@ public class LocalPersonaUiTests : IDisposable
             // was decoded rather than merely named.
             var orb = OrbFor(manager, sessionId);
             Assert.False(orb.Glyph.IsVisible, "the letters should give way to the picture");
-            Assert.IsType<ImageBrush>(orb.Orb.Fill);
+            Assert.True(orb.AvatarImage.IsVisible && orb.AvatarImage.Source is not null);
 
             // And the header of the panel that opens under it, which is where
             // the *name* shows up rather than the picture.
@@ -778,7 +824,7 @@ public class LocalPersonaUiTests : IDisposable
 
             var orb = OrbFor(manager, sessionId);
             Assert.True(orb.Glyph.IsVisible, "an unmarked yaml example must not dress an orb");
-            Assert.IsNotType<ImageBrush>(orb.Orb.Fill);
+            Assert.False(orb.AvatarImage.IsVisible);
         }
         finally
         {
@@ -832,7 +878,7 @@ public class LocalPersonaUiTests : IDisposable
 
             var orb = OrbFor(manager, sessionId);
             Assert.True(orb.Glyph.IsVisible);
-            Assert.IsNotType<ImageBrush>(orb.Orb.Fill);
+            Assert.False(orb.AvatarImage.IsVisible);
         }
         finally
         {

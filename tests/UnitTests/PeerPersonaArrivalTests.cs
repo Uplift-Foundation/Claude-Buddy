@@ -9,6 +9,12 @@ namespace ClaudeBuddy.Tests;
 // rule in between: what arrives is not what was sent until it has been through
 // the arrival check, and that check is pure so it can be asserted without a
 // socket, a peer or a registry.
+//
+// In the Settings collection: the last two cases below call PeerPersonas.Set
+// and .Forget on the live registry, under a unique session id, but another
+// class's SetForTests can still Clear() the whole table out from under those
+// keys mid-test. Same race CB-188 found in SpeechVoiceRoutingTests.
+[Collection("Settings")]
 public class PeerPersonaArrivalTests
 {
     private static MirrorProtocol.PeerPersona Persona(byte[]? avatar = null) =>

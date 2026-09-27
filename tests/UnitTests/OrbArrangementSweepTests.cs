@@ -15,10 +15,10 @@ namespace ClaudeBuddy.Tests
     // CLAUDE.md warns about precisely because it reads like a gap and is not
     // one.
     //
-    // Kept as one Fact rather than a Theory per case. 62208 xUnit test cases
-    // would cost more in discovery and reporting than the sweep costs to run,
-    // and the sweep's own grouped report is a better failure message than 62208
-    // individual results: one broken rule fails hundreds of cases, and what you
+    // Kept as one Fact rather than a Theory per case. A hundred thousand xUnit
+    // test cases would cost more in discovery and reporting than the sweep costs
+    // to run, and the sweep's own grouped report is a better failure message
+    // than that many individual results: one broken rule fails hundreds of cases, and what you
     // need to see is the rule, not the roll call.
     public class OrbArrangementSweepTests
     {
@@ -44,9 +44,15 @@ namespace ClaudeBuddy.Tests
         {
             var cases = ArrangementSweep.Cases().ToList();
 
+            // 108864 since CB-198 added orb sizes: the first sweep at four
+            // sizes (both platforms' floors, 1.0 and the top), and a mixed-size
+            // sweep. It stood at 62208 before that,
+            // which had itself gone stale — the matrix it guarded was already
+            // 72576 — and a floor that low would not have noticed the size
+            // dimension being dropped. Raised to the real count, not near it.
             Assert.True(
-                cases.Count >= 62208,
-                $"the sweep is down to {cases.Count} cases from 62208 — "
+                cases.Count >= 108864,
+                $"the sweep is down to {cases.Count} cases from 108864 — "
                     + "if that was deliberate, raise the floor in this test");
 
             // All three sweeps present. The anchored half was added after a
@@ -64,6 +70,14 @@ namespace ClaudeBuddy.Tests
             // its presence alone would not prove the bands are ever cut.
             Assert.Contains(cases, c =>
                 c.Split is { } split && split.Build(6).Distinct().Count() > 1);
+
+            // Both ends of the orb-size slider, uniformly, and orbs of
+            // different sizes side by side (CB-198) — the last of which is the
+            // only half that exercises "laid out for the largest orb".
+            Assert.Contains(cases, c => c.Mix is null && c.Size == OrbSizing.MinMacOS);
+            Assert.Contains(cases, c => c.Mix is null && c.Size == OrbSizing.MinWindows);
+            Assert.Contains(cases, c => c.Mix is null && c.Size == OrbSizing.Max);
+            Assert.Contains(cases, c => c.Mix is { } mix && mix.Build(5).Distinct().Count() > 1);
         }
     }
 }

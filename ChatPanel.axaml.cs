@@ -92,6 +92,14 @@ namespace ClaudeBuddy
 
         internal bool IsPinned => _pinned;
 
+        // CB-198: an orb changing size moves its centre-to-edge gap, so the one
+        // panel that is placed relative to its orb follows. A pinned panel is
+        // left exactly where it was put, for the reason SetPinned gives.
+        internal static void FollowOrbResize()
+        {
+            if (Transient is { IsVisible: true } panel) panel.Reposition();
+        }
+
         private static readonly Dictionary<string, string> Drafts = new(StringComparer.Ordinal);
 
         private IRemoteChatSession? _session;
@@ -179,9 +187,10 @@ namespace ClaudeBuddy
         private List<SlashCommand> _slashMatches = new();
         private int _slashSelected;
 
-        // Distance from the orb's centre to the panel's near edge. Clears the
-        // 56pt orb with a small gap, the same way OrbFlyout's ArcRadius does.
-        private const int Gap = 34;
+        // Distance from the orb's centre to the panel's near edge is
+        // OrbSizing.ChatPanelGap(orb size) — it was a flat 34 that cleared the
+        // 56pt orb with a small gap, and a CB-198 orb at 2x would sit on top of
+        // a panel only 34 from its centre.
 
         // The size the XAML ships, captured before anything has been restored
         // over it. An agent with no saved size has to go *back* to this, not
@@ -1648,10 +1657,10 @@ namespace ClaudeBuddy
         {
             if (_owner is null) return;
 
-            // Anchor on the orb's centre, the same constant EnsureFlyoutShown
+            // Anchor on the orb's centre, the same point EnsureFlyoutShown
             // uses. PointToScreen because Position is physical pixels and these
             // are DIPs, and the two only agree at 100% scaling.
-            var anchor = _owner.PointToScreen(new Point(28, 28));
+            var anchor = _owner.PointToScreen(new Point(_owner.CentreDip, _owner.CentreDip));
             var screen = Screens.ScreenFromPoint(anchor) ?? Screens.Primary;
             if (screen is null) return;
 
@@ -1662,7 +1671,7 @@ namespace ClaudeBuddy
             // so unlike the old SizeToContent world these are already final —
             // no need to wait on Root's laid-out bounds.
             var size = new PixelSize((int)(Width * scale), (int)(Height * scale));
-            var gap = (int)(Gap * scale);
+            var gap = (int)(OrbSizing.ChatPanelGap(_owner.OrbSize) * scale);
 
             // Below the orb, flipped above when below would run off the bottom,
             // clamped into the work area — the maths this method used to do
@@ -2767,7 +2776,7 @@ namespace ClaudeBuddy
             //
             // The orb gets its hover arc back, which reads backwards until you
             // say the rule out loud. The arc is suppressed while a chat is open
-            // because the panel is drawn a Gap away from the orb's centre —
+            // because the panel is drawn ChatPanelGap from the orb's centre —
             // over exactly the radius the arc wants. So the rule is not "a chat
             // is open", it is "the panel has that space", and a pinned panel
             // does not: it can be dragged to the other side of the screen, and

@@ -686,6 +686,295 @@ public class LocalPersonaTests : IDisposable
         Assert.Single(persona.Files);
     }
 
+    // --- Resolve: a member's persona resolves as a unit (CB-191) -----------
+    //
+    // Before this, name/voice/rate/avatar were four independent first-wins
+    // races over the whole candidate list. A team member's own profile —
+    // naming itself but no picture — won the name race and then lost the
+    // avatar race a few candidates later to the project's own CLAUDE.md. The
+    // result wore the member's name and the project's face: two personas'
+    // fields, stitched together.
+
+    private void WriteProjectPersona(string project, string claudeDir)
+    {
+        File.WriteAllBytes(Path.Combine(claudeDir, "cto.png"), Png());
+        Write(claudeDir, "PERSONA.MD", "## Attributes", "Name Jennifer", "Profile Photo cto.png");
+        Write(project, "CLAUDE.md", "@.claude/PERSONA.MD");
+    }
+
+    // The ticket's own repro steps, and the negative control this ticket
+    // asks for: on develop this fails, because AvatarPath resolves to
+    // Jennifer's cto.png instead of staying null.
+    [Fact]
+    public void AMembersNameDoesNotBorrowTheProjectsPicture()
+    {
+        var project = Dir("tree", "project");
+        var claudeDir = Dir("tree", "project", ".claude");
+        WriteProjectPersona(project, claudeDir);
+
+        var memberDir = Dir("tree", "project", ".profiles-assets", "ines-harrow");
+        Write(memberDir, "ines-harrow.md", "## Attributes", "Name Ines Harrow");
+
+        var persona = LocalPersona.Resolve(project, SessionSource.ClaudeCode, Array.Empty<string>(), "ines-harrow");
+
+        Assert.Equal("Ines Harrow", persona.Name);
+        Assert.Null(persona.AvatarPath);
+        Assert.Null(persona.AvatarSource);
+    }
+
+    // The other mixing direction: a member file naming only a picture must
+    // not pick up the project's name either.
+    [Fact]
+    public void AMembersPictureDoesNotBorrowTheProjectsName()
+    {
+        var project = Dir("tree", "project");
+        var claudeDir = Dir("tree", "project", ".claude");
+        WriteProjectPersona(project, claudeDir);
+
+        var memberDir = Dir("tree", "project", ".profiles-assets", "ines-harrow");
+        File.WriteAllBytes(Path.Combine(memberDir, "face.png"), Png());
+        Write(memberDir, "ines-harrow.md", "## Attributes", "Profile Photo face.png");
+
+        var persona = LocalPersona.Resolve(project, SessionSource.ClaudeCode, Array.Empty<string>(), "ines-harrow");
+
+        // No name at all — never the project's. OrbLabel's own fallback to
+        // the agent's name is what puts a label on the orb; that is a
+        // separate mechanism (see the OrbLabel tests below) and not this
+        // Persona's own Name field.
+        Assert.Null(persona.Name);
+        Assert.Equal(Path.Combine(memberDir, "face.png"), persona.AvatarPath);
+    }
+
+    // Control: a session that is not a team member at all still gets the
+    // project persona, name and picture together, exactly as before CB-154.
+    [Fact]
+    public void ASessionThatIsNotATeamMemberStillGetsTheProjectPersona()
+    {
+        var project = Dir("tree", "project");
+        var claudeDir = Dir("tree", "project", ".claude");
+        WriteProjectPersona(project, claudeDir);
+
+        var persona = LocalPersona.Resolve(project, SessionSource.ClaudeCode, Array.Empty<string>());
+
+        Assert.Equal("Jennifer", persona.Name);
+        Assert.Equal(Path.Combine(claudeDir, "cto.png"), persona.AvatarPath);
+    }
+
+    // Control, the other shape of "not a team member": an agent name is
+    // given, but neither profiles/ nor .profiles-assets/ exists for it —
+    // there is no member candidate to be exclusive, so this falls straight
+    // through to the project persona exactly as the no-agent-name case does.
+    [Fact]
+    public void AnAgentNameWithNoMemberFileStillGetsTheProjectPersona()
+    {
+        var project = Dir("tree", "project");
+        var claudeDir = Dir("tree", "project", ".claude");
+        WriteProjectPersona(project, claudeDir);
+
+        var persona = LocalPersona.Resolve(project, SessionSource.ClaudeCode, Array.Empty<string>(), "ines-harrow");
+
+        Assert.Equal("Jennifer", persona.Name);
+        Assert.Equal(Path.Combine(claudeDir, "cto.png"), persona.AvatarPath);
+    }
+
+    // Control: a member profile that states both fields keeps both — the fix
+    // only has to stop mixing, not stop a member from having a picture.
+    [Fact]
+    public void AMemberWithBothANameAndAPictureGetsBoth()
+    {
+        var project = Dir("tree", "project");
+        var claudeDir = Dir("tree", "project", ".claude");
+        WriteProjectPersona(project, claudeDir);
+
+        var memberDir = Dir("tree", "project", ".profiles-assets", "ines-harrow");
+        File.WriteAllBytes(Path.Combine(memberDir, "face.png"), Png());
+        Write(memberDir, "ines-harrow.md", "## Attributes", "Name Ines Harrow", "Profile Photo face.png");
+
+        var persona = LocalPersona.Resolve(project, SessionSource.ClaudeCode, Array.Empty<string>(), "ines-harrow");
+
+        Assert.Equal("Ines Harrow", persona.Name);
+        Assert.Equal(Path.Combine(memberDir, "face.png"), persona.AvatarPath);
+    }
+
+    // The two shapes profile-gen's --output can write for one agent —
+    // profiles/<name>/<name>.md (tracked) and .profiles-assets/<name>/<name>.md
+    // (gitignored) — split across both, same as CB-6's own storage.py cases.
+    // On develop this already worked, as two independent first-wins races
+    // over the whole candidate list; a version of this fix that decided
+    // exclusivity candidate by candidate regressed it, returning as soon as
+    // profiles/ alone said anything and never even reading the second file.
+    // Both member candidates are read and folded together before that
+    // decision runs, so this is the control that pins the regression QA
+    // found rather than the ticket's own AC.
+    [Fact]
+    public void TheTwoMemberProfileShapesCombineAsOnePersonaRatherThanRacing()
+    {
+        var project = Dir("tree", "project");
+        var claudeDir = Dir("tree", "project", ".claude");
+        WriteProjectPersona(project, claudeDir);
+
+        var trackedDir = Dir("tree", "project", "profiles", "ines-harrow");
+        Write(trackedDir, "ines-harrow.md", "## Attributes", "Name Ines Harrow");
+
+        var gitignoredDir = Dir("tree", "project", ".profiles-assets", "ines-harrow");
+        File.WriteAllBytes(Path.Combine(gitignoredDir, "face.png"), Png());
+        Write(gitignoredDir, "ines-harrow.md", "## Attributes", "Profile Photo face.png");
+
+        var persona = LocalPersona.Resolve(project, SessionSource.ClaudeCode, Array.Empty<string>(), "ines-harrow");
+
+        Assert.Equal("Ines Harrow", persona.Name);
+        Assert.Equal(Path.Combine(gitignoredDir, "face.png"), persona.AvatarPath);
+    }
+
+    // The other half of the split-shape case: both member files exist and
+    // are read together, and *neither* names a picture. The merge above
+    // must not turn "both files read" into "go looking somewhere else" —
+    // the run is still a member's own persona once it says anything, so it
+    // stays exclusive, and the orb wears initials rather than the project's
+    // face even though two files, not one, were tried and came up short on
+    // exactly that field.
+    [Fact]
+    public void TheTwoMemberProfileShapesStillExcludeTheProjectsFaceWhenNeitherNamesAPicture()
+    {
+        var project = Dir("tree", "project");
+        var claudeDir = Dir("tree", "project", ".claude");
+        WriteProjectPersona(project, claudeDir);
+
+        var trackedDir = Dir("tree", "project", "profiles", "ines-harrow");
+        Write(trackedDir, "ines-harrow.md", "## Attributes", "Name Ines Harrow");
+
+        var gitignoredDir = Dir("tree", "project", ".profiles-assets", "ines-harrow");
+        Write(gitignoredDir, "ines-harrow.md", "## Attributes", "Name Ines Harrow Again");
+
+        var persona = LocalPersona.Resolve(project, SessionSource.ClaudeCode, Array.Empty<string>(), "ines-harrow");
+
+        // profiles/ is read first, so it wins the name; .profiles-assets/
+        // is still read (both files are in the run), but has nothing left
+        // to contribute since the name is already taken.
+        Assert.Equal("Ines Harrow", persona.Name);
+        Assert.Null(persona.AvatarPath);
+        Assert.Null(persona.AvatarSource);
+    }
+
+    // AC4: voice and rate follow the same rule as name and avatar — a
+    // member's own file, once it says anything, is the whole answer, so a
+    // member does not inherit the project's voice either.
+    [Fact]
+    public void AMembersNameDoesNotBorrowTheProjectsVoice()
+    {
+        var project = Dir("tree", "project");
+        var claudeDir = Dir("tree", "project", ".claude");
+        Write(claudeDir, "PERSONA.MD", "## Attributes", "Name Jennifer", "Her voice is Samantha");
+        Write(project, "CLAUDE.md", "@.claude/PERSONA.MD");
+
+        var memberDir = Dir("tree", "project", ".profiles-assets", "ines-harrow");
+        Write(memberDir, "ines-harrow.md", "## Attributes", "Name Ines Harrow");
+
+        var persona = LocalPersona.Resolve(project, SessionSource.ClaudeCode, Array.Empty<string>(), "ines-harrow");
+
+        Assert.Equal("Ines Harrow", persona.Name);
+        Assert.Null(persona.Voice);
+    }
+
+    // A member candidate that exists but states nothing at all is not
+    // "found" in the ticket's sense — it falls through exactly as a missing
+    // file would, and the walk keeps folding the project's files behind it.
+    [Fact]
+    public void AMemberFileWithNothingInItFallsThroughToTheProject()
+    {
+        var project = Dir("tree", "project");
+        var claudeDir = Dir("tree", "project", ".claude");
+        WriteProjectPersona(project, claudeDir);
+
+        var memberDir = Dir("tree", "project", ".profiles-assets", "ines-harrow");
+        Write(memberDir, "ines-harrow.md", "# Just a heading", "and some prose about the member.");
+
+        var persona = LocalPersona.Resolve(project, SessionSource.ClaudeCode, Array.Empty<string>(), "ines-harrow");
+
+        Assert.Equal("Jennifer", persona.Name);
+        Assert.Equal(Path.Combine(claudeDir, "cto.png"), persona.AvatarPath);
+    }
+
+    // The other way a member file can be "found": naming a picture that
+    // PersonaFiles cannot read (a typo, here — no file at that path). A
+    // group that leaves AvatarPath null is not the same as a group that
+    // said nothing at all, and treating it that way would fall through to
+    // the project's CLAUDE.md and put the project lead's face back on this
+    // member's orb — CB-191's exact symptom, reached through a broken
+    // reference rather than an absent field.
+    [Fact]
+    public void AMemberNamingAnUnreadablePictureStillExcludesTheProjectsFaceEvenThoughItGetsNoPicture()
+    {
+        var project = Dir("tree", "project");
+        var claudeDir = Dir("tree", "project", ".claude");
+        WriteProjectPersona(project, claudeDir);
+
+        // Front matter — RawAvatar, the field this fix reads, is set by
+        // every labelled arm (front matter, a bullet, a bold field, a table
+        // row, and the colon-less "## Attributes" form too, since
+        // PersonaMarkdown.Parse's Assign now sets it for that arm alongside
+        // the prose one — see PersonaMarkdown.cs). The sibling case right
+        // below writes the colon-less shape instead, so both are pinned
+        // rather than just the one this file already reached for elsewhere.
+        var memberDir = Dir("tree", "project", ".profiles-assets", "ines-harrow");
+        Write(memberDir, "ines-harrow.md", "---", "image: \"typo.png\"", "---");
+
+        var persona = LocalPersona.Resolve(project, SessionSource.ClaudeCode, Array.Empty<string>(), "ines-harrow");
+
+        Assert.NotEqual("Jennifer", persona.Name);
+        Assert.Null(persona.Name);
+        Assert.Null(persona.AvatarPath);
+        Assert.Null(persona.AvatarSource);
+    }
+
+    // The colon-less sibling of the test above, and the one that actually
+    // matters most: "## Attributes" / "Profile Photo <file>" is this
+    // repository's own PERSONA.MD convention and, per PersonaMarkdown.cs's
+    // own header comment, "the form people actually reach for when they are
+    // *listing* attributes rather than addressing Claude" — so a member
+    // profile is more likely to be written this way than in front matter.
+    // Before PersonaMarkdown.Parse's Assign started setting RawAvatar for
+    // this arm too, this exact fixture fell through to the project's
+    // CLAUDE.md and put Jennifer's face on the member's orb, identical to
+    // the bug this whole ticket exists to fix — just reached through a
+    // grammar arm the fix's first pass never touched.
+    [Fact]
+    public void AMemberNamingAnUnreadablePictureInTheColonLessFormStillExcludesTheProjectsFace()
+    {
+        var project = Dir("tree", "project");
+        var claudeDir = Dir("tree", "project", ".claude");
+        WriteProjectPersona(project, claudeDir);
+
+        var memberDir = Dir("tree", "project", ".profiles-assets", "ines-harrow");
+        Write(memberDir, "ines-harrow.md", "## Attributes", "Profile Photo typo.png");
+
+        var persona = LocalPersona.Resolve(project, SessionSource.ClaudeCode, Array.Empty<string>(), "ines-harrow");
+
+        Assert.NotEqual("Jennifer", persona.Name);
+        Assert.Null(persona.Name);
+        Assert.Null(persona.AvatarPath);
+        Assert.Null(persona.AvatarSource);
+    }
+
+    // The monorepo layering TheNearestFileToNameAFieldOwnsIt already pins
+    // must survive this ticket untouched: with no agent name anywhere, no
+    // candidate is ever IsMemberProfile, so a nearer file's name is still
+    // just a default the farther file's voice can fill in behind it — that
+    // was never the bug CB-191 is about.
+    [Fact]
+    public void ANonMemberMonorepoStillLayersFieldsAcrossLevels()
+    {
+        var parent = Dir("tree");
+        var child = Dir("tree", "project");
+        Write(parent, "CLAUDE.md", "Her name is Parent", "Her voice is Samantha");
+        Write(child, "CLAUDE.md", "Her name is Leota");
+
+        var persona = LocalPersona.Resolve(child, SessionSource.ClaudeCode, Array.Empty<string>());
+
+        Assert.Equal("Leota", persona.Name);
+        Assert.Equal("Samantha", persona.Voice);
+    }
+
     // --- Signature: what the scan compares ---------------------------------
 
     [Fact]

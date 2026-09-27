@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
+using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Layout;
@@ -165,13 +166,44 @@ namespace ClaudeBuddy
         internal static readonly object OpenClawTag = new();
 
         private readonly StackPanel _cliList = new() { Spacing = 6 };
+        private readonly StackPanel _accountSection = new() { Spacing = 6, IsVisible = false };
         private readonly StackPanel _folderSection = new() { Spacing = 6 };
         private readonly StackPanel _agentSection = new() { Spacing = 6, IsVisible = false };
+        private readonly ComboBox _accountCombo = new() { MinWidth = 260, HorizontalAlignment = HorizontalAlignment.Stretch };
         private readonly ComboBox _folderCombo = new() { MinWidth = 260, HorizontalAlignment = HorizontalAlignment.Stretch };
         private readonly ComboBox _agentCombo = new() { MinWidth = 260, HorizontalAlignment = HorizontalAlignment.Stretch };
-        private readonly TextBlock _statusLine = new() { TextWrapping = TextWrapping.Wrap, Opacity = 0.8 };
+        // Three lines reserved up front and trimmed past that, rather than
+        // left to grow: every message this line shows arrives after the window
+        // is on screen, and a launch message carries the whole folder path, so
+        // an unbounded line would resize the window after show — exactly what
+        // CB-207 removes (see ReservedSlot). The reserve is a deliberate cost
+        // to every New chat window, 38pt taller than before CB-207, sized to
+        // the longest fixed message rather than to the rare long path: two
+        // lines was tried and "Terminal opened; no orb yet…" measured three at
+        // this width, so it would have been trimmed on screen
+        // (EveryFixedStatusMessageFitsTheReservedLines pins it). A path that
+        // needs more is trimmed, with the full text in the ToolTip.
+        private const int StatusLines = 3;
+        private const double StatusLineHeight = 18;
+
+        private readonly TextBlock _statusLine = new()
+        {
+            TextWrapping = TextWrapping.Wrap,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            MaxLines = StatusLines,
+            LineHeight = StatusLineHeight,
+            MinHeight = StatusLines * StatusLineHeight,
+            Opacity = 0.8
+        };
         private readonly Button _startButton = new() { Content = "Start" };
         private readonly Button _browseButton = new() { Content = "Browse…" };
+        // CB-207's space-holders, one per slot whose occupant changes after
+        // show. See ReservedSlot for why they exist and Ghost for what they
+        // are; which ones are visible is decided once, in BuildCliList.
+        private readonly Control _accountGhost = Ghost("Account", withBrowse: false);
+        private readonly Control _folderGhost = Ghost("Folder", withBrowse: true);
+        private readonly Control _agentGhost = Ghost("Agent", withBrowse: false);
+        private Grid? _accountSlot;
         private readonly NewChatCli? _prefillCli;
         private readonly string? _prefillCwd;
         private readonly string? _prefillAgentId;
@@ -207,6 +239,16 @@ namespace ClaudeBuddy
             KeyDown += OnWindowKeyDown;
 
             Content = Body();
+
+            // Once more now the account slot exists: BuildCliList ran inside
+            // Body(), before it did, so the slot's own visibility was never set.
+            UpdateTargetSectionVisibility();
+
+            // The full text of a status message the three-line trim cut short.
+            _statusLine.PropertyChanged += (_, e) =>
+            {
+                if (e.Property == TextBlock.TextProperty) ToolTip.SetTip(_statusLine, _statusLine.Text);
+            };
         }
 
         // Escape and Cmd-W close it, the same as SettingsWindow — a small
@@ -241,6 +283,17 @@ namespace ClaudeBuddy
             BuildCliList();
             root.Children.Add(_cliList);
 
+            // Between the CLI list and the Folder section, the same reading
+            // order the plan's own mockup gives: which CLI, then which
+            // account it runs under, then where. Hidden by default and only
+            // ever shown by UpdateTargetSectionVisibility — CB-201's "empty
+            // list means no picker" decision, and never for anything but
+            // Claude Code (see that method's own comment).
+            _accountSection.Children.Add(new TextBlock { Text = "Account", FontWeight = FontWeight.SemiBold });
+            _accountSection.Children.Add(_accountCombo);
+            _accountSlot = ReservedSlot(_accountGhost, _accountSection);
+            root.Children.Add(_accountSlot);
+
             // Folder (local CLIs) and Agent (OpenClaw) occupy the same slot —
             // "OpenClaw selected: an agent picker replaces the folder field"
             // is the plan's own wording — so both sections are built once
@@ -256,11 +309,10 @@ namespace ClaudeBuddy
             BuildFolderCombo();
             folderRow.Children.Add(_folderCombo);
             _folderSection.Children.Add(folderRow);
-            root.Children.Add(_folderSection);
 
             _agentSection.Children.Add(new TextBlock { Text = "Agent", FontWeight = FontWeight.SemiBold });
             _agentSection.Children.Add(_agentCombo);
-            root.Children.Add(_agentSection);
+            root.Children.Add(ReservedSlot(_folderGhost, _agentGhost, _folderSection, _agentSection));
 
             _startButton.Click += async (_, _) => await StartClicked();
             root.Children.Add(_startButton);
@@ -270,10 +322,110 @@ namespace ClaudeBuddy
             return root;
         }
 
+        // CB-207: a window that resizes itself while it is on screen can be
+        // left drawing a stale surface. Measured on a real Mac (Avalonia
+        // 12.1.1): change the window's height while it is not presenting —
+        // minimised was the reliable way to get there — and once it presents
+        // again the old-sized surface is stretched to the new frame, until the
+        // next resize. Growing gives exactly what was reported: everything
+        // scaled up, Start cut off at the bottom, and a layout that no longer
+        // lines up with what is drawn. Minimising only makes it certain: the
+        // same stale-surface stretch is a race on any resize, which is why the
+        // report says "sometimes" — AvaloniaUI/Avalonia#22215, open and
+        // unmerged at 12.1.1, describes a Metal frame rendered into a surface
+        // of the old size and stretched by Core Animation after a resize.
+        // Avalonia.Native also drops a resize that arrives while another is
+        // in progress (WindowBaseImpl::Resize's _inResize guard), and marks
+        // any frame change during a live resize as a User resize, which
+        // Window.HandleResized answers by switching SizeToContent off for good
+        // even with CanResize false.
+        //
+        // So nothing that changes after show is allowed to change the height.
+        // Each slot whose occupant changes (Account shown or hidden, Folder
+        // swapped for Agent) is a single Grid cell holding its real sections
+        // plus a ghost of every shape that could appear there, so the cell,
+        // and so the window, is always as tall as the tallest of them. The
+        // window keeps SizeToContent, which now resolves once, before the
+        // first show, and never moves after it.
+        //
+        // The real sections keep toggling IsVisible exactly as before, so a
+        // hidden picker is still gone from the tab order and from
+        // accessibility. Only the ghost takes up the space, and it takes
+        // nothing else.
+        private static Grid ReservedSlot(params Control[] layers)
+        {
+            var slot = new Grid();
+            foreach (var layer in layers)
+            {
+                layer.VerticalAlignment = VerticalAlignment.Top;
+                slot.Children.Add(layer);
+            }
+
+            return slot;
+        }
+
+        // A section's shape with nothing in it that can be seen, clicked,
+        // focused or announced: the same label, the same ComboBox (holding one
+        // item, since an empty ComboBox measures shorter than one showing its
+        // selection), and the Browse button when the section has one. Each
+        // control is disabled and unfocusable itself, not only through the
+        // panel, so Tab can never land on one. Built
+        // from the same controls as the real section rather than a hard-coded
+        // height, so it measures the same in both themes and at any font size.
+        // The tests pin that the height really does hold across every switch,
+        // which catches this shape drifting away from the real one.
+        private static Control Ghost(string label, bool withBrowse)
+        {
+            var field = new ComboBox
+            {
+                MinWidth = 260,
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                ItemsSource = new[] { label },
+                SelectedIndex = 0,
+                IsEnabled = false,
+                Focusable = false
+            };
+
+            Control row = field;
+            if (withBrowse)
+            {
+                var browse = new Button
+                {
+                    Content = "Browse…",
+                    Margin = new Avalonia.Thickness(8, 0, 0, 0),
+                    IsEnabled = false,
+                    Focusable = false
+                };
+                var dock = new DockPanel();
+                DockPanel.SetDock(browse, Dock.Right);
+                dock.Children.Add(browse);
+                dock.Children.Add(field);
+                row = dock;
+            }
+
+            var ghost = new StackPanel
+            {
+                Spacing = 6,
+                Opacity = 0,
+                IsHitTestVisible = false,
+                IsEnabled = false,
+                IsVisible = false
+            };
+            ghost.Children.Add(new TextBlock { Text = label, FontWeight = FontWeight.SemiBold });
+            ghost.Children.Add(row);
+            AutomationProperties.SetAccessibilityView(ghost, AccessibilityView.Raw);
+            return ghost;
+        }
+
         // internal for NewChatWindowSmokeTests, the same visibility
         // TrayMenuTests etc. use to reach a window's own children without a
         // synthesized click on each one.
+        internal Control AccountGhost => _accountGhost;
+        internal Control FolderGhost => _folderGhost;
+        internal Control AgentGhost => _agentGhost;
         internal StackPanel CliList => _cliList;
+        internal StackPanel AccountSection => _accountSection;
+        internal ComboBox AccountCombo => _accountCombo;
         internal ComboBox FolderCombo => _folderCombo;
         internal StackPanel FolderSection => _folderSection;
         internal ComboBox AgentCombo => _agentCombo;
@@ -323,6 +475,7 @@ namespace ClaudeBuddy
                     if (radio.IsChecked != true) return;
                     _selectedCli = capturedCli;
                     _openClawSelected = false;
+                    BuildAccountCombo();
                     UpdateTargetSectionVisibility();
                 };
 
@@ -338,6 +491,17 @@ namespace ClaudeBuddy
                 ClaudeBuddySettings.OpenClawEnabled, ClaudeBuddySettings.OpenClawHost,
                 ClaudeBuddySettings.OpenClawReplyEnabled);
             var openClawReady = openClawAvailability == OpenClawNewChatAvailability.Ready;
+
+            // Which shapes each slot can ever hold for this window's lifetime
+            // (CB-207, see ReservedSlot) — decided once here from the same
+            // inputs the sections themselves are shown from, so a slot is
+            // never reserved for something that could not appear in it. A
+            // user with no extra accounts gets no gap where the picker would
+            // be; the window reads exactly as it did before CB-201.
+            var claudeCodeUsable = options.Any(o => o.Cli == NewChatCli.ClaudeCode && o.Enabled);
+            _accountGhost.IsVisible = claudeCodeUsable && AccountChoices().Count > 1;
+            _folderGhost.IsVisible = options.Any(o => o.Enabled);
+            _agentGhost.IsVisible = openClawReady;
 
             var openClawRadio = new RadioButton
             {
@@ -356,6 +520,7 @@ namespace ClaudeBuddy
                 _selectedCli = null;
                 _openClawSelected = true;
                 BuildAgentCombo();
+                BuildAccountCombo();
                 UpdateTargetSectionVisibility();
             };
 
@@ -380,6 +545,7 @@ namespace ClaudeBuddy
                 _openClawSelected = true;
                 openClawRadio.IsChecked = true;
                 BuildAgentCombo(wantedAgent);
+                BuildAccountCombo();
                 UpdateTargetSectionVisibility();
                 return;
             }
@@ -411,7 +577,61 @@ namespace ClaudeBuddy
         {
             _folderSection.IsVisible = !_openClawSelected;
             _agentSection.IsVisible = _openClawSelected;
+
+            // Claude Code only (CB-201's "Claude Code only" decision — Codex
+            // and Grok use CODEX_HOME/GROK_HOME, a separate mechanism this
+            // ticket leaves alone), never alongside OpenClaw, and never shown
+            // for a one-entry list (Default alone) — CB-201's "empty list
+            // means no picker" decision. Read off the combo's own item count
+            // rather than a separate field, so this can never drift out of
+            // sync with what BuildAccountCombo actually populated.
+            var accountChoiceCount = (_accountCombo.ItemsSource as IEnumerable<NewChatAccounts.Choice>)?.Count() ?? 0;
+            //
+            // And never beyond the space BuildCliList reserved when the window
+            // was built (CB-207). The count is read fresh on every switch, but
+            // Settings is not modal, so accounts can be added while this
+            // dialog is open; showing a picker that no ghost made room for
+            // would grow the window on screen, which is the very resize
+            // CB-207 removes. A new account appears the next time the dialog
+            // opens; one removed mid-session just hides the picker, leaving
+            // the ghost to hold the height.
+            _accountSection.IsVisible = _accountGhost.IsVisible
+                && !_openClawSelected && _selectedCli == NewChatCli.ClaudeCode && accountChoiceCount > 1;
+
+            // An empty slot would still collect the root StackPanel's spacing,
+            // leaving a 12px gap where the picker never appears.
+            if (_accountSlot is not null) _accountSlot.IsVisible = _accountGhost.IsVisible;
         }
+
+        // Populates the Account combo for whichever CLI is now selected —
+        // every real choice from ClaudeCodeProfileDirs when it's Claude Code,
+        // cleared otherwise so a stale list from a previous selection can
+        // never leak into UpdateTargetSectionVisibility's item count. Restores
+        // the last-chosen account, falling back to Default when that entry
+        // has since been removed from settings (CB-201's own restore rule).
+        private void BuildAccountCombo()
+        {
+            if (_selectedCli != NewChatCli.ClaudeCode)
+            {
+                _accountCombo.ItemsSource = null;
+                return;
+            }
+
+            var choices = AccountChoices();
+            _accountCombo.ItemsSource = choices;
+
+            var saved = ClaudeBuddySettings.NewChatLastProfile;
+            var preferredIndex = saved is { Length: > 0 }
+                ? choices.FindIndex(c => c.ProfileDir == saved)
+                : -1;
+
+            _accountCombo.SelectedIndex = preferredIndex >= 0 ? preferredIndex : 0;
+        }
+
+        private static List<NewChatAccounts.Choice> AccountChoices() =>
+            NewChatAccounts.Choices(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                ClaudeBuddySettings.ClaudeCodeProfileDirs).ToList();
 
         // The stated reason/warning line under a CLI row — small, secondary
         // text, indented to read as belonging to the row above it. Tag
@@ -520,18 +740,28 @@ namespace ClaudeBuddy
                 ? chosen
                 : Environment.CurrentDirectory;
 
+            // Only Claude Code ever shows the Account section (CB-201), so
+            // this reads as "the account combo's real selection when that
+            // section is what's on screen, otherwise Default" rather than
+            // needing its own visibility check.
+            var profileDir = cli == NewChatCli.ClaudeCode && _accountCombo.SelectedItem is NewChatAccounts.Choice choice
+                ? choice.ProfileDir
+                : null;
+
             _startButton.IsEnabled = false;
             _statusLine.Text = "Starting…";
 
             var priorIds = new HashSet<string>(CurrentStatuses().Keys, StringComparer.Ordinal);
 
-            var launch = NewChatLauncher.LaunchForTests?.Invoke(cli, folder) ?? NewChatLauncher.Launch(cli, folder);
+            var launch = NewChatLauncher.LaunchForTests?.Invoke(cli, folder, profileDir)
+                ?? NewChatLauncher.Launch(cli, folder, profileDir);
             _statusLine.Text = launch.Message;
             _startButton.IsEnabled = true;
 
             if (launch.Outcome != LaunchOutcome.Launched) return;
 
             ClaudeBuddySettings.SetNewChatLastCli(cli.ToString());
+            ClaudeBuddySettings.SetNewChatLastProfile(profileDir);
 
             var updatedFolders = RecentFolders.Merge(
                 CurrentStatuses().Values,

@@ -422,7 +422,19 @@ namespace ClaudeBuddy
             // two are independent — an agent's main session is the heartbeat's
             // default target and is still the session you talk to it in. See
             // OpenClawHeartbeat.
-            bool Heartbeat);
+            bool Heartbeat,
+
+            // CB-170: the two fields the orb's Interrupt and End rows need.
+            // SessionId is the gateway's id for the conversation *behind* the
+            // key, which sessions.patch demands as expectedSessionId before it
+            // will archive anything — measured: refused without it. IsMain is
+            // the gateway's own answer to "is this an agent's main session",
+            // which it refuses to archive, so End is hidden on one rather than
+            // offered and refused. Defaulted so a session built by hand (a
+            // test, a fixture) is an ordinary non-main one with no id, which
+            // offers Interrupt and not End.
+            string? SessionId = null,
+            bool IsMain = false);
 
         // Where a reply in this session is supposed to end up. The gateway
         // resolves this itself when asked to deliver an agent's answer, but a
@@ -1195,6 +1207,16 @@ namespace ClaudeBuddy
                 var key = Str(s, "key") ?? Str(s, "sessionKey");
                 if (string.IsNullOrEmpty(key)) continue;
 
+                // An archived conversation is over, by the gateway's own
+                // account, and gets no orb, no room membership and no address.
+                // sessions.list already leaves them out, so this is belt and
+                // braces — but a row carrying the flag is exactly what an
+                // archive from any client looks like (CB-170: measured, the
+                // sessions.changed for an archive carries the whole row with
+                // archived:true), and drawing one would put back the orb the
+                // user just ended.
+                if (Bool(s, "archived") == true) continue;
+
                 var origin = s.TryGetProperty("origin", out var o) && o.ValueKind == JsonValueKind.Object
                     ? o
                     : default;
@@ -1297,7 +1319,9 @@ namespace ClaudeBuddy
                     activity,
                     DeliveryFor(s),
                     kind,
-                    heartbeat));
+                    heartbeat,
+                    Str(s, "sessionId"),
+                    Bool(s, "isMain") == true));
             }
 
             AssignColours(everyAgent);
@@ -1548,6 +1572,25 @@ namespace ClaudeBuddy
             // (CB-169), so they count — and nothing of this event reaches a
             // transcript, which it never did.
             var roster = name == "sessions.changed";
+
+            // An archive, from this app or any other client, arrives as a
+            // sessions.changed carrying the whole row with archived:true
+            // (CB-170, measured). The conversation is over: it leaves the
+            // snapshot now rather than on the next poll, and whatever run or
+            // activity was recorded for it goes with it, so nothing can hold
+            // its orb up. Parse drops the same row on the poll path.
+            if (roster && Bool(payload, "archived") == true)
+            {
+                lock (Gate)
+                {
+                    Running.Remove(key);
+                    LastSeen.Remove(key);
+                }
+
+                Forget(key);
+                return;
+            }
+
             if (roster && signal.Signal == RunSignal.None) return;
 
             OpenClawChatSession? chat;
@@ -1655,6 +1698,138 @@ namespace ClaudeBuddy
                 return (null, ex.Message);
             }
         }
+
+        // CB-170: what one orb's Interrupt and End rows may assume, read off the
+        // live connection and the last session list together. Both halves have
+        // to agree for a row to be offered — see
+        // SessionPresence.CanInterruptOpenClaw / CanEndOpenClawConversation —
+        // and reading them in one place keeps the menu from pairing a method
+        // list from one connection with a scope list from another.
+        internal static OpenClawActionContext CapabilitiesFor(string orbSessionId)
+        {
+            OpenClawGateway? gateway;
+            lock (Gate) gateway = _gateway;
+
+            var key = KeyOfOrb(orbSessionId);
+            if (gateway is null || key is null) return OpenClawActionContext.None;
+
+            var session = _snapshot.FirstOrDefault(s => s.Key == key);
+            return new OpenClawActionContext(
+                true, gateway.Methods, gateway.GrantedScopes,
+                session?.IsMain ?? false, session?.SessionId, key);
+        }
+
+        private static string? KeyOfOrb(string orbSessionId)
+        {
+            const string Prefix = "openclaw:";
+            return orbSessionId.StartsWith(Prefix, StringComparison.Ordinal)
+                   && orbSessionId.Length > Prefix.Length
+                ? orbSessionId[Prefix.Length..]
+                : null;
+        }
+
+        // How many times an archive refused as retryable is asked again, and how
+        // long apart. Measured on CB-170, an archive sent about a second after
+        // the abort it follows was accepted both times; the app sends it within
+        // milliseconds on the same connection, which nobody measured, and the
+        // gateway has a retryable refusal for exactly that window. Three tries
+        // half a second apart covers it without ever looking stuck.
+        internal const int ArchiveAttempts = 3;
+        internal static readonly TimeSpan ArchiveRetryDelay = TimeSpan.FromMilliseconds(500);
+
+        // Stops whatever the agent is generating in this conversation, and
+        // nothing else: chat.abort with the key alone aborts every run in the
+        // session, which is what the gateway's own Control UI Stop button
+        // sends. Never throws — the orb's row shows whatever this returns.
+        internal static async Task<(OpenClawActionOutcome Outcome, string? Detail)> InterruptAsync(
+            string orbSessionId, CancellationToken ct)
+        {
+            OpenClawGateway? gateway;
+            lock (Gate) gateway = _gateway;
+
+            var key = KeyOfOrb(orbSessionId);
+            if (gateway is null || key is null) return (OpenClawActionOutcome.NotConnected, null);
+
+            return await AbortAsync(gateway, key, ct);
+        }
+
+        // Archives the conversation on the gateway, after stopping anything it
+        // is running — the gateway refuses to archive a session mid-run, so the
+        // abort is the first step of ending rather than a separate choice.
+        // Archive and not delete: it is reversible from OpenClaw, and the
+        // gateway already drops archived keys from sessions.list, which is all
+        // the orb needs to go.
+        internal static async Task<(OpenClawActionOutcome Outcome, string? Detail)> EndConversationAsync(
+            string orbSessionId, CancellationToken ct, TimeSpan? retryDelay = null)
+        {
+            OpenClawGateway? gateway;
+            lock (Gate) gateway = _gateway;
+
+            var key = KeyOfOrb(orbSessionId);
+            if (gateway is null || key is null) return (OpenClawActionOutcome.NotConnected, null);
+
+            var sessionId = _snapshot.FirstOrDefault(s => s.Key == key)?.SessionId;
+            if (sessionId is null)
+            {
+                return (OpenClawActionOutcome.Refused, "the gateway hasn't listed this conversation");
+            }
+
+            var abort = await AbortAsync(gateway, key, ct);
+            if (abort.Outcome is not (OpenClawActionOutcome.Done or OpenClawActionOutcome.NothingRunning))
+            {
+                return abort;
+            }
+
+            for (var attempt = 1; ; attempt++)
+            {
+                try
+                {
+                    var res = await gateway.RequestAsync(OpenClawOrbActions.PatchMethod, new Dictionary<string, object>
+                    {
+                        ["key"] = key,
+                        ["archived"] = true,
+                        ["expectedSessionId"] = sessionId
+                    }, ct);
+
+                    var result = OpenClawOrbActions.ParsePatchResult(res);
+                    if (result.Outcome == OpenClawActionOutcome.Done) Forget(key);
+                    return result;
+                }
+                catch (Exception ex) when (OpenClawOrbActions.IsRetryable(ex) && attempt < ArchiveAttempts)
+                {
+                    await Task.Delay(retryDelay ?? ArchiveRetryDelay, ct);
+                }
+                catch (Exception ex)
+                {
+                    return OpenClawOrbActions.ClassifyFailure(ex);
+                }
+            }
+        }
+
+        private static async Task<(OpenClawActionOutcome Outcome, string? Detail)> AbortAsync(
+            OpenClawGateway gateway, string key, CancellationToken ct)
+        {
+            try
+            {
+                var res = await gateway.RequestAsync(OpenClawOrbActions.AbortMethod, new Dictionary<string, object>
+                {
+                    ["sessionKey"] = key
+                }, ct);
+
+                return OpenClawOrbActions.ParseAbortResult(res);
+            }
+            catch (Exception ex)
+            {
+                return OpenClawOrbActions.ClassifyFailure(ex);
+            }
+        }
+
+        // Takes an archived conversation off the snapshot at once, rather than
+        // leaving its orb up for as long as five seconds until the next poll says
+        // the same thing. Only ever after the gateway confirmed the archive, so
+        // this is the list catching up with a fact rather than predicting one.
+        private static void Forget(string key) =>
+            _snapshot = _snapshot.Where(s => s.Key != key).ToList();
 
         // Sends a reply into a session. Fails loudly rather than silently: the
         // panel puts whatever comes back in front of the person who typed it,

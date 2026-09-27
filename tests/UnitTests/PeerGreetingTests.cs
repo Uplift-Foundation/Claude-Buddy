@@ -151,7 +151,7 @@ public class PeerGreetingTests
     public void AConnectionAnswersToTheNameItWasAdoptedUnder()
     {
         using var link = Link();
-        using var stream = new MemoryStream();
+        using var stream = new BlocksUntilDisposed();
 
         link.Adopt("mini", stream, OurPin, CancellationToken.None);
 
@@ -161,8 +161,12 @@ public class PeerGreetingTests
     [Fact]
     public void RenamingMovesTheConnectionRatherThanCopyingIt()
     {
+        // A MemoryStream ends the moment Adopt's pump reads it, which races
+        // Forget against this assertion — the pump can remove "mini" before
+        // IsConnected ever runs, and did, under load. Held open instead, the
+        // same fix TwoUnnamedConnectionsDoNotCollide already needed below.
         using var link = Link();
-        using var stream = new MemoryStream();
+        using var stream = new BlocksUntilDisposed();
 
         var provisional = PeerLink.Unnamed();
 
@@ -183,7 +187,10 @@ public class PeerGreetingTests
         // link would go quiet and look healthy.
         using var link = Link();
 
-        // Empty, so the pump reads a clean end of stream and exits at once.
+        // Empty, so the pump reads a clean end of stream and exits at once —
+        // deliberately, unlike the two tests above: this one is asserting what
+        // happens *after* the pump exits, so it needs the pump to actually do
+        // that rather than to stay open.
         var stream = new MemoryStream();
 
         var provisional = PeerLink.Unnamed();
@@ -221,6 +228,58 @@ public class PeerGreetingTests
         link.Adopt(b, second, TheirPin, CancellationToken.None);
 
         Assert.Equal(2, link.ConnectedMachines().Count);
+    }
+
+    // A stream that blocks on read until it is disposed, then reports a clean
+    // end of stream — what a live connection looks like right up until it is
+    // actually closed. Exists so Adopt's pump has somewhere to spend the test
+    // instead of racing Forget against the assertion that follows.
+    //
+    // HeldOpen below never resolves at all, which is fine where nothing waits
+    // on the pump exiting, but would leave a suspended read hanging past the
+    // end of any test that later awaited disconnection. This resolves on
+    // Dispose specifically so nothing outlives the `using` block that owns it.
+    private sealed class BlocksUntilDisposed : Stream
+    {
+        private readonly TaskCompletionSource _disposed =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override async ValueTask<int> ReadAsync(
+            Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            await _disposed.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            return 0;
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) =>
+            throw new NotSupportedException();
+
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) =>
+            throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) =>
+            throw new NotSupportedException();
+
+        // Idempotent, same reason as HeldOpen below: the link disposes the
+        // stream when it drops the connection and the test's `using` disposes
+        // it again on the way out.
+        protected override void Dispose(bool disposing)
+        {
+            _disposed.TrySetResult();
+            base.Dispose(disposing);
+        }
     }
 
     // A stream that never delivers a byte and never ends, which is what an idle

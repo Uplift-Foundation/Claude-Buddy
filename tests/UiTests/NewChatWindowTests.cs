@@ -47,6 +47,13 @@ public class NewChatWindowTests : IDisposable
     private static NewChatOption Disabled(NewChatCli cli, string reason) =>
         new(cli, Enabled: false, Reason: reason, Warning: null);
 
+    // The separator NewChatAccounts.Choices' labels actually carry on this
+    // platform (via ChatHeaderMeta.HomeRelative) — CI's Windows leg caught a
+    // hardcoded "~/" here expecting "~\.claude-board" instead, the same
+    // "passes on the machine it was written on" shape NewChatAccountsTests'
+    // own Tilde() helper exists to avoid.
+    private static string Tilde(string rest) => "~" + Path.DirectorySeparatorChar + rest;
+
     private static NewChatWindow NewWindow(
         NewChatCli? prefillCli = null, string? prefillCwd = null, string? prefillAgentId = null)
     {
@@ -231,7 +238,7 @@ public class NewChatWindowTests : IDisposable
         FreshSettings();
         NewChatAvailability.CurrentForTests = () => Array.Empty<NewChatOption>();
         var launched = false;
-        NewChatLauncher.LaunchForTests = (_, _) => { launched = true; return new LaunchResult(LaunchOutcome.Launched, "x"); };
+        NewChatLauncher.LaunchForTests = (_, _, _) => { launched = true; return new LaunchResult(LaunchOutcome.Launched, "x"); };
 
         var window = NewWindow();
         Click(window.StartButton);
@@ -246,7 +253,7 @@ public class NewChatWindowTests : IDisposable
         FreshSettings();
         NewChatWindow.CurrentStatusesForTests = () => new Dictionary<string, SessionStatus>();
         NewChatAvailability.CurrentForTests = () => new[] { Enabled(NewChatCli.ClaudeCode) };
-        NewChatLauncher.LaunchForTests = (_, _) =>
+        NewChatLauncher.LaunchForTests = (_, _, _) =>
             new LaunchResult(LaunchOutcome.NotFound, "Claude Code not found on PATH or in its usual install locations.");
 
         var window = NewWindow();
@@ -263,13 +270,151 @@ public class NewChatWindowTests : IDisposable
         FreshSettings();
         NewChatWindow.CurrentStatusesForTests = () => new Dictionary<string, SessionStatus>();
         NewChatAvailability.CurrentForTests = () => new[] { Enabled(NewChatCli.Codex) };
-        NewChatLauncher.LaunchForTests = (_, _) => new LaunchResult(LaunchOutcome.Launched, "Codex started in /repo/one.");
+        NewChatLauncher.LaunchForTests = (_, _, _) => new LaunchResult(LaunchOutcome.Launched, "Codex started in /repo/one.");
 
         var window = NewWindow(prefillCli: NewChatCli.Codex, prefillCwd: "/repo/one");
         Click(window.StartButton);
 
         Assert.Equal("Codex", ClaudeBuddySettings.NewChatLastCli);
         Assert.Contains("/repo/one", ClaudeBuddySettings.NewChatRecentFolders);
+    }
+
+    // --- CB-201's Account picker ---
+
+    [AvaloniaFact]
+    public void TheAccountPickerIsHiddenWithNoConfiguredProfiles()
+    {
+        FreshSettings();
+        NewChatAvailability.CurrentForTests = () => new[] { Enabled(NewChatCli.ClaudeCode) };
+
+        var window = NewWindow();
+
+        Assert.False(window.AccountSection.IsVisible);
+    }
+
+    [AvaloniaFact]
+    public void TheAccountPickerListsTheConfiguredProfilesAlongsideDefault()
+    {
+        FreshSettings();
+        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-board");
+        NewChatAvailability.CurrentForTests = () => new[] { Enabled(NewChatCli.ClaudeCode) };
+
+        var window = NewWindow();
+
+        Assert.True(window.AccountSection.IsVisible);
+        var items = window.AccountCombo.ItemsSource!.Cast<NewChatAccounts.Choice>().ToList();
+        Assert.Equal(new[] { NewChatAccounts.DefaultLabel, Tilde(".claude-board") }, items.Select(i => i.Label));
+    }
+
+    [AvaloniaFact]
+    public void TheAccountPickerIsHiddenForCodex()
+    {
+        FreshSettings();
+        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-board");
+        NewChatAvailability.CurrentForTests = () => new[] { Enabled(NewChatCli.Codex) };
+
+        var window = NewWindow(prefillCli: NewChatCli.Codex);
+
+        Assert.False(window.AccountSection.IsVisible);
+    }
+
+    [AvaloniaFact]
+    public void TheAccountPickerIsHiddenForGrok()
+    {
+        FreshSettings();
+        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-board");
+        NewChatAvailability.CurrentForTests = () => new[] { Enabled(NewChatCli.Grok) };
+
+        var window = NewWindow(prefillCli: NewChatCli.Grok);
+
+        Assert.False(window.AccountSection.IsVisible);
+    }
+
+    [AvaloniaFact]
+    public void TheAccountPickerIsHiddenWhenOpenClawIsSelected()
+    {
+        FreshSettings();
+        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-board");
+        NewChatAvailability.CurrentForTests = () => new[] { Enabled(NewChatCli.ClaudeCode) };
+        NewChatWindow.OpenClawAvailabilityForTests = () => OpenClawNewChatAvailability.Ready;
+        NewChatWindow.KnownAgentsForTests = () => new[] { ("id-1", "Alexis") };
+
+        var window = NewWindow();
+        var openClawRow = window.CliList.Children.OfType<RadioButton>().Single(r => (string)r.Content! == "OpenClaw");
+        openClawRow.IsChecked = true;
+
+        Assert.False(window.AccountSection.IsVisible);
+    }
+
+    [AvaloniaFact]
+    public void StartWithDefaultAccountPassesNullProfileDirToTheLauncher()
+    {
+        FreshSettings();
+        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-board");
+        NewChatWindow.CurrentStatusesForTests = () => new Dictionary<string, SessionStatus>();
+        NewChatAvailability.CurrentForTests = () => new[] { Enabled(NewChatCli.ClaudeCode) };
+        string? seenProfileDir = "not set yet";
+        NewChatLauncher.LaunchForTests = (_, _, profileDir) =>
+        {
+            seenProfileDir = profileDir;
+            return new LaunchResult(LaunchOutcome.Launched, "Claude Code started in /repo/one.");
+        };
+
+        var window = NewWindow(prefillCli: NewChatCli.ClaudeCode, prefillCwd: "/repo/one");
+        Click(window.StartButton);
+
+        Assert.Null(seenProfileDir);
+        Assert.Null(ClaudeBuddySettings.NewChatLastProfile);
+    }
+
+    [AvaloniaFact]
+    public void StartWithAChosenAccountPassesItsProfileDirToTheLauncher()
+    {
+        FreshSettings();
+        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-board");
+        NewChatWindow.CurrentStatusesForTests = () => new Dictionary<string, SessionStatus>();
+        NewChatAvailability.CurrentForTests = () => new[] { Enabled(NewChatCli.ClaudeCode) };
+        string? seenProfileDir = "not set yet";
+        NewChatLauncher.LaunchForTests = (_, _, profileDir) =>
+        {
+            seenProfileDir = profileDir;
+            return new LaunchResult(LaunchOutcome.Launched, "Claude Code started in /repo/one.");
+        };
+
+        var window = NewWindow(prefillCli: NewChatCli.ClaudeCode, prefillCwd: "/repo/one");
+        var choices = window.AccountCombo.ItemsSource!.Cast<NewChatAccounts.Choice>().ToList();
+        window.AccountCombo.SelectedItem = choices.Single(c => c.ProfileDir == ".claude-board");
+        Click(window.StartButton);
+
+        Assert.Equal(".claude-board", seenProfileDir);
+        Assert.Equal(".claude-board", ClaudeBuddySettings.NewChatLastProfile);
+    }
+
+    [AvaloniaFact]
+    public void TheLastChosenAccountIsRestoredOnReopen()
+    {
+        FreshSettings();
+        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-board");
+        ClaudeBuddySettings.SetNewChatLastProfile(".claude-board");
+        NewChatAvailability.CurrentForTests = () => new[] { Enabled(NewChatCli.ClaudeCode) };
+
+        var window = NewWindow(prefillCli: NewChatCli.ClaudeCode);
+
+        var selected = (NewChatAccounts.Choice)window.AccountCombo.SelectedItem!;
+        Assert.Equal(".claude-board", selected.ProfileDir);
+    }
+
+    [AvaloniaFact]
+    public void ARemovedSavedAccountFallsBackToDefault()
+    {
+        FreshSettings();
+        ClaudeBuddySettings.SetNewChatLastProfile(".claude-gone");
+        NewChatAvailability.CurrentForTests = () => new[] { Enabled(NewChatCli.ClaudeCode) };
+
+        var window = NewWindow(prefillCli: NewChatCli.ClaudeCode);
+
+        var selected = (NewChatAccounts.Choice)window.AccountCombo.SelectedItem!;
+        Assert.Null(selected.ProfileDir);
     }
 
     // --- the watch tick, driven directly per LocalCliChatSessionTests' own

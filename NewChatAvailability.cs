@@ -84,4 +84,91 @@ namespace ClaudeBuddy
             _ => null
         };
     }
+
+    // CB-201's Account picker: turns the user's configured
+    // ClaudeCodeProfileDirs into the rows a combo box shows, plus the profile
+    // dir NewChatLauncher.Launch should actually receive for each — pure, the
+    // same reason NewChatAvailability.Evaluate above is, so every branch (an
+    // empty list, a duplicate, a blank, a second spelling of the default
+    // account) is a test rather than a real settings file and a real $HOME.
+    internal static class NewChatAccounts
+    {
+        // Not a compile-time const: the separator has to be the platform's
+        // own, the same reason every extra's label is built off
+        // Path.DirectorySeparatorChar rather than a hardcoded "/" — QA
+        // (CB-201) caught the Default row still reading "~/.claude" on
+        // Windows CI while every real extra had already picked up "~\..."
+        // from ChatHeaderMeta.HomeRelative, which two rows in the same list
+        // disagreeing about their own separator is not a cosmetic gap.
+        internal static readonly string DefaultLabel = "Default (~" + Path.DirectorySeparatorChar + ".claude)";
+
+        // One row of the combo box. ProfileDir is exactly what Launch should
+        // be handed — null for Default, so a caller never needs its own
+        // "is this the default row" check before passing the selection
+        // through.
+        internal sealed record Choice(string Label, string? ProfileDir)
+        {
+            public override string ToString() => Label;
+        }
+
+        // Default first, then each configured extra that isn't a second
+        // spelling of the default account and isn't a repeat of one already
+        // added. A result of exactly one entry (Default alone) is what tells
+        // NewChatWindow to hide the picker entirely — CB-201's "empty list
+        // means no picker" decision.
+        //
+        // Resolved through ClaudeProfile.Resolve rather than a fresh
+        // Path.Combine/HashSet pair, so a dir that collapses to the default
+        // account here (".claude", ".claude/", the absolute $HOME/.claude
+        // spelling) is the same set of dirs ConfigDirFor would also read as
+        // null — one resolver, one answer, asked from two places.
+        internal static IReadOnlyList<Choice> Choices(string home, IReadOnlyList<string> extras)
+        {
+            var choices = new List<Choice> { new(DefaultLabel, null) };
+
+            // Resolved once and reused for every HomeRelative call below,
+            // rather than handing it the raw `home` argument as-is. QA
+            // (CB-201) caught this the hard way: on windows-latest CI, a
+            // caller-supplied home of "/Users/me" is not already in the form
+            // ClaudeProfile.Resolve's own Path.GetFullPath call would produce
+            // ("D:\Users\me", since Windows resolves a leading "/" against
+            // the current drive) — so comparing a resolved profile path
+            // against the *unresolved* home string failed to recognise it as
+            // "under home" at all, and every real entry fell through to its
+            // full absolute path instead of a "~/..." label. Resolving home
+            // the same way makes the two sides of the comparison agree
+            // regardless of what shape the caller's home string was already
+            // in.
+            var homeResolved = ClaudeProfile.Resolve(home, string.Empty);
+
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ClaudeProfile.Resolve(home, ClaudeBuddySettings.DefaultRemoteControlProfileDir)
+            };
+
+            foreach (var extra in extras)
+            {
+                if (string.IsNullOrWhiteSpace(extra)) continue;
+
+                var trimmed = extra.Trim();
+                var resolved = ClaudeProfile.Resolve(home, trimmed);
+                if (!seen.Add(resolved)) continue;
+
+                // The label is built from the *resolved* path, not the raw
+                // setting — QA (CB-201) caught an absolute entry outside
+                // $HOME ("/Volumes/Backup/.claude-mobile") rendering as
+                // "~/Volumes/Backup/.claude-mobile" when the label was built
+                // by trimming leading punctuation off the raw string instead.
+                // ChatHeaderMeta.HomeRelative already carries this exact rule
+                // (a real separator at the boundary, not just a matching
+                // prefix, is what makes something "under" home) for cwd
+                // display; reusing it here is one resolver rather than a
+                // second copy that could disagree with it. ProfileDir stays
+                // the raw, untouched string — the label is display only.
+                choices.Add(new Choice(ChatHeaderMeta.HomeRelative(resolved, homeResolved), trimmed));
+            }
+
+            return choices;
+        }
+    }
 }
