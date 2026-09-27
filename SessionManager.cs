@@ -392,7 +392,9 @@ namespace ClaudeBuddy
             Func<string, string?>? transcriptHunt = null,
             Func<IReadOnlyList<string>>? userConfigDirs = null,
             Func<int, SessionDependents.Verdict>? dependents = null,
-            bool? onWindows = null)
+            bool? onWindows = null,
+            Func<IReadOnlyList<SessionStatus>, IReadOnlyDictionary<TmuxPaneKey, string?>>? paneOwners = null,
+            Func<string, AgentViewer?>? agentViewer = null)
         {
             _statusDir = statusDir;
             _jobListing = jobListing ?? BackgroundJobs.SnapshotForScan;
@@ -412,7 +414,28 @@ namespace ClaudeBuddy
             _userConfigDirs = userConfigDirs ?? (() => LocalPersona.UserConfigDirs());
             _dependents = dependents ?? SessionDependents.Of;
             _onWindows = onWindows ?? OperatingSystem.IsWindows();
+            _paneOwners = paneOwners ?? TerminalFocuser.TmuxPaneOwners;
+            _agentViewer = agentViewer
+                ?? (cwd => OperatingSystem.IsMacOS() ? AgentTeamViewer.For(cwd) : null);
         }
+
+        // Who is running in each claimed tmux pane, and which `claude agents`
+        // window is watching a directory. Seams for the reason the two above
+        // are: the real ones run tmux, ps and lsof against this machine, and
+        // since this change they are asked from the scan's background half (see
+        // ScanProbes), so a test of that half needs to be able to count and
+        // answer them.
+        private readonly Func<IReadOnlyList<SessionStatus>, IReadOnlyDictionary<TmuxPaneKey, string?>> _paneOwners;
+        private readonly Func<string, AgentViewer?> _agentViewer;
+
+        // Every subprocess question this pass needs, asked. Runs on
+        // ScheduleScan's background thread in production, and inline for
+        // ScanAndUpdate's callers; ScanProbePlan has the argument for why its
+        // gates ask no more and no less than the reconciliation half reads.
+        private ScanProbes GatherProbes(List<ScanEntry> found) =>
+            ScanProbes.Gather(
+                ScanProbePlan.For(found, AgentTeam.LeadOf),
+                _paneOwners, _jobListing, _attachClients, _agentViewer);
 
         private readonly Func<Dictionary<string, string>?> _jobListing;
 
@@ -1773,7 +1796,8 @@ namespace ClaudeBuddy
         {
             SyncAutoColorMarker();
             var now = DateTime.UtcNow;
-            ScanAndUpdateCore(ReadStatusFiles(now), now);
+            var found = ReadStatusFiles(now);
+            ScanAndUpdateCore(found, GatherProbes(found), now);
         }
 
         // Guards ScheduleScan against a tick landing while the previous scan's
@@ -1823,13 +1847,14 @@ namespace ClaudeBuddy
             try
             {
                 var now = DateTime.UtcNow;
-                var found = await Task.Run(() =>
+                var (found, probes) = await Task.Run(() =>
                 {
                     SyncAutoColorMarker();
-                    return ReadStatusFiles(now);
+                    var read = ReadStatusFiles(now);
+                    return (read, GatherProbes(read));
                 }).ConfigureAwait(true);
 
-                ScanAndUpdateCore(found, now);
+                ScanAndUpdateCore(found, probes, now);
             }
             finally
             {
@@ -1962,7 +1987,7 @@ namespace ClaudeBuddy
         // ReadStatusFiles — this stays on whichever thread calls it:
         // ScanAndUpdate above calls it inline; ScheduleScan calls it after
         // hopping back onto the UI thread its await resumed on.
-        private void ScanAndUpdateCore(List<ScanEntry> found, DateTime now)
+        private void ScanAndUpdateCore(List<ScanEntry> found, ScanProbes probes, DateTime now)
         {
             var seen = new HashSet<string>();
             bool setChanged = false;
@@ -2256,8 +2281,12 @@ namespace ClaudeBuddy
             // running. A positive mismatch is enough to remove the obsolete
             // claimant when this scan also has the current owner; an absent or
             // ambiguous answer changes nothing.
+            //
+            // The answers were gathered before this method was entered, off the
+            // UI thread and in one listing (see ScanProbes); this only reads
+            // them.
             var stalePaneClaims = ReconcileTmuxPaneClaims(found, entry =>
-                TerminalFocuser.TmuxPaneOwner(entry.Status));
+                probes.PaneOwner(entry.Status));
             found.RemoveAll(entry => stalePaneClaims.Contains(entry.SessionId));
 
             InheritTerminalInfo(found);
@@ -2275,27 +2304,25 @@ namespace ClaudeBuddy
             // then one pass can keep an orb and describe it wrongly in the same
             // breath.
             //
-            // Lazily, though, and that is not a micro-optimisation: fetching it
-            // eagerly runs `claude agents --json` as a subprocess on every pass
-            // for every machine, including one with nothing but ordinary
-            // terminal sessions on it — which the rules below never ask the
-            // daemon about, deliberately (see JudgeReachability's own note that
-            // "an ordinary session never pays for the lookup"). Eager fetching
-            // also broke both scan suites the moment it landed, which is a fair
-            // description of what it would have done to a quiet machine.
-            Dictionary<string, string>? jobs = null;
-            var askedTheDaemon = false;
+            // Only when something asks, though, and that is not a
+            // micro-optimisation: fetching it on every pass runs `claude agents
+            // --json` as a subprocess for every machine, including one with
+            // nothing but ordinary terminal sessions on it — which the rules
+            // below never ask the daemon about, deliberately (see
+            // JudgeReachability's own note that "an ordinary session never pays
+            // for the lookup"). Fetching it unconditionally also broke both scan
+            // suites the moment it landed, which is a fair description of what
+            // it would have done to a quiet machine.
+            //
+            // That decision used to be a lazy closure here, which put the
+            // subprocess on the UI thread whenever the ten-second cache behind
+            // it had run out. It is ScanProbePlan's now, made from the files
+            // before this method runs, and the listing arrives already fetched
+            // off-thread. The three readers below are the three cases that
+            // plan's gate names.
+            var jobs = probes.Jobs;
 
-            Dictionary<string, string>? Jobs()
-            {
-                if (askedTheDaemon) return jobs;
-
-                askedTheDaemon = true;
-                jobs = _jobListing();
-                return jobs;
-            }
-
-            Func<string, bool> isLiveJob = id => BackgroundJobs.IsLive(Jobs(), id);
+            Func<string, bool> isLiveJob = id => BackgroundJobs.IsLive(jobs, id);
 
             // Who is sitting in a job, asked once per pass and only when the
             // answer could change a rendering — which is to say only when
@@ -2307,7 +2334,7 @@ namespace ClaudeBuddy
             // not the same as "nobody is attached" —
             // SessionPresence.HasAttachClient is where that direction is decided
             // and why.
-            var attachClients = worthAsking ? _attachClients() : null;
+            var attachClients = worthAsking ? probes.AttachClients : null;
 
             var superseded = Superseded(found, isLiveJob);
 
@@ -2389,7 +2416,7 @@ namespace ClaudeBuddy
                 // SessionPresence.LocalDaemonCanAnswerFor.
                 var phase = worthAsking && status.Source == SessionSource.ClaudeCode
                             && SessionPresence.LocalDaemonCanAnswerFor(status, _onWindows)
-                    ? BackgroundJobs.Phase(Jobs(), sessionId)
+                    ? BackgroundJobs.Phase(jobs, sessionId)
                     : JobPhase.Unknown;
 
                 // Whether this file is the husk a handoff to a background job
@@ -2458,7 +2485,7 @@ namespace ClaudeBuddy
 
                 if (WantsAgentViewer(sessionId, status, leadsWithLiveAgents))
                 {
-                    AgentTeamViewer.TryAdopt(status);
+                    probes.AdoptViewer(status);
                 }
 
                 if (JudgeReachability(sessionId, status, leadsWithLiveAgents, phase, File.Exists)

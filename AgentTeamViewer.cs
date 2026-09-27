@@ -47,7 +47,7 @@ namespace ClaudeBuddy
         private const long CacheMs = 5_000;
 
         private static readonly object Gate = new();
-        private static readonly Dictionary<string, (Viewer? Found, long Stamp)> Cache =
+        private static readonly Dictionary<string, (AgentViewer? Found, long Stamp)> Cache =
             new(StringComparer.Ordinal);
 
         // Which terminal app a viewer for a directory was opened into, so a
@@ -56,36 +56,19 @@ namespace ClaudeBuddy
         private static readonly Dictionary<string, string> Launched =
             new(StringComparer.Ordinal);
 
-        private readonly record struct Viewer(string Socket, string Pane, string Tty);
-
-        // Fills in a status that names no terminal, from the viewer for its
-        // directory. Returns whether anything was learned; the caller shows the
-        // orb either way, since a team that is running is worth seeing even
-        // when you can't yet click your way to it.
-        // Excluded from coverage: reaches the ps/lsof/tmux scan below.
-        [ExcludeFromCodeCoverage]
-        public static bool TryAdopt(SessionStatus status)
-        {
-            if (!OperatingSystem.IsMacOS()) return false;
-            if (string.IsNullOrEmpty(status.Cwd)) return false;
-
-            var viewer = For(status.Cwd);
-            if (viewer is null) return false;
-
-            status.TmuxSocket = viewer.Value.Socket;
-            status.TmuxPane = viewer.Value.Pane;
-            status.Tty = viewer.Value.Tty;
-
-            // TmuxBin is deliberately left empty: it records where the *hook*
-            // found tmux, and this didn't come from a hook. TerminalFocuser
-            // falls back to the usual install locations.
-            return true;
-        }
-
+        // The viewer for a directory, or null when none is running there. This
+        // used to sit behind TryAdopt, which the scan called on the UI thread
+        // and which walked `ps` and `lsof` on every cache miss. The scan now
+        // calls this from its background half, only for the directories
+        // ScanProbePlan names, and applies the answer on the UI thread through
+        // ScanProbes.AdoptViewer. Off macOS there is no `claude agents` window
+        // to find; that was TryAdopt's first check and is now the scan's default
+        // seam's.
+        //
         // Excluded from coverage: a wall-clock cache around the process scan
         // below.
         [ExcludeFromCodeCoverage]
-        private static Viewer? For(string cwd)
+        internal static AgentViewer? For(string cwd)
         {
             var key = cwd.TrimEnd('/');
             var now = Environment.TickCount64;
@@ -111,7 +94,7 @@ namespace ClaudeBuddy
         // Excluded from coverage: walks live pids and reads each one's cwd and
         // tty.
         [ExcludeFromCodeCoverage]
-        private static Viewer? Locate(string cwd)
+        private static AgentViewer? Locate(string cwd)
         {
             foreach (var pid in ViewerPids())
             {
@@ -130,11 +113,11 @@ namespace ClaudeBuddy
                     // Running outside tmux: the tty alone is enough for the
                     // app to find the window that owns it.
                     if (string.IsNullOrEmpty(tty)) continue;
-                    return new Viewer("", "", tty);
+                    return new AgentViewer("", "", tty);
                 }
 
                 var socket = tmux.Split(',')[0];
-                return new Viewer(socket, pane, tty);
+                return new AgentViewer(socket, pane, tty);
             }
 
             return null;
