@@ -4174,12 +4174,13 @@ namespace ClaudeBuddy
             var screen = allOrbs[0].Screens.Primary ?? allOrbs[0].Screens.All.FirstOrDefault();
             var work = screen?.WorkingArea ?? new PixelRect(0, 0, 1920, 1080);
 
+            var anchor = ArrangementAnchor(work);
             var layout = new OrbArrangement.Layout(
                 work,
                 screen?.Scaling ?? 1.0,
                 ClaudeBuddySettings.ArrangeShape,
                 ClaudeBuddySettings.ArrangeSpacing,
-                ArrangementAnchor(work));
+                anchor);
 
             var heartbeats = ClaudeBuddySettings.OpenClawHeartbeatMode;
             var crons = ClaudeBuddySettings.OpenClawCronMode;
@@ -4218,7 +4219,7 @@ namespace ClaudeBuddy
             // shape stays where it is on the screen, which is what the saved
             // anchor exists to do.
             var landed = OrbArrangement.LandedCenter(placed, allOrbs.Count, leadOf, groupOf, shapes, layout, sizeOf);
-            if (landed != layout.Center)
+            if (landed != anchor)
                 ClaudeBuddySettings.ArrangeAnchor = new ClaudeBuddySettings.OrbPlacement(landed.X, landed.Y);
 
             return allOrbs.Select((orb, i) => (orb, placed[i])).ToList();
