@@ -536,4 +536,103 @@ public class OrbArrangementAnimationTests
             ClaudeBuddySettings.ArrangeSpacing = spacingBefore;
         }
     }
+
+    // The work area SessionManager itself arranges into — the same primary-
+    // screen read, with the same fallback, so a test anchor "past the right
+    // edge" is past the edge the arrangement is actually clamped to.
+    private static PixelRect WorkOf(SessionManager manager)
+    {
+        var orb = Windows(manager).Values.First();
+        var screen = orb.Screens.Primary ?? orb.Screens.All.FirstOrDefault();
+        return screen?.WorkingArea ?? new PixelRect(0, 0, 1920, 1080);
+    }
+
+    // CB-211 end to end, at the level the ticket asked for: a saved anchor
+    // left well past the right edge (Warren's was 565px out), an arrange, a
+    // whole-shape drag of (-300, +200), a re-arrange — and every orb moves by
+    // exactly the drag. Before the fix the horizontal half vanished into the
+    // overshoot. Also asserts the saved value itself was repaired by the first
+    // arrange, since that is the part that heals a settings file already
+    // carrying a stale anchor.
+    [AvaloniaFact]
+    public void ADragBackFromAStaleAnchorPastTheEdgeMovesEveryOrbByTheWholeDrag()
+    {
+        var anchorBefore = ClaudeBuddySettings.ArrangeAnchor;
+        try
+        {
+            using var scratch = new Scratch();
+            scratch.Write("a");
+            scratch.Write("b", cli: "codex");
+            scratch.Write("c", cli: "grok");
+
+            var manager = Manager(scratch.Dir);
+            manager.ScanAndUpdate();
+
+            var work = WorkOf(manager);
+            var stale = new ClaudeBuddySettings.OrbPlacement(work.Right + 480, work.Y + work.Height / 2);
+            ClaudeBuddySettings.ArrangeAnchor = stale;
+
+            manager.ArrangeOrbsInPattern();
+            CompleteTheGlide(manager);
+
+            var repaired = ClaudeBuddySettings.ArrangeAnchor!;
+            Assert.True(repaired.X < work.Right, $"anchor still at {repaired.X}, past {work.Right}");
+            Assert.Equal(stale.Y, repaired.Y);
+
+            var before = Windows(manager).ToDictionary(kv => kv.Key, kv => kv.Value.Position);
+
+            manager.ShiftArrangementAnchor(-300, 200);
+            manager.ReapplyArrangement();
+
+            Assert.All(Windows(manager), kv =>
+                Assert.Equal(new PixelPoint(before[kv.Key].X - 300, before[kv.Key].Y + 200), kv.Value.Position));
+        }
+        finally
+        {
+            ClaudeBuddySettings.ArrangeAnchor = anchorBefore;
+        }
+    }
+
+    // The control: an anchor the screen honours — an odd number of pixels off
+    // the middle, the case a recomputed value would round first — is left
+    // exactly as saved by an arrange, and a drag from it is honoured in full,
+    // just as before CB-211.
+    [AvaloniaFact]
+    public void AnInRangeAnchorIsLeftExactlyAsSavedAndStillHonoursADrag()
+    {
+        var anchorBefore = ClaudeBuddySettings.ArrangeAnchor;
+        try
+        {
+            using var scratch = new Scratch();
+            scratch.Write("a");
+            scratch.Write("b", cli: "codex");
+
+            var manager = Manager(scratch.Dir);
+            manager.ScanAndUpdate();
+
+            var work = WorkOf(manager);
+            var honoured = new ClaudeBuddySettings.OrbPlacement(
+                work.X + work.Width / 2 - 101, work.Y + work.Height / 2 + 37);
+            ClaudeBuddySettings.ArrangeAnchor = honoured;
+
+            manager.ArrangeOrbsInPattern();
+            CompleteTheGlide(manager);
+
+            Assert.Equal(honoured, ClaudeBuddySettings.ArrangeAnchor);
+
+            var before = Windows(manager).ToDictionary(kv => kv.Key, kv => kv.Value.Position);
+
+            manager.ShiftArrangementAnchor(40, -24);
+            manager.ReapplyArrangement();
+
+            Assert.Equal(new ClaudeBuddySettings.OrbPlacement(honoured.X + 40, honoured.Y - 24),
+                ClaudeBuddySettings.ArrangeAnchor);
+            Assert.All(Windows(manager), kv =>
+                Assert.Equal(new PixelPoint(before[kv.Key].X + 40, before[kv.Key].Y - 24), kv.Value.Position));
+        }
+        finally
+        {
+            ClaudeBuddySettings.ArrangeAnchor = anchorBefore;
+        }
+    }
 }

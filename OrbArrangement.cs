@@ -170,6 +170,88 @@ namespace ClaudeBuddy
             return placed;
         }
 
+        // The anchor that would have drawn `placed` where it landed (CB-211):
+        // layout.Center itself whenever the shape went where it was asked, and
+        // otherwise that centre moved along whichever axis Slide had to push the
+        // shape back onto the screen. `placed` is what Compute returned for
+        // these same arguments.
+        //
+        // A caller that saves an anchor has to save this one, not the one it
+        // asked for. Slide is what keeps an anchor off past an edge from drawing
+        // orbs off the screen, and it does that silently: an anchor 565px past
+        // the last one the screen honours draws exactly the shape that last one
+        // does. Saved as it was asked for, the overshoot sits in the settings
+        // file where nothing can see it, and the next drag back toward the
+        // screen has to spend it before the shape moves a pixel — which is how
+        // a -300px drag on a real 2560px screen came back as no move at all.
+        //
+        // Per axis, and only along an axis where some slot touches the edge of
+        // the work area. Slide leaves a shape flush against the edge it pushed
+        // it to, so a shape clear of both edges on an axis was never pushed
+        // along it, and its asked-for coordinate is already the landed one —
+        // returned untouched, not recomputed, so an anchor the screen honours
+        // is never nudged by so much as a rounding. That is also why the
+        // real-world case keeps its vertical drag: pushed back in x, clear in y.
+        //
+        // Along an edge, measured rather than predicted. Working out Slide's
+        // offset directly means modelling every shape, fan and band against
+        // the edges, which is the arithmetic Compute already does; drawing the
+        // same orbs once more around the middle of the screen, where nothing is
+        // pushed, and comparing the two needs none of it. The middle is moved
+        // by a pixel where needed so its distance from the asked-for anchor is
+        // even, which is the shift the sweep proves exact — its check 5 says
+        // why an odd one can round a pixel out. Averaged over the orbs rather
+        // than read off one, because the per-orb clamp that is Slide's last
+        // resort can move one member of a fan further than the rest; the
+        // average still lands the saved anchor at the edge of the range the
+        // screen honours, which is the property that matters.
+        internal static PixelPoint LandedCenter(
+            PixelPoint[] placed, int count, int[] leadOf, int[] groupOf, IReadOnlyList<string> shapes,
+            Layout layout, double[]? sizeOf = null)
+        {
+            var work = layout.Work;
+            var asked = layout.Center ?? new PixelPoint(work.X + work.Width / 2, work.Y + work.Height / 2);
+
+            if (count <= 0 || placed.Length < count) return asked;
+
+            // Slots, not orbs, for the same reason the sweep measures its margin
+            // on slots: the arrangement is laid out and pushed in slots, and a
+            // small orb sits inset in its slot a few pixels clear of an edge the
+            // slot is jammed against.
+            var sizes = SizesFor(count, sizeOf);
+            var window = WindowFor(layout.Scale, sizes.Max());
+
+            bool touchesX = false, touchesY = false;
+            for (var i = 0; i < count; i++)
+            {
+                var inset = (window - WindowFor(layout.Scale, sizes[i])) / 2;
+                var x = placed[i].X - inset;
+                var y = placed[i].Y - inset;
+
+                touchesX |= x <= work.X || x + window >= work.Right;
+                touchesY |= y <= work.Y || y + window >= work.Bottom;
+            }
+
+            if (!touchesX && !touchesY) return asked;
+
+            var middle = new PixelPoint(
+                work.X + work.Width / 2 + ((asked.X - work.X - work.Width / 2) & 1),
+                work.Y + work.Height / 2 + ((asked.Y - work.Y - work.Height / 2) & 1));
+
+            var centred = Compute(count, leadOf, groupOf, shapes, layout with { Center = middle }, sizeOf);
+
+            long dx = 0, dy = 0;
+            for (var i = 0; i < count; i++)
+            {
+                dx += placed[i].X - centred[i].X;
+                dy += placed[i].Y - centred[i].Y;
+            }
+
+            return new PixelPoint(
+                touchesX ? middle.X + (int)Math.Round(dx / (double)count) : asked.X,
+                touchesY ? middle.Y + (int)Math.Round(dy / (double)count) : asked.Y);
+        }
+
         // Everything Compute does between knowing the slot size and handing
         // back slot top-lefts: shapes in bands, fans off leads, separation.
         // gridWhenSqueezed redraws as a grid any group the screen squeezed;
