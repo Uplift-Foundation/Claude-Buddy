@@ -222,6 +222,45 @@ public class NewChatWindowHeightTests : IDisposable
         Assert.True(window.FolderGhost.IsVisible);
     }
 
+    // QA (Hana, CB-207): Settings is not modal, so an account can be added
+    // while this dialog is open. The picker must not appear in space that was
+    // never reserved for it; it waits for the next time the dialog opens.
+    [AvaloniaFact]
+    public void AnAccountAddedWhileOpenDoesNotGrowTheWindow()
+    {
+        FreshSettings();
+        NewChatAvailability.CurrentForTests = () => new[] { Enabled(NewChatCli.ClaudeCode), Enabled(NewChatCli.Codex) };
+        NewChatWindow.OpenClawAvailabilityForTests = () => OpenClawNewChatAvailability.NoGateway;
+
+        var window = NewWindow();
+        var opened = ContentHeight(window);
+        Assert.False(window.AccountGhost.IsVisible);
+
+        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-board");
+        Select(window, NewChatCli.Codex);
+        Select(window, NewChatCli.ClaudeCode);
+
+        Assert.Equal(opened, ContentHeight(window));
+        Assert.False(window.AccountSection.IsVisible);
+
+        // ...and a freshly opened dialog does offer it.
+        Assert.True(NewWindow().AccountSection.IsVisible);
+    }
+
+    [AvaloniaFact]
+    public void AnAccountRemovedWhileOpenHidesThePickerAndKeepsTheHeight()
+    {
+        var window = EverythingAvailable();
+        var opened = ContentHeight(window);
+
+        ClaudeBuddySettings.RemoveClaudeCodeProfileDir(".claude-board");
+        Select(window, NewChatCli.Codex);
+        Select(window, NewChatCli.ClaudeCode);
+
+        Assert.False(window.AccountSection.IsVisible);
+        Assert.Equal(opened, ContentHeight(window));
+    }
+
     [AvaloniaFact]
     public void AnAccountListWithoutAUsableClaudeCodeReservesNothing()
     {

@@ -581,13 +581,21 @@ namespace ClaudeBuddy
             // rather than a separate field, so this can never drift out of
             // sync with what BuildAccountCombo actually populated.
             var accountChoiceCount = (_accountCombo.ItemsSource as IEnumerable<NewChatAccounts.Choice>)?.Count() ?? 0;
-            _accountSection.IsVisible =
-                !_openClawSelected && _selectedCli == NewChatCli.ClaudeCode && accountChoiceCount > 1;
+            //
+            // And never beyond the space BuildCliList reserved when the window
+            // was built (CB-207). The count is read fresh on every switch, but
+            // Settings is not modal, so accounts can be added while this
+            // dialog is open; showing a picker that no ghost made room for
+            // would grow the window on screen, which is the very resize
+            // CB-207 removes. A new account appears the next time the dialog
+            // opens; one removed mid-session just hides the picker, leaving
+            // the ghost to hold the height.
+            _accountSection.IsVisible = _accountGhost.IsVisible
+                && !_openClawSelected && _selectedCli == NewChatCli.ClaudeCode && accountChoiceCount > 1;
 
             // An empty slot would still collect the root StackPanel's spacing,
-            // leaving a 12px gap where the picker never appears. Once BuildCliList
-            // has decided the ghost, this is constant for the window's life.
-            if (_accountSlot is not null) _accountSlot.IsVisible = _accountGhost.IsVisible || _accountSection.IsVisible;
+            // leaving a 12px gap where the picker never appears.
+            if (_accountSlot is not null) _accountSlot.IsVisible = _accountGhost.IsVisible;
         }
 
         // Populates the Account combo for whichever CLI is now selected —
