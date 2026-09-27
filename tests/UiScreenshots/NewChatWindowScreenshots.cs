@@ -184,6 +184,28 @@ public class NewChatWindowScreenshots : IDisposable
         ScreenshotHelper.Capture(window, "new-chat-window-account-picker.png");
     }
 
+    // CB-207: the same two profiles, but Codex selected. The picker is hidden
+    // (CB-201) while its space is kept, so switching CLIs never resizes the
+    // window on screen. This is the one state where that reserved space is
+    // visible, and it should read as the same window as the capture above,
+    // at the same height.
+    [AvaloniaFact]
+    public void AccountSpaceKeptForCodex()
+    {
+        NewChatAvailability.CurrentForTests = () => new[]
+        {
+            Enabled(NewChatCli.ClaudeCode), Enabled(NewChatCli.Codex), Enabled(NewChatCli.Grok)
+        };
+        NewChatWindow.OpenClawAvailabilityForTests = () => OpenClawNewChatAvailability.NoGateway;
+        NewChatWindow.CurrentStatusesForTests = () => new Dictionary<string, SessionStatus>();
+        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-work");
+        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-board");
+
+        var window = NewWindow(prefillCli: NewChatCli.Codex);
+
+        ScreenshotHelper.Capture(window, "new-chat-window-account-space-kept.png");
+    }
+
     // The OpenClaw row selected, Ready, with agents loaded — the agent
     // section replacing the folder section is CB-168's own decision record
     // ("OpenClaw selected: an agent picker replaces the folder field"), and
