@@ -80,7 +80,7 @@ public class OrbAvatarTests
             orb.UpdateFrom(Gateway());
 
             Assert.False(orb.Glyph.IsVisible, "the letters should give way to the picture");
-            Assert.IsType<ImageBrush>(orb.Orb.Fill);
+            Assert.True(orb.AvatarImage.IsVisible && orb.AvatarImage.Source is not null);
         }
         finally
         {
@@ -112,7 +112,7 @@ public class OrbAvatarTests
 
             orb.UpdateFrom(Gateway("Workspace Nova"));
 
-            Assert.IsType<ImageBrush>(orb.Orb.Fill);
+            Assert.True(orb.AvatarImage.IsVisible && orb.AvatarImage.Source is not null);
             var voice = Assert.IsType<TextToSpeech.VoiceOption>(OpenClawSessions.VoiceForSession(sessionId));
             Assert.Equal(TextToSpeech.SpeakEngine.System, voice.Engine);
             Assert.Equal(workspaceVoice, voice.Name);
@@ -156,7 +156,7 @@ public class OrbAvatarTests
             var orb = new OrbWindow(sessionId);
             orb.UpdateFrom(Gateway("Gateway Nova"));
 
-            Assert.IsType<ImageBrush>(orb.Orb.Fill);
+            Assert.True(orb.AvatarImage.IsVisible && orb.AvatarImage.Source is not null);
             Assert.Equal(neural, SessionIdentity.VoiceFor(sessionId, new[] { neural }));
             Assert.Equal(1.3, OpenClawSessions.RateForSession(sessionId));
         }
@@ -171,7 +171,7 @@ public class OrbAvatarTests
     // runs a couple of times a second, and rebuilding the brush on every tick
     // would restart an animated avatar continuously.
     [AvaloniaFact]
-    public void ApplyingTheSamePictureTwiceKeepsTheSameBrush()
+    public void ApplyingTheSamePictureTwiceKeepsTheSameFrame()
     {
         try
         {
@@ -179,11 +179,91 @@ public class OrbAvatarTests
             var orb = new OrbWindow(sessionId);
 
             orb.UpdateFrom(Gateway());
-            var first = orb.Orb.Fill;
+            var first = orb.AvatarImage.Source;
+            Assert.NotNull(first);
 
             orb.UpdateFrom(Gateway());
 
-            Assert.Same(first, orb.Orb.Fill);
+            Assert.Same(first, orb.AvatarImage.Source);
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
+    // --- CB-198: drawn by an Image, so it stays sharp at every orb size ---
+
+    // The picture is drawn by AvatarImage beneath a clear ellipse rather than
+    // as the ellipse's fill: an ImageBrush is rasterised at its untransformed
+    // size and went to a mosaic under the orb-size transform. The ring is still
+    // the ellipse's, and the picture breathes with it on the one transform.
+    [AvaloniaFact]
+    public void AnAvatarIsDrawnByTheImageBeneathAClearRingThatBreathesWithIt()
+    {
+        try
+        {
+            var sessionId = Publish(Agent(), Png());
+            var orb = new OrbWindow(sessionId);
+
+            orb.UpdateFrom(Gateway());
+
+            Assert.True(orb.AvatarImage.IsVisible);
+            Assert.NotNull(orb.AvatarImage.Source);
+            Assert.Same(Brushes.Transparent, orb.Orb.Fill);
+            Assert.Same(orb.Orb.RenderTransform, orb.AvatarImage.RenderTransform);
+            Assert.Equal(Stretch.UniformToFill, orb.AvatarImage.Stretch);
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
+    [AvaloniaFact]
+    public void ATeamMembersPictureShrinksAndClipsWithItsSmallerCircle()
+    {
+        try
+        {
+            var sessionId = Publish(Agent(), Png());
+            var orb = new OrbWindow(sessionId);
+            orb.UpdateFrom(Gateway());
+
+            orb.SetTeamRole(true);
+            Assert.Equal(36 * 0.72, orb.AvatarImage.Width, 6);
+            Assert.Equal(36 * 0.72, orb.AvatarImage.Height, 6);
+            var clip = Assert.IsType<EllipseGeometry>(orb.AvatarImage.Clip);
+            Assert.Equal(new Avalonia.Rect(0, 0, 36 * 0.72, 36 * 0.72), clip.Rect);
+
+            orb.SetTeamRole(false);
+            Assert.Equal(36, orb.AvatarImage.Width, 6);
+            Assert.Equal(new Avalonia.Rect(0, 0, 36, 36), ((EllipseGeometry)orb.AvatarImage.Clip!).Rect);
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
+    [AvaloniaFact]
+    public void LosingThePictureGivesTheOrbItsStateFillBackAndDropsTheFrame()
+    {
+        var agent = Agent();
+        try
+        {
+            var sessionId = Publish(agent, Png());
+            var orb = new OrbWindow(sessionId);
+            orb.UpdateFrom(Gateway());
+            Assert.True(orb.AvatarImage.IsVisible);
+
+            // The route BecomingALocalSessionRestoresTheLetters already uses:
+            // republishing the agent without a picture does not clear it, since
+            // the avatar cache keeps a picture an agent once had.
+            orb.UpdateFrom(Local());
+
+            Assert.False(orb.AvatarImage.IsVisible);
+            Assert.Null(orb.AvatarImage.Source);
+            Assert.IsType<SolidColorBrush>(orb.Orb.Fill);
         }
         finally
         {
@@ -206,7 +286,7 @@ public class OrbAvatarTests
             orb.UpdateFrom(Local());
 
             Assert.True(orb.Glyph.IsVisible);
-            Assert.IsNotType<ImageBrush>(orb.Orb.Fill);
+            Assert.False(orb.AvatarImage.IsVisible);
         }
         finally
         {
@@ -227,7 +307,7 @@ public class OrbAvatarTests
             orb.UpdateFrom(Gateway());
 
             Assert.True(orb.Glyph.IsVisible);
-            Assert.IsNotType<ImageBrush>(orb.Orb.Fill);
+            Assert.False(orb.AvatarImage.IsVisible);
         }
         finally
         {
@@ -292,7 +372,7 @@ public class OrbAvatarTests
             orb.UpdateFrom(Gateway());
 
             Assert.True(orb.Glyph.IsVisible);
-            Assert.IsNotType<ImageBrush>(orb.Orb.Fill);
+            Assert.False(orb.AvatarImage.IsVisible);
         }
         finally
         {
@@ -371,8 +451,8 @@ public class OrbAvatarTests
             orb.UpdateFrom(Gateway());
             Flush();
 
-            var brush = (ImageBrush)orb.Orb.Fill!;
-            var firstFrame = brush.Source;
+            var image = orb.AvatarImage;
+            var firstFrame = image.Source;
             Assert.NotNull(firstFrame);
 
             // Wall-clock bounded rather than iteration-bounded: under the
@@ -385,7 +465,7 @@ public class OrbAvatarTests
             while (Environment.TickCount64 < deadline && !advanced)
             {
                 Flush();
-                if (!ReferenceEquals(brush.Source, firstFrame)) advanced = true;
+                if (!ReferenceEquals(image.Source, firstFrame)) advanced = true;
                 await System.Threading.Tasks.Task.Delay(5);
             }
 

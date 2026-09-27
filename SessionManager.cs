@@ -2568,6 +2568,7 @@ namespace ClaudeBuddy
                 if (isNew)
                 {
                     window = new OrbWindow(sessionId);
+                    window.SizeRelayoutRequested += ReapplyOrbSizes;
                     _windows[sessionId] = window;
                     _order.Add(sessionId);
                     if (OrbsVisible) window.Show();
@@ -3284,6 +3285,54 @@ namespace ClaudeBuddy
             }
         }
 
+        // CB-198: the settings slider and the Size menu both land here, the
+        // same shape as ReapplyGlyphs — one change, every orb. Each orb takes
+        // its own override if it has one, the slider if not; then everything
+        // that is placed *relative* to an orb's size moves with it: the
+        // arrangement or the stack, anything the new sizes pushed off a
+        // screen, the team arrows, and a chat panel open beside an orb.
+        //
+        // Goes through ApplyOrbSize directly rather than anything on the
+        // UpdateFrom path, so SetTeamRole's early return (which only knows
+        // about the team role) cannot swallow a size change.
+        public void ReapplyOrbSizes()
+        {
+            foreach (var window in _windows.Values)
+            {
+                window.ApplyEffectiveOrbSize();
+            }
+
+            if (_isArranged) ReapplyArrangement();
+            else ReflowPositions();
+
+            RescueOffscreenOrbs();
+            RememberResizedPins();
+            TeamLinks.Refresh();
+            ChatPanel.FollowOrbResize();
+        }
+
+        // A pinned orb that just resized kept its centre, so its saved corner and
+        // size are stale; write the new pair. Only for a key no other pinned orb
+        // shares — the drag code's rule (OrbWindow.OnPointerReleased) that a team
+        // member must never overwrite its lead's spot with an offset copy. A
+        // shared key's saved entry stays right anyway: it carries the size it
+        // was saved at, and RestoredTopLeft corrects from that.
+        private void RememberResizedPins()
+        {
+            var pinned = _windows.Values.Where(w => w.IsPinned && !string.IsNullOrEmpty(w.PositionKey)).ToList();
+
+            foreach (var window in pinned)
+            {
+                if (pinned.Count(other => other.PositionKey == window.PositionKey) == 1)
+                    RememberOrbPosition(window);
+            }
+        }
+
+        // An orb's window in physical pixels at a screen's scaling — what
+        // every bare `56 * scale` in this file meant before orbs had a size.
+        internal static int OrbPixels(OrbWindow window, double scaling) =>
+            (int)(OrbSizing.WindowDip(window.OrbSize) * scaling);
+
         // Speech is one global thing, not one per orb: whichever orb started it,
         // every open flyout's speak button has to agree about whether something
         // is being read. Broadcasting from here rather than from the orb that
@@ -3325,25 +3374,29 @@ namespace ClaudeBuddy
             if (screen is null) return;
 
             // WorkingArea and Window.Position are in physical pixels; the
-            // 56/12/24 design sizes are DIPs, so scale them.
+            // 12/24 design sizes and each orb's own window are DIPs, so scale
+            // them.
             var work = screen.WorkingArea;
             var scale = screen.Scaling;
-            int size = (int)(56 * scale);
             int spacing = (int)(12 * scale);
             int margin = (int)(24 * scale);
 
             // Orbs the user has placed by hand keep their spot and don't take up
             // a slot, so the rest of the stack closes up behind them.
-            int slot = 0;
+            //
+            // CB-198: each orb advances the stack by its own size rather than a
+            // shared 56, so a 2x orb pushes the next one down by what it
+            // actually occupies. Right edges line up, the column keeps the
+            // same margin from the screen edge at every size.
+            int y = work.Y + margin;
             foreach (var id in DisplayOrder())
             {
                 var window = _windows[id];
                 if (window.IsPinned) continue;
 
-                window.Position = new PixelPoint(
-                    work.Right - size - margin,
-                    work.Y + margin + slot * (size + spacing));
-                slot++;
+                int size = OrbPixels(window, scale);
+                window.Position = new PixelPoint(work.Right - size - margin, y);
+                y += size + spacing;
             }
 
             // Every arrow's geometry just moved.
@@ -3666,15 +3719,17 @@ namespace ClaudeBuddy
 
             if (saved is null) return;
 
-            var point = new PixelPoint(saved.X, saved.Y);
-
             // The monitor it was dragged onto may be gone, or its layout
             // changed. Anything that no longer lands on a screen falls back to
-            // the default stack rather than being stranded off-canvas.
-            var screen = window.Screens.ScreenFromPoint(point);
+            // the default stack rather than being stranded off-canvas. Asked of
+            // the saved corner itself, before the size correction below, which
+            // is at most half a 2x orb and should not decide which screen this
+            // was.
+            var screen = window.Screens.ScreenFromPoint(new PixelPoint(saved.X, saved.Y));
             if (screen is null) return;
 
-            window.PinAt(ClampIntoWork(point, screen.WorkingArea, (int)(56 * screen.Scaling)));
+            var point = RestoredTopLeft(saved, window.OrbSize, screen.Scaling);
+            window.PinAt(ClampIntoWork(point, screen.WorkingArea, OrbPixels(window, screen.Scaling)));
         }
 
         // CB-111: bring back a chat panel that was pinned before the app last
@@ -3756,10 +3811,12 @@ namespace ClaudeBuddy
             {
                 if (!window.IsVisible) continue;
 
-                var size = 56;
-                var centre = new PixelPoint(
-                    window.Position.X + size / 2,
-                    window.Position.Y + size / 2);
+                // Half the orb's own window in Position's units, rather than
+                // the bare 56 this used to add: that was a DIP half added to a
+                // physical position, right only at 100% scaling, and blind to
+                // the orb's size (CB-198).
+                var half = OrbPixels(window, window.DesktopScaling) / 2;
+                var centre = new PixelPoint(window.Position.X + half, window.Position.Y + half);
 
                 if (window.Screens.ScreenFromPoint(centre) is not null) continue;
 
@@ -3767,7 +3824,7 @@ namespace ClaudeBuddy
                 if (screen is null) continue;
 
                 window.PinAt(ClampIntoWork(
-                    window.Position, screen.WorkingArea, (int)(56 * screen.Scaling)));
+                    window.Position, screen.WorkingArea, OrbPixels(window, screen.Scaling)));
             }
         }
 
@@ -3776,7 +3833,21 @@ namespace ClaudeBuddy
             if (string.IsNullOrEmpty(window.PositionKey)) return;
 
             var position = window.Position;
-            ClaudeBuddySettings.SetOrbPosition(window.PositionKey, position.X, position.Y);
+            ClaudeBuddySettings.SetOrbPosition(window.PositionKey, position.X, position.Y, window.OrbSize);
+        }
+
+        // CB-198: a saved spot is a top-left corner, and the same *centre* at a
+        // different size has a different corner. Shifted by half the difference
+        // between the window it was saved at and the window it is now, so the
+        // orb comes back centred where it was left. No saved size means it was
+        // saved before orbs had one, which is 1.0.
+        internal static PixelPoint RestoredTopLeft(
+            ClaudeBuddySettings.OrbPlacement saved, double currentSize, double scaling)
+        {
+            var shift = (OrbSizing.WindowDip(saved.Size ?? OrbSizing.Default) - OrbSizing.WindowDip(currentSize))
+                        / 2 * scaling;
+            var d = (int)Math.Round(shift);
+            return new PixelPoint(saved.X + d, saved.Y + d);
         }
 
         public void ReturnOrbToStack(string sessionId)
@@ -4092,7 +4163,13 @@ namespace ClaudeBuddy
                     : 0;
             }
 
-            var placed = OrbArrangement.Compute(allOrbs.Count, leadOf, groupOf, Shapes(), layout);
+            // CB-198: each orb's effective size, in the same index order as
+            // leadOf and groupOf. Read off the window rather than recomputed
+            // from settings, so the arrangement lays out what is actually drawn
+            // — ReapplyOrbSizes applies the sizes before it arranges.
+            var sizeOf = allOrbs.Select(orb => orb.OrbSize).ToArray();
+
+            var placed = OrbArrangement.Compute(allOrbs.Count, leadOf, groupOf, Shapes(), layout, sizeOf);
 
             return allOrbs.Select((orb, i) => (orb, placed[i])).ToList();
         }

@@ -26,6 +26,30 @@ namespace ClaudeBuddy.Tests
             TeamLinkGeometry.Place(
                 new Point(fromX, fromY), new Point(toX, toY), MemberRadius, LeadRadius, scale);
 
+        // --- CB-198: at the smallest and largest orb sizes ---
+
+        // OrbWindow.OrbRadius is 18 * (0.72 for a member) * the user's size, and
+        // TeamLinks passes it straight through, so the geometry needs no size of
+        // its own. What has to hold is that the shaft still clears both circles
+        // at their scaled radii, and that two orbs exactly at the scaled minimum
+        // distance still get an arrow while one pixel nearer do not.
+        [Theory]
+        [InlineData(0.6)]
+        [InlineData(2.0)]
+        public void TheArrowClearsBothCirclesAtAnOrbSize(double size)
+        {
+            var member = 18 * 0.72 * size;
+            var lead = 18 * size;
+
+            var far = TeamLinkGeometry.Place(new Point(100, 100), new Point(600, 100), member, lead, 1)!.Value;
+            Assert.Equal(100 + member + TeamLinkGeometry.MemberGap, far.Start.X + far.Position.X, 1);
+            Assert.Equal(600 - lead - TeamLinkGeometry.LeadGap, far.End.X + far.Position.X, 1);
+
+            var min = TeamLinkGeometry.MinimumCentreDistance(member, lead);
+            Assert.NotNull(TeamLinkGeometry.Place(new Point(0, 0), new Point(min + 0.01, 0), member, lead, 1));
+            Assert.Null(TeamLinkGeometry.Place(new Point(0, 0), new Point(min - 1, 0), member, lead, 1));
+        }
+
         // --- when there is an arrow ---
 
         [Fact]

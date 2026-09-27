@@ -14,29 +14,55 @@
         WindowStartupLocation="Manual">
 
     <!-- Root is pinned to 56x56 and anchored top-left rather than left to
-         fill the window, because on Windows this window is *not* 56x56 no
-         matter what it asks for. Windows enforces a minimum size on a
-         top-level window (SM_CXMINTRACK/SM_CYMINTRACK, 136x39 on a stock
-         Windows 11 desktop), which lands here as a 120x56 client area —
-         measured on a real machine, and confirmed unbeatable: Width/Height,
-         MinWidth/MaxWidth, and even an outside SetWindowPos asking for 26x26
-         all leave it at the floor. (Min/Max used to be set here for exactly
-         that purpose; they did nothing and are gone.)
+         fill the window, so the orb's geometry does not depend on the window
+         being the size it asked for. Windows enforces a minimum size on a
+         top-level window, and a window below it is inflated rather than
+         refused; its *position* is still set exactly, so pinning the real
+         56x56 box to the top-left corner keeps a 36px circle centred at DIP
+         (28,28) — the point the mic flyout (OrbWindow.OrbCentre) and the team
+         arrows (TeamLinks, PointToScreen of the orb's CentreDip) anchor on —
+         wherever the window is bigger than its content.
 
-         So the window's own size can't be a layout input. Its *position*
-         still can — that Avalonia sets exactly — which is why anchoring the
-         real 56x56 box to the top-left corner is what restores the geometry
-         every other part of the app already assumes: a 36px circle centred
-         at DIP (28,28). Centred in the inflated client area instead, the orb
-         was drawn 32px right of that point, which is what put the mic flyout
-         (OrbWindow.MicFlyoutOffset) and the team arrows (TeamLinks, which
-         anchors at PointToScreen(28,28)) nowhere near the orb they belong
-         to, and stretched the hover/drag square below to 120px wide.
+         This comment used to say the floor was SM_CXMINTRACK/SM_CYMINTRACK
+         (136x39) and that it landed as a 120x56 client area, even for a
+         window asking for 26x26. That was wrong on the axis and on the size.
+         Measured 2026-09-26 for CB-198 on a Windows 11 box at 96 DPI
+         (SM_CXMINTRACK=136, SM_CYMINTRACK=39, which the window does not
+         follow), with this very class: OrbWindow hosted by a harness that
+         skips Program.Main's single-instance claim, its Win32 style 0x16020000
+         and ex-style 0x200008 identical to the installed 0.5.7-beta's orbs.
+         Asked 56 → 56x56. Asked 33.6 → 33x39. Asked 36.4 → 36x39. Asked 26 →
+         32x39. So the floor is about 32 wide by 39 tall, and at the default
+         size neither applies: the window is exactly 56x56, as the installed
+         app's own orbs also read. Every figure is a window and client
+         rectangle, not a picture of the drawn circle — GetWindowRect and
+         GetClientRect on the window handle (EnumWindows by pid, via
+         PowerShell Add-Type P/Invoke, for the installed app), agreeing with
+         Avalonia's ClientSize — run as an interactive scheduled task in the
+         console session, since an ssh session is session 0 and cannot see
+         the desktop's windows at all.
+
+         The 39-DIP height is the floor that matters to an orb. The strip it
+         adds below a smaller one is not click-through — it swallows clicks,
+         right-clicks and hover rather than passing them to the window
+         behind — which is why OrbSizing.MinWindows is 0.7, the smallest size
+         whose window clears both floors; its comment has that measurement.
 
          Transparent (not null) background so the whole 56x56 area is
          hit-testable: hover tooltip, drag, and right-click work anywhere
-         on the orb's square, not just the ellipse pixels. Now genuinely that
-         square, rather than the window's full width. -->
+         on the orb's square, not just the ellipse pixels.
+
+         CB-198: the user's orb size is a LayoutTransform over Root, not a
+         change to anything inside it. Root keeps its 56x56 geometry — circle,
+         glow, context ring, badges and SetTeamRole's 0.72 all mean exactly
+         what they did — and the window is sized to WindowDip(OrbSize) around
+         it; see OrbWindow.ApplyOrbSize. The transform control is anchored
+         Left/Top for the same floor reason Root is. -->
+    <LayoutTransformControl x:Name="SizeTransform"
+                            HorizontalAlignment="Left" VerticalAlignment="Top">
+        <LayoutTransformControl.LayoutTransform>
+            <ScaleTransform ScaleX="1" ScaleY="1"/>
+        </LayoutTransformControl.LayoutTransform>
     <Grid x:Name="Root" Background="Transparent"
           Width="56" Height="56"
           HorizontalAlignment="Left" VerticalAlignment="Top">
@@ -88,6 +114,11 @@
                     <MenuItem x:Name="SoundFinishedMenuItem" Header="When a turn finishes"/>
                     <MenuItem x:Name="SoundAttentionMenuItem" Header="When it needs you"/>
                 </MenuItem>
+                <!-- CB-198's per-orb size: Default (follow the slider) plus
+                     OrbSizing.Presets, rebuilt on Opening beside the Sound
+                     submenus for the same reason — see
+                     OrbWindow.RebuildSizeSubmenu. -->
+                <MenuItem x:Name="SizeMenuItem" Header="Size"/>
                 <!-- The `claude agents` roster, for the orbs it lists. Above
                      the two lifecycle items because it is the harmless one of
                      the three, and hidden rather than greyed for the same
@@ -193,6 +224,27 @@
                      Stroke="#17FFFFFF" StrokeThickness="3"/>
             <Path x:Name="ContextArc" StrokeThickness="3" StrokeLineCap="Round"/>
         </Canvas>
+
+        <!-- An agent's picture, beneath the Orb ellipse so that ellipse's ring
+             still draws on top of it. Its own Image rather than an ImageBrush
+             on the ellipse's fill (which it was until CB-198): Avalonia's Skia
+             backend rasterises a tile brush into an intermediate surface sized
+             to its target in DIPs at the screen's DPI, and never counts the
+             render transform above it — so under the orb-size LayoutTransform
+             a 2x orb drew a 36-pixel picture stretched over 72, a visible
+             mosaic on the first real Windows install. An Image is drawn
+             through the whole transform with no intermediate, and stays sharp
+             at every size. Width, Height and the clip follow SetTeamRole;
+             the pulse shares the Orb's transform. -->
+        <Image x:Name="AvatarImage"
+               Width="36" Height="36"
+               Stretch="UniformToFill"
+               IsVisible="False"
+               IsHitTestVisible="False">
+            <Image.Clip>
+                <EllipseGeometry Rect="0,0,36,36"/>
+            </Image.Clip>
+        </Image>
 
         <!-- The buddy itself -->
         <Ellipse x:Name="Orb"
@@ -356,4 +408,5 @@
                    VerticalAlignment="Center"
                    IsHitTestVisible="False"/>
     </Grid>
+    </LayoutTransformControl>
 </Window>

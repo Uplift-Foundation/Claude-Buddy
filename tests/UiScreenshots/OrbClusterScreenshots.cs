@@ -62,17 +62,40 @@ public class OrbClusterScreenshots
             new[] { "heart", "circle", "line" },
             "arrangement-two-shapes.png");
 
-    private static void Plot(int[] groups, string[] shapes, string fileName)
+    // CB-198: one heart of orbs at every size the slider offers, from its
+    // bottom to its top — this runner's bottom, so the Windows capture shows
+    // its 70% floor and the macOS one its 60%, with a team of three hanging off the biggest. What a
+    // reviewer is looking for is the rule OrbArrangement states — the lattice
+    // is laid out for the largest orb and every orb is centred in its slot —
+    // so the small ones should sit as far apart as the big one would, none
+    // touching, the team's arrows' worth from its lead.
+    [AvaloniaFact]
+    public void MixedSizesShareOneHeartSpacedForTheLargest()
     {
-        var leads = Enumerable.Repeat(-1, groups.Length).ToArray();
+        const int count = 13;
+
+        var sizes = Enumerable.Range(0, count)
+            .Select(i => OrbSizing.Min + (OrbSizing.Max - OrbSizing.Min) * (i % 5) / 4.0)
+            .ToArray();
+
+        // Orb 4 is the biggest in the ramp; make it the lead of 5, 6 and 7.
+        var leads = Enumerable.Repeat(-1, count).ToArray();
+        for (var i = 5; i <= 7; i++) leads[i] = 4;
+
+        Plot(new int[count], new[] { "heart" }, "arrangement-mixed-sizes.png", leads, sizes);
+    }
+
+    private static void Plot(
+        int[] groups, string[] shapes, string fileName, int[]? leads = null, double[]? sizes = null)
+    {
+        leads ??= Enumerable.Repeat(-1, groups.Length).ToArray();
         var layout = new OrbArrangement.Layout(Work, 1.0, shapes[0], 0.85, null);
 
-        var placed = OrbArrangement.Compute(groups.Length, leads, groups, shapes, layout);
+        var placed = OrbArrangement.Compute(groups.Length, leads, groups, shapes, layout, sizes);
 
         // A third of life size, so a 1920x1080 desktop fits a page and the orbs
         // stay big enough to tell apart.
         const double scale = 1.0 / 3;
-        const double orb = OrbArrangement.CircleDip * scale;
 
         var canvas = new Canvas
         {
@@ -93,6 +116,13 @@ public class OrbClusterScreenshots
         for (var i = 0; i < placed.Length; i++)
         {
             var g = groups[i];
+
+            // Each orb at its own user size, and a team member at MemberScale of
+            // that again, as OrbWindow draws them.
+            var size = sizes?[i] ?? 1.0;
+            var member = leads[i] >= 0 && leads[i] < placed.Length && leads[i] != i;
+            var orb = OrbArrangement.CircleDip * size * (member ? OrbArrangement.MemberScale : 1.0) * scale;
+
             var dot = new Ellipse
             {
                 Width = orb,
@@ -100,12 +130,12 @@ public class OrbClusterScreenshots
                 Fill = new SolidColorBrush(colours[g % colours.Length])
             };
 
-            // Compute returns window top-left corners; the circle a person sees
-            // is CircleDip inside a WindowDip window, so the drawn dot is offset
-            // by half the difference. Same arithmetic OrbWindow's own layout
-            // does, and getting it wrong here would draw a picture that is
-            // subtly not what the app does.
-            const double inset = (OrbArrangement.WindowDip - OrbArrangement.CircleDip) / 2 * scale;
+            // Compute returns window top-left corners, each for that orb's own
+            // window; the circle a person sees is centred in it, so the drawn
+            // dot is offset from the corner by half the difference. Same
+            // arithmetic OrbWindow's own layout does, and getting it wrong here
+            // would draw a picture that is subtly not what the app does.
+            var inset = (OrbArrangement.WindowDip * size * scale - orb) / 2;
 
             Canvas.SetLeft(dot, (placed[i].X - Work.X) * scale + inset);
             Canvas.SetTop(dot, (placed[i].Y - Work.Y) * scale + inset);

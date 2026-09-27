@@ -134,7 +134,7 @@ public class PeerPersonaUiTests : IDisposable
         orb.UpdateFrom(Remote());
 
         Assert.False(orb.Glyph.IsVisible, "the letters should give way to the picture");
-        Assert.IsType<ImageBrush>(orb.Orb.Fill);
+        Assert.True(orb.AvatarImage.IsVisible && orb.AvatarImage.Source is not null);
     }
 
     // Bytes that are not an image are refused by the decoder and the orb falls

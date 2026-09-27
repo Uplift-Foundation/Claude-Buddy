@@ -186,6 +186,10 @@ namespace ClaudeBuddy
             Glow.Fill = _glowBrush;
             Orb.RenderTransform = _orbScale;
 
+            // One transform for both, so an agent's picture breathes with the
+            // ring drawn around it rather than holding still inside it.
+            AvatarImage.RenderTransform = _orbScale;
+
             // Centred, so the acknowledgment halo expands evenly out of the orb
             // rather than growing towards one corner.
             Glow.RenderTransform = _glowScale;
@@ -943,8 +947,72 @@ namespace ClaudeBuddy
         private const double MemberScale = 0.72;
 
         // Half the orb's drawn width, in DIPs — where TeamLinks stops the arrow
-        // so it doesn't run under the orb.
+        // so it doesn't run under the orb. Both the team role and the user's
+        // size go into it, and neither setter's early return can skip the
+        // other's contribution because both recompute it here.
         public double OrbRadius { get; private set; } = 18;
+
+        private void UpdateOrbRadius() =>
+            OrbRadius = 18 * (_isTeamMember ? MemberScale : 1.0) * OrbSize;
+
+        // --- the user's orb size (CB-198) --------------------------------------
+        // A multiplier over the whole 56-DIP orb, applied as a LayoutTransform
+        // over Root (see the axaml) rather than threaded through SetTeamRole's
+        // twenty `* scale` sites: those already mix one factor into the circle,
+        // and a fourth number folded into the third is exactly how this orb's
+        // geometry has gone wrong before. Everything inside Root keeps its
+        // 56-space coordinates; only the window and the anchors outside it
+        // (TeamLinks, the chat panel, SessionManager's stack) ask for the size.
+
+        internal double OrbSize { get; private set; } = OrbSizing.Default;
+
+        // Raised when this orb's size changed in a way the orbs around it have
+        // to make room for — a changed SoundKey bringing a different override
+        // (RefreshSoundKey), or the Size menu (SetSizeOverride). The owning
+        // SessionManager subscribes when it creates the window and re-lays
+        // every orb out. An event rather than SessionManager.Instance: the orb
+        // has no business knowing which manager is current, and a test's
+        // manager never is.
+        internal event Action? SizeRelayoutRequested;
+
+        // The orb's centre in this window's own DIPs — what every (28,28)
+        // outside Root used to hard-code.
+        internal double CentreDip => OrbSizing.CentreDip(OrbSize);
+
+        // Resizes around the orb's visible centre, so an orb grows and shrinks
+        // in place rather than out of its top-left corner.
+        //
+        // DesktopScaling is Avalonia's own declared factor between a window's
+        // DIPs and its Position units, which is the conversion this needs. Not
+        // PointToScreen, which was the first version: under the headless
+        // platform it does not follow a Position set in code, so the centre it
+        // reported was not the one the orb was drawn at — a test of the
+        // offscreen rescue caught that on the sibling call site.
+        internal bool ApplyOrbSize(double size)
+        {
+            size = OrbSizing.Clamp(size);
+            if (size == OrbSize) return false;
+
+            var scaling = DesktopScaling;
+            var centreX = Position.X + CentreDip * scaling;
+            var centreY = Position.Y + CentreDip * scaling;
+
+            OrbSize = size;
+            SizeTransform.LayoutTransform = new ScaleTransform(size, size);
+            Width = Height = OrbSizing.WindowDip(size);
+            UpdateOrbRadius();
+
+            Position = new PixelPoint(
+                (int)Math.Round(centreX - CentreDip * scaling),
+                (int)Math.Round(centreY - CentreDip * scaling));
+            return true;
+        }
+
+        // This orb's own override if it has one, the global slider if not.
+        // Keyed by SoundKey — the per-agent key the override is stored under,
+        // see ClaudeBuddySettings.OrbSizes.
+        internal bool ApplyEffectiveOrbSize() =>
+            ApplyOrbSize(OrbSizing.Effective(ClaudeBuddySettings.OrbSizeFor(SoundKey), ClaudeBuddySettings.OrbSize));
 
         private bool _isTeamMember;
 
@@ -956,6 +1024,8 @@ namespace ClaudeBuddy
             var scale = isTeamMember ? MemberScale : 1.0;
 
             Orb.Width = Orb.Height = 36 * scale;
+            AvatarImage.Width = AvatarImage.Height = 36 * scale;
+            AvatarImage.Clip = new EllipseGeometry(new Rect(0, 0, 36 * scale, 36 * scale));
             Glow.Width = Glow.Height = 56 * scale;
 
             // Kept on the orb's edge rather than in the window's corner. The
@@ -997,7 +1067,7 @@ namespace ClaudeBuddy
             CliBadge.Margin = new Thickness(Math.Max(0, inset), 0, 0, Math.Max(0, inset));
 
             Glyph.FontSize = BaseGlyphFontSize * scale;
-            OrbRadius = 18 * scale;
+            UpdateOrbRadius();
         }
 
         // Smaller with two letters than with one, so the wider glyph still
@@ -1028,7 +1098,6 @@ namespace ClaudeBuddy
         // which is why both paths stay.
         private bool _hasAvatar;
         private string? _agentEmoji;
-        private ImageBrush? _avatarBrush;
 
         // The state ring on an avatar orb. One brush with its own transition,
         // rather than a fresh SolidColorBrush per state change: the fill it
@@ -1102,9 +1171,13 @@ namespace ClaudeBuddy
 
             Glyph.IsVisible = false;
 
-            _avatarBrush ??= new ImageBrush { Stretch = Stretch.UniformToFill };
-            _avatarBrush.Source = avatar.Frames[0];
-            Orb.Fill = _avatarBrush;
+            // Drawn by AvatarImage beneath the ellipse, not as its fill — see the
+            // axaml for why an ImageBrush goes soft under the orb-size
+            // transform. The ellipse goes clear so the picture shows through,
+            // and keeps drawing the ring.
+            AvatarImage.Source = avatar.Frames[0];
+            AvatarImage.IsVisible = true;
+            Orb.Fill = Brushes.Transparent;
 
             _ringBrush ??= new SolidColorBrush(_orbBrush.Color)
             {
@@ -1144,6 +1217,8 @@ namespace ClaudeBuddy
             _avatar = null;
             StopAvatarAnimation();
 
+            AvatarImage.IsVisible = false;
+            AvatarImage.Source = null;
             Orb.Fill = _orbBrush;
             Orb.Stroke = new SolidColorBrush(Color.Parse("#22FFFFFF"));
             Orb.StrokeThickness = 1;
@@ -1169,10 +1244,10 @@ namespace ClaudeBuddy
 
             _avatarTimer.Tick += (_, _) =>
             {
-                if (_avatar is null || _avatarBrush is null) return;
+                if (_avatar is null) return;
 
                 _avatarFrame = (_avatarFrame + 1) % _avatar.Frames.Count;
-                _avatarBrush.Source = _avatar.Frames[_avatarFrame];
+                AvatarImage.Source = _avatar.Frames[_avatarFrame];
                 _avatarTimer!.Interval = TimeSpan.FromMilliseconds(_avatar.DelaysMs[_avatarFrame]);
             };
 
@@ -1765,9 +1840,10 @@ namespace ClaudeBuddy
         }
 
         // Centre of the orb in its own window's DIPs — half of Root's pinned
-        // 56x56. Unchanged by MemberScale: a team member is drawn smaller
-        // around this same point, never moved off it.
-        private const double OrbCentre = 28;
+        // 56x56 at the default size, scaled with it otherwise (CB-198).
+        // Unchanged by MemberScale: a team member is drawn smaller around this
+        // same point, never moved off it.
+        private double OrbCentre => CentreDip;
 
         // --- Speak latest turn --------------------------------------------------
 
@@ -2929,6 +3005,7 @@ namespace ClaudeBuddy
             // should still populate for a test or a standalone window that
             // never made a SessionManager current.
             RebuildSoundSubmenus();
+            RebuildSizeSubmenu();
 
             var manager = SessionManager.Instance;
             if (manager is null) return;
@@ -3012,6 +3089,61 @@ namespace ClaudeBuddy
             }
         }
 
+        // CB-198's per-orb size. Rebuilt on Opening for the Sound submenus'
+        // reason: the slider (which the Default row names) and this orb's own
+        // override can both have moved since the menu was last shown. The same
+        // CheckBox toggle rather than a text checkmark, for CB-173's reason
+        // given on BuildSoundSubmenu.
+        //
+        // Default is checked only when there is no override — an override that
+        // happens to equal the slider is still an override, and will stop
+        // following the slider the moment the slider moves, so the menu says
+        // which of the two it is rather than which number it currently draws.
+        internal void RebuildSizeSubmenu()
+        {
+            var over = ClaudeBuddySettings.OrbSizeFor(SoundKey);
+
+            SizeMenuItem.Items.Clear();
+
+            var defaultItem = new MenuItem
+            {
+                Header = $"Default ({SizeLabel(ClaudeBuddySettings.OrbSize)})",
+                ToggleType = MenuItemToggleType.CheckBox,
+                IsChecked = over is null
+            };
+            defaultItem.Click += (_, _) => SetSizeOverride(null);
+            SizeMenuItem.Items.Add(defaultItem);
+
+            SizeMenuItem.Items.Add(new Separator());
+
+            foreach (var preset in OrbSizing.Presets)
+            {
+                var item = new MenuItem
+                {
+                    Header = SizeLabel(preset),
+                    ToggleType = MenuItemToggleType.CheckBox,
+                    IsChecked = over is double o && Math.Abs(o - preset) < 1e-9
+                };
+                item.Click += (_, _) => SetSizeOverride(preset);
+                SizeMenuItem.Items.Add(item);
+            }
+        }
+
+        internal static string SizeLabel(double size) =>
+            $"{Math.Round(size * 100).ToString(System.Globalization.CultureInfo.InvariantCulture)}%";
+
+        // Every orb, not just this one: a size change moves the stack or the
+        // arrangement around the orb that changed, so the owning manager does
+        // it (SizeRelayoutRequested). With no manager listening — a standalone
+        // window — there is nothing else to move, so this orb resizes itself.
+        private void SetSizeOverride(double? size)
+        {
+            ClaudeBuddySettings.SetOrbSize(SoundKey, size);
+
+            if (SizeRelayoutRequested is { } relayout) relayout();
+            else ApplyEffectiveOrbSize();
+        }
+
         // Reads the other trigger's current override so writing one never
         // clobbers the other — ClaudeBuddySettings.SetOrbTurnSound takes
         // both fields together, and OrbTurnSound has no "leave unchanged"
@@ -3071,16 +3203,41 @@ namespace ClaudeBuddy
             var key = SessionManager.SoundKeyFor(status, SessionId);
             if (key == SoundKey || string.IsNullOrEmpty(key)) return;
 
-            if (!string.IsNullOrEmpty(SoundKey))
+            var hadKey = !string.IsNullOrEmpty(SoundKey);
+            if (hadKey)
             {
                 var stale = ClaudeBuddySettings.OrbTurnSoundFor(SoundKey);
                 if (stale is not null && ClaudeBuddySettings.OrbTurnSoundFor(key) is null)
                 {
                     ClaudeBuddySettings.SetOrbTurnSound(key, stale.Finished, stale.Attention);
                 }
+
+                // CB-198's size override rides the same key, so it migrates by
+                // the same rule — copied, not moved, and never over a size the
+                // new key already has — for the same two QA findings above: a
+                // 200% chosen before the title arrived must not snap back to
+                // the slider the moment it does, and a shared key must not be
+                // emptied out from under the other orb using it.
+                var staleSize = ClaudeBuddySettings.OrbSizeFor(SoundKey);
+                if (staleSize is not null && ClaudeBuddySettings.OrbSizeFor(key) is null)
+                {
+                    ClaudeBuddySettings.SetOrbSize(key, staleSize);
+                }
             }
 
             SoundKey = key;
+
+            // The first real key is also the first moment this orb can know its
+            // own size, and the manager's layout pass for a new orb places it
+            // (SessionManager calls UpdateFrom before RestoreOrbPosition). A
+            // *later* key can carry a different override on an orb already in
+            // a stack or an arrangement, and nothing else would re-lay those
+            // out around its new size — so that case says so, to whichever
+            // manager owns this orb; see SizeRelayoutRequested.
+            if (ApplyEffectiveOrbSize() && hadKey)
+            {
+                SizeRelayoutRequested?.Invoke();
+            }
         }
 
         // The row that says what it will do, or why it will not.

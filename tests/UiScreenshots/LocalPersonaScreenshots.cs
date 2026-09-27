@@ -128,6 +128,36 @@ public class LocalPersonaScreenshots
     // picture at all rather than Jennifer's: a wrong pixel here is the whole
     // of the regression this ticket fixes, and nothing about LocalPersonas.For
     // reporting the right AvatarPath can show that on its own.
+    // CB-198: the same persona orb at 2x. The picture has to stay sharp — the
+    // orb is scaled by a LayoutTransform, and a picture rasterised at its 36-DIP
+    // size before that transform comes out as an upscaled mosaic, which is how
+    // the first real Windows install drew it. The capture is what shows it.
+    [AvaloniaFact]
+    public void ALocalPersonaOrbAtDoubleSizeKeepsItsPictureSharp()
+    {
+        var project = WriteFixture();
+        var sessionId = "local-persona-2x-capture-" + Guid.NewGuid();
+        var before = ClaudeBuddySettings.OrbSize;
+
+        try
+        {
+            ClaudeBuddySettings.OrbSize = 2.0;
+            Publish(sessionId, project);
+
+            var orb = new OrbWindow(sessionId);
+            orb.UpdateFrom(Local(project));
+
+            ScreenshotHelper.Capture(orb, "local-persona-orb-2x.png");
+        }
+        finally
+        {
+            ClaudeBuddySettings.OrbSize = before;
+            LocalPersonas.SetForTests(new Dictionary<string, LocalPersona.Persona>());
+            OpenClawAvatars.Forget(LocalPersonas.AvatarKey(sessionId));
+            if (Directory.Exists(project)) Directory.Delete(project, true);
+        }
+    }
+
     private static string WriteMemberFixture(out string memberName)
     {
         memberName = "ines-harrow";
