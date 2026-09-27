@@ -51,9 +51,12 @@ namespace ClaudeBuddy
         internal static void Set(string sessionId, MirrorProtocol.PeerPersona? persona)
         {
             persona = Sanitize(persona);
+            MirrorProtocol.PeerPersona? previous;
 
             lock (Gate)
             {
+                previous = Registry.GetValueOrDefault(sessionId);
+
                 if (persona is null)
                 {
                     Registry.Remove(sessionId);
@@ -67,7 +70,28 @@ namespace ClaudeBuddy
             // The wire can replace a portrait under the same roster session.
             // Forgetting by a receiver-owned key is the only cache operation
             // needed; it cannot and must not ask the sender for a file again.
-            OpenClawAvatars.Forget(AvatarKey(sessionId));
+            //
+            // CB-216: only when the picture actually changed. This runs on every
+            // scan, every two seconds, and forgetting unconditionally made the
+            // orb decode the peer's picture again each time: an animated GIF of
+            // 11-15 MB, for a face that had not changed.
+            if (!SamePicture(previous, persona)) OpenClawAvatars.Forget(AvatarKey(sessionId));
+        }
+
+        // Whether two personas wear the same picture. By id when both have one,
+        // which is the hash and length a newer peer names it with; by bytes
+        // otherwise, since an older peer sends the picture inline in every
+        // roster as a fresh array, and comparing those bytes costs a
+        // memcmp against the decode that forgetting would cause.
+        internal static bool SamePicture(MirrorProtocol.PeerPersona? a, MirrorProtocol.PeerPersona? b)
+        {
+            var left = a?.Avatar;
+            var right = b?.Avatar;
+
+            if (left is null || right is null) return left is null && right is null;
+            if (ReferenceEquals(left, right)) return true;
+            if (a!.AvatarId is { Length: > 0 } id && b!.AvatarId is { Length: > 0 } other) return id == other;
+            return left.AsSpan().SequenceEqual(right);
         }
 
         internal static void Forget(string sessionId)
