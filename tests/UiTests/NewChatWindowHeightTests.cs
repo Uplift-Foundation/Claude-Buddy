@@ -153,6 +153,37 @@ public class NewChatWindowHeightTests : IDisposable
         }
     }
 
+    // The reserve is sized to the longest fixed message (CB-207 QA): each
+    // one, laid out unbounded at the dialog's content width, has to fit in
+    // the lines reserved, or it would be trimmed on screen. Measured in the
+    // headless font, not the macOS or Windows system font. The captures in
+    // tests/UiScreenshots are what show the real one.
+    [AvaloniaTheory]
+    [InlineData("Terminal opened; no orb yet — the CLI's hook may not be installed / trusted.")]
+    [InlineData("Conversation created; no orb yet — check your gateway connection.")]
+    [InlineData("Conversation started with Alexis. Waiting for its orb…")]
+    [InlineData("Claude Code is running — its orb should be on screen.")]
+    [InlineData("Codex not found on PATH or in its usual install locations.")]
+    [InlineData("Starting a new chat isn't supported on this platform yet.")]
+    public void EveryFixedStatusMessageFitsTheReservedLines(string message)
+    {
+        var window = EverythingAvailable();
+        Flush();
+
+        var unbounded = new TextBlock
+        {
+            Text = message,
+            TextWrapping = window.StatusLine.TextWrapping,
+            LineHeight = window.StatusLine.LineHeight,
+            FontSize = window.StatusLine.FontSize,
+            FontFamily = window.StatusLine.FontFamily
+        };
+        unbounded.Measure(new Size(420 - 40, double.PositiveInfinity));
+
+        Assert.True(unbounded.DesiredSize.Height <= window.StatusLine.MinHeight,
+            $"{unbounded.DesiredSize.Height} > {window.StatusLine.MinHeight}");
+    }
+
     [AvaloniaFact]
     public void TheStatusLineCarriesItsFullTextAsATooltip()
     {

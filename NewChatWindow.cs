@@ -173,11 +173,16 @@ namespace ClaudeBuddy
         private readonly ComboBox _folderCombo = new() { MinWidth = 260, HorizontalAlignment = HorizontalAlignment.Stretch };
         private readonly ComboBox _agentCombo = new() { MinWidth = 260, HorizontalAlignment = HorizontalAlignment.Stretch };
         // Three lines reserved up front and trimmed past that, rather than
-        // left to grow: every message this line shows arrives after the
-        // window is on screen, and a launch message carries the whole folder
-        // path, so an unbounded line would resize the window after show —
-        // exactly what CB-207 removes (see ReservedSlot). ToolTip carries the
-        // full text for the rare message the trim cuts.
+        // left to grow: every message this line shows arrives after the window
+        // is on screen, and a launch message carries the whole folder path, so
+        // an unbounded line would resize the window after show — exactly what
+        // CB-207 removes (see ReservedSlot). The reserve is a deliberate cost
+        // to every New chat window, 38pt taller than before CB-207, sized to
+        // the longest fixed message rather than to the rare long path: two
+        // lines was tried and "Terminal opened; no orb yet…" measured three at
+        // this width, so it would have been trimmed on screen
+        // (EveryFixedStatusMessageFitsTheReservedLines pins it). A path that
+        // needs more is trimmed, with the full text in the ToolTip.
         private const int StatusLines = 3;
         private const double StatusLineHeight = 18;
 
