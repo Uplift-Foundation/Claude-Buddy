@@ -1628,6 +1628,30 @@ public class MirrorRoundTripTests : IDisposable
         Assert.Equal(2, harness.Client.Known().Count);
     }
 
+    // QA's follow-up: a reorder and a real change in the same poll. The sort
+    // must not mask the new session, and once it has been sent the next poll
+    // is unchanged again.
+    [Fact]
+    public async Task AReorderThatComesWithARealChangeIsSentAndThenSettles()
+    {
+        var harness = new Harness(_dir);
+        harness.AddSession("first", WriteTranscript("first.jsonl", Conversation(2)));
+        harness.AddSession("second", WriteTranscript("second.jsonl", Conversation(2)));
+        await harness.Client.AskWhatTheyHaveAsync(harness.Peers);
+
+        harness.ReverseAgentOrder();
+        harness.AddSession("third", WriteTranscript("third.jsonl", Conversation(2)));
+        harness.ForgetFramesSoFar();
+        await harness.Client.AskWhatTheyHaveAsync(harness.Peers);
+
+        Assert.True(harness.ChunkFrames > 0);
+        Assert.Equal(3, harness.Client.Known().Count);
+
+        harness.ForgetFramesSoFar();
+        await harness.Client.AskWhatTheyHaveAsync(harness.Peers);
+        Assert.Equal(0, harness.ChunkFrames);
+    }
+
     // --- CB-216: pictures cross once, by id ----------------------------------------
 
     private static readonly byte[] Face = { 137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3 };
