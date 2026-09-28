@@ -1231,15 +1231,22 @@ namespace ClaudeBuddy
         // Its own timer rather than the shared pulse ticker: frame delays are
         // whatever each GIF's author chose, and are neither 60fps nor the same
         // between two agents.
+        //
+        // CB-218: only while the orb is on screen. "Show orbs" off hides every
+        // orb window, and each animated avatar used to keep swapping frames
+        // nobody could see, a frame's worth of work per window at the GIF's rate.
+        // OnPropertyChanged below starts it again when the orb is shown, from
+        // the frame it stopped on, so the animation picks up rather than
+        // restarting.
         private void StartAvatarAnimation()
         {
             StopAvatarAnimation();
 
-            if (_avatar is null || !_avatar.IsAnimated) return;
+            if (!OrbAvatarAnimation.ShouldRun(_avatar?.IsAnimated == true, IsVisible)) return;
 
             _avatarTimer = new DispatcherTimer
             {
-                Interval = TimeSpan.FromMilliseconds(_avatar.DelaysMs[0])
+                Interval = TimeSpan.FromMilliseconds(_avatar!.DelaysMs[_avatarFrame])
             };
 
             _avatarTimer.Tick += (_, _) =>
@@ -1258,6 +1265,20 @@ namespace ClaudeBuddy
         {
             _avatarTimer?.Stop();
             _avatarTimer = null;
+        }
+
+        // Whether the avatar is animating now, for the tests that pin when it
+        // is not.
+        internal bool AvatarAnimating => _avatarTimer is { IsEnabled: true };
+
+        protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
+        {
+            base.OnPropertyChanged(change);
+
+            if (change.Property != IsVisibleProperty) return;
+
+            if (IsVisible) StartAvatarAnimation();
+            else StopAvatarAnimation();
         }
 
         // The letters themselves live in OrbGlyph, which is pure and tested;
