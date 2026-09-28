@@ -1256,6 +1256,10 @@ namespace ClaudeBuddy
                 _avatarFrame = (_avatarFrame + 1) % _avatar.Frames.Count;
                 AvatarImage.Source = _avatar.Frames[_avatarFrame];
                 _avatarTimer!.Interval = TimeSpan.FromMilliseconds(_avatar.DelaysMs[_avatarFrame]);
+
+                // The breath rides this frame rather than presenting one of its
+                // own in between (OrbBreathCadence).
+                if (_breathing) StepBreath(Environment.TickCount64);
             };
 
             _avatarTimer.Start();
@@ -1310,7 +1314,7 @@ namespace ClaudeBuddy
                 default:
                     StopPulse();
                     AnimateColor(color, TimeSpan.FromMilliseconds(400), state);
-                    StartPulse(1.06, TimeSpan.FromSeconds(2.2), new SineEaseInOut());
+                    StartPulse(1.06, TimeSpan.FromSeconds(2.2), new SineEaseInOut(), idle: true);
                     break;
             }
         }
@@ -1547,9 +1551,18 @@ namespace ClaudeBuddy
         // rate, and each frame re-renders the whole (transparent, topmost) orb
         // window — measured at roughly 8% of a core per orb at 60Hz. The pulse is
         // a slow breath, so a much lower rate is indistinguishable and costs a
-        // third as much. Hidden orbs are skipped entirely, which the old
+        // fraction as much. Hidden orbs are skipped entirely, which the old
         // animation never did: Hide() left it running.
-        private const double PulseFps = 20;
+        //
+        // Ten, not the twenty this said for most of its life. Twenty was never
+        // what anybody saw: from 29 Aug every DispatcherTimer fired late by the
+        // startup offset DispatcherClock fixes, and once CB-219 stopped the
+        // danger ring's animation promoting timers on time, this ticker ran at
+        // about 4 Hz. Putting the clock right put it at a real 20 Hz on every
+        // orb — every state breathes, idle included — and Buddy went from 7% to
+        // about 20% of a core on the MacBook with the same sessions. Ten keeps
+        // the breath smooth: the idle one moves under a pixel a step.
+        private const double PulseFps = 10;
 
         private static readonly List<OrbWindow> Pulsing = new();
         private static DispatcherTimer? _ticker;
@@ -1566,13 +1579,18 @@ namespace ClaudeBuddy
         // saying something about its state that is not true.
         private bool _breathing;
 
+        // The idle breath steps at half the ticker's rate, and an orb with an
+        // animated avatar breathes on its own frames. OrbBreathCadence has why.
+        private bool _idleBreath;
+        private long _lastBreathStepAt;
+
         // Its own clock rather than the orb's, because the orb's period changes
         // with the session's state — and a heart that sped up when the agent
         // started working would be saying something this badge does not know.
         private const double HeartPeriodMs = OpenClawHeartbeat.PeriodMs;
         private long _heartStartedAt;
 
-        private void StartPulse(double to, TimeSpan duration, Easing easing)
+        private void StartPulse(double to, TimeSpan duration, Easing easing, bool idle = false)
         {
             // Duration is a half-cycle in the old alternating animation, so a full
             // breath is twice it. Easing is implied by the cosine below.
@@ -1580,6 +1598,7 @@ namespace ClaudeBuddy
             _pulsePeriodMs = duration.TotalMilliseconds * 2;
             _pulseStartedAt = Environment.TickCount64;
             _breathing = true;
+            _idleBreath = idle;
 
             if (!Pulsing.Contains(this)) Pulsing.Add(this);
             EnsureTicker();
@@ -1608,7 +1627,11 @@ namespace ClaudeBuddy
         // pulsing orb once a real frame elapses, which a headless test only
         // gets by pumping the dispatcher against wall time. Driving it directly
         // is the same trade ApplyState already makes above.
-        internal void TickPulse()
+        internal void TickPulse() => TickPulse(Environment.TickCount64);
+
+        // With the clock passed in, so a test can step the idle breath's
+        // cadence at exact times instead of racing the wall clock.
+        internal void TickPulse(long now)
         {
             // Nothing on screen, nothing to animate — the whole point of the
             // "Show orbs" toggle was to stop this work, and it never did.
@@ -1624,17 +1647,19 @@ namespace ClaudeBuddy
             // roster solely to finish an acknowledgment must not start swelling:
             // scale is the state channel, and a parked orb that breathed for a
             // quarter of a second would be claiming to have come back to life.
-            if (_breathing)
-            {
-                var phase = (Environment.TickCount64 - _pulseStartedAt) % _pulsePeriodMs / _pulsePeriodMs;
-                var eased = (1 - Math.Cos(phase * 2 * Math.PI)) / 2;   // 0 -> 1 -> 0, smooth at both ends
-                var scale = 1.0 + (_pulseTo - 1.0) * eased;
-
-                _orbScale.ScaleX = scale;
-                _orbScale.ScaleY = scale;
-            }
+            if (_breathing && OrbBreathCadence.PulseTickSetsScale(AvatarAnimating, _idleBreath, now, _lastBreathStepAt))
+                StepBreath(now);
 
             if (HeartBadge.IsVisible) TickHeart();
+        }
+
+        private void StepBreath(long now)
+        {
+            var scale = OrbBreathCadence.ScaleAt(now - _pulseStartedAt, _pulsePeriodMs, _pulseTo);
+
+            _orbScale.ScaleX = scale;
+            _orbScale.ScaleY = scale;
+            _lastBreathStepAt = now;
         }
 
         // The heart badge's beat, on the same ticker as the breath above. Two
