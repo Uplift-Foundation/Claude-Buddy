@@ -57,12 +57,26 @@ namespace ClaudeBuddy
         // stale 94% is exactly the reading someone needs to be able to see.
         private const double StaleOpacity = 0.45;
 
-        // The class the breathing animation in AccountOrbWindow.axaml selects on.
-        // Named here rather than spelled out at its three call sites so the code
-        // and the XAML cannot drift apart in the one way that would be invisible:
-        // a typo in a selector is not a compile error, it is a ring that stops
-        // breathing and says nothing about why.
+        // The class that marks a ring as breathing. Since CB-219 it selects no
+        // animation. The shared ticker below finds the rings wearing it and steps
+        // their opacity, and the IsBreathing properties read it back. It stays a
+        // class so a ring's state is still visible on the shape itself.
         private const string BreathingClass = "breathing";
+
+        // CB-219: one ticker steps every breathing ring in every account orb, at
+        // UsageRingBreath.FrameInterval, and only while some ring is breathing.
+        // It replaces an IterationCount="Infinite" style animation, which kept
+        // the compositor rendering on every vsync and was most of Buddy's idle
+        // CPU. See UsageRingBreath for the measurement.
+        private static readonly System.Collections.Generic.List<AccountOrbWindow> Breathing = new();
+        private static Avalonia.Threading.DispatcherTimer? _breathTicker;
+
+        // When each of this orb's rings started breathing. Per ring rather than
+        // one shared phase, so a ring that starts breathing begins at full
+        // opacity and fades, as each ring's own style animation used to, instead
+        // of popping straight to wherever a shared clock had got to. Found by QA
+        // on 762aedf2.
+        private readonly System.Collections.Generic.Dictionary<Path, long> _breathStartedAt = new();
 
         private bool _pinned;
 
@@ -91,6 +105,8 @@ namespace ClaudeBuddy
         {
             AccountKey = key;
             InitializeComponent();
+
+            Closed += (_, _) => StopBreathingAll();
 
             Opened += (_, _) =>
             {
@@ -293,31 +309,17 @@ namespace ClaudeBuddy
         // in tests/UnitTests instead of being inferred from what a Path ended up
         // wearing. What is left below is the part that genuinely needs a shape.
         //
-        // The animation itself is declared in AccountOrbWindow.axaml against the
-        // `breathing` class, so this method only ever adds or removes that class.
-        // That split is not a matter of taste: Avalonia refuses to *run* a
-        // looping animation, and the first version of this built an
-        // IterationCount.Infinite animation and called Animation.RunAsync on it —
-        // which is answered with InvalidOperationException("Looping animations
-        // must not use the Run method."). Fire-and-forget meant the throw never
-        // reached the dispatcher; it landed in the crash log as an unobserved
-        // task exception — twenty-two entries across twelve separate runs of the
-        // app on the machine this was written against, counted on 7 Sep 2026,
-        // and still arriving while the fix was being reviewed. The count is
-        // dated because it only ever grows: every ring that enters the danger
-        // band leaves another one behind.
+        // The breath itself is stepped by the shared ticker below, at
+        // UsageRingBreath.FrameInterval, for every ring wearing the `breathing`
+        // class. So this method still only ever adds or removes that class, and
+        // starts or stops the ticker to match.
         //
-        // The comment this replaces claimed the visible cost was a ring that
-        // never moved. It was not, and the difference is worth writing down
-        // rather than quietly fixing. On 12.1.1 RunAsync faults the task it
-        // returns instead of throwing before it acts — it applies the animation,
-        // then awaits a task it has already failed — so the ring breathed, in
-        // every scenario it was driven through on a real Mac. What was broken
-        // was the contract and not the pixels: a call the framework has already
-        // declared invalid, working only by the order in which this particular
-        // version gives up, and a faulted task per ring left behind. The reason
-        // to fix it is that nothing about that survives a bump on purpose.
-        // See the XAML for the measurements.
+        // History worth keeping: this was once an infinite Animation run from
+        // code, which Avalonia refuses ("Looping animations must not use the Run
+        // method."). Twenty-two unobserved task exceptions were counted in the
+        // crash log on 7 Sep 2026 before it moved into a style. The style was
+        // correct, but it rendered on every vsync forever, which CB-219 measured
+        // as most of Buddy's idle CPU. See AccountOrbWindow.axaml.
         private void ApplyBreath(Path arc, double? percent)
         {
             var breathing = arc.Classes.Contains(BreathingClass);
@@ -326,15 +328,20 @@ namespace ClaudeBuddy
             {
                 case UsageRingGeometry.BreathChange.Start:
                     arc.Classes.Add(BreathingClass);
+                    _breathStartedAt[arc] = Environment.TickCount64;
+                    arc.Opacity = 1;
+                    StartBreathing();
                     break;
 
                 case UsageRingGeometry.BreathChange.Stop:
                     arc.Classes.Remove(BreathingClass);
+                    _breathStartedAt.Remove(arc);
+                    if (!AnyRingBreathing) StopBreathingAll();
 
                     // The one place opacity has to be put back, and the only
                     // path from breathing to not, so putting it here rather than
-                    // on every poll is not a shortcut. An animation outranks a
-                    // local value while it runs, so this cannot fight a ring
+                    // on every poll is not a shortcut. The ticker only touches
+                    // rings still wearing the class, so this cannot fight a ring
                     // that is still breathing; what it does is stop a ring being
                     // abandoned at whatever fraction of a breath it had reached.
                     arc.Opacity = 1;
@@ -342,6 +349,68 @@ namespace ClaudeBuddy
 
                 // Leave: a ring already in the state it should be in. Doing
                 // nothing is the behaviour, not the absence of it — see the enum.
+            }
+        }
+
+        private bool AnyRingBreathing =>
+            WeeklyArc.Classes.Contains(BreathingClass)
+            || SessionArc.Classes.Contains(BreathingClass)
+            || ExtraArc.Classes.Contains(BreathingClass);
+
+        private void StartBreathing()
+        {
+            if (!Breathing.Contains(this)) Breathing.Add(this);
+
+            if (_breathTicker is null)
+            {
+                _breathTicker = new Avalonia.Threading.DispatcherTimer { Interval = UsageRingBreath.FrameInterval };
+                _breathTicker.Tick += (_, _) => TickAllBreaths();
+            }
+
+            if (!_breathTicker.IsEnabled) _breathTicker.Start();
+        }
+
+        private void StopBreathingAll()
+        {
+            Breathing.Remove(this);
+            if (Breathing.Count == 0) _breathTicker?.Stop();
+        }
+
+        // Whether the shared ticker is running, and whether this orb is on it,
+        // for the tests that pin when they are not.
+        internal static bool BreathTickerRunning => _breathTicker is { IsEnabled: true };
+        internal bool OnBreathTicker => Breathing.Contains(this);
+
+        // The ticker is process-wide and test classes leave orbs open, so a test
+        // that needs to see it stop starts from nothing.
+        internal static void ClearBreathingForTests()
+        {
+            Breathing.Clear();
+            _breathTicker?.Stop();
+            _breathTicker = null;
+        }
+
+        internal static void TickAllBreaths()
+        {
+            var now = Environment.TickCount64;
+            for (var i = Breathing.Count - 1; i >= 0; i--) Breathing[i].TickBreath(now);
+        }
+
+        // When a ring started breathing, for the tests that step it to a known
+        // point in its breath. Null for a ring that isn't breathing.
+        internal long? BreathStartedAt(Path arc) =>
+            _breathStartedAt.TryGetValue(arc, out var started) ? started : null;
+
+        // A hidden orb is skipped rather than stepped: nobody can see its rings,
+        // and CB-218 found the same waste in the session orbs' avatars. Its rings
+        // pick up again, at wherever their own breath has got to, when it shows.
+        internal void TickBreath(long now)
+        {
+            if (!IsVisible) return;
+
+            foreach (var (arc, started) in _breathStartedAt)
+            {
+                arc.Opacity = UsageRingBreath.OpacityAt(now - started);
             }
         }
 

@@ -431,10 +431,21 @@ namespace ClaudeBuddy
         // ScheduleScan's background thread in production, and inline for
         // ScanAndUpdate's callers; ScanProbePlan has the argument for why its
         // gates ask no more and no less than the reconciliation half reads.
-        private ScanProbes GatherProbes(List<ScanEntry> found) =>
-            ScanProbes.Gather(
+        //
+        // CB-217: first it tells the job listing which transcripts the Claude
+        // Code sessions here have, so `claude agents --json` is only run for
+        // the accounts that own one of them. See BackgroundJobs.AccountsToAsk.
+        private ScanProbes GatherProbes(List<ScanEntry> found)
+        {
+            BackgroundJobs.NoteLiveTranscripts(ClaudeTranscripts(found));
+
+            return ScanProbes.Gather(
                 ScanProbePlan.For(found, AgentTeam.LeadOf),
                 _paneOwners, _jobListing, _attachClients, _agentViewer);
+        }
+
+        internal static IEnumerable<string?> ClaudeTranscripts(IEnumerable<ScanEntry> found) =>
+            found.Where(e => e.Status.Source == SessionSource.ClaudeCode).Select(e => e.Status.TranscriptPath);
 
         private readonly Func<Dictionary<string, string>?> _jobListing;
 

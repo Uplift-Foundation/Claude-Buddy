@@ -40,7 +40,6 @@ public class ScreenLockWaitSeamTests
             now: () => DateTime.UtcNow,
             sleep: Thread.Sleep,
             cap: TimeSpan.FromMilliseconds(1),
-            lockedCap: TimeSpan.FromHours(12),
             interval: Interval);
 
         clock.Stop();
@@ -64,7 +63,6 @@ public class ScreenLockWaitSeamTests
             now: () => DateTime.UtcNow,
             sleep: Thread.Sleep,
             cap: TimeSpan.FromMilliseconds(1),
-            lockedCap: TimeSpan.FromHours(12),
             interval: Interval);
 
         // One probe if the first clock read already crossed the 1ms deadline,
@@ -74,25 +72,25 @@ public class ScreenLockWaitSeamTests
     }
 
     [Fact]
-    public void A_one_millisecond_locked_cap_really_does_expire_against_the_wall_clock()
+    public void A_reported_lock_is_waited_out_against_the_wall_clock_and_ends_on_the_unlock()
     {
-        // The locked arm's own negative control, and the one that matters
-        // most: a reported lock is capped rather than waited on forever, so
-        // against a real clock it has to actually stop. Without this, every
-        // other locked-screen test here is equally consistent with a loop
-        // that can never exit — which is precisely what the first draft of
-        // this change shipped.
+        // CB-215 against a real clock and real sleeps. A reported lock has no
+        // cap now, so the only way out of the loop is an unlocked reading. This
+        // checks that it really does keep sleeping through a locked stretch,
+        // and really does return on the first unlock, rather than either
+        // returning early or never returning.
         var probes = 0;
+        var started = DateTime.UtcNow;
 
         ScreenLockWait.Wait(
-            probe: () => { probes++; return ScreenLockState.Locked; },
+            probe: () => ++probes <= 5 ? ScreenLockState.Locked : ScreenLockState.Unlocked,
             now: () => DateTime.UtcNow,
             sleep: Thread.Sleep,
-            cap: TimeSpan.FromHours(2),
-            lockedCap: TimeSpan.FromMilliseconds(1),
+            cap: TimeSpan.FromMilliseconds(1),
             interval: Interval);
 
-        Assert.InRange(probes, 1, 3);
+        Assert.Equal(6, probes);
+        Assert.True(DateTime.UtcNow - started >= Interval * 5, "the loop did not sleep through the lock");
     }
 
     [Fact]
@@ -105,7 +103,6 @@ public class ScreenLockWaitSeamTests
             now: () => DateTime.UtcNow,
             sleep: Thread.Sleep,
             cap: TimeSpan.FromHours(2),
-            lockedCap: TimeSpan.FromHours(12),
             interval: TimeSpan.FromHours(1));
 
         clock.Stop();
