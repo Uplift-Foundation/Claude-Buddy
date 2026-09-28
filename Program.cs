@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using Avalonia;
+using Avalonia.Threading;
 
 namespace ClaudeBuddy
 {
@@ -164,6 +165,10 @@ namespace ClaudeBuddy
                 .UsePlatformDetect()
                 // The orbs are the whole UI; no Dock icon needed on macOS.
                 .With(new MacOSPlatformOptions { ShowInDock = false })
+                // The earliest moment the platform's dispatcher exists, and
+                // before the app has started any timers of its own. See
+                // DispatcherClock for why every timer was late without it.
+                .AfterPlatformServicesSetup(_ => DispatcherClock.Align(Dispatcher.UIThread))
                 .LogToTrace();
     }
 }

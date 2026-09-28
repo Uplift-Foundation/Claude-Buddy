@@ -51,5 +51,5 @@ public class UsageRingBreathTests
 
     [Fact]
     public void ItIsSteppedAtTheSessionOrbsPulseRate() =>
-        Assert.Equal(50, UsageRingBreath.FrameInterval.TotalMilliseconds);
+        Assert.Equal(100, UsageRingBreath.FrameInterval.TotalMilliseconds);
 }
