@@ -307,4 +307,49 @@ public class ClaudeCloudCredentialPlatformTests
 
         Assert.Equal("b=9", multi.Stamp());
     }
+
+    [Theory]
+    [InlineData("/Users/x/.claude-board/")]
+    [InlineData("/Users/x/.claude-board\\")]
+    public void ATrailingSeparatorOnARootDoesNotChangeItsHash(string root)
+    {
+        Assert.Equal(new[] { ClaudeCliCredentials.KeychainServiceFor("/Users/x/.claude-board") },
+            ClaudeCliCredentials.CandidateServices("/nowhere", new[] { root }));
+    }
+
+    [Fact]
+    public void ARootOfOnlySeparatorsIsHashedAsGiven()
+    {
+        Assert.Equal(new[] { ClaudeCliCredentials.KeychainServiceFor("/") },
+            ClaudeCliCredentials.CandidateServices("/nowhere", new[] { "/" }));
+    }
+
+    // Custody canary through the composite: nothing it exposes carries the token.
+    [Fact]
+    public void AFoundReadNeverPutsTheTokenInNamesAnsweredByOrAttempts()
+    {
+        const string canary = "sk-ant-oat01-CANARY-ACCESS-abcdef0123456789";
+        var multi = new MultiCredentialSource(new (string, ICloudCredentialSource)[]
+        {
+            ("store-a", new CanaryFake(canary)),
+        });
+
+        var read = multi.Read();
+
+        Assert.Equal(canary, read.AccessToken);
+        var exposed = string.Join("|", multi.Names) + "|" + multi.AnsweredBy + "|"
+            + string.Join("|", multi.Attempts.Select(a => $"{a.Name} {a.Outcome} {a.Reason}"))
+            + "|" + multi.Stamp();
+        Assert.DoesNotContain(canary, exposed);
+        Assert.DoesNotContain("CANARY", exposed);
+    }
+
+    private sealed class CanaryFake : ICloudCredentialSource
+    {
+        private readonly string _token;
+        internal CanaryFake(string token) => _token = token;
+        public string? Stamp() => "1";
+        public CredentialRead Read() =>
+            new(CredentialOutcome.Found, _token, null, "a credential is present");
+    }
 }

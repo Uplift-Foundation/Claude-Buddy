@@ -215,7 +215,13 @@ namespace ClaudeBuddy
             {
                 if (string.Equals(root, defaultRoot, StringComparison.Ordinal))
                     AddOnce(services, KeychainServiceFor(null));
-                AddOnce(services, KeychainServiceFor(root));
+                // A settings entry of ".claude-board/" reaches here as
+                // "<home>/.claude-board/", but a shell exports CLAUDE_CONFIG_DIR
+                // without the slash, and the CLI hashes what it was given
+                // verbatim. Trim so the two spell the same directory the same way;
+                // a root that is nothing but separators is left as it was.
+                var trimmed = root.TrimEnd('/', '\\');
+                AddOnce(services, KeychainServiceFor(trimmed.Length == 0 ? root : trimmed));
             }
             return services;
         }
