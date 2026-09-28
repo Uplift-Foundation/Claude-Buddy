@@ -70,7 +70,13 @@ namespace ClaudeBuddy
         // CPU. See UsageRingBreath for the measurement.
         private static readonly System.Collections.Generic.List<AccountOrbWindow> Breathing = new();
         private static Avalonia.Threading.DispatcherTimer? _breathTicker;
-        private static readonly long BreathEpoch = Environment.TickCount64;
+
+        // When each of this orb's rings started breathing. Per ring rather than
+        // one shared phase, so a ring that starts breathing begins at full
+        // opacity and fades, as each ring's own style animation used to, instead
+        // of popping straight to wherever a shared clock had got to. Found by QA
+        // on 762aedf2.
+        private readonly System.Collections.Generic.Dictionary<Path, long> _breathStartedAt = new();
 
         private bool _pinned;
 
@@ -322,11 +328,14 @@ namespace ClaudeBuddy
             {
                 case UsageRingGeometry.BreathChange.Start:
                     arc.Classes.Add(BreathingClass);
+                    _breathStartedAt[arc] = Environment.TickCount64;
+                    arc.Opacity = 1;
                     StartBreathing();
                     break;
 
                 case UsageRingGeometry.BreathChange.Stop:
                     arc.Classes.Remove(BreathingClass);
+                    _breathStartedAt.Remove(arc);
                     if (!AnyRingBreathing) StopBreathingAll();
 
                     // The one place opacity has to be put back, and the only
@@ -382,20 +391,25 @@ namespace ClaudeBuddy
 
         internal static void TickAllBreaths()
         {
-            var opacity = UsageRingBreath.OpacityAt(Environment.TickCount64 - BreathEpoch);
-            for (var i = Breathing.Count - 1; i >= 0; i--) Breathing[i].TickBreath(opacity);
+            var now = Environment.TickCount64;
+            for (var i = Breathing.Count - 1; i >= 0; i--) Breathing[i].TickBreath(now);
         }
+
+        // When a ring started breathing, for the tests that step it to a known
+        // point in its breath. Null for a ring that isn't breathing.
+        internal long? BreathStartedAt(Path arc) =>
+            _breathStartedAt.TryGetValue(arc, out var started) ? started : null;
 
         // A hidden orb is skipped rather than stepped: nobody can see its rings,
         // and CB-218 found the same waste in the session orbs' avatars. Its rings
-        // pick the breath up again, in step with the rest, the moment it shows.
-        internal void TickBreath(double opacity)
+        // pick up again, at wherever their own breath has got to, when it shows.
+        internal void TickBreath(long now)
         {
             if (!IsVisible) return;
 
-            foreach (var arc in new[] { WeeklyArc, SessionArc, ExtraArc })
+            foreach (var (arc, started) in _breathStartedAt)
             {
-                if (arc.Classes.Contains(BreathingClass)) arc.Opacity = opacity;
+                arc.Opacity = UsageRingBreath.OpacityAt(now - started);
             }
         }
 

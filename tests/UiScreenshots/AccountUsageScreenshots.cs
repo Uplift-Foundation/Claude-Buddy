@@ -69,12 +69,13 @@ public class AccountUsageScreenshots : IDisposable
         orb.Show();
         ScreenshotHelper.Flush();
 
-        orb.TickBreath(1.0);
+        var started = orb.BreathStartedAt(orb.WeeklyArc)!.Value;
+        orb.TickBreath(started);
         ScreenshotHelper.Flush();
         var full = Pixels(orb);
         ScreenshotHelper.CaptureAlreadyShown(orb, "account-orb-breath-full.png");
 
-        orb.TickBreath(UsageRingBreath.Floor);
+        orb.TickBreath(started + (long)UsageRingBreath.HalfPeriodMs);
         ScreenshotHelper.Flush();
         var faded = Pixels(orb);
         ScreenshotHelper.CaptureAlreadyShown(orb, "account-orb-breath-faded.png");

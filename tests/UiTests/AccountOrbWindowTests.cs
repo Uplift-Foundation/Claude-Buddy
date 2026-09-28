@@ -521,9 +521,10 @@ public class AccountOrbWindowTests : IDisposable
         orb.Show();
         orb.UpdateFrom(Usage(session: 20, weekly: 92), Now);
 
-        orb.TickBreath(0.7);
+        var started = orb.BreathStartedAt(orb.WeeklyArc)!.Value;
+        orb.TickBreath(started + 1300);
 
-        Assert.Equal(0.7, orb.WeeklyArc.Opacity);
+        Assert.Equal(UsageRingBreath.OpacityAt(1300), orb.WeeklyArc.Opacity, precision: 9);
         Assert.Equal(
             BindingPriority.Unset,
             orb.SessionArc.GetDiagnostic(Visual.OpacityProperty).Priority);
@@ -533,9 +534,10 @@ public class AccountOrbWindowTests : IDisposable
         // at whatever fraction of a breath it had reached, and the ticker no
         // longer touches it.
         orb.UpdateFrom(Usage(session: 20, weekly: 10), Now);
-        orb.TickBreath(0.6);
+        orb.TickBreath(started + 2600);
 
         Assert.Equal(1, orb.WeeklyArc.Opacity);
+        Assert.Null(orb.BreathStartedAt(orb.WeeklyArc));
         orb.Close();
     }
 
@@ -564,6 +566,57 @@ public class AccountOrbWindowTests : IDisposable
         orb.Close();
     }
 
+    // QA's finding on 762aedf2: a ring that starts breathing while another is
+    // already mid-breath must begin at full opacity and fade, as each ring's own
+    // style animation did, rather than popping straight to the other ring's
+    // phase on its first tick.
+    [AvaloniaFact]
+    public async Task ARingThatStartsBreathingLaterBeginsAtFullOpacity()
+    {
+        var early = new AccountOrbWindow("a");
+        early.Show();
+        early.UpdateFrom(Usage(weekly: 95), Now);
+        await Task.Delay(400);
+
+        var late = new AccountOrbWindow("b");
+        late.Show();
+        late.UpdateFrom(Usage(weekly: 95), Now);
+        Assert.Equal(1, late.WeeklyArc.Opacity);
+
+        AccountOrbWindow.TickAllBreaths();
+
+        // The late ring is at most a few milliseconds into its own breath, so it
+        // is still at (almost exactly) full opacity; the early one is visibly
+        // not, being ~400 ms in.
+        Assert.True(late.WeeklyArc.Opacity > 0.99, $"late ring popped to {late.WeeklyArc.Opacity}");
+        Assert.True(early.WeeklyArc.Opacity < late.WeeklyArc.Opacity);
+
+        early.Close();
+        late.Close();
+    }
+
+    // Two rings on one orb that start breathing at different times keep their
+    // own phases, as two separately started animations did.
+    [AvaloniaFact]
+    public void EachRingKeepsItsOwnBreath()
+    {
+        var orb = new AccountOrbWindow("k");
+        orb.Show();
+        orb.UpdateFrom(Usage(session: 10, weekly: 95), Now);
+        var weeklyStarted = orb.BreathStartedAt(orb.WeeklyArc)!.Value;
+
+        orb.UpdateFrom(Usage(session: 95, weekly: 95), Now);
+        var sessionStarted = orb.BreathStartedAt(orb.SessionArc)!.Value;
+        Assert.Equal(weeklyStarted, orb.BreathStartedAt(orb.WeeklyArc));
+
+        var now = Math.Max(weeklyStarted, sessionStarted) + 1000;
+        orb.TickBreath(now);
+
+        Assert.Equal(UsageRingBreath.OpacityAt(now - weeklyStarted), orb.WeeklyArc.Opacity, precision: 9);
+        Assert.Equal(UsageRingBreath.OpacityAt(now - sessionStarted), orb.SessionArc.Opacity, precision: 9);
+        orb.Close();
+    }
+
     // A hidden orb's rings are not stepped: nobody can see them. They pick the
     // breath up again, in step with the rest, when the orb shows.
     [AvaloniaFact]
@@ -572,12 +625,13 @@ public class AccountOrbWindowTests : IDisposable
         var orb = new AccountOrbWindow("k");
         orb.UpdateFrom(Usage(weekly: 92), Now);
 
-        orb.TickBreath(0.6);
+        var started = orb.BreathStartedAt(orb.WeeklyArc)!.Value;
+        orb.TickBreath(started + 2600);
         Assert.Equal(1, orb.WeeklyArc.Opacity);
 
         orb.Show();
-        orb.TickBreath(0.6);
-        Assert.Equal(0.6, orb.WeeklyArc.Opacity);
+        orb.TickBreath(started + 2600);
+        Assert.Equal(UsageRingBreath.Floor, orb.WeeklyArc.Opacity, precision: 9);
         orb.Close();
     }
 
