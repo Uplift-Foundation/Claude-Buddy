@@ -30,3 +30,4 @@ Obj/
 # machine- and version-specific binary. One did land here once.
 __pycache__/
 *.pyc
+.profiles-assets/
