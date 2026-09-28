@@ -202,8 +202,8 @@ internal static class Program
         Console.WriteLine($"outcome  {read.Outcome}");
         // Store names and outcomes only — never a value.
         Console.WriteLine($"answered {Multi.AnsweredBy ?? "(none)"}");
-        foreach (var (name, outcome) in Multi.Attempts)
-            Console.WriteLine($"tried    {name} -> {outcome}");
+        foreach (var (name, outcome, reason) in Multi.Attempts)
+            Console.WriteLine($"tried    {name} -> {outcome}: {reason}");
         Console.WriteLine($"meaning  {ClaudeCliCredentials.Describe(read.Outcome)}");
         if (read.Detail is { } detail) Console.WriteLine($"detail   {detail}");
         Console.WriteLine($"expires  {read.ExpiresAt?.ToString("u") ?? "(not stated)"}");

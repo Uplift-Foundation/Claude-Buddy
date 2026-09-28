@@ -30,6 +30,8 @@ public class ClaudeCloudCredentialPlatformTests
         {
             "Claude Code-credentials",
             ClaudeCliCredentials.KeychainServiceFor(Path.Combine(Home, ".claude")),
+            // The CLI's plaintext fallback, walked after the Keychain candidates.
+            Path.Combine(Home, ".claude", ".credentials.json"),
         }, multi.Names);
     }
 
@@ -207,7 +209,7 @@ public class ClaudeCloudCredentialPlatformTests
 
         Assert.Equal(CredentialOutcome.Found, read.Outcome);
         Assert.Equal("b", multi.AnsweredBy);
-        Assert.Equal(new[] { ("a", CredentialOutcome.NotLoggedIn), ("b", CredentialOutcome.Found) },
+        Assert.Equal(new[] { ("a", CredentialOutcome.NotLoggedIn, "NotLoggedIn"), ("b", CredentialOutcome.Found, "Found") },
             multi.Attempts);
     }
 
@@ -233,6 +235,7 @@ public class ClaudeCloudCredentialPlatformTests
 
         Assert.Equal(0, absent.Reads);
         Assert.Equal("b", multi.AnsweredBy);
+        Assert.Equal(("a", CredentialOutcome.NotLoggedIn, "no such item or file"), multi.Attempts[0]);
     }
 
     [Theory]
@@ -272,8 +275,29 @@ public class ClaudeCloudCredentialPlatformTests
         var read = multi.Read();
 
         Assert.Equal(CredentialOutcome.NotLoggedIn, read.Outcome);
-        Assert.Empty(multi.Attempts);
+        Assert.Single(multi.Attempts);
         Assert.Null(multi.Stamp());
+    }
+
+    [Fact]
+    public void AnExpiredStoreReportsItsExpiryTimeInTheReason()
+    {
+        var expiry = new System.DateTimeOffset(2026, 9, 19, 12, 0, 0, System.TimeSpan.Zero);
+        var expired = new ExpiredFake(expiry);
+        var multi = new MultiCredentialSource(new (string, ICloudCredentialSource)[] { ("a", expired) });
+
+        multi.Read();
+
+        Assert.Contains("expiresAt 2026-09-19 12:00:00Z", multi.Attempts[0].Reason);
+    }
+
+    private sealed class ExpiredFake : ICloudCredentialSource
+    {
+        private readonly System.DateTimeOffset _expiry;
+        internal ExpiredFake(System.DateTimeOffset expiry) => _expiry = expiry;
+        public string? Stamp() => "1";
+        public CredentialRead Read() =>
+            new(CredentialOutcome.NotLoggedIn, null, _expiry, "the stored credential expired");
     }
 
     [Fact]

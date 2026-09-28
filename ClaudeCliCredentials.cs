@@ -506,11 +506,18 @@ namespace ClaudeBuddy
                 foreach (var service in CandidateServices(home, roots))
                     children.Add((service, new KeychainCredentialSource(service)));
             }
-            else
-            {
-                foreach (var root in roots)
-                    children.Add((CredentialsFilePath(root), new FileCredentialSource(CredentialsFilePath(root))));
-            }
+
+            // Files are walked on macOS too, after the Keychain candidates. Read
+            // out of the 2.1.284 binary: on every platform the CLI's store is
+            // `Ns(keychain, plaintext)` — "keychain-with-plaintext-fallback" — and
+            // when the Keychain write fails non-transiently it writes
+            // `<config dir>/.credentials.json` (mode 0600) instead and deletes the
+            // Keychain item. The file is not hashed or suffixed; its directory is
+            // CLAUDE_SECURESTORAGE_CONFIG_DIR or the config dir itself. (The CLI
+            // itself would only look at the file when the Keychain holds nothing;
+            // walking past a blanked Keychain entry to a file is a superset.)
+            foreach (var root in roots)
+                children.Add((CredentialsFilePath(root), new FileCredentialSource(CredentialsFilePath(root))));
             return new MultiCredentialSource(children);
         }
     }
@@ -545,9 +552,12 @@ namespace ClaudeBuddy
         // Name of the store that produced the last Found read; null otherwise.
         internal string? AnsweredBy { get; private set; }
 
-        // Each store the last Read consulted and what it said. Names, never values.
-        internal IReadOnlyList<(string Name, CredentialOutcome Outcome)> Attempts { get; private set; } =
-            Array.Empty<(string, CredentialOutcome)>();
+        // Each store the last Read consulted, what it said and why. Names and
+        // reason wording only, never values. A store that does not exist is
+        // listed too (outcome NotLoggedIn, reason "no such item or file"), so a
+        // diagnostic can tell "absent" from "present but blank".
+        internal IReadOnlyList<(string Name, CredentialOutcome Outcome, string Reason)> Attempts { get; private set; } =
+            Array.Empty<(string, CredentialOutcome, string)>();
 
         // The stamps of every store that has one, keyed by name so a login moving
         // from one store to another still changes the value. Null when none exist.
@@ -565,12 +575,16 @@ namespace ClaudeBuddy
         public CredentialRead Read()
         {
             AnsweredBy = null;
-            var attempts = new List<(string, CredentialOutcome)>();
+            var attempts = new List<(string, CredentialOutcome, string)>();
             CredentialRead? best = null;
 
             foreach (var (name, source) in _children)
             {
-                if (source.Stamp() is null) continue;
+                if (source.Stamp() is null)
+                {
+                    attempts.Add((name, CredentialOutcome.NotLoggedIn, "no such item or file"));
+                    continue;
+                }
 
                 // This is not an unbudgeted read: the whole walk is itself the
                 // `Read` that ReadWithinAsync runs on a pool thread under one
@@ -580,7 +594,9 @@ namespace ClaudeBuddy
                 // call shape, and rightly — it must stay forbidden everywhere else.
                 Func<CredentialRead> readChild = source.Read;
                 var read = readChild();
-                attempts.Add((name, read.Outcome));
+                var reason = read.Detail ?? ClaudeCliCredentials.Describe(read.Outcome);
+                if (read.ExpiresAt is { } expiry) reason += $" (expiresAt {expiry:u})";
+                attempts.Add((name, read.Outcome, reason));
 
                 if (read.Outcome == CredentialOutcome.Found)
                 {
