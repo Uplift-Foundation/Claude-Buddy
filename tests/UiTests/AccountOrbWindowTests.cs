@@ -640,7 +640,12 @@ public class AccountOrbWindowTests : IDisposable
     [AvaloniaFact]
     public void TheTickerRunsOnlyWhileSomeRingBreathes()
     {
+        // From nothing: no ticker has been created yet, and clearing again with
+        // none is harmless.
         AccountOrbWindow.ClearBreathingForTests();
+        AccountOrbWindow.ClearBreathingForTests();
+        Assert.False(AccountOrbWindow.BreathTickerRunning);
+
         var first = new AccountOrbWindow("a");
         var second = new AccountOrbWindow("b");
 

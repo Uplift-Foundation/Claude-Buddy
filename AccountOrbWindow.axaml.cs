@@ -387,6 +387,7 @@ namespace ClaudeBuddy
         {
             Breathing.Clear();
             _breathTicker?.Stop();
+            _breathTicker = null;
         }
 
         internal static void TickAllBreaths()
