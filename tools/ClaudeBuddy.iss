@@ -136,18 +136,27 @@ Name: "{userstartup}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: startup
 ; an install does not flash a console. Failure is deliberately not fatal — the
 ; app still runs, and a user who declines or lacks the rights gets a link that
 ; cannot reach out rather than an install that stops.
+;
+; Only in an administrative install. Adding a firewall rule needs elevation, and
+; this installer defaults to PrivilegesRequired=lowest, a per-user install, where
+; the step could only fail: netsh exited 1 on every per-user install measured on
+; the Windows box. That exit code in the install log was also misread as Setup
+; itself failing (CB-213). Skipping it there changes nothing about what the
+; install achieves, since the rule could not be added either way; a per-user
+; install is left to Windows Firewall's own first-listen prompt.
 Filename: "{sys}\netsh.exe"; \
   Parameters: "advfirewall firewall add rule name=""{#AppName} peer link"" dir=in action=allow program=""{app}\{#AppExe}"" enable=yes profile=private"; \
-  Flags: runhidden skipifdoesntexist; StatusMsg: "Allowing Claude Buddy through the firewall..."
+  Flags: runhidden skipifdoesntexist; Check: IsAdminInstallMode; StatusMsg: "Allowing Claude Buddy through the firewall..."
 Filename: "{app}\{#AppExe}"; Description: "Start {#AppName} now"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
 ; The firewall rule goes when the app does. Leaving it behind would name a
 ; program that is no longer installed, which is exactly the kind of debris a
-; user cannot interpret later.
+; user cannot interpret later. Only where an administrative install could have
+; added it; see the add rule above.
 Filename: "{sys}\netsh.exe"; \
   Parameters: "advfirewall firewall delete rule name=""{#AppName} peer link"""; \
-  Flags: runhidden skipifdoesntexist; RunOnceId: "removefirewallrule"
+  Flags: runhidden skipifdoesntexist; RunOnceId: "removefirewallrule"; Check: IsAdminInstallMode
 ; Take the hook entries back out of every CLI they were wired into, or the CLI
 ; keeps invoking a script that is about to be deleted and logs a hook error on
 ; every event. runhidden because an uninstall should not flash a console window.
