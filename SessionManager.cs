@@ -392,7 +392,9 @@ namespace ClaudeBuddy
             Func<string, string?>? transcriptHunt = null,
             Func<IReadOnlyList<string>>? userConfigDirs = null,
             Func<int, SessionDependents.Verdict>? dependents = null,
-            bool? onWindows = null)
+            bool? onWindows = null,
+            Func<IReadOnlyList<SessionStatus>, IReadOnlyDictionary<TmuxPaneKey, string?>>? paneOwners = null,
+            Func<string, AgentViewer?>? agentViewer = null)
         {
             _statusDir = statusDir;
             _jobListing = jobListing ?? BackgroundJobs.SnapshotForScan;
@@ -412,7 +414,38 @@ namespace ClaudeBuddy
             _userConfigDirs = userConfigDirs ?? (() => LocalPersona.UserConfigDirs());
             _dependents = dependents ?? SessionDependents.Of;
             _onWindows = onWindows ?? OperatingSystem.IsWindows();
+            _paneOwners = paneOwners ?? TerminalFocuser.TmuxPaneOwners;
+            _agentViewer = agentViewer ?? AgentTeamViewer.For;
         }
+
+        // Who is running in each claimed tmux pane, and which `claude agents`
+        // window is watching a directory. Seams for the reason the two above
+        // are: the real ones run tmux, ps and lsof against this machine, and
+        // since this change they are asked from the scan's background half (see
+        // ScanProbes), so a test of that half needs to be able to count and
+        // answer them.
+        private readonly Func<IReadOnlyList<SessionStatus>, IReadOnlyDictionary<TmuxPaneKey, string?>> _paneOwners;
+        private readonly Func<string, AgentViewer?> _agentViewer;
+
+        // Every subprocess question this pass needs, asked. Runs on
+        // ScheduleScan's background thread in production, and inline for
+        // ScanAndUpdate's callers; ScanProbePlan has the argument for why its
+        // gates ask no more and no less than the reconciliation half reads.
+        //
+        // CB-217: first it tells the job listing which transcripts the Claude
+        // Code sessions here have, so `claude agents --json` is only run for
+        // the accounts that own one of them. See BackgroundJobs.AccountsToAsk.
+        private ScanProbes GatherProbes(List<ScanEntry> found)
+        {
+            BackgroundJobs.NoteLiveTranscripts(ClaudeTranscripts(found));
+
+            return ScanProbes.Gather(
+                ScanProbePlan.For(found, AgentTeam.LeadOf),
+                _paneOwners, _jobListing, _attachClients, _agentViewer);
+        }
+
+        internal static IEnumerable<string?> ClaudeTranscripts(IEnumerable<ScanEntry> found) =>
+            found.Where(e => e.Status.Source == SessionSource.ClaudeCode).Select(e => e.Status.TranscriptPath);
 
         private readonly Func<Dictionary<string, string>?> _jobListing;
 
@@ -1773,7 +1806,8 @@ namespace ClaudeBuddy
         {
             SyncAutoColorMarker();
             var now = DateTime.UtcNow;
-            ScanAndUpdateCore(ReadStatusFiles(now), now);
+            var found = ReadStatusFiles(now);
+            ScanAndUpdateCore(found, GatherProbes(found), now);
         }
 
         // Guards ScheduleScan against a tick landing while the previous scan's
@@ -1823,13 +1857,14 @@ namespace ClaudeBuddy
             try
             {
                 var now = DateTime.UtcNow;
-                var found = await Task.Run(() =>
+                var (found, probes) = await Task.Run(() =>
                 {
                     SyncAutoColorMarker();
-                    return ReadStatusFiles(now);
+                    var read = ReadStatusFiles(now);
+                    return (read, GatherProbes(read));
                 }).ConfigureAwait(true);
 
-                ScanAndUpdateCore(found, now);
+                ScanAndUpdateCore(found, probes, now);
             }
             finally
             {
@@ -1962,7 +1997,7 @@ namespace ClaudeBuddy
         // ReadStatusFiles — this stays on whichever thread calls it:
         // ScanAndUpdate above calls it inline; ScheduleScan calls it after
         // hopping back onto the UI thread its await resumed on.
-        private void ScanAndUpdateCore(List<ScanEntry> found, DateTime now)
+        private void ScanAndUpdateCore(List<ScanEntry> found, ScanProbes probes, DateTime now)
         {
             var seen = new HashSet<string>();
             bool setChanged = false;
@@ -2256,8 +2291,12 @@ namespace ClaudeBuddy
             // running. A positive mismatch is enough to remove the obsolete
             // claimant when this scan also has the current owner; an absent or
             // ambiguous answer changes nothing.
+            //
+            // The answers were gathered before this method was entered, off the
+            // UI thread and in one listing (see ScanProbes); this only reads
+            // them.
             var stalePaneClaims = ReconcileTmuxPaneClaims(found, entry =>
-                TerminalFocuser.TmuxPaneOwner(entry.Status));
+                probes.PaneOwner(entry.Status));
             found.RemoveAll(entry => stalePaneClaims.Contains(entry.SessionId));
 
             InheritTerminalInfo(found);
@@ -2275,27 +2314,25 @@ namespace ClaudeBuddy
             // then one pass can keep an orb and describe it wrongly in the same
             // breath.
             //
-            // Lazily, though, and that is not a micro-optimisation: fetching it
-            // eagerly runs `claude agents --json` as a subprocess on every pass
-            // for every machine, including one with nothing but ordinary
-            // terminal sessions on it — which the rules below never ask the
-            // daemon about, deliberately (see JudgeReachability's own note that
-            // "an ordinary session never pays for the lookup"). Eager fetching
-            // also broke both scan suites the moment it landed, which is a fair
-            // description of what it would have done to a quiet machine.
-            Dictionary<string, string>? jobs = null;
-            var askedTheDaemon = false;
+            // Only when something asks, though, and that is not a
+            // micro-optimisation: fetching it on every pass runs `claude agents
+            // --json` as a subprocess for every machine, including one with
+            // nothing but ordinary terminal sessions on it — which the rules
+            // below never ask the daemon about, deliberately (see
+            // JudgeReachability's own note that "an ordinary session never pays
+            // for the lookup"). Fetching it unconditionally also broke both scan
+            // suites the moment it landed, which is a fair description of what
+            // it would have done to a quiet machine.
+            //
+            // That decision used to be a lazy closure here, which put the
+            // subprocess on the UI thread whenever the ten-second cache behind
+            // it had run out. It is ScanProbePlan's now, made from the files
+            // before this method runs, and the listing arrives already fetched
+            // off-thread. The three readers below are the three cases that
+            // plan's gate names.
+            var jobs = probes.Jobs;
 
-            Dictionary<string, string>? Jobs()
-            {
-                if (askedTheDaemon) return jobs;
-
-                askedTheDaemon = true;
-                jobs = _jobListing();
-                return jobs;
-            }
-
-            Func<string, bool> isLiveJob = id => BackgroundJobs.IsLive(Jobs(), id);
+            Func<string, bool> isLiveJob = id => BackgroundJobs.IsLive(jobs, id);
 
             // Who is sitting in a job, asked once per pass and only when the
             // answer could change a rendering — which is to say only when
@@ -2307,7 +2344,11 @@ namespace ClaudeBuddy
             // not the same as "nobody is attached" —
             // SessionPresence.HasAttachClient is where that direction is decided
             // and why.
-            var attachClients = worthAsking ? _attachClients() : null;
+            //
+            // Null unless worthAsking, by construction: ScanProbePlan's attach
+            // gate is worthAsking itself, computed from the same files, so the
+            // scan never had the answer to throw away.
+            var attachClients = probes.AttachClients;
 
             var superseded = Superseded(found, isLiveJob);
 
@@ -2389,7 +2430,7 @@ namespace ClaudeBuddy
                 // SessionPresence.LocalDaemonCanAnswerFor.
                 var phase = worthAsking && status.Source == SessionSource.ClaudeCode
                             && SessionPresence.LocalDaemonCanAnswerFor(status, _onWindows)
-                    ? BackgroundJobs.Phase(Jobs(), sessionId)
+                    ? BackgroundJobs.Phase(jobs, sessionId)
                     : JobPhase.Unknown;
 
                 // Whether this file is the husk a handoff to a background job
@@ -2458,7 +2499,7 @@ namespace ClaudeBuddy
 
                 if (WantsAgentViewer(sessionId, status, leadsWithLiveAgents))
                 {
-                    AgentTeamViewer.TryAdopt(status);
+                    probes.AdoptViewer(status);
                 }
 
                 if (JudgeReachability(sessionId, status, leadsWithLiveAgents, phase, File.Exists)
@@ -2568,6 +2609,7 @@ namespace ClaudeBuddy
                 if (isNew)
                 {
                     window = new OrbWindow(sessionId);
+                    window.SizeRelayoutRequested += ReapplyOrbSizes;
                     _windows[sessionId] = window;
                     _order.Add(sessionId);
                     if (OrbsVisible) window.Show();
@@ -3284,6 +3326,54 @@ namespace ClaudeBuddy
             }
         }
 
+        // CB-198: the settings slider and the Size menu both land here, the
+        // same shape as ReapplyGlyphs — one change, every orb. Each orb takes
+        // its own override if it has one, the slider if not; then everything
+        // that is placed *relative* to an orb's size moves with it: the
+        // arrangement or the stack, anything the new sizes pushed off a
+        // screen, the team arrows, and a chat panel open beside an orb.
+        //
+        // Goes through ApplyOrbSize directly rather than anything on the
+        // UpdateFrom path, so SetTeamRole's early return (which only knows
+        // about the team role) cannot swallow a size change.
+        public void ReapplyOrbSizes()
+        {
+            foreach (var window in _windows.Values)
+            {
+                window.ApplyEffectiveOrbSize();
+            }
+
+            if (_isArranged) ReapplyArrangement();
+            else ReflowPositions();
+
+            RescueOffscreenOrbs();
+            RememberResizedPins();
+            TeamLinks.Refresh();
+            ChatPanel.FollowOrbResize();
+        }
+
+        // A pinned orb that just resized kept its centre, so its saved corner and
+        // size are stale; write the new pair. Only for a key no other pinned orb
+        // shares — the drag code's rule (OrbWindow.OnPointerReleased) that a team
+        // member must never overwrite its lead's spot with an offset copy. A
+        // shared key's saved entry stays right anyway: it carries the size it
+        // was saved at, and RestoredTopLeft corrects from that.
+        private void RememberResizedPins()
+        {
+            var pinned = _windows.Values.Where(w => w.IsPinned && !string.IsNullOrEmpty(w.PositionKey)).ToList();
+
+            foreach (var window in pinned)
+            {
+                if (pinned.Count(other => other.PositionKey == window.PositionKey) == 1)
+                    RememberOrbPosition(window);
+            }
+        }
+
+        // An orb's window in physical pixels at a screen's scaling — what
+        // every bare `56 * scale` in this file meant before orbs had a size.
+        internal static int OrbPixels(OrbWindow window, double scaling) =>
+            (int)(OrbSizing.WindowDip(window.OrbSize) * scaling);
+
         // Speech is one global thing, not one per orb: whichever orb started it,
         // every open flyout's speak button has to agree about whether something
         // is being read. Broadcasting from here rather than from the orb that
@@ -3325,25 +3415,29 @@ namespace ClaudeBuddy
             if (screen is null) return;
 
             // WorkingArea and Window.Position are in physical pixels; the
-            // 56/12/24 design sizes are DIPs, so scale them.
+            // 12/24 design sizes and each orb's own window are DIPs, so scale
+            // them.
             var work = screen.WorkingArea;
             var scale = screen.Scaling;
-            int size = (int)(56 * scale);
             int spacing = (int)(12 * scale);
             int margin = (int)(24 * scale);
 
             // Orbs the user has placed by hand keep their spot and don't take up
             // a slot, so the rest of the stack closes up behind them.
-            int slot = 0;
+            //
+            // CB-198: each orb advances the stack by its own size rather than a
+            // shared 56, so a 2x orb pushes the next one down by what it
+            // actually occupies. Right edges line up, the column keeps the
+            // same margin from the screen edge at every size.
+            int y = work.Y + margin;
             foreach (var id in DisplayOrder())
             {
                 var window = _windows[id];
                 if (window.IsPinned) continue;
 
-                window.Position = new PixelPoint(
-                    work.Right - size - margin,
-                    work.Y + margin + slot * (size + spacing));
-                slot++;
+                int size = OrbPixels(window, scale);
+                window.Position = new PixelPoint(work.Right - size - margin, y);
+                y += size + spacing;
             }
 
             // Every arrow's geometry just moved.
@@ -3666,15 +3760,17 @@ namespace ClaudeBuddy
 
             if (saved is null) return;
 
-            var point = new PixelPoint(saved.X, saved.Y);
-
             // The monitor it was dragged onto may be gone, or its layout
             // changed. Anything that no longer lands on a screen falls back to
-            // the default stack rather than being stranded off-canvas.
-            var screen = window.Screens.ScreenFromPoint(point);
+            // the default stack rather than being stranded off-canvas. Asked of
+            // the saved corner itself, before the size correction below, which
+            // is at most half a 2x orb and should not decide which screen this
+            // was.
+            var screen = window.Screens.ScreenFromPoint(new PixelPoint(saved.X, saved.Y));
             if (screen is null) return;
 
-            window.PinAt(ClampIntoWork(point, screen.WorkingArea, (int)(56 * screen.Scaling)));
+            var point = RestoredTopLeft(saved, window.OrbSize, screen.Scaling);
+            window.PinAt(ClampIntoWork(point, screen.WorkingArea, OrbPixels(window, screen.Scaling)));
         }
 
         // CB-111: bring back a chat panel that was pinned before the app last
@@ -3756,10 +3852,12 @@ namespace ClaudeBuddy
             {
                 if (!window.IsVisible) continue;
 
-                var size = 56;
-                var centre = new PixelPoint(
-                    window.Position.X + size / 2,
-                    window.Position.Y + size / 2);
+                // Half the orb's own window in Position's units, rather than
+                // the bare 56 this used to add: that was a DIP half added to a
+                // physical position, right only at 100% scaling, and blind to
+                // the orb's size (CB-198).
+                var half = OrbPixels(window, window.DesktopScaling) / 2;
+                var centre = new PixelPoint(window.Position.X + half, window.Position.Y + half);
 
                 if (window.Screens.ScreenFromPoint(centre) is not null) continue;
 
@@ -3767,7 +3865,7 @@ namespace ClaudeBuddy
                 if (screen is null) continue;
 
                 window.PinAt(ClampIntoWork(
-                    window.Position, screen.WorkingArea, (int)(56 * screen.Scaling)));
+                    window.Position, screen.WorkingArea, OrbPixels(window, screen.Scaling)));
             }
         }
 
@@ -3776,7 +3874,21 @@ namespace ClaudeBuddy
             if (string.IsNullOrEmpty(window.PositionKey)) return;
 
             var position = window.Position;
-            ClaudeBuddySettings.SetOrbPosition(window.PositionKey, position.X, position.Y);
+            ClaudeBuddySettings.SetOrbPosition(window.PositionKey, position.X, position.Y, window.OrbSize);
+        }
+
+        // CB-198: a saved spot is a top-left corner, and the same *centre* at a
+        // different size has a different corner. Shifted by half the difference
+        // between the window it was saved at and the window it is now, so the
+        // orb comes back centred where it was left. No saved size means it was
+        // saved before orbs had one, which is 1.0.
+        internal static PixelPoint RestoredTopLeft(
+            ClaudeBuddySettings.OrbPlacement saved, double currentSize, double scaling)
+        {
+            var shift = (OrbSizing.WindowDip(saved.Size ?? OrbSizing.Default) - OrbSizing.WindowDip(currentSize))
+                        / 2 * scaling;
+            var d = (int)Math.Round(shift);
+            return new PixelPoint(saved.X + d, saved.Y + d);
         }
 
         public void ReturnOrbToStack(string sessionId)
@@ -4073,12 +4185,13 @@ namespace ClaudeBuddy
             var screen = allOrbs[0].Screens.Primary ?? allOrbs[0].Screens.All.FirstOrDefault();
             var work = screen?.WorkingArea ?? new PixelRect(0, 0, 1920, 1080);
 
+            var anchor = ArrangementAnchor(work);
             var layout = new OrbArrangement.Layout(
                 work,
                 screen?.Scaling ?? 1.0,
                 ClaudeBuddySettings.ArrangeShape,
                 ClaudeBuddySettings.ArrangeSpacing,
-                ArrangementAnchor(work));
+                anchor);
 
             var heartbeats = ClaudeBuddySettings.OpenClawHeartbeatMode;
             var crons = ClaudeBuddySettings.OpenClawCronMode;
@@ -4092,7 +4205,33 @@ namespace ClaudeBuddy
                     : 0;
             }
 
-            var placed = OrbArrangement.Compute(allOrbs.Count, leadOf, groupOf, Shapes(), layout);
+            // CB-198: each orb's effective size, in the same index order as
+            // leadOf and groupOf. Read off the window rather than recomputed
+            // from settings, so the arrangement lays out what is actually drawn
+            // — ReapplyOrbSizes applies the sizes before it arranges.
+            var sizeOf = allOrbs.Select(orb => orb.OrbSize).ToArray();
+
+            var shapes = Shapes();
+            var placed = OrbArrangement.Compute(allOrbs.Count, leadOf, groupOf, shapes, layout, sizeOf);
+
+            // CB-211: save where the shape actually landed, not where it was
+            // asked to go. The two can differ only while the shape sits against
+            // an edge of the screen, which is where a saved anchor dragged past
+            // what the screen honours ends up — and left alone, that overshoot
+            // would swallow the next drag back. See
+            // OrbArrangement.LandedCenter. Done on every arrange, so a value
+            // that drifted out before this existed is repaired the first time
+            // the shape is drawn rather than only prevented from here on.
+            //
+            // One consequence, and a change from before: a shape that *grows*
+            // into an edge — a wider spacing, an orb joining, a bigger orb —
+            // has its anchor pulled in with it, and keeps that centre when it
+            // shrinks again rather than drifting back out toward the edge. The
+            // shape stays where it is on the screen, which is what the saved
+            // anchor exists to do.
+            var landed = OrbArrangement.LandedCenter(placed, allOrbs.Count, leadOf, groupOf, shapes, layout, sizeOf);
+            if (landed != anchor)
+                ClaudeBuddySettings.ArrangeAnchor = new ClaudeBuddySettings.OrbPlacement(landed.X, landed.Y);
 
             return allOrbs.Select((orb, i) => (orb, placed[i])).ToList();
         }
@@ -4128,6 +4267,12 @@ namespace ClaudeBuddy
         // arranged orb by the same delta, so the shape's saved centre needs
         // the same nudge or the next membership change would snap it back to
         // wherever it was before the drag.
+        //
+        // Unbounded here on purpose. A drag can carry the shape toward an edge
+        // further than the screen will draw it, and clamping at this point
+        // would mean repeating the whole arrangement's geometry to know where
+        // "too far" is. The next arrange does know, and saves the anchor it
+        // actually honoured (CB-211) — so the overshoot lasts only until then.
         public void ShiftArrangementAnchor(int dx, int dy)
         {
             if (dx == 0 && dy == 0) return;

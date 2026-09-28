@@ -32,9 +32,34 @@ namespace ClaudeBuddy.Tests;
 [Collection("Settings")]
 public class NewChatWindowScreenshots : IDisposable
 {
-    public NewChatWindowScreenshots() => ClearSeams();
+    public NewChatWindowScreenshots()
+    {
+        FreshSettings();
+        ClearSeams();
+    }
 
     public void Dispose() => ClearSeams();
+
+    // CB-201's own review flag: AccountPickerWithTwoProfiles used to point
+    // CLAUDE_BUDDY_SETTINGS_DIR at its own fresh directory but never put it
+    // back, and ClearSeams only resets the delegate seams, not the settings
+    // dir or ClaudeCodeProfileDirs itself. xUnit constructs a fresh instance
+    // per test method but does not guarantee method order, so whichever
+    // scenario ran right after AccountPickerWithTwoProfiles inherited its two
+    // stray profiles — DefaultState drew the Account picker on the macOS CI
+    // leg for exactly this reason, on a capture that is supposed to look
+    // identical to CB-168's dialog. A fresh settings dir per scenario, the
+    // same pattern NewChatWindowTests' own FreshSettings() already uses,
+    // means every scenario starts from an empty profile list regardless of
+    // what ran before it — order stops being able to matter at all, rather
+    // than merely not mattering in whatever order happened to be tried.
+    private static void FreshSettings()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "cb-newchat-screenshots-" + Guid.NewGuid());
+        Directory.CreateDirectory(dir);
+        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
+        ClaudeBuddySettings.ReloadForTests();
+    }
 
     private static NewChatWindow NewWindow(
         NewChatCli? prefillCli = null, string? prefillCwd = null, string? prefillAgentId = null)
@@ -108,7 +133,7 @@ public class NewChatWindowScreenshots : IDisposable
         };
         NewChatWindow.OpenClawAvailabilityForTests = () => OpenClawNewChatAvailability.NoGateway;
         NewChatWindow.CurrentStatusesForTests = () => new Dictionary<string, SessionStatus>();
-        NewChatLauncher.LaunchForTests = (_, _) => new LaunchResult(
+        NewChatLauncher.LaunchForTests = (_, _, _) => new LaunchResult(
             LaunchOutcome.NotFound, "Claude Code not found on PATH or in its usual install locations.");
 
         var window = NewWindow();
@@ -133,6 +158,52 @@ public class NewChatWindowScreenshots : IDisposable
         Assert.False(radios.Single(r => Equals(r.Tag, NewChatWindow.OpenClawTag)).IsEnabled);
 
         ScreenshotHelper.CaptureAlreadyShown(window, "new-chat-window-launch-error.png");
+    }
+
+    // CB-201's Account section: Claude Code selected with two configured
+    // profiles beside Default — the picker sitting between the CLI list and
+    // the Folder section, exactly where BuildCliList's own comment places it.
+    [AvaloniaFact]
+    public void AccountPickerWithTwoProfiles()
+    {
+        NewChatAvailability.CurrentForTests = () => new[]
+        {
+            Enabled(NewChatCli.ClaudeCode), Enabled(NewChatCli.Codex), Enabled(NewChatCli.Grok)
+        };
+        NewChatWindow.OpenClawAvailabilityForTests = () => OpenClawNewChatAvailability.NoGateway;
+        NewChatWindow.CurrentStatusesForTests = () => new Dictionary<string, SessionStatus>();
+
+        // The constructor's own FreshSettings() already gave this instance an
+        // isolated, empty settings dir — no extra dir setup needed here, only
+        // the two profiles this scenario is actually about.
+        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-work");
+        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-board");
+
+        var window = NewWindow();
+
+        ScreenshotHelper.Capture(window, "new-chat-window-account-picker.png");
+    }
+
+    // CB-207: the same two profiles, but Codex selected. The picker is hidden
+    // (CB-201) while its space is kept, so switching CLIs never resizes the
+    // window on screen. This is the one state where that reserved space is
+    // visible, and it should read as the same window as the capture above,
+    // at the same height.
+    [AvaloniaFact]
+    public void AccountSpaceKeptForCodex()
+    {
+        NewChatAvailability.CurrentForTests = () => new[]
+        {
+            Enabled(NewChatCli.ClaudeCode), Enabled(NewChatCli.Codex), Enabled(NewChatCli.Grok)
+        };
+        NewChatWindow.OpenClawAvailabilityForTests = () => OpenClawNewChatAvailability.NoGateway;
+        NewChatWindow.CurrentStatusesForTests = () => new Dictionary<string, SessionStatus>();
+        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-work");
+        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-board");
+
+        var window = NewWindow(prefillCli: NewChatCli.Codex);
+
+        ScreenshotHelper.Capture(window, "new-chat-window-account-space-kept.png");
     }
 
     // The OpenClaw row selected, Ready, with agents loaded — the agent

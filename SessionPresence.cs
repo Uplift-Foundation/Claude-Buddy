@@ -709,6 +709,34 @@ namespace ClaudeBuddy
         internal static bool CanEndSession(SessionStatus status) =>
             status.IsLocalCli && status.SessionPid > 0;
 
+        // CB-170: the two OpenClaw rows. An OpenClaw conversation has no pid, so
+        // CanEndSession is correctly false for every one of them and these are
+        // different operations rather than a wider gate on it — requests to the
+        // gateway, which the gateway can refuse.
+        //
+        // Offered only where they will work, the CB-59 rule: connected, the
+        // gateway names the method, and this device holds operator.write. The
+        // method list alone is not enough — measured, the gateway advertises
+        // methods a device cannot call — and in practice the scope is there
+        // exactly when "Allow replying to agents" is on. A room orb is a whole
+        // channel standing for several sessions, and neither verb means
+        // anything for it.
+        internal static bool CanInterruptOpenClaw(SessionStatus status, OpenClawActionContext context) =>
+            status.Source == SessionSource.OpenClaw && !status.IsRoom
+            && context.Connected && context.Key is not null
+            && context.Methods.Contains(OpenClawOrbActions.AbortMethod)
+            && context.Scopes.Contains(OpenClawOrbActions.WriteScope);
+
+        // End also needs what the archive itself demands: a session id to send
+        // as expectedSessionId, and a session that is not an agent's main one,
+        // which the gateway refuses to archive. Hidden there rather than offered
+        // and refused. It also sends chat.abort first, so it needs that method
+        // too.
+        internal static bool CanEndOpenClawConversation(SessionStatus status, OpenClawActionContext context) =>
+            CanInterruptOpenClaw(status, context)
+            && !context.IsMain && context.SessionId is not null
+            && context.Methods.Contains(OpenClawOrbActions.PatchMethod);
+
         // --- the hygiene sweep ------------------------------------------------
         // Nothing but the SessionEnd hook's `rm -f` has ever deleted a status
         // file, and SessionEnd only fires on a graceful exit. So a Ctrl+C'd

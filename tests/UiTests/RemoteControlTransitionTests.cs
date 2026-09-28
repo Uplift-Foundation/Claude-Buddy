@@ -294,7 +294,13 @@ public class RemoteControlTransitionTests : IDisposable
     // after its orb is already on screen. Re-stamping the published snapshot is
     // what gets that colour onto the orb at the next scan rather than at the next
     // poll — the difference between a couple of seconds and up to a minute.
-    [Fact]
+    //
+    // An [AvaloniaFact] because it pumps the dispatcher: RunJobs executes every
+    // queued job, including other tests' timers, and only the thread that owns
+    // the dispatcher may. As a plain [Fact] on a pool thread it failed whenever
+    // anything else had left a job queued (CB-219 found the breathing ticker
+    // doing that; an unidentified leftover did it once before).
+    [AvaloniaFact]
     public void AColourLearnedLaterReachesAnAlreadyPublishedSession()
     {
         RemoteControlSessions.ForgetAnswersForTests();

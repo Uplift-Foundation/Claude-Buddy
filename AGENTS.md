@@ -32,6 +32,8 @@ CB-133 paid for it: personas parsed out of markdown shipped, and the same day `.
 
 **CB's board has four columns, and they are now confirmed** — read off CB-1, the first ticket filed, which is what this paragraph used to ask for. They are **Refinement → Development → Testing → Done**, with transition ids 11, 21, 31 and 41; every transition is global, so any status can be reached from any other. The name this file guessed was "Refining", which is a status on project FMN and not one CB has: a team-managed project owns its workflow separately, and the guess was wrong. Nothing else here needed correcting.
 
+**In refinement the PM surfaces scope forks the requester may not have considered, not just the reading that was asked for.** CB-198 asked for resizable orbs, and the obvious reading was a global slider; whether each orb should also be able to override it was a fork the ticket never raised, and the answer changed the branch — a per-orb key, a right-click submenu, a title migration, mixed sizes in every arrangement. So the PM puts a fork like that to the requester as one question, with a recommendation and the real cost of each branch, rather than refining one branch in silence and discovering the other at review. Then the answer is final: asked once and settled, not reopened each round.
+
 Then it writes a plan, and **plans on a stronger model than the one that implements**. Planning is where a wrong call is cheapest to fix and most expensive to miss:
 
 | Feature | Plan with | Implement with |
@@ -279,7 +281,7 @@ dotnet test tests/UnitTests --collect:"XPlat Code Coverage"
 
 ## Testing
 
-Orb *geometry*: `dotnet run --project tests/ArrangementTests`. It walks every shape at every end of the spacing slider across a range of orb counts and team shapes on three screen sizes, and asserts that nothing leaves the work area, nothing is drawn on top of anything else, and no team member ends up too far from its lead to be read as one. Run it after any change to `OrbArrangement`.
+Orb *geometry*: `dotnet run --project tests/ArrangementTests`. It walks every shape at every end of the spacing slider and orb size, mixed sizes included, across a range of orb counts and team shapes on three screen sizes, and asserts that nothing leaves the work area, nothing is drawn on top of anything else, and no team member ends up too far from its lead to be read as one. Run it after any change to `OrbArrangement`.
 
 Transcript and dialog parsing: `dotnet run --project tests/TranscriptTests`. It covers `ChatTranscript` (Claude Code's JSONL, and reading a permission dialog off a captured tmux pane) and `CodexTranscript` (Codex's rollout JSONL).
 

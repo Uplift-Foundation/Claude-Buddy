@@ -268,9 +268,10 @@ namespace ClaudeBuddy
                 Show();
             }
 
-            // An orb sits at DIP (28,28) in its own window regardless of how
-            // big the orb inside is drawn, so this point is the same for a
-            // member and a lead. Asked of the window rather than derived from
+            // An orb sits at DIP CentreDip in its own window regardless of how
+            // big the team role draws it, so this point is the same for a
+            // member and a lead — (28,28) at the default size, scaled with the
+            // user's orb size since CB-198. Asked of the window rather than derived from
             // Position, so it is right on both platforms' coordinate systems.
             //
             // (28,28) is the centre of OrbWindow's Root, which is pinned to
@@ -280,7 +281,7 @@ namespace ClaudeBuddy
             // Windows for exactly that reason before it was pinned.
             private static Point Centre(OrbWindow orb)
             {
-                var centre = orb.PointToScreen(new Point(28, 28));
+                var centre = orb.PointToScreen(new Point(orb.CentreDip, orb.CentreDip));
                 return new Point(centre.X, centre.Y);
             }
 

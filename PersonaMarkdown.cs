@@ -405,10 +405,29 @@ namespace ClaudeBuddy
             // statement wins, a voice goes through the shared voice grammar so
             // an engine annotation is stripped the same way — and two copies
             // of that agreement is one copy that can drift.
+            //
+            // The avatar case sets rawAvatar too, not only avatar — matching
+            // ExplicitAvatar and ScopedField below, the other two arms that
+            // can name a picture. Before this, only those two arms left a
+            // trace of "a picture was named here" for a value the grammar
+            // accepted but PersonaFiles later could not read — a resolver
+            // keying an is-this-member-found decision off RawAvatar (CB-191)
+            // saw a colon-less "Profile Photo typo.png" under an Attributes
+            // heading as having said nothing at all, the same silent drop
+            // CB-139 already fixed once for the *reading* of a picture and
+            // this is for the *reporting* of one. Harmless for the prose arm's
+            // own call: ProseField never reaches Assign with a value that
+            // failed AvatarValue's own picture-shape check, so rawAvatar and
+            // avatar always agree there and nothing about "her picture is
+            // lovely" starts being logged as a named-but-unreadable picture.
             void Assign(ProseKind kind, string stated)
             {
                 if (kind is ProseKind.Name) name ??= stated;
-                else if (kind is ProseKind.Avatar) avatar ??= stated;
+                else if (kind is ProseKind.Avatar)
+                {
+                    rawAvatar ??= stated;
+                    avatar ??= stated;
+                }
                 else
                 {
                     var (statedVoice, statedRate) = VoiceValue(stated);

@@ -14,8 +14,8 @@ namespace ClaudeBuddy
         // DIPs. Large enough that the side buttons clear the orb's
         // circle with a small gap, without spreading the arc so far
         // the buttons feel detached from the orb they belong to.
-        private const double ArcRadius = 56;
-        private const double ButtonHalf = 12;
+        internal const double ArcRadius = 56;
+        internal const double ButtonHalf = 12;
 
         private DispatcherTimer? _flyTimer;
         private PixelPoint _flyFrom;

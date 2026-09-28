@@ -190,13 +190,12 @@ namespace ClaudeBuddy
         // is exactly what stops Buddy coming back, and a `false` arm would sit
         // in the code as a route to being silently absent. There is no such
         // answer to model, so the type does not offer one.
-        public static void WaitForUnlock(TimeSpan cap, TimeSpan lockedCap, TimeSpan interval) =>
+        public static void WaitForUnlock(TimeSpan cap, TimeSpan interval) =>
             ScreenLockWait.Wait(
                 probe: ProbeState,
                 now: () => DateTime.UtcNow,
                 sleep: Thread.Sleep,
                 cap: cap,
-                lockedCap: lockedCap,
                 interval: interval);
     }
 }

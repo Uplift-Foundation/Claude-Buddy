@@ -61,6 +61,7 @@ namespace ClaudeBuddy
         public const string Unwatch = "UNWATCH";   // client → server: stop
         public const string Input = "INPUT";       // client → server: type this into that session
         public const string Resend = "RESEND";     // client → server: that piece failed its hash
+        public const string Avatar = "AVATAR";     // client → server: a persona picture, by its id (CB-216)
         public const string Ok = "OK";             // server → client: done
         public const string Err = "ERR";           // server → client: couldn't
 
@@ -68,6 +69,7 @@ namespace ClaudeBuddy
         // what to do with it and the user reads wording chosen on this side of
         // the wire, not whatever the far machine happened to phrase.
         public const string ErrNoSession = "no-session";
+        public const string ErrNoAvatar = "no-avatar";
         public const string ErrNoTranscript = "no-transcript";
         public const string ErrNoPane = "no-pane";
 
@@ -527,10 +529,28 @@ namespace ClaudeBuddy
             [property: JsonPropertyName("name")] string? Name = null,
             [property: JsonPropertyName("voice")] string? Voice = null,
             [property: JsonPropertyName("rate")] double? Rate = null,
-            [property: JsonPropertyName("avatar")] byte[]? Avatar = null)
+            [property: JsonPropertyName("avatar")] byte[]? Avatar = null,
+            [property: JsonPropertyName("avatarId")] string? AvatarId = null)
         {
-            public bool IsEmpty => Name is null && Voice is null && Rate is null && Avatar is null;
+            public bool IsEmpty => Name is null && Voice is null && Rate is null && Avatar is null && AvatarId is null;
         }
+
+        // CB-216: a persona picture named by what it is instead of carried in
+        // full. An asker that says it can fetch pictures by id (AvatarsByIdField)
+        // gets AvatarId in the roster and no bytes, and asks for the bytes once
+        // with an AVATAR request, only for an id it has not seen. An asker that
+        // does not say so gets the bytes inline, exactly as before.
+        //
+        // Hash and length both, so an id cannot be mistaken for another picture's,
+        // and so the receiver can check what it is handed before it keeps it.
+        public const string AvatarsByIdField = "av";
+        public const string AvatarIdField = "a";
+
+        public static string AvatarIdOf(byte[] bytes) => Hash(bytes) + ":" + bytes.LongLength;
+
+        public static bool AvatarMatches(string? id, byte[]? bytes) =>
+            !string.IsNullOrEmpty(id) && bytes is not null
+            && string.Equals(id, AvatarIdOf(bytes), StringComparison.Ordinal);
 
         public const string CliClaudeCode = "claude";
         public const string CliCodex = "codex";
@@ -542,7 +562,58 @@ namespace ClaudeBuddy
         };
 
         public static byte[] EncodeRoster(IReadOnlyList<MirrorRosterEntry> entries) =>
-            Gzip(JsonSerializer.SerializeToUtf8Bytes(entries, RosterJson));
+            Gzip(RosterBytes(entries));
+
+        // The roster before compression: what RosterHash is taken over, and what
+        // EncodeRoster gzips. Hashing this rather than the gzip is what lets an
+        // unchanged roster be recognised without compressing it at all.
+        public static byte[] RosterBytes(IReadOnlyList<MirrorRosterEntry> entries) =>
+            JsonSerializer.SerializeToUtf8Bytes(entries, RosterJson);
+
+        // The roster in one fixed order, whatever order it was built in.
+        //
+        // The server builds it in the order `claude agents --json` listed the
+        // sessions that tick, and nothing makes that order stable between polls.
+        // Hashing the roster in that order made "unchanged" depend on
+        // enumeration rather than content: the same two sessions listed the
+        // other way round hashed differently and were sent again in full, which
+        // on any machine with more than one session could defeat the no-op
+        // silently. (Found by QA on 0d427c22.) Route first, because it is the
+        // round-trip identity; name second, for entries without one. Ordinal on
+        // both, so the order is the same on every machine and every culture.
+        //
+        // No receiver depends on the order. Every client keys the entries by
+        // name and route.
+        public static List<MirrorRosterEntry> CanonicalRoster(IEnumerable<MirrorRosterEntry> entries) =>
+            entries
+                .OrderBy(e => e.Route ?? "", StringComparer.Ordinal)
+                .ThenBy(e => e.Name, StringComparer.Ordinal)
+                .ToList();
+
+        // CB-216: the field a HELLO and its answer carry the roster's hash in.
+        //
+        // A peer asks every ten seconds, and a roster embeds each persona's
+        // picture, which is an animated GIF of 11-15 MB on the machine this was
+        // measured on. Answering every ask in full sent about 17 MB per ask to
+        // each peer (106 MB a minute), and gzipping it was about 30 points of
+        // the serving machine's CPU, for a roster that had not changed. Now the
+        // answer carries the hash of what it sent, the next ask carries it back,
+        // and a match is answered with a bare OK and no roster at all.
+        //
+        // An optional field, the same negotiation openclaw-identity-get uses: a
+        // Buddy that predates it ignores a field it has never heard of and sends
+        // the roster in full, and one that never receives the hash never sends
+        // it, so it is always sent the roster in full. Mixed versions degrade to
+        // the old cost, never to a missing roster.
+        public const string RosterHashField = "rh";
+
+        // Whether an ask may be answered "unchanged". Only a hash the asker
+        // actually sent, equal to what would be sent now: an absent or empty
+        // field is an asker with nothing to compare against, which is every
+        // asker's first question and every older Buddy's every question.
+        public static bool RosterUnchanged(string? askerHash, string currentHash) =>
+            !string.IsNullOrEmpty(askerHash)
+            && string.Equals(askerHash, currentHash, StringComparison.Ordinal);
 
         // Null rather than an exception for anything unreadable, which is this
         // repo's rule for a format it does not own: a roster that will not parse

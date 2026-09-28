@@ -72,7 +72,13 @@ namespace ClaudeBuddy
         // unresolvable is certainly not the default directory, and handing the
         // caller the raw path keeps this from being the layer that decides a
         // nonsense profile is really the default one.
-        private static string Resolve(string home, string profileDir)
+        //
+        // internal rather than private: NewChatAccounts.Choices (CB-201) needs
+        // the identical normalization to decide whether a saved profile dir is
+        // really a second spelling of the default account, and reimplementing
+        // it there would be the second resolver this file's own header comment
+        // says never to have.
+        internal static string Resolve(string home, string profileDir)
         {
             var combined = Path.Combine(home, profileDir);
 

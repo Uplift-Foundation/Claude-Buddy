@@ -49,8 +49,19 @@ namespace ClaudeBuddy
         // script needs the terminal's own shell to become the CLI rather than
         // wait behind it — see AgentTeamViewer.AttachSession for the pattern
         // this follows.
-        internal static string For(NewChatCli cli, string binaryPath) =>
-            TerminalScripts.ShellQuote(binaryPath);
+        //
+        // configDir null (the default account, or any CLI but Claude Code —
+        // see NewChatLauncher.ConfigDirFor) leaves the command exactly as it
+        // was: no assignment prefix at all, never one that names the default
+        // directory (CB-42's whole point). Set, it becomes
+        // `CLAUDE_CONFIG_DIR='<dir>' '<binary>'`, a plain POSIX variable
+        // assignment ahead of the command it applies to — the shell scopes it
+        // to that one invocation without this needing `export` or a subshell.
+        internal static string For(NewChatCli cli, string binaryPath, string? configDir = null) =>
+            configDir is null
+                ? TerminalScripts.ShellQuote(binaryPath)
+                : "CLAUDE_CONFIG_DIR=" + TerminalScripts.ShellQuote(configDir)
+                    + " " + TerminalScripts.ShellQuote(binaryPath);
 
         // The general Windows launch shape: wt.exe when it's installed
         // (`-d <cwd> cmd.exe /k <exe> [args...]`, which gives the CLI an
@@ -101,8 +112,47 @@ namespace ClaudeBuddy
         // The Windows launch for a new chat specifically: the general builder
         // with no extra arguments, since there is no verb and no session id —
         // just the CLI, in the chosen folder.
+        //
+        // configDir null reproduces the general builder's output byte for
+        // byte. Set, the start info additionally switches to
+        // UseShellExecute = false and carries CLAUDE_CONFIG_DIR on
+        // Environment — true, wt.exe/cmd.exe's shared default, launches
+        // through ShellExecuteEx and ignores ProcessStartInfo.Environment
+        // entirely, so the variable would silently never leave this process.
+        //
+        // **Measured on the `windows` box (192.168.1.24), 26 Sep 2026,
+        // confirmed rather than assumed:** a scheduled task run in the
+        // logged-on interactive session (console, session 2 — an SSH session
+        // lands in session 0 and can start no visible window, so this could
+        // not be read directly off an SSH-launched process) set
+        // CLAUDE_CONFIG_DIR on its own environment and launched `wt.exe -d
+        // ... cmd.exe /c "echo %CLAUDE_CONFIG_DIR%> file"`. The file showed
+        // the real value, twice, with two different values across two runs —
+        // and a WindowsTerminal.exe/OpenConsole.exe pair was already running
+        // (since 23 Sep, well before this test), so the result covers the
+        // case that actually worried this ticket: wt.exe's single-instance
+        // model, where a new invocation hands its request to an
+        // already-running "monarch" process over IPC rather than becoming the
+        // tab's parent itself. CLAUDE_CONFIG_DIR was not set as a User or
+        // Machine environment variable, which rules out the file simply
+        // showing an ambient value that had nothing to do with this
+        // mechanism. wt.exe does carry the launching process's environment
+        // through to a new tab, monarch delegation included, so a profiled
+        // launch keeps exactly the same wt-first-then-cmd.exe preference an
+        // unprofiled one already has — no separate routing decision was
+        // needed here after all.
         internal static ProcessStartInfo? WindowsProcessStartInfo(
-            NewChatCli cli, string? binaryPath, string cwd, bool useWindowsTerminal) =>
-            GeneralWindowsStartInfo(binaryPath, cwd, extraArgs: null, useWindowsTerminal);
+            NewChatCli cli, string? binaryPath, string cwd, bool useWindowsTerminal, string? configDir = null)
+        {
+            var start = GeneralWindowsStartInfo(binaryPath, cwd, extraArgs: null, useWindowsTerminal);
+
+            if (start is not null && configDir is not null)
+            {
+                start.UseShellExecute = false;
+                start.Environment["CLAUDE_CONFIG_DIR"] = configDir;
+            }
+
+            return start;
+        }
     }
 }

@@ -80,7 +80,7 @@ public class OrbAvatarTests
             orb.UpdateFrom(Gateway());
 
             Assert.False(orb.Glyph.IsVisible, "the letters should give way to the picture");
-            Assert.IsType<ImageBrush>(orb.Orb.Fill);
+            Assert.True(orb.AvatarImage.IsVisible && orb.AvatarImage.Source is not null);
         }
         finally
         {
@@ -112,7 +112,7 @@ public class OrbAvatarTests
 
             orb.UpdateFrom(Gateway("Workspace Nova"));
 
-            Assert.IsType<ImageBrush>(orb.Orb.Fill);
+            Assert.True(orb.AvatarImage.IsVisible && orb.AvatarImage.Source is not null);
             var voice = Assert.IsType<TextToSpeech.VoiceOption>(OpenClawSessions.VoiceForSession(sessionId));
             Assert.Equal(TextToSpeech.SpeakEngine.System, voice.Engine);
             Assert.Equal(workspaceVoice, voice.Name);
@@ -156,7 +156,7 @@ public class OrbAvatarTests
             var orb = new OrbWindow(sessionId);
             orb.UpdateFrom(Gateway("Gateway Nova"));
 
-            Assert.IsType<ImageBrush>(orb.Orb.Fill);
+            Assert.True(orb.AvatarImage.IsVisible && orb.AvatarImage.Source is not null);
             Assert.Equal(neural, SessionIdentity.VoiceFor(sessionId, new[] { neural }));
             Assert.Equal(1.3, OpenClawSessions.RateForSession(sessionId));
         }
@@ -171,7 +171,7 @@ public class OrbAvatarTests
     // runs a couple of times a second, and rebuilding the brush on every tick
     // would restart an animated avatar continuously.
     [AvaloniaFact]
-    public void ApplyingTheSamePictureTwiceKeepsTheSameBrush()
+    public void ApplyingTheSamePictureTwiceKeepsTheSameFrame()
     {
         try
         {
@@ -179,11 +179,91 @@ public class OrbAvatarTests
             var orb = new OrbWindow(sessionId);
 
             orb.UpdateFrom(Gateway());
-            var first = orb.Orb.Fill;
+            var first = orb.AvatarImage.Source;
+            Assert.NotNull(first);
 
             orb.UpdateFrom(Gateway());
 
-            Assert.Same(first, orb.Orb.Fill);
+            Assert.Same(first, orb.AvatarImage.Source);
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
+    // --- CB-198: drawn by an Image, so it stays sharp at every orb size ---
+
+    // The picture is drawn by AvatarImage beneath a clear ellipse rather than
+    // as the ellipse's fill: an ImageBrush is rasterised at its untransformed
+    // size and went to a mosaic under the orb-size transform. The ring is still
+    // the ellipse's, and the picture breathes with it on the one transform.
+    [AvaloniaFact]
+    public void AnAvatarIsDrawnByTheImageBeneathAClearRingThatBreathesWithIt()
+    {
+        try
+        {
+            var sessionId = Publish(Agent(), Png());
+            var orb = new OrbWindow(sessionId);
+
+            orb.UpdateFrom(Gateway());
+
+            Assert.True(orb.AvatarImage.IsVisible);
+            Assert.NotNull(orb.AvatarImage.Source);
+            Assert.Same(Brushes.Transparent, orb.Orb.Fill);
+            Assert.Same(orb.Orb.RenderTransform, orb.AvatarImage.RenderTransform);
+            Assert.Equal(Stretch.UniformToFill, orb.AvatarImage.Stretch);
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
+    [AvaloniaFact]
+    public void ATeamMembersPictureShrinksAndClipsWithItsSmallerCircle()
+    {
+        try
+        {
+            var sessionId = Publish(Agent(), Png());
+            var orb = new OrbWindow(sessionId);
+            orb.UpdateFrom(Gateway());
+
+            orb.SetTeamRole(true);
+            Assert.Equal(36 * 0.72, orb.AvatarImage.Width, 6);
+            Assert.Equal(36 * 0.72, orb.AvatarImage.Height, 6);
+            var clip = Assert.IsType<EllipseGeometry>(orb.AvatarImage.Clip);
+            Assert.Equal(new Avalonia.Rect(0, 0, 36 * 0.72, 36 * 0.72), clip.Rect);
+
+            orb.SetTeamRole(false);
+            Assert.Equal(36, orb.AvatarImage.Width, 6);
+            Assert.Equal(new Avalonia.Rect(0, 0, 36, 36), ((EllipseGeometry)orb.AvatarImage.Clip!).Rect);
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
+    [AvaloniaFact]
+    public void LosingThePictureGivesTheOrbItsStateFillBackAndDropsTheFrame()
+    {
+        var agent = Agent();
+        try
+        {
+            var sessionId = Publish(agent, Png());
+            var orb = new OrbWindow(sessionId);
+            orb.UpdateFrom(Gateway());
+            Assert.True(orb.AvatarImage.IsVisible);
+
+            // The route BecomingALocalSessionRestoresTheLetters already uses:
+            // republishing the agent without a picture does not clear it, since
+            // the avatar cache keeps a picture an agent once had.
+            orb.UpdateFrom(Local());
+
+            Assert.False(orb.AvatarImage.IsVisible);
+            Assert.Null(orb.AvatarImage.Source);
+            Assert.IsType<SolidColorBrush>(orb.Orb.Fill);
         }
         finally
         {
@@ -206,7 +286,7 @@ public class OrbAvatarTests
             orb.UpdateFrom(Local());
 
             Assert.True(orb.Glyph.IsVisible);
-            Assert.IsNotType<ImageBrush>(orb.Orb.Fill);
+            Assert.False(orb.AvatarImage.IsVisible);
         }
         finally
         {
@@ -227,7 +307,7 @@ public class OrbAvatarTests
             orb.UpdateFrom(Gateway());
 
             Assert.True(orb.Glyph.IsVisible);
-            Assert.IsNotType<ImageBrush>(orb.Orb.Fill);
+            Assert.False(orb.AvatarImage.IsVisible);
         }
         finally
         {
@@ -292,7 +372,7 @@ public class OrbAvatarTests
             orb.UpdateFrom(Gateway());
 
             Assert.True(orb.Glyph.IsVisible);
-            Assert.IsNotType<ImageBrush>(orb.Orb.Fill);
+            Assert.False(orb.AvatarImage.IsVisible);
         }
         finally
         {
@@ -368,11 +448,14 @@ public class OrbAvatarTests
             var sessionId = Publish(agent, AnimatedGif());
             var orb = new OrbWindow(sessionId);
 
+            // Shown, as every real orb is: since CB-218 a hidden orb does not
+            // animate, which the cases below pin.
+            orb.Show();
             orb.UpdateFrom(Gateway());
             Flush();
 
-            var brush = (ImageBrush)orb.Orb.Fill!;
-            var firstFrame = brush.Source;
+            var image = orb.AvatarImage;
+            var firstFrame = image.Source;
             Assert.NotNull(firstFrame);
 
             // Wall-clock bounded rather than iteration-bounded: under the
@@ -385,7 +468,7 @@ public class OrbAvatarTests
             while (Environment.TickCount64 < deadline && !advanced)
             {
                 Flush();
-                if (!ReferenceEquals(brush.Source, firstFrame)) advanced = true;
+                if (!ReferenceEquals(image.Source, firstFrame)) advanced = true;
                 await System.Threading.Tasks.Task.Delay(5);
             }
 
@@ -394,6 +477,108 @@ public class OrbAvatarTests
         finally
         {
             PublishNothing();
+        }
+    }
+
+    // --- CB-218: an orb nobody can see does not animate ----------------------
+
+    // "Show orbs" off hides every orb window, and each animated avatar used to
+    // keep swapping frames regardless. Hidden, the timer stops and the picture
+    // holds the frame it was on; shown again, it resumes from that frame.
+    [AvaloniaFact]
+    public async System.Threading.Tasks.Task AHiddenOrbStopsAnimatingAndResumesWhereItStopped()
+    {
+        var agent = Agent();
+        try
+        {
+            var orb = new OrbWindow(Publish(agent, AnimatedGif()));
+            orb.Show();
+            orb.UpdateFrom(Gateway());
+            Flush();
+            Assert.True(orb.AvatarAnimating);
+
+            // Let it move off the first frame, so "resumes where it stopped"
+            // cannot be satisfied by restarting from the beginning.
+            var first = orb.AvatarImage.Source;
+            await WaitUntil(() => !ReferenceEquals(orb.AvatarImage.Source, first));
+
+            orb.Hide();
+            Flush();
+            Assert.False(orb.AvatarAnimating);
+            var held = orb.AvatarImage.Source;
+
+            await System.Threading.Tasks.Task.Delay(300);
+            Flush();
+            Assert.Same(held, orb.AvatarImage.Source);
+
+            orb.Show();
+            Flush();
+            Assert.True(orb.AvatarAnimating);
+            Assert.Same(held, orb.AvatarImage.Source);
+
+            await WaitUntil(() => !ReferenceEquals(orb.AvatarImage.Source, held));
+            orb.Close();
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
+    // An orb built while "Show orbs" is off is never shown, and never starts
+    // a timer, until it is.
+    [AvaloniaFact]
+    public void AnOrbThatWasNeverShownDoesNotAnimate()
+    {
+        var agent = Agent();
+        try
+        {
+            var orb = new OrbWindow(Publish(agent, AnimatedGif()));
+            orb.UpdateFrom(Gateway());
+            Flush();
+
+            Assert.NotNull(orb.AvatarImage.Source);
+            Assert.False(orb.AvatarAnimating);
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
+    // Visibility changing on an orb with a still picture, or none, starts
+    // nothing: there is no second frame to go to.
+    [AvaloniaFact]
+    public void ShowingAnOrbWithAStillPictureStartsNoTimer()
+    {
+        var agent = Agent();
+        try
+        {
+            var orb = new OrbWindow(Publish(agent, Png()));
+            orb.Show();
+            orb.UpdateFrom(Gateway());
+            Flush();
+
+            Assert.False(orb.AvatarAnimating);
+            orb.Hide();
+            orb.Show();
+            Assert.False(orb.AvatarAnimating);
+            orb.Close();
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
+    private static async System.Threading.Tasks.Task WaitUntil(Func<bool> condition)
+    {
+        var deadline = Environment.TickCount64 + 10_000;
+        while (!condition())
+        {
+            Assert.True(Environment.TickCount64 < deadline, "the avatar never advanced");
+            Flush();
+            await System.Threading.Tasks.Task.Delay(5);
         }
     }
 

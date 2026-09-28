@@ -46,10 +46,11 @@ namespace ClaudeBuddy
         // one. Kept as its own entry point rather than made a special case at the
         // call site: the sweep in tests/ArrangementTests is written against it,
         // and every case it walks has to keep meaning the same thing.
-        internal static PixelPoint[] Compute(int count, int[] leadOf, Layout layout)
+        internal static PixelPoint[] Compute(
+            int count, int[] leadOf, Layout layout, double[]? sizeOf = null)
             => count <= 0
                 ? Array.Empty<PixelPoint>()
-                : Compute(count, leadOf, new int[count], new[] { layout.Shape }, layout);
+                : Compute(count, leadOf, new int[count], new[] { layout.Shape }, layout, sizeOf);
 
         // The same, with the orbs split across up to `shapes.Count` shapes drawn
         // side by side — see OrbClusters for what the groups mean and
@@ -62,8 +63,42 @@ namespace ClaudeBuddy
         // standing in — asking its own group instead would let a lead in one
         // band fan its members into another, which is neither what the group
         // setting means nor something the arrows could survive.
+        //
+        // sizeOf[i] is orb i's user size (CB-198) — the slider in Settings or
+        // that orb's own override, 1.0 being the size every orb always was.
+        // It is a fourth number, and deliberately kept apart from the three
+        // above and from Layout.Scale: Scale is the display's pixels per DIP,
+        // MemberScale is what a team member is drawn at relative to its lead,
+        // and a user size multiplies both without being either. Null, or an
+        // array shorter than the orb count, reads as 1.0 for whatever it does
+        // not cover. Every position returned is still a window top-left, for
+        // *that orb's own* window, so a caller sets OrbWindow.Position to it
+        // exactly as before.
+        //
+        // **The lattice is laid out for the largest orb present, and every orb
+        // is centred in its slot.** Everything below works in slots one
+        // largest-window wide — the shape, the fit, the bands, the fan-outs and
+        // the separation pass — and only at the very end does each orb trade
+        // the slot's top-left for its own, half its own window short of the
+        // slot's centre. A smaller orb therefore sits wholly inside the
+        // footprint a largest orb would have had, which makes the two things
+        // the sweep cares most about true by construction rather than by
+        // tuning: a slot on the screen holds an orb on the screen, and two
+        // circles no bigger than the ones that were separated cannot overlap
+        // more than those did.
+        //
+        // The price, stated so nobody mistakes it for a bug: small orbs sit as
+        // far apart as the biggest one would. One orb at 200% among a dozen at
+        // 60% spreads all of them out as though every one were at 200%. Packing
+        // mixed sizes tightly means a separation pass that reasons about pairs
+        // of different radii, fan-outs whose arrow distance depends on which
+        // member it is, and bands sized by the orbs inside them — every one of
+        // them a place the geometry has broken before when it was changed by
+        // eye. Loose and provably right was preferred to tight and
+        // probably right.
         internal static PixelPoint[] Compute(
-            int count, int[] leadOf, int[] groupOf, IReadOnlyList<string> shapes, Layout layout)
+            int count, int[] leadOf, int[] groupOf, IReadOnlyList<string> shapes, Layout layout,
+            double[]? sizeOf = null)
         {
             if (count <= 0) return Array.Empty<PixelPoint>();
 
@@ -72,8 +107,162 @@ namespace ClaudeBuddy
 
             Classify(count, leadOf, anchors, members);
 
-            var window = (int)Math.Round(WindowDip * layout.Scale);
-            var circle = CircleDip * layout.Scale;
+            var sizes = SizesFor(count, sizeOf);
+            var largest = sizes.Max();
+
+            var window = WindowFor(layout.Scale, largest);
+            var circle = CircleDip * layout.Scale * largest;
+
+            var placed = Arrange(
+                count, leadOf, groupOf, shapes, layout, anchors, members, window, circle,
+                gridWhenSqueezed: false, out var squeezed);
+
+            // Orbs the separation pass could not get apart, in an arrangement
+            // the screen had to squeeze, are drawn again with every squeezed
+            // shape as a grid — and the grid kept only if it is actually better.
+            //
+            // It took orb sizes to find this. At 200% a circle is 72 DIP, and
+            // thirty of them in a row need about 2220 DIP of width that not one
+            // test screen has; a column of thirteen needs more height than a
+            // small laptop has; a ring of thirty is wider than that laptop is
+            // tall. Fit squeezed each outline down to the screen regardless,
+            // Separate pushed against the screen edges, and the sweep found
+            // orbs up to 60px on top of each other. No spacing, turn or nudge
+            // makes a row of thirty fit a width that holds twenty-six — only a
+            // different shape does. A grid is the one that packs a rectangle,
+            // and it is already one of the shapes, which is why it rather than
+            // an invented wrap: Line's comment makes the same argument about a
+            // wrapped column.
+            //
+            // Tried, measured and kept-if-better rather than predicted, and two
+            // drafts are the reason. The first swapped to a grid whenever an
+            // outline's neighbours were squeezed closer than Separate accepts,
+            // and redrew 184 cases in the sweep at plain 1.0 size — thirty-orb
+            // stars and hearts on a small laptop, too tight on paper, that
+            // Separate had always resolved perfectly well. The second asked the
+            // same question only after measuring an overlap, and missed a column
+            // of ten 200% orbs on an 800px laptop: its outline *just* holds them,
+            // at 76px a step against 74 needed, and the lead's fanned team has
+            // nowhere left to go. Predicting capacity means modelling the fans,
+            // the separation pass and the edges together; measuring the result
+            // needs none of it. And an arrangement with nothing overlapping is
+            // returned exactly as it would have been before this existed — by
+            // construction, not by a threshold tuned until the sweep went quiet.
+            if (squeezed && WorstGap(placed, leadOf, circle) < -Slack(circle, layout.Spacing))
+            {
+                var gridded = Arrange(
+                    count, leadOf, groupOf, shapes, layout, anchors, members, window, circle,
+                    gridWhenSqueezed: true, out _);
+
+                if (WorstGap(gridded, leadOf, circle) > WorstGap(placed, leadOf, circle)) placed = gridded;
+            }
+
+            // From slots to orbs: each one centred in the slot it was given, at
+            // its own size. Integer halving, so the offset is the same whole
+            // number of pixels however the slot moves — a dragged anchor moves
+            // a small orb by exactly the delta it moves a big one.
+            for (var i = 0; i < count; i++)
+            {
+                var inset = (window - WindowFor(layout.Scale, sizes[i])) / 2;
+                placed[i] = new PixelPoint(placed[i].X + inset, placed[i].Y + inset);
+            }
+
+            return placed;
+        }
+
+        // The anchor that would have drawn `placed` where it landed (CB-211):
+        // layout.Center itself whenever the shape went where it was asked, and
+        // otherwise that centre moved along whichever axis Slide had to push the
+        // shape back onto the screen. `placed` is what Compute returned for
+        // these same arguments.
+        //
+        // A caller that saves an anchor has to save this one, not the one it
+        // asked for. Slide is what keeps an anchor off past an edge from drawing
+        // orbs off the screen, and it does that silently: an anchor 565px past
+        // the last one the screen honours draws exactly the shape that last one
+        // does. Saved as it was asked for, the overshoot sits in the settings
+        // file where nothing can see it, and the next drag back toward the
+        // screen has to spend it before the shape moves a pixel — which is how
+        // a -300px drag on a real 2560px screen came back as no move at all.
+        //
+        // Per axis, and only along an axis where some slot touches the edge of
+        // the work area. Slide leaves a shape flush against the edge it pushed
+        // it to, so a shape clear of both edges on an axis was never pushed
+        // along it, and its asked-for coordinate is already the landed one —
+        // returned untouched, not recomputed, so an anchor the screen honours
+        // is never nudged by so much as a rounding. That is also why the
+        // real-world case keeps its vertical drag: pushed back in x, clear in y.
+        //
+        // Along an edge, measured rather than predicted. Working out Slide's
+        // offset directly means modelling every shape, fan and band against
+        // the edges, which is the arithmetic Compute already does; drawing the
+        // same orbs once more around the middle of the screen, where nothing is
+        // pushed, and comparing the two needs none of it. The middle is moved
+        // by a pixel where needed so its distance from the asked-for anchor is
+        // even, which is the shift the sweep proves exact — its check 5 says
+        // why an odd one can round a pixel out. Averaged over the orbs rather
+        // than read off one, because the per-orb clamp that is Slide's last
+        // resort can move one member of a fan further than the rest; the
+        // average still lands the saved anchor at the edge of the range the
+        // screen honours, which is the property that matters.
+        internal static PixelPoint LandedCenter(
+            PixelPoint[] placed, int count, int[] leadOf, int[] groupOf, IReadOnlyList<string> shapes,
+            Layout layout, double[]? sizeOf = null)
+        {
+            var work = layout.Work;
+            var asked = layout.Center ?? new PixelPoint(work.X + work.Width / 2, work.Y + work.Height / 2);
+
+            if (count <= 0 || placed.Length < count) return asked;
+
+            // Slots, not orbs, for the same reason the sweep measures its margin
+            // on slots: the arrangement is laid out and pushed in slots, and a
+            // small orb sits inset in its slot a few pixels clear of an edge the
+            // slot is jammed against.
+            var sizes = SizesFor(count, sizeOf);
+            var window = WindowFor(layout.Scale, sizes.Max());
+
+            bool touchesX = false, touchesY = false;
+            for (var i = 0; i < count; i++)
+            {
+                var inset = (window - WindowFor(layout.Scale, sizes[i])) / 2;
+                var x = placed[i].X - inset;
+                var y = placed[i].Y - inset;
+
+                touchesX |= x <= work.X || x + window >= work.Right;
+                touchesY |= y <= work.Y || y + window >= work.Bottom;
+            }
+
+            if (!touchesX && !touchesY) return asked;
+
+            var middle = new PixelPoint(
+                work.X + work.Width / 2 + ((asked.X - work.X - work.Width / 2) & 1),
+                work.Y + work.Height / 2 + ((asked.Y - work.Y - work.Height / 2) & 1));
+
+            var centred = Compute(count, leadOf, groupOf, shapes, layout with { Center = middle }, sizeOf);
+
+            long dx = 0, dy = 0;
+            for (var i = 0; i < count; i++)
+            {
+                dx += placed[i].X - centred[i].X;
+                dy += placed[i].Y - centred[i].Y;
+            }
+
+            return new PixelPoint(
+                touchesX ? middle.X + (int)Math.Round(dx / (double)count) : asked.X,
+                touchesY ? middle.Y + (int)Math.Round(dy / (double)count) : asked.Y);
+        }
+
+        // Everything Compute does between knowing the slot size and handing
+        // back slot top-lefts: shapes in bands, fans off leads, separation.
+        // gridWhenSqueezed redraws as a grid any group the screen squeezed;
+        // `squeezed` says whether any group was.
+        private static PixelPoint[] Arrange(
+            int count, int[] leadOf, int[] groupOf, IReadOnlyList<string> shapes, Layout layout,
+            List<int> anchors, Dictionary<int, List<int>> members, int window, double circle,
+            bool gridWhenSqueezed, out bool squeezed)
+        {
+            squeezed = false;
+
             var minGap = MinGap(circle, layout.Spacing);
 
             var slots = Math.Max(1, shapes.Count);
@@ -106,15 +295,21 @@ namespace ClaudeBuddy
                 if (counts[g] == 0) continue;
 
                 var band = bands[g];
+                var at = layout with
+                {
+                    Work = band,
+                    Shape = ShapeAt(shapes, g, layout.Shape),
+                    Center = CentreFor(band, layout, single)
+                };
 
-                drawn[g] = Fit(
-                    ShapeFor(counts[g], layout with
-                    {
-                        Work = band,
-                        Shape = ShapeAt(shapes, g, layout.Shape),
-                        Center = CentreFor(band, layout, single)
-                    }),
-                    band, window, minGap);
+                drawn[g] = Fit(ShapeFor(counts[g], window, at), band, window, minGap, out var tight);
+
+                squeezed |= tight;
+
+                if (tight && gridWhenSqueezed && at.Shape != "grid")
+                {
+                    drawn[g] = Fit(ShapeFor(counts[g], window, at with { Shape = "grid" }), band, window, minGap, out _);
+                }
             }
 
             // With more than one shape in play, each has now been sized inside
@@ -135,7 +330,7 @@ namespace ClaudeBuddy
                     groupAt[orb] = g;
                 }
 
-                centreOf[g] = Centre(shape);
+                centreOf[g] = Centre(shape, window);
                 nearestOf[g] = Nearest(shape);
             }
 
@@ -183,6 +378,53 @@ namespace ClaudeBuddy
             }
 
             return Separate(result, leadOf, circle, layout.Work, window, layout.Spacing);
+        }
+
+        // The tightest clearance between any two circles, in pixels — negative
+        // when they overlap. Slot top-lefts all share one window, so their
+        // differences are centre differences. Radii as Separate counts them: a
+        // member's is MemberScale of a lead's.
+        internal static double WorstGap(PixelPoint[] pts, int[] leadOf, double circle)
+        {
+            double RadiusOf(int i) =>
+                (i < leadOf.Length && leadOf[i] >= 0 && leadOf[i] < pts.Length ? circle * MemberScale : circle) / 2;
+
+            var worst = double.MaxValue;
+
+            for (var i = 0; i < pts.Length; i++)
+            for (var j = i + 1; j < pts.Length; j++)
+            {
+                var dx = pts[i].X - pts[j].X;
+                var dy = pts[i].Y - pts[j].Y;
+                worst = Math.Min(worst, Math.Sqrt(dx * dx + dy * dy) - RadiusOf(i) - RadiusOf(j));
+            }
+
+            return worst;
+        }
+
+        // An orb's window in physical pixels at a given user size. Rounded the
+        // same way the single-size code always rounded it, so that at 1.0 the
+        // arrangement is bit-for-bit what it was before sizes existed.
+        internal static int WindowFor(double scale, double size) =>
+            (int)Math.Round(WindowDip * scale * size);
+
+        // One size per orb, with anything the caller did not supply — or
+        // supplied as nonsense — read as the size orbs have always been. A
+        // zero, negative or non-finite size would make a window of no pixels
+        // or of NaN pixels, and a NaN in the largest-orb maximum would put
+        // every orb at NaN along with it; clamping to OrbSizing's real range is
+        // the settings layer's job, and this only refuses what cannot be drawn.
+        internal static double[] SizesFor(int count, double[]? sizeOf)
+        {
+            var sizes = new double[count];
+
+            for (var i = 0; i < count; i++)
+            {
+                var size = sizeOf is not null && i < sizeOf.Length ? sizeOf[i] : 1.0;
+                sizes[i] = size > 0 && double.IsFinite(size) ? size : 1.0;
+            }
+
+            return sizes;
         }
 
         // Which shape an orb joins, defended against a caller that disagrees
@@ -584,7 +826,27 @@ namespace ClaudeBuddy
             var dy = lead.Y + half - centre.Y;
             var dist = Math.Sqrt(dx * dx + dy * dy);
 
-            if (dist < 1) { dx = 0; dy = -1; dist = 1; }
+            // A lead that *is* the middle of its shape — the only orb its group
+            // holds — has no outward. Toward the middle of the screen instead,
+            // which is where the room is, and only straight up when the lead is
+            // standing on that too.
+            //
+            // It was always straight up, and for a while that was invisible for
+            // the wrong reason: Centre added a DIP half-window to pixel
+            // coordinates, so on a Retina screen the "middle" of a lone lead's
+            // shape sat 28px up and left of the lead, and outward came out as
+            // down and to the right — into the screen, by accident, from the one
+            // corner the sweep anchors to. Fixing Centre turned that fan up into
+            // the top edge, and nineteen members pressed into a corner that way
+            // left 70 cases a pixel short of clearing each other.
+            if (dist < 1)
+            {
+                dx = work.X + work.Width / 2.0 - (lead.X + half);
+                dy = work.Y + work.Height / 2.0 - (lead.Y + half);
+                dist = Math.Sqrt(dx * dx + dy * dy);
+
+                if (dist < 1) { dx = 0; dy = -1; dist = 1; }
+            }
 
             var baseAngle = Math.Atan2(dy / dist, dx / dist);
 
@@ -827,9 +1089,8 @@ namespace ClaudeBuddy
             return pts;
         }
 
-        private static PixelPoint[] ShapeFor(int n, Layout layout)
+        private static PixelPoint[] ShapeFor(int n, int window, Layout layout)
         {
-            var window = (int)Math.Round(WindowDip * layout.Scale);
             var unit = Unit(layout.Shape, n);
 
             // Any starting size will do — the fit below sets the real one from
@@ -850,12 +1111,18 @@ namespace ClaudeBuddy
 
         // Scale the pattern until neighbours clear each other, but never past
         // what the screen can hold, then slide it fully inside.
-        private static PixelPoint[] Fit(PixelPoint[] pts, PixelRect work, int window, double minGap)
+        //
+        // `squeezed` says the screen won: the pattern was shrunk below the
+        // size the spacing asked for to keep it on the screen.
+        private static PixelPoint[] Fit(
+            PixelPoint[] pts, PixelRect work, int window, double minGap, out bool squeezed)
         {
+            squeezed = false;
+
             if (pts.Length == 0) return pts;
             if (pts.Length == 1) return new[] { Inside(pts[0], work, window) };
 
-            var centre = Centre(pts);
+            var centre = Centre(pts, window);
 
             var closest = double.MaxValue;
             for (var i = 0; i < pts.Length; i++)
@@ -880,6 +1147,9 @@ namespace ClaudeBuddy
 
             var factor = Math.Min(wanted, fits);
 
+            // The screen, not the spacing slider, decided how big this is.
+            squeezed = fits < wanted;
+
             var scaled = pts.Select(p => new PixelPoint(
                 (int)Math.Round(centre.X + (p.X + window / 2.0 - centre.X) * factor - window / 2.0),
                 (int)Math.Round(centre.Y + (p.Y + window / 2.0 - centre.Y) * factor - window / 2.0)))
@@ -888,14 +1158,31 @@ namespace ClaudeBuddy
             return Slide(scaled, work, window);
         }
 
+        // How far two lead circles may overlap before Separate pushes them
+        // apart: a little at the very bottom of the spacing slider, which is
+        // meant to be a tight cluster, and none anywhere else.
+        private static double Slack(double circle, double spacing) => spacing <= 0.3 ? circle * 0.4 : 0;
+
         // Centres, not corners: scaling has to happen about the middle of the
         // drawn shape, and the corner is half a window away from it.
-        private static (double X, double Y) Centre(PixelPoint[] pts)
-        {
-            if (pts.Length == 0) return (0, 0);
-
-            return (pts.Average(p => (double)p.X) + WindowDip / 2, pts.Average(p => (double)p.Y) + WindowDip / 2);
-        }
+        //
+        // Half a window in *pixels*, the window every other line here uses.
+        // This used to add WindowDip / 2 — 28, a DIP figure — to pixel
+        // coordinates, which is right only at Scale 1.0. On a Retina screen the
+        // window is 112px and the pivot sat 28px up and left of the shape's
+        // real middle, so Fit scaled the shape away from its anchor by those
+        // 28px times one less than Fit's own stretch factor. Measured before the fix: nine
+        // teamless orbs in a grid, anchored in the middle of a 3024x1890 screen
+        // at Scale 2 and the widest spacing, came out with their centroid
+        // (73, 73) px off the anchor, against (0.0, 0.0) after. The sweep never
+        // saw it because every check it makes is relative — a constant error
+        // moves with the anchor — and CB-198 would have made it worse, since a
+        // 200% orb at Scale 2 is a 224px window and an 84px pivot error.
+        //
+        // No empty-array guard, because no caller can pass one: Fit returns
+        // before asking, and Compute only asks of a group holding orbs.
+        private static (double X, double Y) Centre(PixelPoint[] pts, int window) =>
+            (pts.Average(p => (double)p.X) + window / 2.0, pts.Average(p => (double)p.Y) + window / 2.0);
 
         private static PixelPoint[] Slide(PixelPoint[] pts, PixelRect work, int window)
         {
@@ -945,7 +1232,7 @@ namespace ClaudeBuddy
             // The bottom of the slider is meant to be a tight cluster, so a
             // little overlap there is the setting doing its job rather than a
             // fault to correct.
-            var slack = spacing <= 0.3 ? circle * 0.4 : 0;
+            var slack = Slack(circle, spacing);
 
             // How many members each lead is holding, so the pull-back below can
             // ask whether they fit.

@@ -39,6 +39,18 @@ namespace ClaudeBuddy.Tests
             Assert.Equal(new RunEvent(RunSignal.End, Run), ev);
         }
 
+        // CB-170, measured: an aborted run's roster row arrives with phase "end"
+        // and then again, about a second later, with phase "error". The second
+        // is as terminal as the first.
+        [Fact]
+        public void ARosterRowWithPhaseErrorAndARunIdEndsThatRun()
+        {
+            var ev = Classify("sessions.changed",
+                $$"""{"sessionKey":"agent:main:main","phase":"error","runId":"{{Run}}","status":"killed"}""");
+
+            Assert.Equal(new RunEvent(RunSignal.End, Run), ev);
+        }
+
         // The CB-152 burst: a reason, no phase, no runId — for the whole roster.
         [Theory]
         [InlineData("""{"sessionKey":"agent:main:discord:direct:1","reason":"cron-binding"}""")]

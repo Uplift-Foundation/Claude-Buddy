@@ -323,6 +323,10 @@ namespace ClaudeBuddy
                 case MirrorProtocol.Resend:
                     await ResendAsync(fromPeer, frame).ConfigureAwait(false);
                     break;
+
+                case MirrorProtocol.Avatar:
+                    await AvatarAsync(fromPeer, frame).ConfigureAwait(false);
+                    break;
             }
         }
 
@@ -377,6 +381,10 @@ namespace ClaudeBuddy
             // IsLocalCli filter below applies either way, so nothing becomes
             // visible that was not already a session on this disk.
             var everything = asked is null || asked.Count == 0;
+
+            // CB-216: an asker that can fetch pictures by id is sent ids, and
+            // one that cannot is sent the bytes, as every Buddy before this was.
+            var picturesById = frame.Get(MirrorProtocol.AvatarsByIdField) == "1";
 
             var wanted = everything
                 ? agents.Select(a => a.Name).Distinct(StringComparer.OrdinalIgnoreCase).ToList()
@@ -443,7 +451,7 @@ namespace ClaudeBuddy
                     status.State,
                     _seams.CanDeliver?.Invoke(status),
                     RouteFor(resolved.Value.SessionId),
-                    ResolvePeerPersona(status)));
+                    ResolvePeerPersona(status, picturesById)));
             }
 
             // AgentRoster is Claude Code's authority, not a universal session
@@ -466,15 +474,34 @@ namespace ClaudeBuddy
                     entries.Add(new MirrorProtocol.MirrorRosterEntry(name, MirrorProtocol.CliFor(status.Source),
                         hasTranscript, _seams.CanType(status), string.IsNullOrWhiteSpace(status.Color) ? null : status.Color,
                         Commands(status), status.State, _seams.CanDeliver?.Invoke(status), RouteFor(session.SessionId),
-                        ResolvePeerPersona(status)));
+                        ResolvePeerPersona(status, picturesById)));
                 }
             }
 
-            await SendTransferAsync(
-                fromPeer, frame.Id, MirrorProtocol.EncodeRoster(entries),
-                new Dictionary<string, string>(), sub: null)
+            // CB-216: hashed before it is compressed, so an asker holding this
+            // exact roster is told so with a bare OK and no roster at all. See
+            // MirrorProtocol.RosterHashField for what that saved and why it is
+            // safe against a Buddy that has never heard of the field.
+            entries = MirrorProtocol.CanonicalRoster(entries);
+            var raw = MirrorProtocol.RosterBytes(entries);
+            var hash = MirrorProtocol.Hash(raw);
+            var reply = new Dictionary<string, string> { [MirrorProtocol.RosterHashField] = hash };
+
+            if (MirrorProtocol.RosterUnchanged(frame.Get(MirrorProtocol.RosterHashField), hash))
+            {
+                MirrorLog.Say("hello-unchanged", $"from={fromPeer} entries={entries.Count}");
+                await SendAsync(fromPeer, MirrorProtocol.BuildFrame(MirrorProtocol.Ok, frame.Id, reply))
+                    .ConfigureAwait(false);
+                return;
+            }
+
+            await SendTransferAsync(fromPeer, frame.Id, _rosterGzip.For(hash, raw), reply, sub: null)
                 .ConfigureAwait(false);
         }
+
+        // Shared by every peer, for the reason RosterGzipMemo gives: they are
+        // all sent the same roster.
+        private readonly RosterGzipMemo _rosterGzip = new(MirrorProtocol.Gzip);
 
         // This is intentionally on the serving side of the protocol. The
         // receiving Buddy must never ask LocalPersona to resolve a remote cwd:
@@ -484,16 +511,45 @@ namespace ClaudeBuddy
         // is still meaningful, and PersonaFiles applies its byte bound again
         // while reading. Sending no persona on any unreadable input is more
         // honest than sending a partial path for the receiver to reinterpret.
-        internal static MirrorProtocol.PeerPersona? ResolvePeerPersona(SessionStatus status)
+        //
+        // CB-216: the picture comes from PeerAvatarStore, which reads it again
+        // only when the file changes, and is sent as its id to an asker that can
+        // fetch by id (picturesById) and as bytes to one that cannot.
+        internal static MirrorProtocol.PeerPersona? ResolvePeerPersona(
+            SessionStatus status, bool picturesById = false)
         {
             if (!status.IsLocalCli || string.IsNullOrWhiteSpace(status.Cwd)) return null;
 
             var candidates = LocalPersona.Candidates(
                 status.Cwd, LocalPersona.UserConfigDirs(), status.Source, status.Agent);
             var local = LocalPersona.ResolveFrom(candidates, status.Cwd);
-            var avatar = local.AvatarPath is null ? null : PersonaFiles.ReadAvatarFile(local.AvatarPath);
-            var peer = new MirrorProtocol.PeerPersona(local.Name, local.Voice, local.Rate, avatar);
+            var picture = local.AvatarPath is null ? null : PeerAvatarStore.Shared.At(local.AvatarPath);
+            var peer = picture is not { } found
+                ? new MirrorProtocol.PeerPersona(local.Name, local.Voice, local.Rate)
+                : picturesById
+                    ? new MirrorProtocol.PeerPersona(local.Name, local.Voice, local.Rate, AvatarId: found.Id)
+                    : new MirrorProtocol.PeerPersona(local.Name, local.Voice, local.Rate, found.Bytes);
             return peer.IsEmpty ? null : peer;
+        }
+
+        // An AVATAR request: one picture, by the id a roster named it with.
+        // Only an id this machine offered is answered, and from the bytes it
+        // offered under it, so the id cannot be used to read anything else.
+        private async Task AvatarAsync(string fromPeer, MirrorProtocol.MirrorFrame frame)
+        {
+            var id = frame.Get(MirrorProtocol.AvatarIdField);
+            var bytes = PeerAvatarStore.Shared.ById(id);
+
+            if (bytes is null)
+            {
+                await ErrAsync(fromPeer, frame.Id, MirrorProtocol.ErrNoAvatar, "no such picture here")
+                    .ConfigureAwait(false);
+                return;
+            }
+
+            await SendTransferAsync(fromPeer, frame.Id, bytes,
+                new Dictionary<string, string> { [MirrorProtocol.AvatarIdField] = id! }, sub: null)
+                .ConfigureAwait(false);
         }
 
         // The commands that session can actually run, read off this machine's
