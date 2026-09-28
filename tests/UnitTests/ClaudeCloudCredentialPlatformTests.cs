@@ -352,4 +352,29 @@ public class ClaudeCloudCredentialPlatformTests
         public CredentialRead Read() =>
             new(CredentialOutcome.Found, _token, null, "a credential is present");
     }
+
+    // The shape of the real-Mac result: two Keychain entries blanked by the CLI,
+    // one expired, and the live login in the plaintext file.
+    [Fact]
+    public void BlankedBlankedExpiredThenALiveFileIsFoundViaTheFile()
+    {
+        var expiry = new System.DateTimeOffset(2026, 9, 6, 6, 56, 0, System.TimeSpan.Zero);
+        var multi = new MultiCredentialSource(new (string, ICloudCredentialSource)[]
+        {
+            ("svc", new Fake("1", CredentialOutcome.NotLoggedIn, "the Claude Code CLI signed this login out")),
+            ("svc-a", new Fake("2", CredentialOutcome.NotLoggedIn, "the Claude Code CLI signed this login out")),
+            ("svc-b", new ExpiredFake(expiry)),
+            ("file", new Fake("3", CredentialOutcome.Found, "a credential is present")),
+        });
+
+        var read = multi.Read();
+
+        Assert.Equal(CredentialOutcome.Found, read.Outcome);
+        Assert.Equal("file", multi.AnsweredBy);
+        Assert.Equal(4, multi.Attempts.Count);
+        Assert.Equal("the Claude Code CLI signed this login out", multi.Attempts[0].Reason);
+        Assert.Equal("the Claude Code CLI signed this login out", multi.Attempts[1].Reason);
+        Assert.Equal("the stored credential expired (expiresAt 2026-09-06 06:56:00Z)", multi.Attempts[2].Reason);
+        Assert.Equal(("file", CredentialOutcome.Found, "a credential is present"), multi.Attempts[3]);
+    }
 }
