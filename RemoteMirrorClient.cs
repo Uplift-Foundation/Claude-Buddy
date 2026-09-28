@@ -175,6 +175,24 @@ namespace ClaudeBuddy
         // rather than on every ten-second tick.
         private readonly HashSet<string> _askingAll = new(StringComparer.OrdinalIgnoreCase);
 
+        // CB-216: the hash of the roster each peer last sent in full, handed back
+        // on the next ask so an unchanged roster comes back as a bare OK instead
+        // of 17 MB of persona pictures. See MirrorProtocol.RosterHashField.
+        //
+        // Held only while the roster it describes is exactly what this side
+        // holds for that peer. Anything else that changes that peer's entries
+        // forgets it (a disconnect, a relay answer), so the next ask is answered
+        // in full and the result is always the one a full answer would give.
+        private readonly Dictionary<string, string> _rosterHashes = new(StringComparer.OrdinalIgnoreCase);
+
+        // CB-216: persona pictures fetched by id, so each distinct picture
+        // crosses the wire once rather than inside every roster. Keyed by id,
+        // which is the picture's hash and length, so two peers offering the same
+        // file share one entry. Bounded for the reason PeerAvatarStore is: the
+        // pictures are large. Forgetting one costs a single fetch.
+        internal const int PictureCapacity = 16;
+        private readonly PictureCache _pictures = new(PictureCapacity);
+
         // Asks a machine what it has, naming nothing.
         //
         // **A separate method because DiscoverAsync cannot express this, and
@@ -218,6 +236,11 @@ namespace ClaudeBuddy
                     _answeredNo.Add(displayName);
                     disconnectedChanged = true;
                 }
+
+                foreach (var gone in _rosterHashes.Keys.Where(peer => !connected.Contains(peer)).ToList())
+                {
+                    _rosterHashes.Remove(gone);
+                }
             }
 
             if (disconnectedChanged) RosterUpdated?.Invoke();
@@ -234,11 +257,21 @@ namespace ClaudeBuddy
 
                 Reply reply;
 
+                var fields = new Dictionary<string, string>
+                {
+                    ["pv"] = "1",
+                    [MirrorProtocol.AvatarsByIdField] = "1",
+                };
+                lock (_gate)
+                {
+                    if (_rosterHashes.TryGetValue(peer, out var held))
+                        fields[MirrorProtocol.RosterHashField] = held;
+                }
+
                 try
                 {
                     reply = await RequestAsync(
-                        peer, MirrorProtocol.Hello,
-                        new Dictionary<string, string> { ["pv"] = "1" },
+                        peer, MirrorProtocol.Hello, fields,
                         payload: null, TimeSpan.FromSeconds(30))
                         .ConfigureAwait(false);
                 }
@@ -249,8 +282,20 @@ namespace ClaudeBuddy
 
                 if (!reply.Ok || reply.Payload is null) continue;
 
-                var entries = MirrorProtocol.DecodeRoster(reply.Payload);
-                if (entries is null) continue;
+                var decoded = MirrorProtocol.DecodeRoster(reply.Payload);
+                if (decoded is null) continue;
+
+                var (entries, allPictures) = await FillPicturesAsync(peer, decoded).ConfigureAwait(false);
+
+                // Only once the roster has decoded and every picture in it has
+                // arrived, so a hash never stands for a roster this side did not
+                // fully take in. A picture that failed to arrive is asked for
+                // again with the whole roster on the next poll.
+                lock (_gate)
+                {
+                    if (HashToHold(reply.Fields, allPictures) is { } sent) _rosterHashes[peer] = sent;
+                    else _rosterHashes.Remove(peer);
+                }
 
                 var offered = new Dictionary<string, MirrorProtocol.MirrorRosterEntry>(
                     StringComparer.OrdinalIgnoreCase);
@@ -396,6 +441,11 @@ namespace ClaudeBuddy
                         _answeredNo.Remove(key);
                     }
 
+                    // This relay's entries just changed by a route other than
+                    // its full roster, so a hash held for it no longer
+                    // describes what this side holds.
+                    _rosterHashes.Remove(relay);
+
                     // Asked about and not mentioned means that Buddy does not
                     // have it — a session on a third machine, most likely.
                     foreach (var name in ask)
@@ -407,6 +457,77 @@ namespace ClaudeBuddy
 
                 RosterUpdated?.Invoke();
             }
+        }
+
+        // The roster hash to hand back on the next ask, or null to hold none: only
+        // a hash the server actually sent, and only once every picture the
+        // roster named has arrived. An older server sends none, and a roster
+        // this side has not fully taken in must be asked for in full again.
+        internal static string? HashToHold(IReadOnlyDictionary<string, string>? fields, bool allPictures) =>
+            allPictures
+            && fields is not null
+            && fields.TryGetValue(MirrorProtocol.RosterHashField, out var sent)
+            && sent.Length > 0
+                ? sent
+                : null;
+
+        // Gives every entry named by picture id its picture's bytes, from those
+        // already held or with one AVATAR request per id not yet seen. Returns
+        // whether every picture arrived.
+        //
+        // A picture that cannot be fetched, or whose bytes do not match the id
+        // they were asked for, leaves the entry wearing whatever picture this
+        // side already showed for it, rather than none. Swapping a face for
+        // letters over a failed fetch would be a visible change caused by a
+        // transport hiccup.
+        private async Task<(List<MirrorProtocol.MirrorRosterEntry> Entries, bool AllPictures)> FillPicturesAsync(
+            string peer, IReadOnlyList<MirrorProtocol.MirrorRosterEntry> entries)
+        {
+            var filled = new List<MirrorProtocol.MirrorRosterEntry>(entries.Count);
+            var all = true;
+
+            foreach (var entry in entries)
+            {
+                if (entry.Persona is not { AvatarId: { Length: > 0 } id, Avatar: null } persona)
+                {
+                    filled.Add(entry);
+                    continue;
+                }
+
+                byte[]? bytes;
+                lock (_gate) bytes = _pictures.Get(id);
+
+                bytes ??= await FetchPictureAsync(peer, id).ConfigureAwait(false);
+
+                if (bytes is null)
+                {
+                    all = false;
+                    lock (_gate) bytes = _roster.GetValueOrDefault(EntryKey(entry))?.Persona?.Avatar;
+                }
+
+                filled.Add(entry with { Persona = persona with { Avatar = bytes } });
+            }
+
+            return (filled, all);
+        }
+
+        private async Task<byte[]?> FetchPictureAsync(string peer, string id)
+        {
+            var reply = await RequestAsync(
+                peer, MirrorProtocol.Avatar,
+                new Dictionary<string, string> { [MirrorProtocol.AvatarIdField] = id },
+                payload: null, TimeSpan.FromSeconds(60))
+                .ConfigureAwait(false);
+
+            if (!reply.Ok || !MirrorProtocol.AvatarMatches(id, reply.Payload))
+            {
+                MirrorLog.Say("avatar-missed", $"from={peer} id={id} ok={reply.Ok}");
+                return null;
+            }
+
+            lock (_gate) _pictures.Add(id, reply.Payload!);
+
+            return reply.Payload;
         }
 
         // --- a session's feed --------------------------------------------------

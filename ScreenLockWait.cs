@@ -128,9 +128,10 @@ namespace ClaudeBuddy
         // state where we cannot tell.
         WaitUpToCap,
 
-        // Wait far longer, but still not forever. For the state where the
-        // window server has told us starting would fail.
-        WaitUpToLockedCap
+        // Wait until the window server says unlocked, however long that takes.
+        // For the state where it has told us starting would fail. See
+        // ShouldStartNow for why there is no cap (CB-215).
+        WaitForUnlock
     }
 
     internal static class ScreenLockWait
@@ -140,56 +141,50 @@ namespace ClaudeBuddy
         {
             ScreenLockState.Unlocked => ScreenLockWaitPolicy.StartNow,
             ScreenLockState.NoWindowServerSession => ScreenLockWaitPolicy.WaitUpToCap,
-            ScreenLockState.Locked => ScreenLockWaitPolicy.WaitUpToLockedCap,
+            ScreenLockState.Locked => ScreenLockWaitPolicy.WaitForUnlock,
             _ => throw new ArgumentOutOfRangeException(nameof(state), state, null)
         };
 
         // How long this policy is willing to wait before starting anyway.
         //
-        // Two caps rather than one, because the two waiting states are waiting
-        // on different things. `WaitUpToCap` is the unknowable state and its
-        // cap is short, because a misread lock must not keep Buddy off the
-        // menu bar for a session. `WaitUpToLockedCap` is the window server's
-        // own answer, so its cap is long enough that it will not fire in any
-        // real lock — but it exists, and that is the whole argument below.
-        internal static TimeSpan CapFor(
-            ScreenLockWaitPolicy policy, TimeSpan cap, TimeSpan lockedCap) =>
+        // `WaitUpToCap` is the unknowable state, and its cap is short, because a
+        // misread lock must not keep Buddy off the menu bar for a session.
+        // `WaitForUnlock` is the window server's own answer, and since CB-215 it
+        // has no cap at all: TimeSpan.MaxValue, which the loop's elapsed time
+        // never reaches.
+        internal static TimeSpan CapFor(ScreenLockWaitPolicy policy, TimeSpan cap) =>
             policy switch
             {
                 ScreenLockWaitPolicy.StartNow => TimeSpan.Zero,
                 ScreenLockWaitPolicy.WaitUpToCap => cap,
-                ScreenLockWaitPolicy.WaitUpToLockedCap => lockedCap,
+                ScreenLockWaitPolicy.WaitForUnlock => TimeSpan.MaxValue,
                 _ => throw new ArgumentOutOfRangeException(nameof(policy), policy, null)
             };
 
         // The policy with the caller's clock folded in: may startup build a
         // compositor right now?
         //
-        // Both waiting arms read `capExpired` the same way, because CapFor has
-        // already chosen *which* cap that is. The difference between them is
-        // the length, not the rule.
+        // **A reported lock never starts the UI (CB-215).** Starting against it is
+        // a guaranteed AvaloniaNativeRenderTimer -6661 abort. This arm used to
+        // be capped at twelve hours, on two arguments that both failed in
+        // practice:
         //
-        // **A reported lock is capped too, and that is a deliberate reversal
-        // of this change's first draft.** That draft waited on a reported lock
-        // forever, on the reasoning that the window server's own answer cannot
-        // be wrong in the direction a cap defends against. The reasoning is
-        // sound and the conclusion still was not: it has no answer for the key
-        // being stuck true after a real unlock, where the failure is Buddy
-        // invisibly absent with no recovery but for someone noticing a process
-        // and killing it. Capped, that same case starts the UI; and if the
-        // screen really is locked, the -6661 crash is restarted by
-        // KeepAlive{SuccessfulExit:false}, re-probes and waits again —
-        // self-healing, one log line per twelve hours of continuous lock, and
-        // nobody is looking at a locked screen while it happens. This
-        // repository rates silent absence worse than a crash, and this is
-        // exactly that trade.
+        // - That the abort would "self-heal" through the launch agent's
+        //   KeepAlive. On the MacBook, where Buddy is started with `open`, it
+        //   didn't: after the 2026-09-27 11:28 abort Buddy was simply gone
+        //   until someone started it again.
+        // - That twelve hours of continuous lock is not a machine anyone cares
+        //   about. The Mac mini is headless and always locked, and its Buddy is
+        //   a live peer (serveOnLaunch runs before this wait). The cap killed it
+        //   every twelve hours, and it dropped off every peer.
         //
-        // The cap is long enough that it should never fire. The 2026-09-22
-        // lock was confirmed from the unified log — `_powerMonitor.screenLocked
-        // yes` with `DisplayOn: 0` and `isClamshelled 1`, 1.3 seconds before
-        // the crash — so the state this arm handles is real, and a machine
-        // genuinely locked for twelve hours is not one anybody is waiting to
-        // see a menu bar on.
+        // So a locked screen waits, serving peers, until the window server says
+        // unlocked. The residual risk, named rather than defended against: if
+        // CGSSessionScreenIsLocked were ever stuck true after a real unlock,
+        // Buddy would stay without its UI until relaunched. That hasn't been
+        // observed; a real unlock clears the key, as the watchers used during
+        // CB-216 to CB-219 saw every time. A crash every twelve hours was the
+        // observed alternative.
         //
         // Takes the policy rather than the state, with the state overload
         // below composing the two, so that every arm — including the
@@ -202,7 +197,7 @@ namespace ClaudeBuddy
             {
                 ScreenLockWaitPolicy.StartNow => true,
                 ScreenLockWaitPolicy.WaitUpToCap => capExpired,
-                ScreenLockWaitPolicy.WaitUpToLockedCap => capExpired,
+                ScreenLockWaitPolicy.WaitForUnlock => false,
                 _ => throw new ArgumentOutOfRangeException(nameof(policy), policy, null)
             };
 
@@ -280,11 +275,9 @@ namespace ClaudeBuddy
             Func<DateTime> now,
             Action<TimeSpan> sleep,
             TimeSpan cap,
-            TimeSpan lockedCap,
             TimeSpan interval)
         {
             var start = now();
-            DateTime? lockedSince = null;
             DateTime? unknownSince = null;
             var firstReading = true;
 
@@ -303,21 +296,18 @@ namespace ClaudeBuddy
                 DateTime since;
                 switch (policy)
                 {
-                    case ScreenLockWaitPolicy.WaitUpToLockedCap:
-                        lockedSince ??= latch;
-                        since = lockedSince.Value;
-                        break;
                     case ScreenLockWaitPolicy.WaitUpToCap:
                         unknownSince ??= latch;
                         since = unknownSince.Value;
                         break;
                     default:
-                        // StartNow, whose cap is zero — the latch is immaterial.
+                        // StartNow, whose cap is zero, and WaitForUnlock, which
+                        // has none: for both the latch is immaterial.
                         since = latch;
                         break;
                 }
 
-                var expired = readAt - since >= CapFor(policy, cap, lockedCap);
+                var expired = readAt - since >= CapFor(policy, cap);
 
                 if (ShouldStartNow(policy, expired)) return;
                 sleep(interval);

@@ -71,6 +71,64 @@ namespace ClaudeBuddy
         private static Dictionary<string, string>? _states;
         private static long _stamp;
 
+        // Which accounts the cached listing covers. A hit needs the same set, so
+        // a session showing up in an account the listing did not ask about
+        // forces a fresh read rather than a stale "not a job" (CB-217).
+        private static string? _statesAccounts;
+
+        // The transcript paths of the Claude Code sessions the scan can see,
+        // noted by the scan's background half just before it asks for the
+        // listing. Null until the first scan, which means "ask every account".
+        private static string?[]? _liveTranscripts;
+
+        // CB-217: called by the scan with every Claude Code session's transcript
+        // path, so the listing can skip accounts that own none of them.
+        [ExcludeFromCodeCoverage]
+        internal static void NoteLiveTranscripts(IEnumerable<string?> transcriptPaths)
+        {
+            var paths = transcriptPaths.ToArray();
+            lock (Cache.Gate) _liveTranscripts = paths;
+        }
+
+        // The accounts worth asking, out of accountDirs, in their order.
+        //
+        // The listing is only ever consulted by session id, and a session
+        // belongs to exactly one account, so an account that owns none of the
+        // sessions the scan can see cannot change any answer. A Claude Code
+        // transcript lives under its account's config directory
+        // (<dir>/projects/...), which is how a session is attributed.
+        //
+        // Conservative wherever attribution fails: no transcripts noted yet, or
+        // any one session whose transcript is missing or under none of the
+        // known directories, and every account is asked, as before. Skipping
+        // then could turn a real job into "not a job".
+        internal static List<string> AccountsToAsk(
+            IReadOnlyList<string> accountDirs, IReadOnlyList<string?>? transcriptPaths)
+        {
+            if (transcriptPaths is null) return accountDirs.ToList();
+
+            var wanted = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var path in transcriptPaths)
+            {
+                var owner = string.IsNullOrWhiteSpace(path)
+                    ? null
+                    : accountDirs.FirstOrDefault(dir => IsUnder(path, dir));
+
+                if (owner is null) return accountDirs.ToList();
+                wanted.Add(owner);
+            }
+
+            return accountDirs.Where(wanted.Contains).ToList();
+        }
+
+        internal static bool IsUnder(string path, string dir)
+        {
+            var root = dir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            return path.Length > root.Length
+                && path.StartsWith(root, StringComparison.OrdinalIgnoreCase)
+                && (path[root.Length] == Path.DirectorySeparatorChar || path[root.Length] == Path.AltDirectorySeparatorChar);
+        }
+
         // Whether this session is a background job that is still going.
         //
         // Asked of two shapes of session. The first records no pid at all — a
@@ -186,15 +244,18 @@ namespace ClaudeBuddy
         [ExcludeFromCodeCoverage]
         private static Dictionary<string, string>? States()
         {
+            var accounts = Accounts();
+            var key = string.Join("\n", accounts.Select(a => a.Dir));
+
             lock (Cache.Gate)
             {
-                if (_states is not null && Environment.TickCount64 - _stamp < CacheMs)
+                if (_states is not null && Environment.TickCount64 - _stamp < CacheMs && _statesAccounts == key)
                 {
                     return _states;
                 }
             }
 
-            var fresh = Read();
+            var fresh = Read(accounts);
 
             lock (Cache.Gate)
             {
@@ -204,9 +265,33 @@ namespace ClaudeBuddy
                 {
                     _states = fresh;
                     _stamp = Environment.TickCount64;
+                    _statesAccounts = key;
                 }
                 return _states;
             }
+        }
+
+        // Every account this machine has, as (directory, config dir to pass):
+        // the inherited one first, passed as null so the CLI resolves it itself,
+        // then the extras. Filtered by AccountsToAsk.
+        [ExcludeFromCodeCoverage]
+        private static List<(string Dir, string? ConfigDir)> Accounts()
+        {
+            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            var inherited = Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR");
+            var inheritedDir = string.IsNullOrWhiteSpace(inherited)
+                ? Path.Combine(home, ".claude")
+                : inherited.Trim().TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+            var all = new List<(string Dir, string? ConfigDir)> { (inheritedDir, null) };
+            all.AddRange(ExtraAccountDirs(home, ClaudeBuddySettings.ClaudeCodeProfileDirs, inherited)
+                .Select(dir => (dir, (string?)dir)));
+
+            string?[]? transcripts;
+            lock (Cache.Gate) transcripts = _liveTranscripts;
+
+            var ask = AccountsToAsk(all.Select(a => a.Dir).ToList(), transcripts);
+            return all.Where(a => ask.Contains(a.Dir, StringComparer.OrdinalIgnoreCase)).ToList();
         }
 
         // Every account's listing, merged into one.
@@ -250,7 +335,7 @@ namespace ClaudeBuddy
         // with the answers is Merge and ExtraAccountDirs below, both pure and
         // both covered.
         [ExcludeFromCodeCoverage]
-        private static Dictionary<string, string>? Read()
+        private static Dictionary<string, string>? Read(List<(string Dir, string? ConfigDir)> accounts)
         {
             // Invoked directly, not through a shell. The obvious way to reach a
             // binary that isn't on this app's PATH is to ask the user's shell to
@@ -264,17 +349,19 @@ namespace ClaudeBuddy
             var claude = ClaudeBinary.Path;
             if (claude is null) return null;
 
-            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-            var inherited = Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR");
+            // CB-217: only the accounts that own a session the scan can see, the
+            // inherited one first as before. None at all means nothing is worth
+            // asking, and every session is "not a job", exactly as a listing
+            // that named none of them would have said.
+            if (accounts.Count == 0) return new Dictionary<string, string>(StringComparer.Ordinal);
 
-            // null first: this app's own environment, which is the account it has
-            // always read and the only one nearly every machine has.
-            var merged = ReadOne(claude, configDir: null);
-
-            foreach (var dir in ExtraAccountDirs(
-                home, ClaudeBuddySettings.ClaudeCodeProfileDirs, inherited))
+            Dictionary<string, string>? merged = null;
+            var first = true;
+            foreach (var (_, configDir) in accounts)
             {
-                merged = Merge(merged, ReadOne(claude, dir));
+                var one = ReadOne(claude, configDir);
+                merged = first ? one : Merge(merged, one);
+                first = false;
             }
 
             return merged;

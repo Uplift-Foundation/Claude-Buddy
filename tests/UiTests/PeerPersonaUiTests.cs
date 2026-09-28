@@ -155,6 +155,59 @@ public class PeerPersonaUiTests : IDisposable
         Assert.Equal("Fa", orb.GlyphText);
     }
 
+    // --- CB-216: a picture is decoded once, and again only when it changes ---
+
+    // Set runs on every scan. It used to forget the orb's decoded picture every
+    // time, so a peer's 11-15 MB GIF was decoded again every two seconds. The
+    // same picture, arriving again as a fresh array (an older peer) or by the
+    // same id (a newer one), now keeps the decoded one.
+    [AvaloniaTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TheSamePictureArrivingAgainKeepsTheDecodedOne(bool byId)
+    {
+        var sessionId = "rc:peer-account:" + Guid.NewGuid();
+        _avatarKeysToClean.Add(PeerPersonas.AvatarKey(sessionId));
+        var bytes = Portrait();
+        var id = byId ? MirrorProtocol.AvatarIdOf(bytes) : null;
+
+        PeerPersonas.Set(sessionId, new MirrorProtocol.PeerPersona("Faraday", Avatar: bytes, AvatarId: id));
+        var orb = NewOrb(sessionId);
+        orb.UpdateFrom(Remote());
+        var decoded = OpenClawAvatars.For(PeerPersonas.AvatarKey(sessionId), null);
+        Assert.NotNull(decoded);
+
+        PeerPersonas.Set(sessionId, new MirrorProtocol.PeerPersona("Faraday", Avatar: bytes.ToArray(), AvatarId: id));
+        orb.UpdateFrom(Remote());
+
+        Assert.Same(decoded, OpenClawAvatars.For(PeerPersonas.AvatarKey(sessionId), null));
+    }
+
+    // ...and a changed picture replaces it on the orb, which is the decision's
+    // "a changed persona picture reaches a peer" at the last step: the screen.
+    [AvaloniaFact]
+    public void AChangedPictureReplacesTheOneTheOrbWasWearing()
+    {
+        var sessionId = "rc:peer-account:" + Guid.NewGuid();
+        _avatarKeysToClean.Add(PeerPersonas.AvatarKey(sessionId));
+        var before = Portrait(0x8A, 0x6F, 0xD4);
+        var after = Portrait(0x10, 0xC0, 0x40);
+
+        PeerPersonas.Set(sessionId, new MirrorProtocol.PeerPersona(
+            "Faraday", Avatar: before, AvatarId: MirrorProtocol.AvatarIdOf(before)));
+        var orb = NewOrb(sessionId);
+        orb.UpdateFrom(Remote());
+        var old = orb.AvatarImage.Source;
+
+        PeerPersonas.Set(sessionId, new MirrorProtocol.PeerPersona(
+            "Faraday", Avatar: after, AvatarId: MirrorProtocol.AvatarIdOf(after)));
+        orb.UpdateFrom(Remote());
+
+        Assert.True(orb.AvatarImage.IsVisible);
+        Assert.NotNull(orb.AvatarImage.Source);
+        Assert.NotSame(old, orb.AvatarImage.Source);
+    }
+
     // --- no regression for the common case ---
 
     // A remote session whose far machine has no persona draws exactly as it did

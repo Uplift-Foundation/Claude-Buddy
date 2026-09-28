@@ -448,6 +448,9 @@ public class OrbAvatarTests
             var sessionId = Publish(agent, AnimatedGif());
             var orb = new OrbWindow(sessionId);
 
+            // Shown, as every real orb is: since CB-218 a hidden orb does not
+            // animate, which the cases below pin.
+            orb.Show();
             orb.UpdateFrom(Gateway());
             Flush();
 
@@ -474,6 +477,199 @@ public class OrbAvatarTests
         finally
         {
             PublishNothing();
+        }
+    }
+
+    // --- the breath and the avatar share frames ------------------------------
+    //
+    // Each present of an orb costs a Metal render session, so an orb whose GIF
+    // is already presenting at its own rate does not present again in between
+    // for the breath: the pulse tick leaves its scale alone and the avatar's
+    // frame steps it. OrbBreathCadence has the measurement.
+
+    private static Avalonia.Media.ScaleTransform OrbScale(OrbWindow orb) =>
+        (Avalonia.Media.ScaleTransform)orb.AvatarImage.RenderTransform!;
+
+    [AvaloniaFact]
+    public async System.Threading.Tasks.Task AnAnimatedAvatarCarriesTheBreathOnItsOwnFrames()
+    {
+        var agent = Agent();
+        try
+        {
+            var orb = new OrbWindow(Publish(agent, AnimatedGif()));
+            orb.Show();
+            orb.UpdateFrom(Gateway());
+            Flush();
+            orb.ApplyState("generating");
+            Assert.True(orb.AvatarAnimating);
+
+            // A value the breath can never produce, so any write shows.
+            var scale = OrbScale(orb);
+            scale.ScaleX = scale.ScaleY = 0.5;
+
+            orb.TickPulse();
+            Assert.Equal(0.5, scale.ScaleX);
+
+            var frame = orb.AvatarImage.Source;
+            await WaitUntil(() => !ReferenceEquals(orb.AvatarImage.Source, frame));
+
+            Assert.InRange(scale.ScaleX, 1.0, 1.14);
+            Assert.Equal(scale.ScaleX, scale.ScaleY);
+            orb.Close();
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
+    [AvaloniaFact]
+    public void AWorkingOrbWithoutAnAnimatedAvatarBreathesOnEveryPulseTick()
+    {
+        PublishNothing();
+        var orb = new OrbWindow(Publish(Agent(), picture: null));
+        orb.Show();
+        orb.UpdateFrom(Gateway());
+        Flush();
+        orb.ApplyState("generating");
+        Assert.False(orb.AvatarAnimating);
+
+        // Far ahead of the real clock, which the shared ticker may already
+        // have stamped a step with.
+        var t = Environment.TickCount64 + 10_000_000;
+        var scale = OrbScale(orb);
+        orb.TickPulse(t);
+        scale.ScaleX = 0.5;
+
+        orb.TickPulse(t + 100);
+        Assert.NotEqual(0.5, scale.ScaleX);
+        orb.Close();
+        PublishNothing();
+    }
+
+    [AvaloniaFact]
+    public void AnIdleOrbBreathesOnEveryOtherPulseTick()
+    {
+        PublishNothing();
+        var orb = new OrbWindow(Publish(Agent(), picture: null));
+        orb.Show();
+        orb.UpdateFrom(Gateway());
+        Flush();
+        orb.ApplyState("idle");
+
+        var t = Environment.TickCount64 + 10_000_000;
+        var scale = OrbScale(orb);
+        orb.TickPulse(t);
+        scale.ScaleX = 0.5;
+
+        orb.TickPulse(t + 100);
+        Assert.Equal(0.5, scale.ScaleX);
+
+        orb.TickPulse(t + 200);
+        Assert.NotEqual(0.5, scale.ScaleX);
+        orb.Close();
+        PublishNothing();
+    }
+
+    // --- CB-218: an orb nobody can see does not animate ----------------------
+
+    // "Show orbs" off hides every orb window, and each animated avatar used to
+    // keep swapping frames regardless. Hidden, the timer stops and the picture
+    // holds the frame it was on; shown again, it resumes from that frame.
+    [AvaloniaFact]
+    public async System.Threading.Tasks.Task AHiddenOrbStopsAnimatingAndResumesWhereItStopped()
+    {
+        var agent = Agent();
+        try
+        {
+            var orb = new OrbWindow(Publish(agent, AnimatedGif()));
+            orb.Show();
+            orb.UpdateFrom(Gateway());
+            Flush();
+            Assert.True(orb.AvatarAnimating);
+
+            // Let it move off the first frame, so "resumes where it stopped"
+            // cannot be satisfied by restarting from the beginning.
+            var first = orb.AvatarImage.Source;
+            await WaitUntil(() => !ReferenceEquals(orb.AvatarImage.Source, first));
+
+            orb.Hide();
+            Flush();
+            Assert.False(orb.AvatarAnimating);
+            var held = orb.AvatarImage.Source;
+
+            await System.Threading.Tasks.Task.Delay(300);
+            Flush();
+            Assert.Same(held, orb.AvatarImage.Source);
+
+            orb.Show();
+            Flush();
+            Assert.True(orb.AvatarAnimating);
+            Assert.Same(held, orb.AvatarImage.Source);
+
+            await WaitUntil(() => !ReferenceEquals(orb.AvatarImage.Source, held));
+            orb.Close();
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
+    // An orb built while "Show orbs" is off is never shown, and never starts
+    // a timer, until it is.
+    [AvaloniaFact]
+    public void AnOrbThatWasNeverShownDoesNotAnimate()
+    {
+        var agent = Agent();
+        try
+        {
+            var orb = new OrbWindow(Publish(agent, AnimatedGif()));
+            orb.UpdateFrom(Gateway());
+            Flush();
+
+            Assert.NotNull(orb.AvatarImage.Source);
+            Assert.False(orb.AvatarAnimating);
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
+    // Visibility changing on an orb with a still picture, or none, starts
+    // nothing: there is no second frame to go to.
+    [AvaloniaFact]
+    public void ShowingAnOrbWithAStillPictureStartsNoTimer()
+    {
+        var agent = Agent();
+        try
+        {
+            var orb = new OrbWindow(Publish(agent, Png()));
+            orb.Show();
+            orb.UpdateFrom(Gateway());
+            Flush();
+
+            Assert.False(orb.AvatarAnimating);
+            orb.Hide();
+            orb.Show();
+            Assert.False(orb.AvatarAnimating);
+            orb.Close();
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
+    private static async System.Threading.Tasks.Task WaitUntil(Func<bool> condition)
+    {
+        var deadline = Environment.TickCount64 + 10_000;
+        while (!condition())
+        {
+            Assert.True(Environment.TickCount64 < deadline, "the avatar never advanced");
+            Flush();
+            await System.Threading.Tasks.Task.Delay(5);
         }
     }
 

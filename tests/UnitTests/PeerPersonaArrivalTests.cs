@@ -129,4 +129,48 @@ public class PeerPersonaArrivalTests
             PeerPersonas.Forget(sessionId);
         }
     }
+
+    // --- CB-216: whether a persona changed its picture ---
+
+    [Fact]
+    public void TwoPersonasWithNoPictureWearTheSameOne() =>
+        Assert.True(PeerPersonas.SamePicture(Persona(), null));
+
+    [Fact]
+    public void GainingOrLosingAPictureIsAChange()
+    {
+        Assert.False(PeerPersonas.SamePicture(Persona(), Persona(new byte[] { 1 })));
+        Assert.False(PeerPersonas.SamePicture(Persona(new byte[] { 1 }), null));
+    }
+
+    [Fact]
+    public void TheSameArrayIsTheSamePicture()
+    {
+        var bytes = new byte[] { 1, 2 };
+        Assert.True(PeerPersonas.SamePicture(Persona(bytes), Persona(bytes)));
+    }
+
+    [Fact]
+    public void PicturesWithIdsAreComparedByIdAlone()
+    {
+        // Equal ids and different arrays: the same picture, without reading
+        // 15 MB to find out. Different ids: different pictures, however alike.
+        Assert.True(PeerPersonas.SamePicture(
+            Persona(new byte[] { 1 }) with { AvatarId = "x:1" },
+            Persona(new byte[] { 1 }) with { AvatarId = "x:1" }));
+        Assert.False(PeerPersonas.SamePicture(
+            Persona(new byte[] { 1 }) with { AvatarId = "x:1" },
+            Persona(new byte[] { 1 }) with { AvatarId = "y:1" }));
+    }
+
+    [Fact]
+    public void InlinePicturesFromAnOlderPeerAreComparedByTheirBytes()
+    {
+        Assert.True(PeerPersonas.SamePicture(Persona(new byte[] { 1, 2 }), Persona(new byte[] { 1, 2 })));
+        Assert.False(PeerPersonas.SamePicture(Persona(new byte[] { 1, 2 }), Persona(new byte[] { 1, 3 })));
+
+        // One with an id and one without is the inline case too.
+        Assert.True(PeerPersonas.SamePicture(
+            Persona(new byte[] { 1, 2 }) with { AvatarId = "x:2" }, Persona(new byte[] { 1, 2 })));
+    }
 }

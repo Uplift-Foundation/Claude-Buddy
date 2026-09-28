@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using Avalonia;
+using Avalonia.Threading;
 
 namespace ClaudeBuddy
 {
@@ -20,27 +21,14 @@ namespace ClaudeBuddy
         // keep the app off the menu bar for a whole session.
         //
         // This is no longer the cap on a screen the window server has *told*
-        // us is locked — that one is LockedWait below, and starting when this
+        // us is locked — that one has no cap at all (see below), and starting when this
         // shorter one expired is what the 2026-09-22 -6661 crash was.
         private static readonly TimeSpan LockWait = TimeSpan.FromHours(2);
 
-        // How long to wait when the window server reports the screen locked.
-        //
-        // Six times LockWait, because the two are answers to different
-        // questions. LockWait is short because an unknowable state might be
-        // wrong and a wrong answer must not cost a session. This one is long
-        // because the reading is the window server's own and starting against
-        // it is a guaranteed -6661 — so the cap should not fire in any real
-        // lock, and twelve hours of continuous lock is not a machine anybody
-        // is waiting to see a menu bar on.
-        //
-        // It is capped at all, rather than waiting forever, because a key
-        // stuck true after a real unlock would otherwise leave Buddy
-        // invisibly absent with no recovery. Capped, that case starts; and if
-        // the screen really is locked, the crash is restarted by
-        // KeepAlive{SuccessfulExit:false} and waits again. ScreenLockWait's
-        // CapFor has the full argument.
-        private static readonly TimeSpan LockedWait = TimeSpan.FromHours(12);
+        // There is no cap on a screen the window server reports locked: startup
+        // waits, serving peers, until it unlocks (CB-215). See
+        // ScreenLockWait.ShouldStartNow for why the twelve-hour cap it used to
+        // have was removed.
 
         private static readonly TimeSpan LockPoll = TimeSpan.FromSeconds(2);
 
@@ -167,7 +155,7 @@ namespace ClaudeBuddy
                 // now and the decision lives in ScreenLockWait, one arm per
                 // state, so there is nothing here left to discard.
                 waitForUnlock: () =>
-                    MacOSScreenLock.WaitForUnlock(LockWait, LockedWait, LockPoll),
+                    MacOSScreenLock.WaitForUnlock(LockWait, LockPoll),
 
                 startUi: () => BuildAvaloniaApp().StartWithClassicDesktopLifetime(args));
         }
@@ -177,6 +165,10 @@ namespace ClaudeBuddy
                 .UsePlatformDetect()
                 // The orbs are the whole UI; no Dock icon needed on macOS.
                 .With(new MacOSPlatformOptions { ShowInDock = false })
+                // The earliest moment the platform's dispatcher exists, and
+                // before the app has started any timers of its own. See
+                // DispatcherClock for why every timer was late without it.
+                .AfterPlatformServicesSetup(_ => DispatcherClock.Align(Dispatcher.UIThread))
                 .LogToTrace();
     }
 }
