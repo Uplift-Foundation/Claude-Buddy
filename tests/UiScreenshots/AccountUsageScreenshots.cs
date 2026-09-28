@@ -52,6 +52,50 @@ public class AccountUsageScreenshots
         return orb;
     }
 
+    // CB-219: a ring in the danger band still visibly breathes, on real pixels.
+    // The breath used to be an infinite style animation, which rendered on every
+    // vsync forever and was most of Buddy's idle CPU. A 20 fps ticker steps it
+    // now. This draws the orb through real Skia at the top of a breath and at
+    // the bottom, and asserts the ring's pixels differ, so the ticker's opacity
+    // demonstrably reaches the screen. Both frames are written out for the PR's
+    // screenshot comment.
+    [AvaloniaFact]
+    public void ADangerRingStillVisiblyBreathes()
+    {
+        var orb = Orb(Usage(20, 95));
+        orb.Show();
+        ScreenshotHelper.Flush();
+
+        orb.TickBreath(1.0);
+        ScreenshotHelper.Flush();
+        var full = Pixels(orb);
+        ScreenshotHelper.CaptureAlreadyShown(orb, "account-orb-breath-full.png");
+
+        orb.TickBreath(UsageRingBreath.Floor);
+        ScreenshotHelper.Flush();
+        var faded = Pixels(orb);
+        ScreenshotHelper.CaptureAlreadyShown(orb, "account-orb-breath-faded.png");
+
+        var changed = full.Zip(faded).Count(pair => pair.First != pair.Second);
+        Assert.True(changed > 20, $"only {changed} pixels changed between the top and bottom of a breath");
+        orb.Close();
+    }
+
+    private static SkiaSharp.SKColor[] Pixels(AccountOrbWindow orb)
+    {
+        var size = new Avalonia.PixelSize(
+            Math.Max(1, (int)Math.Ceiling(orb.Bounds.Width)),
+            Math.Max(1, (int)Math.Ceiling(orb.Bounds.Height)));
+        using var bitmap = new Avalonia.Media.Imaging.RenderTargetBitmap(size);
+        ScreenshotHelper.Render(orb, bitmap);
+
+        using var stream = new MemoryStream();
+        bitmap.Save(stream);
+        stream.Position = 0;
+        using var decoded = SkiaSharp.SKBitmap.Decode(stream);
+        return decoded.Pixels;
+    }
+
     [AvaloniaFact]
     public void AnAccountWithRoomToSpare()
     {

@@ -342,14 +342,10 @@ public class AccountOrbWindowTests
     // Avalonia's own styling really hands the arc's opacity to an animation
     // when it does.
     //
-    // What no test here can see is the pulse *advancing*. Avalonia's headless
-    // clock never moves, so a breathing arc sits on its first frame however long
-    // you pump the render timer — measured over 1.2 seconds of real time — and
-    // the clock cannot be replaced either: both IClock and ClockBase are
-    // internal to Avalonia 12.1.1, so a test cannot supply one it can step. That
-    // the ring visibly breathes, and stops, was measured instead by running the
-    // real window on a real compositor; see AccountOrbWindow.axaml, which also
-    // records the part that measurement corrected. Nothing below covers it.
+    // Since CB-219 the breath advancing is covered here too. It used to be an
+    // Avalonia style animation, whose headless clock never moves, so no test
+    // could see it; it is now a DispatcherTimer stepping UsageRingBreath's
+    // curve, which runs on real time. See ABreathingRingsOpacityMovesOverRealTime.
 
     [AvaloniaFact]
     public void ARingEnteringTheDangerBandBreathes()
@@ -495,88 +491,137 @@ public class AccountOrbWindowTests
         Assert.Equal(1, orb.ExtraArc.Opacity);
     }
 
-    // The seam between the two halves of the fix, and the only place it can be
-    // checked. A selector is compiled against nothing: misspell the class in
-    // either file and the code still runs, every test above still passes, and
-    // the ring silently never moves again — which is exactly the failure being
-    // fixed here, arriving through a different door.
+    // CB-219: the breath is no longer a looping style animation. An infinite
+    // animation keeps the compositor rendering on every vsync, and on an
+    // account in the danger band that measured as most of Buddy's idle CPU
+    // (34.8% breathing against 9.5% held still). This guards against one
+    // coming back: the window declares no animation at all.
     [AvaloniaFact]
-    public void TheBreathingStyleSelectsWhatTheCodeSetsAndLoops()
+    public void TheWindowDeclaresNoLoopingAnimation()
     {
         var orb = new AccountOrbWindow("k");
 
-        var style = Assert.IsType<Style>(Assert.Single(orb.Styles));
-
-        // The two spellings that have to agree, compared as text because that is
-        // all a selector is until something matches it.
-        Assert.Equal("Path.breathing", style.Selector?.ToString());
-
-        var breath = Assert.IsType<Animation>(Assert.Single(style.Animations));
-
-        // Infinite is the whole reason this had to become a style rather than a
-        // RunAsync call: Avalonia refuses to run a looping animation at all.
-        // Alternate is what makes it a breath rather than a sawtooth snapping
-        // back to full at the end of every cycle.
-        Assert.Equal(IterationCount.Infinite, breath.IterationCount);
-        Assert.Equal(PlaybackDirection.Alternate, breath.PlaybackDirection);
-        Assert.Equal(TimeSpan.FromMilliseconds(2600), breath.Duration);
-        Assert.IsType<SineEaseInOut>(breath.Easing);
-
-        // 1.0 down to 0.55, not to 0: a ring that vanishes is a ring whose sweep
-        // cannot be read, and the sweep is the number.
-        var opacities = breath.Children
-            .SelectMany(frame => frame.Setters.Cast<Setter>())
-            .Select(setter => setter.Value)
-            .ToArray();
-        Assert.Equal(new object?[] { 1.0, 0.55 }, opacities);
+        Assert.DoesNotContain(orb.Styles.OfType<Style>(), style => style.Animations.Count > 0);
     }
 
-    // ...and that the style declared on the *window* actually reaches a Path
-    // several levels down inside its Canvas, which is the one assumption the
-    // declarative approach rests on and the one nothing above would catch. A
-    // breathing arc's Opacity ends up owned by an animation; a calm one's is an
-    // ordinary local value this class wrote.
-    //
-    // Read this for exactly what it says. It proves the style was found, matched
-    // and applied — it does **not** prove the loop advances, because Avalonia's
-    // headless clock never moves: the opacity of a breathing arc sits on its
-    // first frame for as long as you pump the render timer, measured here over
-    // 1.2 seconds of real time. Worse, the broken RunAsync version reported
-    // Animation priority too, because RunAsync applies the first keyframe before
-    // it gets as far as throwing. So this is a guard against the style silently
-    // not reaching the shape, and nothing more; that the ring visibly pulses was
-    // confirmed by running the built app, and cannot be confirmed from here.
+    // What replaced it: the shared ticker writes the curve's opacity onto a
+    // breathing ring, and leaves a calm ring's opacity entirely unwritten. A
+    // ring that has never breathed should carry no value of ours whatsoever.
     [AvaloniaFact]
-    public void TheWindowsStyleReachesTheArcsInsideItsCanvas()
+    public void TheTickerStepsABreathingRingAndLeavesACalmOneAlone()
     {
         var orb = new AccountOrbWindow("k");
-
+        orb.Show();
         orb.UpdateFrom(Usage(session: 20, weekly: 92), Now);
-        Pump();
 
-        Assert.Equal(
-            BindingPriority.Animation,
-            orb.WeeklyArc.GetDiagnostic(Visual.OpacityProperty).Priority);
+        orb.TickBreath(0.7);
 
-        // The calm ring is not merely un-animated, it is untouched: nothing has
-        // written its opacity at all, because BreathChangeFor answered Leave and
-        // the window did nothing. A ring that has never breathed should carry no
-        // value of ours whatsoever.
+        Assert.Equal(0.7, orb.WeeklyArc.Opacity);
         Assert.Equal(
             BindingPriority.Unset,
             orb.SessionArc.GetDiagnostic(Visual.OpacityProperty).Priority);
         Assert.Equal(1, orb.SessionArc.Opacity);
 
+        // Leaving the band gives full opacity back rather than leaving the ring
+        // at whatever fraction of a breath it had reached, and the ticker no
+        // longer touches it.
         orb.UpdateFrom(Usage(session: 20, weekly: 10), Now);
-        Pump();
+        orb.TickBreath(0.6);
 
-        // And on the way back down the animation lets go rather than holding the
-        // property at whatever fraction of a breath it had reached — which is
-        // what the local 1 written by the Stop arm is for.
-        Assert.Equal(
-            BindingPriority.LocalValue,
-            orb.WeeklyArc.GetDiagnostic(Visual.OpacityProperty).Priority);
         Assert.Equal(1, orb.WeeklyArc.Opacity);
+        orb.Close();
+    }
+
+    // The part the old style animation could not show under headless Avalonia,
+    // whose animation clock never moves: the breath really advances with real
+    // time, because a DispatcherTimer drives it now.
+    [AvaloniaFact]
+    public async Task ABreathingRingsOpacityMovesOverRealTime()
+    {
+        var orb = new AccountOrbWindow("k");
+        orb.Show();
+        orb.UpdateFrom(Usage(weekly: 95), Now);
+        Assert.True(AccountOrbWindow.BreathTickerRunning);
+
+        var seen = new HashSet<double>();
+        var deadline = Environment.TickCount64 + 5_000;
+        while (seen.Count < 3 && Environment.TickCount64 < deadline)
+        {
+            Pump();
+            seen.Add(Math.Round(orb.WeeklyArc.Opacity, 3));
+            await Task.Delay(60);
+        }
+
+        Assert.True(seen.Count >= 3, "the ring's opacity never moved");
+        Assert.All(seen, opacity => Assert.InRange(opacity, UsageRingBreath.Floor, 1.0));
+        orb.Close();
+    }
+
+    // A hidden orb's rings are not stepped: nobody can see them. They pick the
+    // breath up again, in step with the rest, when the orb shows.
+    [AvaloniaFact]
+    public void AHiddenOrbsRingsAreNotStepped()
+    {
+        var orb = new AccountOrbWindow("k");
+        orb.UpdateFrom(Usage(weekly: 92), Now);
+
+        orb.TickBreath(0.6);
+        Assert.Equal(1, orb.WeeklyArc.Opacity);
+
+        orb.Show();
+        orb.TickBreath(0.6);
+        Assert.Equal(0.6, orb.WeeklyArc.Opacity);
+        orb.Close();
+    }
+
+    // The ticker runs only while some ring anywhere is breathing, and a closed
+    // or calmed orb leaves it.
+    [AvaloniaFact]
+    public void TheTickerRunsOnlyWhileSomeRingBreathes()
+    {
+        AccountOrbWindow.ClearBreathingForTests();
+        var first = new AccountOrbWindow("a");
+        var second = new AccountOrbWindow("b");
+
+        first.UpdateFrom(Usage(weekly: 92), Now);
+        second.UpdateFrom(Usage(session: 90, weekly: 95), Now);
+        Assert.True(first.OnBreathTicker && second.OnBreathTicker);
+        Assert.True(AccountOrbWindow.BreathTickerRunning);
+
+        // One of two rings calming keeps the orb on the ticker...
+        second.UpdateFrom(Usage(session: 10, weekly: 95), Now);
+        Assert.True(second.OnBreathTicker);
+
+        // ...its last one calming takes it off, and the other orb keeps it going.
+        second.UpdateFrom(Usage(session: 10, weekly: 10), Now);
+        Assert.False(second.OnBreathTicker);
+        Assert.True(AccountOrbWindow.BreathTickerRunning);
+
+        // Closing the last breathing orb stops it.
+        first.Close();
+        Assert.False(first.OnBreathTicker);
+        Assert.False(AccountOrbWindow.BreathTickerRunning);
+
+        // And a ring starting again starts it again.
+        second.UpdateFrom(Usage(weekly: 90), Now);
+        Assert.True(AccountOrbWindow.BreathTickerRunning);
+        second.Close();
+    }
+
+    // The ticker's own tick applies one curve value to every orb on it.
+    [AvaloniaFact]
+    public void TickingAllBreathsStepsEveryVisibleOrbOnTheTicker()
+    {
+        AccountOrbWindow.ClearBreathingForTests();
+        var orb = new AccountOrbWindow("k");
+        orb.Show();
+        orb.UpdateFrom(Usage(weekly: 92), Now);
+
+        AccountOrbWindow.TickAllBreaths();
+
+        Assert.InRange(orb.WeeklyArc.Opacity, UsageRingBreath.Floor, 1.0);
+        Assert.Equal(BindingPriority.LocalValue, orb.WeeklyArc.GetDiagnostic(Visual.OpacityProperty).Priority);
+        orb.Close();
     }
 
     // Styles are applied on the dispatcher, so nothing above is true until it
