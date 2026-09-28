@@ -97,8 +97,13 @@ internal static class Program
     private static string Home =>
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
-    private static ICloudCredentialSource Source() =>
-        ClaudeCliCredentials.SourceFor(OperatingSystem.IsMacOS(), Home);
+    // One instance, because it remembers which store answered and the probe
+    // reports that afterwards. CLAUDE_CONFIG_DIR is honoured when the probe is run
+    // from a shell that has it; the app itself cannot see the CLI's environment.
+    private static readonly MultiCredentialSource Multi = ClaudeCliCredentials.SourceFor(
+        OperatingSystem.IsMacOS(), Home, Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR"));
+
+    private static ICloudCredentialSource Source() => Multi;
 
     // How long this tool waits for the credential store before giving up.
     //
@@ -195,6 +200,10 @@ internal static class Program
         var read = await ReadCredentialAsync();
 
         Console.WriteLine($"outcome  {read.Outcome}");
+        // Store names and outcomes only — never a value.
+        Console.WriteLine($"answered {Multi.AnsweredBy ?? "(none)"}");
+        foreach (var (name, outcome) in Multi.Attempts)
+            Console.WriteLine($"tried    {name} -> {outcome}");
         Console.WriteLine($"meaning  {ClaudeCliCredentials.Describe(read.Outcome)}");
         if (read.Detail is { } detail) Console.WriteLine($"detail   {detail}");
         Console.WriteLine($"expires  {read.ExpiresAt?.ToString("u") ?? "(not stated)"}");
