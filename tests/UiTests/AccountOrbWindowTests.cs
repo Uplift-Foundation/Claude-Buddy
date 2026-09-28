@@ -27,8 +27,15 @@ namespace ClaudeBuddy.Tests;
 // TwoLetterGlyphs while deciding its letters, and a sibling test flipping that
 // setting mid-run would otherwise change what this one draws.
 [Collection("Settings")]
-public class AccountOrbWindowTests
+public class AccountOrbWindowTests : IDisposable
 {
+    // CB-219: a ring in the danger band puts its orb on a process-wide 20 fps
+    // ticker, and most cases here leave their orb open. Left running, that
+    // ticker's queued ticks were executed by an unrelated [Fact] that pumps the
+    // dispatcher from a pool thread, which threw "a different thread owns it".
+    // Each case leaves nothing breathing behind it.
+    public void Dispose() => AccountOrbWindow.ClearBreathingForTests();
+
     private static readonly DateTimeOffset Now =
         new(2026, 8, 30, 12, 0, 0, TimeSpan.Zero);
 

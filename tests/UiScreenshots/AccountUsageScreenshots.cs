@@ -19,8 +19,11 @@ namespace ClaudeBuddy.Tests;
 // starts a `claude` subprocess per account — the same reason
 // OrbWindowScreenshots has none.
 [Collection("Settings")]
-public class AccountUsageScreenshots
+public class AccountUsageScreenshots : IDisposable
 {
+    // Leaves no ring breathing on the shared ticker; see AccountOrbWindowTests.
+    public void Dispose() => AccountOrbWindow.ClearBreathingForTests();
+
     private static readonly DateTimeOffset Now =
         new(2026, 8, 30, 12, 0, 0, TimeSpan.Zero);
 
