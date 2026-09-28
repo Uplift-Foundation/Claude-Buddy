@@ -8,11 +8,16 @@ namespace ClaudeBuddy.Tests;
 public class DispatcherClockTests
 {
     [Theory]
-    [InlineData(231, 104, 127)]     // measured on a dev instance: the dispatcher's clock started first
-    [InlineData(104, 231, -127)]
-    [InlineData(500, 500, 0)]
-    public void TheOffsetIsTheDispatchersClockLessThePlatforms(long dispatcherNow, long platformNow, long offset) =>
-        Assert.Equal(offset, DispatcherClock.Offset(dispatcherNow, platformNow));
+    [InlineData(104, 231, 104, 127)]    // measured on a dev instance: the dispatcher's clock started first
+    [InlineData(104, 231, 110, 121)]    // measured to the nearer edge of the bracket
+    [InlineData(231, 104, 231, -127)]
+    [InlineData(500, 500, 500, 0)]
+    [InlineData(500, 502, 504, 0)]      // preempted between reads: same clock, no offset
+    [InlineData(500, 500, 504, 0)]
+    [InlineData(500, 504, 504, 0)]
+    public void TheOffsetIsHowFarTheDispatcherReadsOutsideTheBracket(
+        long platformBefore, long dispatcherNow, long platformAfter, long offset) =>
+        Assert.Equal(offset, DispatcherClock.Offset(platformBefore, dispatcherNow, platformAfter));
 
     [Theory]
     [InlineData(0, false)]

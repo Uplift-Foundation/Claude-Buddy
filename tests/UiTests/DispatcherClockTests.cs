@@ -61,24 +61,37 @@ public class DispatcherClockTests
         // a second before the platform's did.
         SetDispatcherClock(() => platform() + 500);
 
+        // Every comparison below brackets its reading between two of the
+        // platform's, rather than subtracting one reading from another, so a
+        // runner that is slow between two lines cannot move the answer. A
+        // Windows CI runner did, by 4 ms, when this test subtracted.
         var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(10) };
+        var startedFrom = platform();
         timer.Start();
+        var startedBy = platform();
 
         try
         {
             // Stamped on the old clock, so due half a second later than it
             // asked for on the platform's.
-            Assert.InRange(DueTime(timer) - platform(), 10_499, 10_501);
+            Assert.InRange(DueTime(timer), startedFrom + 10_500, startedBy + 10_500);
 
+            var alignedFrom = platform();
             var result = DispatcherClock.Align(Dispatcher.UIThread);
+            var alignedBy = platform();
 
             Assert.Equal(DispatcherClock.Outcome.Aligned, result.Outcome);
-            Assert.InRange(result.OffsetMs, 499, 501);
+            Assert.InRange(result.OffsetMs, 500 - (alignedBy - alignedFrom), 500);
             Assert.True(result.TimersRestarted >= 1);
 
-            Assert.InRange(DispatcherNow() - platform(), -1, 1);
-            Assert.InRange(DueTime(timer) - platform(), 9_998, 10_001);
+            // Restamped on the platform's clock, at some moment during Align.
+            Assert.InRange(DueTime(timer), alignedFrom + 10_000, alignedBy + 10_000);
             Assert.True(timer.IsEnabled);
+
+            var readFrom = platform();
+            var now = DispatcherNow();
+            var readBy = platform();
+            Assert.InRange(now, readFrom, readBy);
         }
         finally
         {
@@ -97,7 +110,11 @@ public class DispatcherClockTests
             var result = DispatcherClock.Align(Dispatcher.UIThread, supported: false);
 
             Assert.Equal(DispatcherClock.Outcome.Unavailable, result.Outcome);
-            Assert.InRange(DispatcherNow() - platform(), 499, 501);
+
+            var readFrom = platform();
+            var now = DispatcherNow();
+            var readBy = platform();
+            Assert.InRange(now, readFrom + 500, readBy + 500);
         }
         finally
         {

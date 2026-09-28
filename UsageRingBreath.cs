@@ -15,14 +15,16 @@ namespace ClaudeBuddy
     // So the same breath is now stepped by AccountOrbWindow's shared ticker at
     // FrameInterval, and this is the curve it samples: the one the XAML
     // declared, 1.0 to 0.55 and back, a sine ease each way, 2.6 s each way. At
-    // 20 frames a second a 2.6 s fade is still smooth to the eye, which is the
-    // rate the session orbs' own pulse has always run at.
+    // 10 frames a second a 2.6 s fade is still smooth to the eye — about 2% of
+    // opacity a step — and it is the rate the session orbs' pulse runs at. It
+    // was 20 until the timer clock was fixed (see DispatcherClock), when 20
+    // became a real 20 and cost more than anybody had ever seen it deliver.
     internal static class UsageRingBreath
     {
         internal const double HalfPeriodMs = 2600;
         internal const double Floor = 0.55;
 
-        internal static readonly TimeSpan FrameInterval = TimeSpan.FromMilliseconds(50);
+        internal static readonly TimeSpan FrameInterval = TimeSpan.FromMilliseconds(100);
 
         // Full opacity at 0 ms, the floor at HalfPeriodMs, full again at twice
         // that, and so on. SineEaseInOut, as the XAML used.

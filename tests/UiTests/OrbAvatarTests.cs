@@ -480,6 +480,97 @@ public class OrbAvatarTests
         }
     }
 
+    // --- the breath and the avatar share frames ------------------------------
+    //
+    // Each present of an orb costs a Metal render session, so an orb whose GIF
+    // is already presenting at its own rate does not present again in between
+    // for the breath: the pulse tick leaves its scale alone and the avatar's
+    // frame steps it. OrbBreathCadence has the measurement.
+
+    private static Avalonia.Media.ScaleTransform OrbScale(OrbWindow orb) =>
+        (Avalonia.Media.ScaleTransform)orb.AvatarImage.RenderTransform!;
+
+    [AvaloniaFact]
+    public async System.Threading.Tasks.Task AnAnimatedAvatarCarriesTheBreathOnItsOwnFrames()
+    {
+        var agent = Agent();
+        try
+        {
+            var orb = new OrbWindow(Publish(agent, AnimatedGif()));
+            orb.Show();
+            orb.UpdateFrom(Gateway());
+            Flush();
+            orb.ApplyState("generating");
+            Assert.True(orb.AvatarAnimating);
+
+            // A value the breath can never produce, so any write shows.
+            var scale = OrbScale(orb);
+            scale.ScaleX = scale.ScaleY = 0.5;
+
+            orb.TickPulse();
+            Assert.Equal(0.5, scale.ScaleX);
+
+            var frame = orb.AvatarImage.Source;
+            await WaitUntil(() => !ReferenceEquals(orb.AvatarImage.Source, frame));
+
+            Assert.InRange(scale.ScaleX, 1.0, 1.14);
+            Assert.Equal(scale.ScaleX, scale.ScaleY);
+            orb.Close();
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
+    [AvaloniaFact]
+    public void AWorkingOrbWithoutAnAnimatedAvatarBreathesOnEveryPulseTick()
+    {
+        PublishNothing();
+        var orb = new OrbWindow(Publish(Agent(), picture: null));
+        orb.Show();
+        orb.UpdateFrom(Gateway());
+        Flush();
+        orb.ApplyState("generating");
+        Assert.False(orb.AvatarAnimating);
+
+        // Far ahead of the real clock, which the shared ticker may already
+        // have stamped a step with.
+        var t = Environment.TickCount64 + 10_000_000;
+        var scale = OrbScale(orb);
+        orb.TickPulse(t);
+        scale.ScaleX = 0.5;
+
+        orb.TickPulse(t + 100);
+        Assert.NotEqual(0.5, scale.ScaleX);
+        orb.Close();
+        PublishNothing();
+    }
+
+    [AvaloniaFact]
+    public void AnIdleOrbBreathesOnEveryOtherPulseTick()
+    {
+        PublishNothing();
+        var orb = new OrbWindow(Publish(Agent(), picture: null));
+        orb.Show();
+        orb.UpdateFrom(Gateway());
+        Flush();
+        orb.ApplyState("idle");
+
+        var t = Environment.TickCount64 + 10_000_000;
+        var scale = OrbScale(orb);
+        orb.TickPulse(t);
+        scale.ScaleX = 0.5;
+
+        orb.TickPulse(t + 100);
+        Assert.Equal(0.5, scale.ScaleX);
+
+        orb.TickPulse(t + 200);
+        Assert.NotEqual(0.5, scale.ScaleX);
+        orb.Close();
+        PublishNothing();
+    }
+
     // --- CB-218: an orb nobody can see does not animate ----------------------
 
     // "Show orbs" off hides every orb window, and each animated avatar used to

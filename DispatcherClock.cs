@@ -61,9 +61,21 @@ namespace ClaudeBuddy
 
         internal readonly record struct Result(Outcome Outcome, long OffsetMs, int TimersRestarted);
 
-        // The pure half: given one reading of each clock, how far apart are
-        // they, and is that far enough to act on?
-        internal static long Offset(long dispatcherNow, long platformNow) => dispatcherNow - platformNow;
+        // The pure half: how far apart are the clocks, and is that far enough
+        // to act on?
+        //
+        // The dispatcher is read between two readings of the platform rather
+        // than beside one, because the thread can be preempted between any two
+        // reads — and a single pair would then report the preemption as an
+        // offset. Two clocks that are really the same one always land the
+        // dispatcher's reading inside the bracket, however long the gap was;
+        // only a reading outside it is an offset, measured to the nearer edge.
+        // That was measured, not supposed: a Windows CI runner took long enough
+        // between two reads to put a same-clock comparison 4 ms apart.
+        internal static long Offset(long platformBefore, long dispatcherNow, long platformAfter) =>
+            dispatcherNow < platformBefore ? dispatcherNow - platformBefore
+            : dispatcherNow > platformAfter ? dispatcherNow - platformAfter
+            : 0;
 
         internal static bool NeedsAlignment(long offsetMs) => Math.Abs(offsetMs) > ToleranceMs;
 
@@ -111,7 +123,9 @@ namespace ClaudeBuddy
             var impl = (IDispatcherImpl)ImplField!.GetValue(dispatcher)!;
 
             var platformNow = (Func<long>)PlatformNowGetter!.CreateDelegate(typeof(Func<long>), impl);
-            var offset = Offset((long)DispatcherNow!.GetValue(dispatcher)!, platformNow());
+            var before = platformNow();
+            var dispatcherNow = (long)DispatcherNow!.GetValue(dispatcher)!;
+            var offset = Offset(before, dispatcherNow, platformNow());
 
             if (!NeedsAlignment(offset)) return new(Outcome.AlreadyAligned, offset, 0);
 
