@@ -55,7 +55,7 @@ public class CloudAccountBoardTests : IDisposable
 
         internal Api(Func<string, string, CloudApiResult> answer) => _answer = answer;
 
-        public Task<CloudApiResult> GetAsync(CloudRequestContext context, CancellationToken token)
+        public Task<CloudApiResult> SendAsync(CloudRequestContext context, CancellationToken token)
         {
             lock (Calls) Calls.Add((context.AccessToken, context.Path));
             return Task.FromResult(_answer(context.AccessToken, context.Path));

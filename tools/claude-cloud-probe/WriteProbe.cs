@@ -20,17 +20,21 @@ namespace ClaudeBuddy;
 // same token being *refused* on another `/v1` route
 // (`/v1/organizations/me` → 403 "Authentication method not allowed").
 //
-// ## Why it builds its own requests, against Program.cs's own argument
+// ## Why it now builds its requests through the app
 //
 // Program.cs refuses to reimplement the shipped request builder, and rightly:
 // a probe that asks differently from the app can answer differently and be
-// believed. This file cannot follow that yet, because the shipped builder is
-// GET-only and knows no `/v1/code` path — adding those is Step 1 of the plan
-// and is decided *by* what this file measures. Once Step 1 lands, `send` and
-// `interrupt` should move onto the shipped builder so there is one copy of the
-// header set again. Until then every header this sends is named on the command
-// line, which is the next best thing to a single copy: nothing is added that
-// the output does not say was added.
+// believed. This file first had to break that rule, because the shipped
+// builder was GET-only and knew no `/v1/code` path, and what it measured is
+// what decided the shape the builder was given. Now it has one, so every
+// request here goes through `CloudRequest.Build`, every body through
+// `ClaudeCloudSend`, and every id through `ClaudeCloudRoster.IsWellFormedId` —
+// one copy of the header set, the bodies and the id rule, shared with the app.
+//
+// The ablation flags survive on top of that: `--beta`, `--org` and
+// `--platform` add a header to the shipped build, and `--no-version` removes
+// one. The output lists the headers read back off the built request, so what
+// a run says it sent is what it sent.
 //
 // ## What it never prints, and what it never touches
 //
@@ -46,14 +50,6 @@ namespace ClaudeBuddy;
 // exists so that the command line of every write says what it was aimed at.
 internal static class WriteProbe
 {
-    internal const string CodeHost = "https://api.anthropic.com";
-    internal const string CodeSessions = "/v1/code/sessions";
-
-    // The CLI's own id rule, read off the binary. Checked here so a typo in a
-    // probe run is refused locally instead of becoming a request.
-    private static readonly System.Text.RegularExpressions.Regex SessionId =
-        new("^session_[A-Za-z0-9_-]+$");
-
     private static readonly HashSet<string> SafeScalars = new(StringComparer.Ordinal)
     {
         "worker_status", "status", "connection_status", "session_status", "status_bucket",
@@ -84,7 +80,9 @@ internal static class WriteProbe
     internal static async Task<int> RunAsync(string verb, string[] args,
         Func<Task<CredentialRead>> readCredential, Func<string?> orgUuid)
     {
-        if (args.Length == 0 || !SessionId.IsMatch(args[0]))
+        // The app's id rule, so a typo in a probe run is refused locally
+        // instead of becoming a request.
+        if (args.Length == 0 || !ClaudeCloudRoster.IsWellFormedId(args[0]))
         {
             Console.Error.WriteLine("first argument must be a session id matching ^session_[A-Za-z0-9_-]+$");
             return 2;
@@ -153,7 +151,8 @@ internal static class WriteProbe
             }
         }
 
-        var escaped = Uri.EscapeDataString(id);
+        // Well formed, checked above, so neither of these is null.
+        var events = CloudRequest.CodeEventsPath(id)!;
         HttpMethod method;
         string path;
         string? body = null;
@@ -162,46 +161,45 @@ internal static class WriteProbe
         {
             case "v1-session":
                 method = HttpMethod.Get;
-                path = $"{CodeSessions}/{escaped}";
+                path = $"{CloudRequest.CodeSessionsPath}/{Uri.EscapeDataString(id)}";
                 break;
             case "v1-events":
                 method = HttpMethod.Get;
-                path = $"{CodeSessions}/{escaped}/events?limit=20&sort_order=desc";
+                path = events + "?limit=20&sort_order=desc";
                 break;
             case "send":
                 method = HttpMethod.Post;
-                path = $"{CodeSessions}/{escaped}/events";
+                path = events;
                 body = opts.Contains("--empty")
                     ? "{\"events\":[]}"
-                    : UserEvent(id, Value(opts, "--text") ?? "CB-199 probe: please reply with the single word ok.",
+                    : ClaudeCloudSend.UserMessageBody(id,
+                        Value(opts, "--text") ?? "CB-199 probe: please reply with the single word ok.",
                         Value(opts, "--uuid") ?? Guid.NewGuid().ToString());
                 break;
             case "interrupt":
                 method = HttpMethod.Post;
-                path = $"{CodeSessions}/{escaped}/events";
-                body = InterruptEvent(Value(opts, "--uuid") ?? Guid.NewGuid().ToString());
+                path = events;
+                body = ClaudeCloudSend.InterruptBody(Guid.NewGuid().ToString(),
+                    Value(opts, "--uuid") ?? Guid.NewGuid().ToString());
                 break;
             default:
                 return 2;
         }
 
-        using var request = new HttpRequestMessage(method, CodeHost + path);
-        var sent = new List<string>();
+        // The shipped build, then the ablation on top of it. A negative control
+        // with no token builds with an empty one and has the Authorization
+        // header taken off again, so it differs from a real request in exactly
+        // that header and nothing else.
+        using var request = CloudRequest.Build(token ?? "", path, method, body);
+        if (token is null) request.Headers.Authorization = null;
 
-        if (token is not null)
+        if (opts.Contains("--no-version"))
         {
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-            sent.Add($"Authorization: Bearer <{auth}>");
-        }
-        if (!opts.Contains("--no-version"))
-        {
-            request.Headers.TryAddWithoutValidation(CloudRequest.VersionHeader, CloudRequest.VersionValue);
-            sent.Add($"{CloudRequest.VersionHeader}: {CloudRequest.VersionValue}");
+            request.Headers.Remove(CloudRequest.VersionHeader);
         }
         if (opts.Contains("--beta"))
         {
             request.Headers.TryAddWithoutValidation("anthropic-beta", "ccr-byoc-2025-07-29");
-            sent.Add("anthropic-beta: ccr-byoc-2025-07-29");
         }
         if (opts.Contains("--org"))
         {
@@ -212,21 +210,14 @@ internal static class WriteProbe
                 return 1;
             }
             request.Headers.TryAddWithoutValidation("x-organization-uuid", org);
-            sent.Add("x-organization-uuid: <from ~/.claude.json>");
         }
         if (Value(opts, "--platform") is { } platform)
         {
             request.Headers.TryAddWithoutValidation("anthropic-client-platform", platform);
-            sent.Add($"anthropic-client-platform: {platform}");
-        }
-        if (body is not null)
-        {
-            request.Content = new StringContent(body, Encoding.UTF8, "application/json");
-            sent.Add("Content-Type: application/json");
         }
 
-        Console.WriteLine($"request  {method} {CodeHost}{path}");
-        foreach (var h in sent) Console.WriteLine($"header   {h}");
+        Console.WriteLine($"request  {method} {CloudRequest.Host}{path}");
+        foreach (var h in SentHeaders(request, auth)) Console.WriteLine($"header   {h}");
         if (body is not null) Console.WriteLine($"body     {RedactText(body)}");
 
         using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
@@ -261,7 +252,7 @@ internal static class WriteProbe
     {
         if (token is null) { Console.Error.WriteLine("v2-events needs --auth real"); return 2; }
         using var api = new HttpCloudApi();
-        var result = await api.GetAsync(
+        var result = await api.SendAsync(
             new CloudRequestContext(token, CloudRequest.EventsPath(id, CloudRequest.MaxPageSize, null)),
             CancellationToken.None);
         Console.WriteLine($"request  GET {CloudRequest.Host}{CloudRequest.EventsPath(id, CloudRequest.MaxPageSize, null)}");
@@ -288,7 +279,7 @@ internal static class WriteProbe
     private static async Task<string?> KindOfAsync(string id, string token)
     {
         using var api = new HttpCloudApi();
-        var result = await api.GetAsync(new CloudRequestContext(token, CloudRequest.SessionPath(id)),
+        var result = await api.SendAsync(new CloudRequestContext(token, CloudRequest.SessionPath(id)),
             CancellationToken.None);
         if (result.Body is null) return null;
         try
@@ -332,38 +323,33 @@ internal static class WriteProbe
         }
     }
 
-    // The CLI's v2 send body, field for field: `{events:[{payload:{...}}]}`, the
-    // payload a Claude Code user row with its own uuid so a resend dedupes.
-    internal static string UserEvent(string sessionId, string text, string uuid) =>
-        new JsonObject
+    // Every header the built request will carry, read back off it rather than
+    // listed from the flags, with the token's value never printed — only which
+    // kind of token it was (real, bogus). Values that name a person are
+    // described rather than shown.
+    private static IEnumerable<string> SentHeaders(HttpRequestMessage request, string auth)
+    {
+        foreach (var header in request.Headers)
         {
-            ["events"] = new JsonArray(new JsonObject
+            if (string.Equals(header.Key, "Authorization", StringComparison.OrdinalIgnoreCase))
             {
-                ["payload"] = new JsonObject
-                {
-                    ["uuid"] = uuid,
-                    ["session_id"] = sessionId,
-                    ["type"] = "user",
-                    ["parent_tool_use_id"] = null,
-                    ["message"] = new JsonObject { ["role"] = "user", ["content"] = text },
-                },
-            }),
-        }.ToJsonString();
+                yield return $"Authorization: Bearer <{auth}>";
+            }
+            else if (string.Equals(header.Key, "x-organization-uuid", StringComparison.OrdinalIgnoreCase))
+            {
+                yield return "x-organization-uuid: <from ~/.claude.json>";
+            }
+            else
+            {
+                yield return $"{header.Key}: {string.Join(",", header.Value)}";
+            }
+        }
 
-    internal static string InterruptEvent(string uuid) =>
-        new JsonObject
+        if (request.Content?.Headers.ContentType is { } type)
         {
-            ["events"] = new JsonArray(new JsonObject
-            {
-                ["payload"] = new JsonObject
-                {
-                    ["type"] = "control_request",
-                    ["request_id"] = Guid.NewGuid().ToString(),
-                    ["request"] = new JsonObject { ["subtype"] = "interrupt", ["cancel_queued"] = true },
-                    ["uuid"] = uuid,
-                },
-            }),
-        }.ToJsonString();
+            yield return $"Content-Type: {type}";
+        }
+    }
 
     private static string? Value(string[] opts, string flag)
     {

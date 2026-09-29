@@ -37,11 +37,15 @@ public class ClaudeCloudRosterPayloadTests
 
         internal FixtureApi(IEnumerable<string> pages) => _pages = new Queue<string>(pages);
 
-        internal List<string> Paths { get; } = new();
+        // The whole context, not just the path, so a test can see the method
+        // and body a call went out with as well as where it went.
+        internal List<CloudRequestContext> Requests { get; } = new();
 
-        public Task<CloudApiResult> GetAsync(CloudRequestContext context, CancellationToken token)
+        internal List<string> Paths => Requests.Select(r => r.Path).ToList();
+
+        public Task<CloudApiResult> SendAsync(CloudRequestContext context, CancellationToken token)
         {
-            Paths.Add(context.Path);
+            Requests.Add(context);
 
             // The negative control for the fixture itself: if the walk ever asks
             // for a page that is not there, that is a bug in the walk rather than

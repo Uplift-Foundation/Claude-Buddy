@@ -296,7 +296,7 @@ internal static class Program
         // value nothing sends is a diagnostic that reports its own assumption as
         // the machine's problem.
         using var api = new HttpCloudApi();
-        var result = await api.GetAsync(
+        var result = await api.SendAsync(
             new CloudRequestContext(read.AccessToken,
                 CloudRequest.ListPath(CloudRequest.MaxPageSize, null)),
             CancellationToken.None);
@@ -348,9 +348,9 @@ internal static class Program
 
         internal CountingApi(ICloudApi inner) => _inner = inner;
 
-        public async Task<CloudApiResult> GetAsync(CloudRequestContext context, CancellationToken token)
+        public async Task<CloudApiResult> SendAsync(CloudRequestContext context, CancellationToken token)
         {
-            var result = await _inner.GetAsync(context, token);
+            var result = await _inner.SendAsync(context, token);
             if (result.Outcome.Kind == CloudOutcomeKind.Ok
                 && context.Path.StartsWith(CloudRequest.ListPath(CloudRequest.MaxPageSize, null).Split('?')[0],
                     StringComparison.Ordinal)

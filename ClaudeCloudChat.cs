@@ -258,7 +258,7 @@ namespace ClaudeBuddy
 
             for (var i = 0; i < MaxEventPages; i++)
             {
-                var result = await _api.GetAsync(
+                var result = await _api.SendAsync(
                     new CloudRequestContext(token,
                         CloudRequest.EventsPath(SessionId, CloudRequest.MaxPageSize, after)),
                     ct).ConfigureAwait(false);
