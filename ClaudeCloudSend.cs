@@ -80,6 +80,17 @@ namespace ClaudeBuddy
 
         // What a 2xx from the write endpoint said.
         //
+        // **The app does not call this, and does not need to.** A send is Sent on
+        // any 2xx — ClaudeCloudChatSession.SendAsync says why an unreadable
+        // receipt must not become "not sent" — and nothing the panel shows is in
+        // the receipt, so for the app there is nothing here to decide. Its only
+        // callers are the unit and integration tests, which pin the measured
+        // receipt shape — `duplicate: true` on a repeated uuid, the sequence
+        // number as a string — through it. That is the record of what a
+        // successful write answers, and it is kept for that reason. The probe
+        // does not call it: it prints receipts through its own allow-listed
+        // summary. If the app ever needs the sequence number, this is where it is.
+        //
         // Measured shape: `{"results":[{"duplicate":false,"sequence_num":"20",
         // "event_id":<uuid>,...}]}`, one result per event sent. The app sends one
         // event per request, so the first result is the answer.

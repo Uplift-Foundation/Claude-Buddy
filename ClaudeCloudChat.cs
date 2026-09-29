@@ -613,6 +613,12 @@ namespace ClaudeBuddy
         // own comment on the interface says.
         internal void PanelOpened() => _panelOpen = true;
 
+        // Whether a panel is bound right now. Read by the panel's own tests,
+        // which cannot see it any other way: the read it licenses is single
+        // flight, so a request count cannot tell "started while closed" from
+        // "started afterwards".
+        internal bool PanelOpen => _panelOpen;
+
         internal void PanelClosed()
         {
             _panelOpen = false;

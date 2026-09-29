@@ -600,21 +600,14 @@ public class CloudChatPanelTests : IDisposable
     // The panel tells a real cloud session when it is being looked at, and when
     // it stops being looked at (PanelOpened / PanelClosed, by concrete type).
     //
-    // The state is read off the session's private flag by reflection, and that
-    // is deliberate. What the flag licenses — one transcript read when a turn
-    // finishes — goes through Task.Run and a single-flight guard, so a request
-    // count can show the open half (awaited below) but can never show the
-    // closed half: a read the closed panel wrongly started and a read started
-    // afterwards collapse into the same one request. The flag is the only thing
-    // that can tell those two apart. If it is renamed this fails loudly on the
-    // lookup rather than passing.
-    private static bool PanelOpenFlag(ClaudeCloudChatSession chat)
-    {
-        var field = typeof(ClaudeCloudChatSession).GetField("_panelOpen",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-        Assert.NotNull(field);
-        return (bool)field!.GetValue(chat)!;
-    }
+    // The state is read off the session's PanelOpen, and that is deliberate.
+    // What the flag licenses — one transcript read when a turn finishes — goes
+    // through Task.Run and a single-flight guard, so a request count can show
+    // the open half (awaited below) but can never show the closed half: a read
+    // the closed panel wrongly started and a read started afterwards collapse
+    // into the same one request. The flag is the only thing that can tell those
+    // two apart.
+    private static bool PanelOpenFlag(ClaudeCloudChatSession chat) => chat.PanelOpen;
 
     [AvaloniaFact]
     public async Task BindAndUnbindTellACloudSessionWhetherAPanelIsOpen()
