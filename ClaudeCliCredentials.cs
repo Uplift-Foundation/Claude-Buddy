@@ -72,6 +72,15 @@ namespace ClaudeBuddy
         // asking again and producing a prompt storm.
         Denied,
 
+        // The Keychain could not ask (errSecInteractionNotAllowed): no one is at
+        // the screen, or this is a background context. **Not a refusal** — no
+        // dialog was shown and nobody said anything, so it must not latch as a
+        // decline and it is retried on the normal cadence; the read fails
+        // instantly and retrying costs nothing. Split from Denied for exactly that
+        // reason: lumping it in told the user "denied" for something nobody did,
+        // and would have left every account files-only after they logged back in.
+        CannotPrompt,
+
         // The store answered with something we could not turn into text at all:
         // an I/O error, a permission error on the file, an unmapped OSStatus.
         Unreadable,
@@ -114,13 +123,29 @@ namespace ClaudeBuddy
         CredentialOutcome Outcome,
         string? AccessToken,
         DateTimeOffset? ExpiresAt,
-        string? Detail);
+        string? Detail,
+        // A more actionable status line than the outcome's own wording, when a
+        // store further up the walk knew something the last one could not say
+        // (the file answered "expired" before the Keychain failed to answer).
+        string? Lead = null);
 
     // Where a credential comes from, as an interface, for the same reason
     // IUsageSource and IRemoteChatSession exist: the real one is an OS prompt or
     // a file in someone's home directory, and a surface that cannot be faked
     // cannot be tested. Every test in this repository talks to a fake; nothing in
     // the suites touches the real Keychain.
+    // A source that shares a read gate with others. See ReadWithinAsync.
+    internal interface IGatedCredentialSource : ICloudCredentialSource
+    {
+        SemaphoreSlim Gate { get; }
+
+        // What to read this time; called with the gate held.
+        ICloudCredentialSource Choose();
+
+        // What the read said; called with the gate still held.
+        void Report(CredentialRead read);
+    }
+
     internal interface ICloudCredentialSource
     {
         // A cheap value that changes when the stored credential changes, and
@@ -157,7 +182,7 @@ namespace ClaudeBuddy
         // of a path but of how the CLI was launched, and this function therefore
         // does not try to recognise ~/.claude: null or empty means "launched with
         // no CLAUDE_CONFIG_DIR", anything else is hashed as given. Callers that
-        // know a root can be reached both ways (see CandidateServices) ask twice.
+        // know a root can be reached both ways (see ServicesForRoot) ask twice.
         //
         // configDir is the CLAUDE_CONFIG_DIR value; secureStorageDir is
         // CLAUDE_SECURESTORAGE_CONFIG_DIR, null meaning unset — an *empty* value
@@ -201,34 +226,42 @@ namespace ClaudeBuddy
             return roots;
         }
 
-        // The Keychain service names to try, in order, for those roots.
+        // The folder's name, never an email. A directory can be named after the
+        // account it holds ("~/.claude-me@example.com"), and the label is shown on
+        // a screen someone else may be looking at, so anything from an "@" on is
+        // dropped; a name that was nothing else becomes "account".
+        internal static string SafeLabel(string root)
+        {
+            var label = UsageAccounts.FallbackLabel(root);
+            var at = label.IndexOf('@');
+            if (at < 0) return label;
+            return at == 0 ? "account" : label[..at];
+        }
+
+        // A root spelt the way the CLI would have been given it: no trailing
+        // separator. A settings entry of ".claude-board/" reaches here as
+        // "<home>/.claude-board/", but a shell exports CLAUDE_CONFIG_DIR without
+        // the slash, and the CLI hashes what it was given verbatim. A root that is
+        // nothing but separators is left as it was.
+        internal static string TrimRoot(string root)
+        {
+            var trimmed = root.TrimEnd('/', '\\');
+            return trimmed.Length == 0 ? root : trimmed;
+        }
+
+        // The Keychain service names to try for ONE root, in order.
         //
         // The default root is asked twice: unsuffixed (CLI launched without
         // CLAUDE_CONFIG_DIR) and suffixed (launched with CLAUDE_CONFIG_DIR=~/.claude).
         // Every other root can only have been reached through CLAUDE_CONFIG_DIR, so
-        // only suffixed. Duplicates are dropped.
-        internal static IReadOnlyList<string> CandidateServices(string home, IReadOnlyList<string> roots)
+        // only suffixed.
+        internal static IReadOnlyList<string> ServicesForRoot(string home, string root)
         {
-            var defaultRoot = Path.Combine(home, ".claude");
-            var services = new List<string>();
-            foreach (var root in roots)
-            {
-                if (string.Equals(root, defaultRoot, StringComparison.Ordinal))
-                    AddOnce(services, KeychainServiceFor(null));
-                // A settings entry of ".claude-board/" reaches here as
-                // "<home>/.claude-board/", but a shell exports CLAUDE_CONFIG_DIR
-                // without the slash, and the CLI hashes what it was given
-                // verbatim. Trim so the two spell the same directory the same way;
-                // a root that is nothing but separators is left as it was.
-                var trimmed = root.TrimEnd('/', '\\');
-                AddOnce(services, KeychainServiceFor(trimmed.Length == 0 ? root : trimmed));
-            }
-            return services;
-        }
-
-        private static void AddOnce(List<string> list, string value)
-        {
-            if (!list.Contains(value, StringComparer.Ordinal)) list.Add(value);
+            var trimmed = TrimRoot(root);
+            var suffixed = KeychainServiceFor(trimmed);
+            return string.Equals(trimmed, TrimRoot(Path.Combine(home, ".claude")), StringComparison.Ordinal)
+                ? new[] { KeychainServiceFor(null), suffixed }
+                : new[] { suffixed };
         }
 
         // Where the CLI keeps the same thing on Windows and Linux.
@@ -341,7 +374,8 @@ namespace ClaudeBuddy
                 if (expiresAt is { } when && when <= now)
                 {
                     return new CredentialRead(CredentialOutcome.NotLoggedIn, null, when,
-                        "the stored credential expired; the CLI refreshes it on its next use");
+                        "the stored credential expired; the CLI refreshes it on its next use",
+                        ExpiredLead);
                 }
 
                 return new CredentialRead(CredentialOutcome.Found, token.GetString(), expiresAt,
@@ -384,11 +418,22 @@ namespace ClaudeBuddy
         // Every string here is safe to render: none of them is derived from the
         // credential, and the negative-control test asserts that for a fake token
         // chosen to be findable if it ever leaked into one.
+        // The stored login has a past expiry and the CLI has not refreshed it. The
+        // most actionable thing any store can say, so it leads whatever a later
+        // store failed with.
+        internal const string ExpiredLead = "the stored login expired — run `claude` to refresh it";
+
+        // What a reading says on the status line: a store's own lead if it has
+        // one, else the outcome's wording.
+        internal static string StatusFor(CredentialRead read) => read.Lead ?? Describe(read.Outcome);
+
         internal static string Describe(CredentialOutcome outcome) => outcome switch
         {
             CredentialOutcome.Found => "signed in to Claude Code",
             CredentialOutcome.NotLoggedIn => "no Claude Code login found — run `claude` and sign in",
-            CredentialOutcome.Denied => "access to the Claude Code login was denied",
+            CredentialOutcome.Denied => "access to the Claude Code login was declined",
+            CredentialOutcome.CannotPrompt =>
+                "the Keychain could not ask for permission — no one is at the screen, or this is a background context",
             CredentialOutcome.Unreadable => "the Claude Code login could not be read",
             CredentialOutcome.Malformed => "the Claude Code login is not in a shape this version understands",
             CredentialOutcome.NoAnswer =>
@@ -451,7 +496,37 @@ namespace ClaudeBuddy
         // is the second independent reason `NoAnswer` stops the arm rather than
         // backing off — the first being that retrying a call which may be waiting on
         // a human is how a pile of consent prompts gets queued up.
+        //
+        // **A gated source is read one at a time, process-wide.** Several accounts
+        // and their chat panels share one macOS consent surface, and two dialogs on
+        // screen at once are unanswerable. The gate is taken here — before the
+        // budget starts, so queueing is not charged to a read that has not begun —
+        // and the source *chooses what to read after it has the gate*, so a prompt
+        // declined while this one waited is honoured. The outcome is reported back
+        // before the gate is released, which is what makes a NoAnswer latch by the
+        // time the next reader gets in.
         internal static async Task<CredentialRead> ReadWithinAsync(
+            ICloudCredentialSource source, TimeSpan budget, CancellationToken ct)
+        {
+            if (source is not IGatedCredentialSource gated)
+            {
+                return await ReadBudgetedAsync(source, budget, ct).ConfigureAwait(false);
+            }
+
+            await gated.Gate.WaitAsync(ct).ConfigureAwait(false);
+            try
+            {
+                var read = await ReadBudgetedAsync(gated.Choose(), budget, ct).ConfigureAwait(false);
+                gated.Report(read);
+                return read;
+            }
+            finally
+            {
+                gated.Gate.Release();
+            }
+        }
+
+        private static async Task<CredentialRead> ReadBudgetedAsync(
             ICloudCredentialSource source, TimeSpan budget, CancellationToken ct)
         {
             // Not cancelled by ct: cancelling the wait is the point, and handing ct
@@ -497,36 +572,70 @@ namespace ClaudeBuddy
         // choice itself is testable on either machine — the same reason OrbGlyph
         // takes the two-letter setting instead of reading it.
         //
-        // Either way the answer is a MultiCredentialSource over every candidate
-        // config root, because the login lives wherever the CLI was pointed.
-        // On Windows/Linux the file under a custom root is ASSUMED to be
-        // `<root>/.credentials.json`; only the macOS Keychain naming was read out
-        // of the binary.
-        internal static MultiCredentialSource SourceFor(
+        // **One source per account, not one flat walk.** The first version put
+        // every root's stores in a single MultiCredentialSource, whose first Found
+        // wins — so on a Mac with two logged-in accounts one was read and the
+        // other never looked at. An account is a config root; each gets its own
+        // MultiCredentialSource over that root's candidates only.
+        //
+        // Within a root the file is tried first, then the Keychain. A live file
+        // needs no prompt and a stale one falls through to the Keychain; one root
+        // cannot hold two different live identities, so the order never changes
+        // *which* account is found, only how many prompts it costs.
+        //
+        // Read out of the 2.1.284 binary: the CLI's store is "keychain with
+        // plaintext fallback", and `<config dir>/.credentials.json` (unhashed) is
+        // where it writes when the Keychain write fails. Confirmed on a real Mac,
+        // where both ~/.claude and ~/.claude-board held live logins in files. The
+        // location under a custom root on Windows/Linux is ASSUMED to be the same.
+        internal static IReadOnlyList<CloudAccount> SourcesFor(
             bool isMacOS, string home, string? configDirEnv = null)
         {
-            var roots = CandidateRoots(home, configDirEnv);
-            var children = new List<(string Name, ICloudCredentialSource Source)>();
-            if (isMacOS)
+            var defaultRoot = Path.Combine(home, ".claude");
+            var accounts = new List<CloudAccount>();
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+
+            foreach (var raw in CandidateRoots(home, configDirEnv))
             {
-                foreach (var service in CandidateServices(home, roots))
-                    children.Add((service, new KeychainCredentialSource(service)));
+                var root = TrimRoot(raw);
+                if (!seen.Add(root)) continue;
+
+                var file = (Name: CredentialsFilePath(root),
+                    Source: (ICloudCredentialSource)new FileCredentialSource(CredentialsFilePath(root)));
+                var children = new List<(string Name, ICloudCredentialSource Source)> { file };
+                if (isMacOS)
+                {
+                    foreach (var service in ServicesForRoot(home, root))
+                        children.Add((service, new KeychainCredentialSource(service)));
+                }
+
+                var label = string.Equals(root, TrimRoot(defaultRoot), StringComparison.Ordinal)
+                    ? "default" : SafeLabel(root);
+                // Two folders can reduce to one label ("me@x.com", "me@y.com").
+                // Told apart with a number rather than left to read as one account.
+                var unique = label;
+                for (var n = 2; accounts.Any(a => a.Label == unique); n++) unique = $"{label}-{n}";
+
+                accounts.Add(new CloudAccount(
+                    root,
+                    unique,
+                    new MultiCredentialSource(children),
+                    new MultiCredentialSource(new[] { file })));
             }
 
-            // Files are walked on macOS too, after the Keychain candidates. Read
-            // out of the 2.1.284 binary: on every platform the CLI's store is
-            // `Ns(keychain, plaintext)` — "keychain-with-plaintext-fallback" — and
-            // when the Keychain write fails non-transiently it writes
-            // `<config dir>/.credentials.json` (mode 0600) instead and deletes the
-            // Keychain item. The file is not hashed or suffixed; its directory is
-            // CLAUDE_SECURESTORAGE_CONFIG_DIR or the config dir itself. (The CLI
-            // itself would only look at the file when the Keychain holds nothing;
-            // walking past a blanked Keychain entry to a file is a superset.)
-            foreach (var root in roots)
-                children.Add((CredentialsFilePath(root), new FileCredentialSource(CredentialsFilePath(root))));
-            return new MultiCredentialSource(children);
+            return accounts;
         }
     }
+
+    // One Claude Code account: a config root, the name it goes by on screen, and
+    // where its login lives.
+    //
+    // Label is the folder's name (UsageAccounts.FallbackLabel), never an email:
+    // the settings line is shown to whoever is looking over a shoulder.
+    // FileSource is the same account's file stores alone, used while another
+    // account's declined Keychain prompt is latched — a file needs no prompt.
+    internal sealed record CloudAccount(
+        string Root, string Label, ICloudCredentialSource Source, ICloudCredentialSource FileSource);
 
     // Tries several stores in order and answers with the first login found.
     //
@@ -555,15 +664,29 @@ namespace ClaudeBuddy
 
         internal IReadOnlyList<string> Names => _children.Select(c => c.Name).ToList();
 
+        // What one Read did, returned with it and never shared between reads: a
+        // parked read that finishes late must not scribble over a newer one's
+        // answer.
+        internal sealed record ReadTrace(
+            string? AnsweredBy,
+            IReadOnlyList<(string Name, CredentialOutcome Outcome, string Reason)> Attempts);
+
+        private ReadTrace _last = new(null, Array.Empty<(string, CredentialOutcome, string)>());
+
+        // The most recently *finished* read's trace, published whole. A diagnostic
+        // convenience for single-threaded callers (the probe, the tests); anything
+        // concurrent uses ReadTraced.
+        private ReadTrace Last => Volatile.Read(ref _last);
+
         // Name of the store that produced the last Found read; null otherwise.
-        internal string? AnsweredBy { get; private set; }
+        internal string? AnsweredBy => Last.AnsweredBy;
 
         // Each store the last Read consulted, what it said and why. Names and
         // reason wording only, never values. A store that does not exist is
         // listed too (outcome NotLoggedIn, reason "no such item or file"), so a
         // diagnostic can tell "absent" from "present but blank".
-        internal IReadOnlyList<(string Name, CredentialOutcome Outcome, string Reason)> Attempts { get; private set; } =
-            Array.Empty<(string, CredentialOutcome, string)>();
+        internal IReadOnlyList<(string Name, CredentialOutcome Outcome, string Reason)> Attempts =>
+            Last.Attempts;
 
         // The stamps of every store that has one, keyed by name so a login moving
         // from one store to another still changes the value. Null when none exist.
@@ -578,11 +701,13 @@ namespace ClaudeBuddy
             return parts.Count == 0 ? null : string.Join(";", parts);
         }
 
-        public CredentialRead Read()
+        public CredentialRead Read() => ReadTraced().Read;
+
+        internal (CredentialRead Read, ReadTrace Trace) ReadTraced()
         {
-            AnsweredBy = null;
             var attempts = new List<(string, CredentialOutcome, string)>();
             CredentialRead? best = null;
+            string? expiredLead = null;
 
             foreach (var (name, source) in _children)
             {
@@ -604,17 +729,19 @@ namespace ClaudeBuddy
                 if (read.ExpiresAt is { } expiry) reason += $" (expiresAt {expiry:u})";
                 attempts.Add((name, read.Outcome, reason));
 
+                if (read.Outcome == CredentialOutcome.NotLoggedIn && read.Lead is { } lead)
+                {
+                    expiredLead ??= lead;
+                }
+
                 if (read.Outcome == CredentialOutcome.Found)
                 {
-                    AnsweredBy = name;
-                    Attempts = attempts;
-                    return read;
+                    return Done(read, name, attempts);
                 }
 
                 if (read.Outcome is CredentialOutcome.Denied or CredentialOutcome.NoAnswer)
                 {
-                    Attempts = attempts;
-                    return read;
+                    return Done(Lead(read, expiredLead), null, attempts);
                 }
 
                 if (best is null || (best.Outcome == CredentialOutcome.NotLoggedIn
@@ -622,9 +749,22 @@ namespace ClaudeBuddy
                     best = read;
             }
 
-            Attempts = attempts;
-            return best ?? new CredentialRead(CredentialOutcome.NotLoggedIn, null, null,
-                "no credential stored");
+            return Done(Lead(best ?? new CredentialRead(CredentialOutcome.NotLoggedIn, null, null,
+                "no credential stored"), expiredLead), null, attempts);
+        }
+
+        // The most actionable outcome wins the status line, the outcome itself
+        // untouched: a Denied or NoAnswer after an expired file must still latch
+        // and halt as one, but it should not be what the user is told.
+        private static CredentialRead Lead(CredentialRead read, string? expiredLead) =>
+            expiredLead is null ? read : read with { Lead = expiredLead };
+
+        private (CredentialRead, ReadTrace) Done(CredentialRead read, string? answeredBy,
+            List<(string, CredentialOutcome, string)> attempts)
+        {
+            var trace = new ReadTrace(answeredBy, attempts);
+            Volatile.Write(ref _last, trace);
+            return (read, trace);
         }
     }
 
@@ -696,7 +836,7 @@ namespace ClaudeBuddy
     // is a call into Security.framework about an item a CI runner does not have,
     // behind a consent dialog no runner can answer. The mapping it performs is in
     // MacOSKeychain and is equally untestable here; what *is* covered is
-    // SourceFor choosing this class, which is the decision this repository owns.
+    // SourcesFor choosing this class, which is the decision this repository owns.
     [ExcludeFromCodeCoverage]
     internal sealed class KeychainCredentialSource : ICloudCredentialSource
     {
@@ -717,7 +857,7 @@ namespace ClaudeBuddy
         {
             // A test process never asks the OS for this.
             //
-            // The seam is here rather than at SourceFor because SourceFor's
+            // The seam is here rather than at SourcesFor because SourcesFor's
             // answer is itself a tested decision — ClaudeCloudCredentialPlatformTests
             // asserts macOS gets this class, and it should keep doing so.
             // Constructing one queries nothing; only this call does.

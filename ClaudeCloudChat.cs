@@ -110,7 +110,7 @@ namespace ClaudeBuddy
         internal const int MaxEventPages = 10;
 
         private readonly ICloudApi _api;
-        private readonly ICloudCredentialSource _credentials;
+        private ICloudCredentialSource _credentials;
         private readonly Action<Action> _post;
         private readonly List<ChatTurn> _history = new();
         private readonly Dictionary<string, ChatTurn> _byUuid = new(StringComparer.Ordinal);
@@ -145,6 +145,10 @@ namespace ClaudeBuddy
             _credentials = credentials;
             _post = post ?? (action => Dispatcher.UIThread.Post(action));
         }
+
+        // Re-point at the login that owns the session now. Loads re-read the
+        // source on every call, so swapping it is all a change of owner needs.
+        internal void UseCredentials(ICloudCredentialSource credentials) => _credentials = credentials;
 
         public string SessionId { get; }
 

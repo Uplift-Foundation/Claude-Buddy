@@ -349,7 +349,7 @@ public class ClaudeCloudStepTests
         {
             Halted = true,
             CredentialStamp = "stamp-1",
-            Status = "access to the Claude Code login was denied",
+            Status = "access to the Claude Code login was declined",
         };
 
         var step = await ClaudeCloudSessions.StepAsync(api, credentials, halted, Now,
@@ -360,7 +360,7 @@ public class ClaudeCloudStepTests
         Assert.Equal(1, credentials.Stamps);
         Assert.Null(step.Snapshot);
         Assert.Equal(halted, step.Next);
-        Assert.Equal("access to the Claude Code login was denied", step.Status);
+        Assert.Equal("access to the Claude Code login was declined", step.Status);
     }
 
     // And it comes back on its own once the stamp moves — the user having signed

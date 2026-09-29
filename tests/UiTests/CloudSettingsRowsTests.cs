@@ -287,4 +287,47 @@ public class CloudSettingsRowsTests
             Reset();
         }
     }
+
+    // Several accounts: the status row carries the header and one line per
+    // account, by folder label, and follows the board as it changes.
+    [AvaloniaFact]
+    public void TheStatusLineShowsOneLinePerAccount()
+    {
+        Reset();
+        try
+        {
+            ClaudeBuddySettings.ClaudeCloudEnabled = true;
+            var board = TwoAccountBoard();
+            ClaudeCloudSessions.SetBoardForTests(board);
+
+            var window = NewWindow();
+            window.ClaudeCloudRows();
+
+            Assert.Equal("2 accounts, 0 cloud sessions\ndefault: checking…\nboard: checking…",
+                window.ClaudeCloudStatusText);
+
+            board.ApplyError("/Users/x/.claude-board", "no Claude Code login found");
+            window.OnStatusTick(null, EventArgs.Empty);
+
+            Assert.Contains("board: no Claude Code login found", window.ClaudeCloudStatusText);
+        }
+        finally
+        {
+            ClaudeCloudSessions.SetBoardForTests(null);
+            Reset();
+        }
+    }
+
+    private sealed class NoLogin : ICloudCredentialSource
+    {
+        public string? Stamp() => null;
+        public CredentialRead Read() => new(CredentialOutcome.NotLoggedIn, null, null, "none");
+    }
+
+    internal static CloudAccountBoard TwoAccountBoard() =>
+        new(new[]
+        {
+            new CloudAccount("/Users/x/.claude", "default", new NoLogin(), new NoLogin()),
+            new CloudAccount("/Users/x/.claude-board", "board", new NoLogin(), new NoLogin()),
+        });
 }

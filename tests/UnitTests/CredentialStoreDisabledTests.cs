@@ -100,7 +100,8 @@ public class CredentialStoreDisabledTests
     [Fact]
     public void DisablingTheStoreDoesNotChangeWhichSourceAPlatformGets()
     {
-        var multi = ClaudeCliCredentials.SourceFor(isMacOS: true, home: "/tmp/does-not-matter");
+        var multi = (MultiCredentialSource)Assert.Single(
+            ClaudeCliCredentials.SourcesFor(isMacOS: true, home: "/tmp/does-not-matter")).Source;
 
         Assert.Contains(ClaudeCliCredentials.KeychainService, multi.Names);
         // And the whole walk stays inert: every child's Stamp() is null while

@@ -2987,6 +2987,12 @@ namespace ClaudeBuddy
                     // ticker available here is the two-second scan, and pointing
                     // a rate-limited events endpoint at it would spend the
                     // account's budget on a window nobody is looking at.
+                    //
+                    // And re-pointed at the login that owns the session *now*:
+                    // ownership can move between polls (see MergeAccounts), and
+                    // a panel cached under the old owner would otherwise keep
+                    // reading, and later sending, with the wrong account.
+                    if (row is not null) existingCloud.UseCredentials(CloudChatCredentialsFor(row.OwnerRoot));
                     StartCloudLoad(existingCloud);
                     return existingCloud;
                 }
@@ -2995,7 +3001,7 @@ namespace ClaudeBuddy
                 // the orb is on its way out, and there is nothing to read.
                 if (row is null) return null;
 
-                var cloud = new ClaudeCloudChatSession(row, CloudChatApi, CloudChatCredentials);
+                var cloud = new ClaudeCloudChatSession(row, CloudChatApi, CloudChatCredentialsFor(row.OwnerRoot));
                 _cloudChats[sessionId] = cloud;
                 StartCloudLoad(cloud);
                 return cloud;
@@ -3053,14 +3059,16 @@ namespace ClaudeBuddy
         [ExcludeFromCodeCoverage]
         private ICloudApi CloudChatApi => _cloudChatApi ??= new HttpCloudApi();
 
-        [ExcludeFromCodeCoverage]
-        private ICloudCredentialSource CloudChatCredentials =>
-            _cloudChatCredentials ??= ClaudeCliCredentials.SourceFor(
-                OperatingSystem.IsMacOS(),
-                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+        // The credential for a session's *owner*. Several accounts can be
+        // listed, and a cloud session belongs to whichever one created it: sending
+        // with another's login is at best refused and at worst reads a
+        // conversation as the wrong person. The instances come from CloudAccounts,
+        // the same ones the poll loop uses.
+        private ICloudCredentialSource CloudChatCredentialsFor(string? ownerRoot) =>
+            _cloudChatCredentialsFor(ownerRoot);
 
         private ICloudApi? _cloudChatApi;
-        private ICloudCredentialSource? _cloudChatCredentials;
+        private Func<string?, ICloudCredentialSource> _cloudChatCredentialsFor = CloudAccounts.SourceFor;
 
         // The only way into RemoteChatFor's ClaudeCloud arm from a test.
         //
@@ -3076,7 +3084,14 @@ namespace ClaudeBuddy
             ICloudApi api, ICloudCredentialSource credentials)
         {
             _cloudChatApi = api;
-            _cloudChatCredentials = credentials;
+            _cloudChatCredentialsFor = _ => credentials;
+        }
+
+        internal void UseCloudChatDependenciesForTests(
+            ICloudApi api, Func<string?, ICloudCredentialSource> credentialsFor)
+        {
+            _cloudChatApi = api;
+            _cloudChatCredentialsFor = credentialsFor;
         }
 
         // Kick off the read and walk away.
