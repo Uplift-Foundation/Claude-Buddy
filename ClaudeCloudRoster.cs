@@ -70,7 +70,6 @@ namespace ClaudeBuddy
             int? ContextPercent,
             string? StatusDetail,
             string? RecentAction,
-            string? WorkerStatus = null,
             string? ConnectionStatus = null);
 
         // What was wrong with a payload, where something was.
@@ -213,11 +212,14 @@ namespace ClaudeBuddy
             string? statusDetail = null;
             string? recentAction = null;
 
-            // Both in the payload since CB-164 and read by nothing until CB-199.
-            // Kept as the raw strings: neither has a documented vocabulary, and
-            // `WORKER_STATUS_UNSPECIFIED` turning up mid-turn is the measured
-            // reason not to turn either into an enum that would have to guess.
-            var workerStatus = Str(element, "worker_status");
+            // Kept as the raw string: it has no documented vocabulary to map.
+            //
+            // `worker_status` is deliberately not read. **Measured on
+            // 2026-09-28 by CB-199's gate**, sampling a fresh cloud session's
+            // /v2 row every second or two through a running turn: the /v2 row
+            // does not carry it at all — only `/v1/code/sessions/{id}` does —
+            // so a field parsed from here would be null on every row, and one
+            // that is always null invites somebody to build on it.
             var connectionStatus = Str(element, "connection_status");
 
             if (element.TryGetProperty("external_metadata", out var meta)
@@ -240,7 +242,7 @@ namespace ClaudeBuddy
             }
 
             return new Row(id!, kind!, status!, bucket, title, updated, needsAction,
-                model, contextPercent, statusDetail, recentAction, workerStatus, connectionStatus);
+                model, contextPercent, statusDetail, recentAction, connectionStatus);
         }
 
         // `context_usage` is `{ max_tokens, used_tokens }`. A zero or absent
@@ -348,23 +350,21 @@ namespace ClaudeBuddy
 
         // Is a turn running right now — the question a Stop button asks.
         //
-        // **Measured by CB-199's gate, on `/v1/code/sessions/{id}` against a
-        // throwaway cloud session:** mid-turn, `status_bucket` was `working`
-        // every time, while `worker_status` was `running` on one read and
-        // `WORKER_STATUS_UNSPECIFIED` on another. After the turn the bucket was
-        // `blocked`, `review_ready` or `completed` and the worker `idle`. So the
-        // bucket is the field that answers, and `worker_status == "running"` —
-        // which the plan first proposed — would have missed a turn that was
-        // plainly in progress. The worker status is parsed and carried, and
-        // deliberately decides nothing.
+        // **Measured on 2026-09-28 by CB-199's gate, on the /v2 row this Session
+        // is built from**, sampled every second or two for twenty seconds of a
+        // running turn on a fresh throwaway session: `session_status` "running"
+        // and `status_bucket` "working" throughout; idle, "idle" and "blocked".
+        // So StateFor's "running" already reads a live turn as generating, and
+        // the bucket agrees with it.
         //
-        // "generating" from StateFor still counts, so there is one busy rule and
-        // not two: anything the orb already pulses for is busy here too.
+        // Both halves are kept because they are two readings of one fact and
+        // the bucket is the one `/v1` shares: there, mid-turn, the bucket read
+        // "working" every time while `worker_status` read "running" once and
+        // `WORKER_STATUS_UNSPECIFIED` once. That is why the plan's first rule,
+        // `worker_status == "running"`, is not this one — and /v2 does not carry
+        // `worker_status` at all.
         //
-        // **Assumed, not measured:** that the `/v2/ccr-sessions` roster row —
-        // which is where Session comes from — uses the same bucket vocabulary as
-        // the `/v1` read the gate measured. Same field name, same account, same
-        // session; nobody has read a /v2 row mid-turn.
+        // One busy rule, not two: anything the orb pulses for is busy here too.
         internal static bool IsBusy(string? state, string? statusBucket) =>
             string.Equals(state, "generating", StringComparison.Ordinal)
             || string.Equals(statusBucket, WorkingBucket, StringComparison.OrdinalIgnoreCase);
@@ -431,7 +431,6 @@ namespace ClaudeBuddy
                 row.ContextPercent,
                 row.StatusDetail,
                 row.RecentAction,
-                row.WorkerStatus,
                 row.ConnectionStatus);
         }
 
