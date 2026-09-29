@@ -345,7 +345,10 @@ public class CloudChatPanelTests : IDisposable
         var panel = ChatPanelTestAccess.Instance!;
 
         Assert.Equal(2, RenderedRows(panel).Count);
-        Assert.False(ComposerRow(panel).IsVisible);
+
+        // CB-199: a cloud session is writable until the server refuses it, so a
+        // transcript that read cleanly comes with a box under it.
+        Assert.True(ComposerRow(panel).IsVisible);
     }
 
     // --- a read that did not ---

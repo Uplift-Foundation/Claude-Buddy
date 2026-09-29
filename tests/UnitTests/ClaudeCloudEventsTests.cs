@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
@@ -446,48 +447,871 @@ public class ClaudeCloudEventsTests
         Assert.Equal(RemoteChatState.Error, chat.State);
     }
 
-    // --- the refusal to send -------------------------------------------------
+    // --- sending ------------------------------------------------------------
+    //
+    // CB-199. What is measured and what these tests therefore pin as behaviour:
+    // POST /v1/code/sessions/{id}/events takes a user row and answers 200 with a
+    // receipt; the same uuid again is `duplicate: true`; the echo reaches the /v2
+    // history carrying the uuid that was sent; a deleted session is 404. The 409
+    // and the account 403 are not measured and are pinned here as what the code
+    // does with them, not as what the server sends.
 
-    // **`/input`, `/messages`, `/turns` and `/conversation` are all 404, measured.**
-    // So the session reports no send capability and SendAsync does nothing at all:
-    // Failed means nothing was queued anywhere and the only copy of what was typed
-    // is the one still in the box, which is exactly true here.
-    [Fact]
-    public async Task SendAlwaysFailsAndRaisesNothing()
+    private const string Receipt =
+        """{"results":[{"duplicate":false,"sequence_num":"20","event_id":"e"}]}""";
+
+    private const string DuplicateReceipt =
+        """{"results":[{"duplicate":true,"sequence_num":"20","event_id":"e"}]}""";
+
+    // A JSON error carrying a request_id, which is what makes a 403 the API's
+    // own refusal rather than an edge block (CloudOutcomes.LooksLikeEdgeBlock).
+    private const string ApiErrorBody =
+        """{"type":"error","error":{"type":"permission_error","message":"no"},"request_id":"req_1"}""";
+
+    private static CloudApiResult Answer(int status, string? body = null) =>
+        new(CloudOutcomes.OutcomeFor(status, body ?? ""), status is >= 200 and < 300 ? body : null);
+
+    private static readonly CloudApiResult TimedOut =
+        new(new CloudOutcome(CloudOutcomeKind.Unavailable, 0, null, "the request timed out"), null);
+
+    // Answers writes and reads separately, since one send can be followed by a
+    // read of the history, and records every context whole.
+    private sealed class RoutingApi : ICloudApi
     {
-        var api = new FakeApi(_ => throw new InvalidOperationException("must not be called"));
-        var chat = Build(api);
+        private readonly Func<CloudRequestContext, CloudApiResult> _answer;
 
-        var raised = 0;
-        chat.TurnAdded += _ => raised++;
-        chat.TurnUpdated += _ => raised++;
+        internal RoutingApi(Func<CloudRequestContext, CloudApiResult> answer) => _answer = answer;
 
-        Assert.Equal(ChatSendOutcome.Failed, await chat.SendAsync("please do the thing"));
+        internal RoutingApi(CloudApiResult write, CloudApiResult? read = null)
+            : this(c => c.Method == HttpMethod.Post
+                ? write
+                : read ?? new CloudApiResult(CloudOutcomes.OutcomeFor(200, ""), Envelope(Array.Empty<string>())))
+        {
+        }
 
-        Assert.Equal(0, raised);
-        Assert.Empty(chat.History);
-        Assert.Empty(api.Paths);
+        internal List<CloudRequestContext> Requests { get; } = new();
+
+        internal List<CloudRequestContext> Posts =>
+            Requests.Where(r => r.Method == HttpMethod.Post).ToList();
+
+        internal List<CloudRequestContext> Gets =>
+            Requests.Where(r => r.Method is null || r.Method == HttpMethod.Get).ToList();
+
+        public Task<CloudApiResult> SendAsync(CloudRequestContext context, CancellationToken token)
+        {
+            Requests.Add(context);
+            return Task.FromResult(_answer(context));
+        }
     }
 
-    // Still the same claim this made when the address lived in the hint's prose:
-    // the session says it cannot be replied to here, and says where it can be.
-    // The *where* is now IRemoteChatReadOnly.ReplyUrl, which the panel renders as
-    // a link — naming the site in a sentence and leaving the user to go and find
-    // the session among their others was the weaker half of that answer, and the
-    // hint no longer repeats what the link already carries.
+    private sealed class CountingCredentials : ICloudCredentialSource
+    {
+        internal CredentialRead Reading { get; set; } =
+            new(CredentialOutcome.Found, Token, null, "a credential is present");
+
+        internal int Reads { get; private set; }
+
+        public string? Stamp() => "stamp-1";
+
+        public CredentialRead Read()
+        {
+            Reads++;
+            return Reading;
+        }
+    }
+
+    // Records what the session waited for and returns at once, so the cadence is
+    // asserted rather than slept through. OnDelay runs before the wait returns,
+    // which is how a test changes the world between two refreshes.
+    private sealed class FakeClock
+    {
+        internal List<TimeSpan> Waits { get; } = new();
+        internal List<CancellationToken> Tokens { get; } = new();
+        internal Action<int, CancellationToken>? OnDelay { get; set; }
+
+        internal Task Delay(TimeSpan wait, CancellationToken ct)
+        {
+            Waits.Add(wait);
+            Tokens.Add(ct);
+            OnDelay?.Invoke(Waits.Count, ct);
+            return Task.CompletedTask;
+        }
+    }
+
+    private static ClaudeCloudSessions.Session Row(string id = "session_a", string state = "idle",
+        string bucket = "idle") =>
+        new(id, "a cloud session", state, new DateTime(2026, 9, 19, 10, 0, 0, DateTimeKind.Utc),
+            "https://claude.ai/code/" + id, bucket, false, null, null, null, null);
+
+    private static ClaudeCloudSessions.Session BusyRow(string id = "session_a") =>
+        Row(id, "generating", "working");
+
+    private static ClaudeCloudChatSession Sender(ICloudApi api, FakeClock? clock = null,
+        ICloudCredentialSource? creds = null, ClaudeCloudSessions.Session? session = null,
+        bool enabled = true)
+    {
+        var tick = clock ?? new FakeClock();
+        return new ClaudeCloudChatSession(session ?? Row(), api, creds ?? new CountingCredentials(),
+            action => action())
+        {
+            Delay = tick.Delay,
+            Enabled = () => enabled,
+        };
+    }
+
+    private static string PayloadUuid(CloudRequestContext context)
+    {
+        using var doc = System.Text.Json.JsonDocument.Parse(context.Body!);
+        return doc.RootElement.GetProperty("events")[0].GetProperty("payload")
+            .GetProperty("uuid").GetString()!;
+    }
+
+    private static List<ChatTurn> Notes(ClaudeCloudChatSession chat) =>
+        chat.History.Where(t => t.Role == ChatRole.System).ToList();
+
     [Fact]
-    public void ItDeclaresItselfReadOnlyAndSaysWhereItCanBeRepliedTo()
+    public async Task ASendPostsTheMessageToTheWritePathAndRaisesTheBubbleOnlyAfterTheAnswer()
+    {
+        var api = new RoutingApi(Answer(200, Receipt));
+        var chat = Sender(api);
+
+        var postsWhenRaised = -1;
+        chat.TurnAdded += _ => postsWhenRaised = api.Posts.Count;
+
+        Assert.Equal(ChatSendOutcome.Sent, await chat.SendAsync("please do the thing"));
+        await chat.FollowUpTask!;
+
+        var post = Assert.Single(api.Posts);
+        Assert.Equal(CloudRequest.CodeEventsPath("session_a"), post.Path);
+        Assert.Equal(Token, post.AccessToken);
+        Assert.Contains("please do the thing", post.Body!, StringComparison.Ordinal);
+
+        // After the POST had answered, never before it.
+        Assert.Equal(1, postsWhenRaised);
+
+        var turn = Assert.Single(chat.History);
+        Assert.Equal(ChatRole.User, turn.Role);
+        Assert.Equal("please do the thing", turn.Text);
+    }
+
+    // The measured round trip: the echo comes back through /v2 carrying the uuid
+    // that was sent, and it lands on the bubble already there.
+    [Fact]
+    public async Task TheEchoOfASentMessageFoldsIntoItsOwnBubble()
+    {
+        string? sentUuid = null;
+        var api = new RoutingApi(c =>
+        {
+            if (c.Method == HttpMethod.Post)
+            {
+                sentUuid = PayloadUuid(c);
+                return Answer(200, Receipt);
+            }
+
+            return new CloudApiResult(CloudOutcomes.OutcomeFor(200, ""),
+                Envelope(new[] { UserRow(sentUuid!, "please do the thing"), AssistantRow("a1", "done") }));
+        });
+        var chat = Sender(api);
+
+        await chat.SendAsync("please do the thing");
+        await chat.FollowUpTask!;
+
+        Assert.Equal(new[] { ChatRole.User, ChatRole.Assistant }, chat.History.Select(t => t.Role));
+    }
+
+    // A duplicate is the retry having worked; an unreadable 2xx still landed.
+    [Theory]
+    [InlineData(DuplicateReceipt)]
+    [InlineData("not json")]
+    public async Task ADuplicateOrUnreadableReceiptStillCountsAsSent(string receipt)
+    {
+        var chat = Sender(new RoutingApi(Answer(200, receipt)));
+
+        Assert.Equal(ChatSendOutcome.Sent, await chat.SendAsync("hello"));
+        await chat.FollowUpTask!;
+        Assert.Equal(ChatRole.User, Assert.Single(chat.History).Role);
+    }
+
+    // Each refusal that says nothing lasting about the session: a note, Failed,
+    // no bubble, one request, and the box stays.
+    [Theory]
+    [InlineData(401, CloudOutcomes.TokenRefusedMarker, "Run `claude`")]
+    [InlineData(401, "", "Run `claude`")]
+    [InlineData(429, "", "Wait a minute")]
+    [InlineData(413, "", "shorter message")]
+    [InlineData(400, "", "request shape")]
+    [InlineData(403, "<html>challenge</html>", "in front of the endpoint")]
+    public async Task ARefusalAboutThisAttemptWritesANoteAndKeepsTheBox(int status, string body,
+        string expected)
+    {
+        var api = new RoutingApi(Answer(status, body));
+        var chat = Sender(api);
+        var flips = 0;
+        chat.ReadOnlyChanged += () => flips++;
+
+        Assert.Equal(ChatSendOutcome.Failed, await chat.SendAsync("hello"));
+
+        Assert.Single(api.Posts);
+        var note = Assert.Single(chat.History);
+        Assert.Equal(ChatRole.System, note.Role);
+        Assert.StartsWith("Not sent: ", note.Text, StringComparison.Ordinal);
+        Assert.Contains(expected, note.Text, StringComparison.Ordinal);
+        Assert.False(chat.IsReadOnly);
+        Assert.Equal(0, flips);
+    }
+
+    // The three refusals that are facts about the session: the box goes, once,
+    // and the next send spends no request.
+    [Theory]
+    [InlineData(409, "", "Ended", CloudChatSendability.EndedHint)]
+    [InlineData(404, "", "Gone", CloudChatSendability.GoneHint)]
+    [InlineData(403, ApiErrorBody, "NotPermitted", CloudChatSendability.NotPermittedHint)]
+    public async Task ARefusalAboutTheSessionTakesTheBoxAway(int status, string body,
+        string expected, string hint)
+    {
+        var api = new RoutingApi(Answer(status, body));
+        var chat = Sender(api);
+        var flips = 0;
+        chat.ReadOnlyChanged += () => flips++;
+
+        Assert.Equal(ChatSendOutcome.Failed, await chat.SendAsync("hello"));
+
+        Assert.Single(api.Posts);
+        Assert.Equal(ChatRole.System, Assert.Single(chat.History).Role);
+        Assert.True(chat.IsReadOnly);
+        Assert.Equal(expected, chat.Sendability.ToString());
+        Assert.Equal(hint, chat.ComposerHint);
+        Assert.Equal(1, flips);
+
+        // The belt to the panel's braces: no box, and no request if one is sent anyway.
+        Assert.Equal(ChatSendOutcome.Failed, await chat.SendAsync("again"));
+        Assert.Single(api.Posts);
+        Assert.Equal(1, flips);
+        Assert.Contains(hint, Notes(chat).Last().Text, StringComparison.Ordinal);
+    }
+
+    // A refusal is an answer to the question actually asked, so a roster row that
+    // still looks fine does not bring the box back.
+    [Fact]
+    public async Task ARefusalOutranksARosterRowThatStillLooksWritable()
+    {
+        var chat = Sender(new RoutingApi(Answer(404)));
+        await chat.SendAsync("hello");
+
+        chat.UpdateStatus(Row());
+
+        Assert.Equal(CloudSendability.Gone, chat.Sendability);
+    }
+
+    [Fact]
+    public async Task ATimeoutIsRetriedOnceWithTheSameUuidAndThenSaysItMayNotHaveArrived()
+    {
+        var clock = new FakeClock();
+        var api = new RoutingApi(TimedOut);
+        var chat = Sender(api, clock);
+
+        Assert.Equal(ChatSendOutcome.Failed, await chat.SendAsync("hello"));
+
+        Assert.Equal(2, api.Posts.Count);
+        Assert.Equal(PayloadUuid(api.Posts[0]), PayloadUuid(api.Posts[1]));
+        Assert.Equal(new[] { Backoff.UnavailableFloor }, clock.Waits);
+
+        var note = Assert.Single(chat.History);
+        Assert.Contains("may not have arrived", note.Text, StringComparison.Ordinal);
+        Assert.False(chat.IsReadOnly);
+    }
+
+    [Fact]
+    public async Task ATimeoutFollowedByAnAnswerIsSentWithOneBubble()
+    {
+        var calls = 0;
+        var api = new RoutingApi(c => c.Method == HttpMethod.Post
+            ? ++calls == 1 ? TimedOut : Answer(200, DuplicateReceipt)
+            : new CloudApiResult(CloudOutcomes.OutcomeFor(200, ""), Envelope(Array.Empty<string>())));
+        var chat = Sender(api);
+
+        Assert.Equal(ChatSendOutcome.Sent, await chat.SendAsync("hello"));
+        await chat.FollowUpTask!;
+
+        Assert.Equal(2, api.Posts.Count);
+        Assert.Equal(PayloadUuid(api.Posts[0]), PayloadUuid(api.Posts[1]));
+        Assert.Equal(ChatRole.User, Assert.Single(chat.History).Role);
+    }
+
+    // A timeout then a real refusal is reported as the refusal.
+    [Fact]
+    public async Task ATimeoutFollowedByARefusalReportsTheRefusal()
+    {
+        var calls = 0;
+        var api = new RoutingApi(c => ++calls == 1 ? TimedOut : Answer(409));
+        var chat = Sender(api);
+
+        Assert.Equal(ChatSendOutcome.Failed, await chat.SendAsync("hello"));
+
+        Assert.Equal(CloudSendability.Ended, chat.Sendability);
+    }
+
+    [Theory]
+    [InlineData("NotLoggedIn")]
+    [InlineData("Denied")]
+    [InlineData("Found")] // Found, but with no token in it
+    public async Task NoUsableCredentialMeansANoteAndNoRequest(string name)
+    {
+        var outcome = Enum.Parse<CredentialOutcome>(name);
+        var api = new RoutingApi(Answer(200, Receipt));
+        var creds = new CountingCredentials { Reading = new CredentialRead(outcome, null, null, "…") };
+        var chat = Sender(api, creds: creds);
+
+        Assert.Equal(ChatSendOutcome.Failed, await chat.SendAsync("hello"));
+
+        Assert.Empty(api.Requests);
+        Assert.Equal("Not sent: " + ClaudeCliCredentials.Describe(outcome) + ".",
+            Assert.Single(chat.History).Text);
+    }
+
+    // Off means no credential read and no socket, even for a panel opened before
+    // the switch was flipped.
+    [Fact]
+    public async Task WithTheFeatureOffNothingIsReadAndNothingIsSent()
+    {
+        var api = new RoutingApi(Answer(200, Receipt));
+        var creds = new CountingCredentials();
+        var chat = Sender(api, creds: creds, enabled: false);
+
+        Assert.Equal(ChatSendOutcome.Failed, await chat.SendAsync("hello"));
+
+        Assert.Empty(api.Requests);
+        Assert.Equal(0, creds.Reads);
+        Assert.Contains("switched off", Assert.Single(chat.History).Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AMalformedIdIsRefusedBeforeAnyRequest()
+    {
+        var api = new RoutingApi(Answer(200, Receipt));
+        var creds = new CountingCredentials();
+        var chat = Sender(api, creds: creds, session: Row("not a session"));
+
+        Assert.Equal(ChatSendOutcome.Failed, await chat.SendAsync("hello"));
+
+        Assert.Empty(api.Requests);
+        Assert.Equal(0, creds.Reads);
+        Assert.Contains("id", Assert.Single(chat.History).Text, StringComparison.Ordinal);
+    }
+
+    // The send path reads the source it was handed, once per send, and builds
+    // none of its own.
+    [Fact]
+    public async Task TheSendReadsTheInjectedSourceOncePerMessage()
+    {
+        var creds = new CountingCredentials();
+        var clock = new FakeClock();
+        var chat = Sender(new RoutingApi(Answer(200, Receipt)), clock, creds);
+
+        // Close the panel at the first wait, so no follow-up read joins the count.
+        clock.OnDelay = (_, _) => chat.PanelClosed();
+
+        await chat.SendAsync("one");
+        await chat.FollowUpTask!;
+        Assert.Equal(1, creds.Reads);
+
+        await chat.SendAsync("two");
+        await chat.FollowUpTask!;
+        Assert.Equal(2, creds.Reads);
+    }
+
+    // The canary: the token reaches the Authorization header and nothing else —
+    // not a note, not the hint, not a turn, and not the body that went out.
+    [Theory]
+    [InlineData(200)]
+    [InlineData(400)]
+    [InlineData(401)]
+    [InlineData(403)]
+    [InlineData(404)]
+    [InlineData(409)]
+    [InlineData(413)]
+    [InlineData(429)]
+    [InlineData(500)]
+    public async Task TheTokenNeverReachesANoteTheHintATurnOrTheBody(int status)
+    {
+        var api = new RoutingApi(Answer(status, status == 200 ? Receipt : ApiErrorBody));
+        var chat = Sender(api);
+
+        await chat.SendAsync("hello");
+        if (chat.FollowUpTask is { } followUp) await followUp;
+
+        Assert.DoesNotContain(Token, chat.ComposerHint, StringComparison.Ordinal);
+        Assert.All(chat.History,
+            turn => Assert.DoesNotContain(Token, turn.Text, StringComparison.Ordinal));
+        Assert.All(api.Requests,
+            r => Assert.DoesNotContain(Token, r.Body ?? "", StringComparison.Ordinal));
+    }
+
+    // --- the follow-up reads after a send -------------------------------------
+
+    [Fact]
+    public async Task AnIdleSessionIsReadOnceAtTheEchoDelayAndThenLeftAlone()
+    {
+        var clock = new FakeClock();
+        var api = new RoutingApi(Answer(200, Receipt));
+        var chat = Sender(api, clock);
+
+        await chat.SendAsync("hello");
+        await chat.FollowUpTask!;
+
+        Assert.Equal(new[] { ClaudeCloudChatSession.EchoDelay }, clock.Waits);
+        Assert.Single(api.Gets);
+    }
+
+    [Fact]
+    public async Task ABusySessionIsReadOnTheIntervalUntilTheCap()
+    {
+        var clock = new FakeClock();
+        var api = new RoutingApi(Answer(200, Receipt));
+        var chat = Sender(api, clock, session: BusyRow());
+
+        await chat.SendAsync("hello");
+        await chat.FollowUpTask!;
+
+        // 10 s, then every 15 s while the total stays within two minutes.
+        var expected = new List<TimeSpan> { ClaudeCloudChatSession.EchoDelay };
+        var elapsed = ClaudeCloudChatSession.EchoDelay;
+        while (elapsed + ClaudeCloudChatSession.UnmeasuredBusyRefreshInterval
+               <= ClaudeCloudChatSession.UnmeasuredRefreshCap)
+        {
+            expected.Add(ClaudeCloudChatSession.UnmeasuredBusyRefreshInterval);
+            elapsed += ClaudeCloudChatSession.UnmeasuredBusyRefreshInterval;
+        }
+
+        Assert.Equal(expected, clock.Waits);
+        Assert.Equal(expected.Count, api.Gets.Count);
+    }
+
+    [Fact]
+    public async Task TheFollowUpStopsWhenTheTurnEnds()
+    {
+        var clock = new FakeClock();
+        var api = new RoutingApi(Answer(200, Receipt));
+        var chat = Sender(api, clock, session: BusyRow());
+        clock.OnDelay = (n, _) => { if (n == 3) chat.UpdateStatus(Row()); };
+
+        await chat.SendAsync("hello");
+        await chat.FollowUpTask!;
+
+        Assert.Equal(3, clock.Waits.Count);
+        Assert.Equal(3, api.Gets.Count);
+    }
+
+    // Busy and read-only at once: a roster row whose bucket says it is over.
+    [Fact]
+    public async Task TheFollowUpStopsWhenTheSessionStopsTakingInput()
+    {
+        var clock = new FakeClock();
+        var api = new RoutingApi(Answer(200, Receipt));
+        var chat = Sender(api, clock, session: BusyRow());
+        clock.OnDelay = (n, _) =>
+        {
+            if (n == 2) chat.UpdateStatus(Row(state: "generating", bucket: "archived"));
+        };
+
+        await chat.SendAsync("hello");
+        await chat.FollowUpTask!;
+
+        Assert.Equal(2, api.Gets.Count);
+    }
+
+    [Fact]
+    public async Task TheFollowUpStopsAtTheFirstRateLimit()
+    {
+        var clock = new FakeClock();
+        var api = new RoutingApi(Answer(200, Receipt), Answer(429));
+        var chat = Sender(api, clock, session: BusyRow());
+
+        await chat.SendAsync("hello");
+        await chat.FollowUpTask!;
+
+        Assert.Single(api.Gets);
+    }
+
+    // A read that fails for another reason does not end a busy follow-up.
+    [Fact]
+    public async Task AFailedReadThatIsNotARateLimitDoesNotEndTheFollowUp()
+    {
+        var clock = new FakeClock();
+        var api = new RoutingApi(Answer(200, Receipt), Answer(500));
+        var chat = Sender(api, clock, session: BusyRow());
+        clock.OnDelay = (n, _) => { if (n == 2) chat.UpdateStatus(Row()); };
+
+        await chat.SendAsync("hello");
+        await chat.FollowUpTask!;
+
+        Assert.Equal(2, api.Gets.Count);
+    }
+
+    // Closing the panel stops the reads, whether the wait notices by throwing
+    // (Task.Delay) or by returning into a cancelled token.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ClosingThePanelStopsTheFollowUp(bool throws)
+    {
+        var clock = new FakeClock();
+        var api = new RoutingApi(Answer(200, Receipt));
+        var chat = Sender(api, clock, session: BusyRow());
+        chat.PanelOpened();
+        clock.OnDelay = (_, ct) =>
+        {
+            chat.PanelClosed();
+            if (throws) ct.ThrowIfCancellationRequested();
+        };
+
+        await chat.SendAsync("hello");
+        await chat.FollowUpTask!;
+
+        Assert.Empty(api.Gets);
+    }
+
+    [Fact]
+    public async Task ASecondSendReplacesTheFirstSendsFollowUp()
+    {
+        var clock = new FakeClock();
+        var chat = Sender(new RoutingApi(Answer(200, Receipt)), clock);
+
+        await chat.SendAsync("one");
+        var first = chat.FollowUpTask!;
+        await chat.SendAsync("two");
+        await first;
+        await chat.FollowUpTask!;
+
+        Assert.True(clock.Tokens[0].IsCancellationRequested);
+        Assert.False(clock.Tokens[1].IsCancellationRequested);
+    }
+
+    // Single flight: an open, a follow-up and the end of a turn can all ask at
+    // once, and the transcript is read once for all of them.
+    [Fact]
+    public async Task OverlappingLoadsShareOneRead()
+    {
+        var gate = new TaskCompletionSource<CloudApiResult>();
+        var api = new GatedApi(gate.Task);
+        var chat = Build(api);
+
+        var first = chat.LoadAsync(CancellationToken.None);
+        var second = chat.LoadAsync(CancellationToken.None);
+
+        gate.SetResult(new CloudApiResult(CloudOutcomes.OutcomeFor(200, ""),
+            Envelope(new[] { UserRow("u1", "hello") })));
+
+        Assert.True(await first);
+        Assert.True(await second);
+        Assert.Equal(1, api.Calls);
+        Assert.Single(chat.History);
+
+        // And once it has finished, the next load reads again.
+        Assert.True(await chat.LoadAsync(CancellationToken.None));
+        Assert.Equal(2, api.Calls);
+    }
+
+    private sealed class GatedApi : ICloudApi
+    {
+        private readonly Task<CloudApiResult> _first;
+
+        internal GatedApi(Task<CloudApiResult> first) => _first = first;
+
+        internal int Calls { get; private set; }
+
+        public Task<CloudApiResult> SendAsync(CloudRequestContext context, CancellationToken token)
+        {
+            Calls++;
+            return _first;
+        }
+    }
+
+    // --- live state ------------------------------------------------------------
+
+    [Fact]
+    public void BusyIsSendableAndSaysTheMessageWillWait()
+    {
+        var chat = Sender(new RoutingApi(Answer(200, Receipt)), session: BusyRow());
+
+        Assert.False(chat.IsReadOnly);
+        Assert.True(chat.CanInterrupt);
+        Assert.Equal(CloudChatSendability.BusyHint, chat.ComposerHint);
+    }
+
+    [Fact]
+    public void AnIdleSessionSaysOnlyMessage()
+    {
+        var chat = Sender(new RoutingApi(Answer(200, Receipt)));
+
+        Assert.False(chat.IsReadOnly);
+        Assert.False(chat.CanInterrupt);
+        Assert.Equal(CloudChatSendability.SendableHint, chat.ComposerHint);
+    }
+
+    [Fact]
+    public void TheRosterMovesStopBothWaysAndSaysSoOnce()
+    {
+        var chat = Sender(new RoutingApi(Answer(200, Receipt)));
+        var changes = 0;
+        chat.InterruptChanged += () => changes++;
+
+        chat.UpdateStatus(BusyRow());
+        Assert.True(chat.CanInterrupt);
+        chat.UpdateStatus(BusyRow());
+        Assert.Equal(1, changes);
+
+        chat.UpdateStatus(Row());
+        Assert.False(chat.CanInterrupt);
+        Assert.Equal(2, changes);
+    }
+
+    // A vanished row reads as Gone, and a row that comes back — the roster is
+    // replaced whole, and a Restart empties it for a moment — brings the box back.
+    [Fact]
+    public void AVanishedRowIsGoneUntilItComesBack()
+    {
+        var chat = Sender(new RoutingApi(Answer(200, Receipt)), session: BusyRow());
+        var flips = 0;
+        var stops = 0;
+        chat.ReadOnlyChanged += () => flips++;
+        chat.InterruptChanged += () => stops++;
+
+        chat.UpdateStatus(null);
+        Assert.Equal(CloudSendability.Gone, chat.Sendability);
+        Assert.Equal(CloudChatSendability.GoneHint, chat.ComposerHint);
+        Assert.False(chat.CanInterrupt);
+        Assert.Equal(1, flips);
+        Assert.Equal(1, stops);
+
+        chat.UpdateStatus(Row());
+        Assert.False(chat.IsReadOnly);
+        Assert.Equal(2, flips);
+    }
+
+    [Fact]
+    public void AnEndedBucketIsEnded()
+    {
+        var chat = Sender(new RoutingApi(Answer(200, Receipt)));
+
+        chat.UpdateStatus(Row(bucket: "failed"));
+
+        Assert.Equal(CloudSendability.Ended, chat.Sendability);
+        Assert.Equal(CloudChatSendability.EndedHint, chat.ComposerHint);
+    }
+
+    // The end of a turn is worth one read, for a panel someone is looking at.
+    [Fact]
+    public async Task TheEndOfATurnIsReadOnceWhileThePanelIsOpen()
+    {
+        var api = new RoutingApi(Answer(200, Receipt));
+        var chat = Sender(api, session: BusyRow());
+        chat.PanelOpened();
+
+        chat.UpdateStatus(Row());
+
+        Assert.NotNull(chat.LoadTask);
+        await chat.LoadTask!;
+        Assert.Contains("/events?", Assert.Single(api.Gets).Path, StringComparison.Ordinal);
+
+        // Idle to idle is not the end of a turn.
+        chat.UpdateStatus(Row());
+        Assert.Single(api.Gets);
+    }
+
+    [Fact]
+    public void TheEndOfATurnIsNotReadForAClosedPanel()
+    {
+        var api = new RoutingApi(Answer(200, Receipt));
+        var chat = Sender(api, session: BusyRow());
+
+        chat.UpdateStatus(Row());
+
+        Assert.Null(chat.LoadTask);
+        Assert.Empty(api.Requests);
+    }
+
+    [Fact]
+    public void TheEndOfATurnIsNotReadForASessionThatHasGone()
+    {
+        var api = new RoutingApi(Answer(200, Receipt));
+        var chat = Sender(api, session: BusyRow());
+        chat.PanelOpened();
+
+        chat.UpdateStatus(null);
+
+        Assert.Null(chat.LoadTask);
+        Assert.Empty(api.Requests);
+    }
+
+    // --- stopping -------------------------------------------------------------
+
+    [Fact]
+    public async Task StopPostsAnInterruptOnlyWhileBusyAndHidesItselfAtOnce()
+    {
+        var api = new RoutingApi(Answer(200, Receipt));
+        var chat = Sender(api, session: BusyRow());
+        var changes = 0;
+        chat.InterruptChanged += () => changes++;
+
+        chat.Cancel();
+
+        Assert.False(chat.CanInterrupt);
+        Assert.Equal(1, changes);
+        await chat.InterruptTask!;
+
+        var post = Assert.Single(api.Posts);
+        Assert.Equal(CloudRequest.CodeEventsPath("session_a"), post.Path);
+        Assert.Contains("\"subtype\":\"interrupt\"", post.Body!, StringComparison.Ordinal);
+        Assert.Empty(chat.History);
+
+        // A second press for the same turn spends nothing.
+        chat.Cancel();
+        Assert.Single(api.Posts);
+    }
+
+    [Fact]
+    public void StopOnAnIdleSessionSpendsNoRequest()
+    {
+        var api = new RoutingApi(Answer(200, Receipt));
+        var chat = Sender(api);
+
+        chat.Cancel();
+
+        Assert.Null(chat.InterruptTask);
+        Assert.Empty(api.Requests);
+    }
+
+    [Fact]
+    public async Task AStopThatDoesNotArriveSaysSoAndComesBack()
+    {
+        var api = new RoutingApi(Answer(500));
+        var chat = Sender(api, session: BusyRow());
+        var changes = 0;
+        chat.InterruptChanged += () => changes++;
+
+        chat.Cancel();
+        await chat.InterruptTask!;
+
+        Assert.True(chat.CanInterrupt);
+        Assert.Equal(2, changes);
+        Assert.StartsWith("Stop did not reach the session: ", Assert.Single(chat.History).Text,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AStopWithNoCredentialSaysWhy()
+    {
+        var api = new RoutingApi(Answer(200, Receipt));
+        var creds = new CountingCredentials
+        {
+            Reading = new CredentialRead(CredentialOutcome.NotLoggedIn, null, null, "…"),
+        };
+        var chat = Sender(api, creds: creds, session: BusyRow());
+
+        chat.Cancel();
+        await chat.InterruptTask!;
+
+        Assert.Empty(api.Requests);
+        Assert.Contains(ClaudeCliCredentials.Describe(CredentialOutcome.NotLoggedIn),
+            Assert.Single(chat.History).Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AStopForAMalformedIdIsRefusedBeforeAnyRequest()
+    {
+        var api = new RoutingApi(Answer(200, Receipt));
+        var chat = Sender(api, session: BusyRow("not a session"));
+
+        chat.Cancel();
+        await chat.InterruptTask!;
+
+        Assert.Empty(api.Requests);
+        Assert.Contains("id", Assert.Single(chat.History).Text, StringComparison.Ordinal);
+    }
+
+    // After a Stop, the turn ending re-arms it for the next one; so does a send.
+    [Fact]
+    public async Task StopComesBackForTheNextTurn()
+    {
+        var chat = Sender(new RoutingApi(Answer(200, Receipt)), session: BusyRow());
+
+        chat.Cancel();
+        await chat.InterruptTask!;
+        Assert.False(chat.CanInterrupt);
+
+        chat.UpdateStatus(Row());
+        chat.UpdateStatus(BusyRow());
+        Assert.True(chat.CanInterrupt);
+
+        chat.Cancel();
+        await chat.InterruptTask!;
+        Assert.False(chat.CanInterrupt);
+
+        await chat.SendAsync("and another thing");
+        Assert.True(chat.CanInterrupt);
+        await chat.FollowUpTask!;
+    }
+
+    // --- the rules, without a session -------------------------------------------
+
+    [Theory]
+    [InlineData(409, "", "Ended")]
+    [InlineData(404, "", "Gone")]
+    [InlineData(403, ApiErrorBody, "NotPermitted")]
+    public void ARefusalAboutTheSessionIsRecognised(int status, string body, string expected)
+    {
+        Assert.Equal(expected,
+            CloudChatSendability.RefusalFor(CloudOutcomes.OutcomeFor(status, body)).ToString());
+    }
+
+    [Theory]
+    [InlineData(200, "")]
+    [InlineData(401, "")]
+    [InlineData(403, "<html></html>")]
+    [InlineData(413, "")]
+    [InlineData(429, "")]
+    [InlineData(500, "")]
+    public void EverythingElseSaysNothingLastingAboutTheSession(int status, string body)
+    {
+        Assert.Null(CloudChatSendability.RefusalFor(CloudOutcomes.OutcomeFor(status, body)));
+    }
+
+    [Fact]
+    public void TheRulesCombineInOrder()
+    {
+        Assert.Equal(CloudSendability.NotPermitted,
+            CloudChatSendability.For(CloudSendability.NotPermitted, Row()));
+        Assert.Equal(CloudSendability.Gone, CloudChatSendability.For(null, null));
+        Assert.Equal(CloudSendability.Ended, CloudChatSendability.For(null, Row(bucket: "ARCHIVED")));
+        Assert.Equal(CloudSendability.Sendable, CloudChatSendability.For(null, Row(bucket: "blocked")));
+    }
+
+    [Fact]
+    public void EachStateHasItsOwnHint()
+    {
+        Assert.Equal(CloudChatSendability.SendableHint,
+            CloudChatSendability.HintFor(CloudSendability.Sendable, busy: false));
+        Assert.Equal(CloudChatSendability.BusyHint,
+            CloudChatSendability.HintFor(CloudSendability.Sendable, busy: true));
+        Assert.Equal(CloudChatSendability.EndedHint,
+            CloudChatSendability.HintFor(CloudSendability.Ended, busy: true));
+        Assert.Equal(CloudChatSendability.GoneHint,
+            CloudChatSendability.HintFor(CloudSendability.Gone, busy: false));
+        Assert.Equal(CloudChatSendability.NotPermittedHint,
+            CloudChatSendability.HintFor(CloudSendability.NotPermitted, busy: false));
+    }
+
+    // Still true: the session says where it can be opened, and the hint beside
+    // the link is never empty.
+    [Fact]
+    public void ItSaysWhereItCanBeOpenedAndItsHintIsNeverEmpty()
     {
         var chat = Build(new FakeApi(_ => throw new InvalidOperationException()));
 
         var readOnly = Assert.IsAssignableFrom<IRemoteChatReadOnly>(chat);
 
-        Assert.True(readOnly.IsReadOnly);
+        Assert.False(readOnly.IsReadOnly);
         Assert.Contains("claude.ai/code", readOnly.ReplyUrl!, StringComparison.Ordinal);
-
-        // And the hint still says something, since the panel draws it beside the
-        // link — an empty sentence there would leave a bare blue word floating
-        // under the transcript.
         Assert.False(string.IsNullOrWhiteSpace(
             Assert.IsAssignableFrom<IRemoteChatComposer>(chat).ComposerHint));
     }
@@ -507,19 +1331,6 @@ public class ClaudeCloudEventsTests
                 "", "idle", false, null, null, null, null));
 
         Assert.Null(Assert.IsAssignableFrom<IRemoteChatReadOnly>(chat).ReplyUrl);
-    }
-
-    // Nothing this app started is in flight — the reply is happening in the cloud
-    // whether the panel is open or not.
-    [Fact]
-    public void CancelDoesNothingAndSaysSoByDoingNothing()
-    {
-        var api = new FakeApi(_ => throw new InvalidOperationException("must not be called"));
-        var chat = Build(api);
-
-        chat.Cancel();
-
-        Assert.Empty(api.Paths);
     }
 
     // --- identity ------------------------------------------------------------
