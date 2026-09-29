@@ -2298,6 +2298,12 @@ namespace ClaudeBuddy
                 + "provides, (Kokoro) for the high-quality engine above, and (custom) for "
                 + "anything your own speakCommand lists."));
 
+            rows.Add(Row("Speech volume", SpeechVolumeControl(),
+                "How loud replies are read aloud — the system voices, the high-quality "
+                + "voice, and orbs with voices of their own. A custom speak command is "
+                + "sent the level and decides what to do with it. How much quieter a "
+                + "given step sounds depends on the voice."));
+
             rows.Add(Row("Speaks", SpeakScopePicker(),
                 "What the speaker reads. The full response is everything the assistant "
                 + "said, which is what it has always done. A vibe code summary condenses "
@@ -2365,9 +2371,143 @@ namespace ClaudeBuddy
             List<TextToSpeech.VoiceOption>? options = null;
 
             combo.DropDownOpened += (_, _) => options = FillVoiceList(combo, options);
-            combo.SelectionChanged += (_, _) => ChooseVoice(combo, options);
+            combo.SelectionChanged += (_, _) =>
+            {
+                ChooseVoice(combo, options);
+
+                // Choosing a voice can change the engine, and the engine is
+                // what decides what the Speech row's note has to say.
+                RefreshSpeechVolumeNote();
+            };
 
             return combo;
+        }
+
+        // CB-200's Speech slider and the note under it for the cases where
+        // telling an engine the level is not the same as hearing it. Kept as
+        // fields so choosing a different voice can change the note without
+        // rebuilding the window.
+        internal Slider? SpeechVolumeSlider { get; private set; }
+        internal TextBlock? SpeechVolumeNote { get; private set; }
+
+        internal TextBlock? SpeechVolumeReadout { get; private set; }
+
+        internal Control SpeechVolumeControl()
+        {
+            SpeechVolumeReadout = VolumeReadout();
+            SpeechVolumeSlider = VolumeSlider(ClaudeBuddySettings.SpeechVolume,
+                level => ClaudeBuddySettings.SpeechVolume = level, SpeechVolumeReadout);
+
+            // Under the slider rather than beside it, and wrapped: every
+            // note is a sentence or two, and beside a 160px slider it
+            // would squeeze the row's label into a clip on Windows — the same
+            // failure the Sounds rows had.
+            SpeechVolumeNote = new TextBlock
+            {
+                FontSize = 11,
+                Opacity = 0.7,
+                MaxWidth = 240,
+                TextWrapping = TextWrapping.Wrap,
+                TextAlignment = TextAlignment.Right,
+                HorizontalAlignment = HorizontalAlignment.Right
+            };
+
+            RefreshSpeechVolumeNote();
+
+            return new StackPanel
+            {
+                Orientation = Orientation.Vertical,
+                Spacing = 4,
+                Children = { WithReadout(SpeechVolumeSlider, SpeechVolumeReadout), SpeechVolumeNote }
+            };
+        }
+
+        // The slider is never disabled: every engine is told the level
+        // (AudioVolume.SpeechVolumeNote says what is and is not promised).
+        // This decides only the note, from the saved engine and from the
+        // engines orbs' own voices resolve to — CB-200's second review found
+        // an orb's persona speaking through a custom command while the row,
+        // reading the global engine alone, said nothing. No voice is
+        // enumerated to find out, for the reason SavedVoiceNameForPlaceholder
+        // gives; the orbs' engines come from the voice list only if something
+        // has already built it.
+        //
+        // No null guard: the constructor builds every row, and VoiceRows
+        // builds this note before anything that could call here can fire —
+        // the picker's SelectionChanged only follows a user's choice.
+        internal void RefreshSpeechVolumeNote()
+        {
+            // The engine that will speak, not merely the one named: a stale
+            // "custom" with no command behind it speaks with a system voice.
+            var engine = TextToSpeech.EngineThatWillSpeak(
+                ClaudeBuddySettings.SpeakEngine, TextToSpeech.CustomCommandConfigured);
+            var note = AudioVolume.SpeechVolumeNote(engine, NeuralSpeech.EngineIgnoresVolume,
+                SessionIdentity.OrbEngines(SessionIdentity.PersonaVoiceRequests(), TextToSpeech.CachedVoiceOptions));
+
+            SpeechVolumeNote!.Text = note;
+            SpeechVolumeNote.IsVisible = note is not null;
+        }
+
+        // CB-200's Alert slider — every chime, whichever engine speaks.
+        internal Slider? AlertVolumeSlider { get; private set; }
+        internal TextBlock? AlertVolumeReadout { get; private set; }
+
+        internal Control AlertVolumeControl()
+        {
+            AlertVolumeReadout = VolumeReadout();
+            AlertVolumeSlider = VolumeSlider(ClaudeBuddySettings.AlertVolume,
+                level => ClaudeBuddySettings.AlertVolume = level, AlertVolumeReadout);
+            return WithReadout(AlertVolumeSlider, AlertVolumeReadout);
+        }
+
+        // The percentage beside each slider (CB-200 QA): a tooltip is a
+        // number nobody sees without hovering, and "how loud is it now" is the
+        // first thing anyone asks of a volume control. Fixed width, right
+        // aligned, so the slider does not shift as 5% becomes 100%.
+        private static TextBlock VolumeReadout() => new()
+        {
+            FontSize = 12,
+            Width = 36,
+            TextAlignment = TextAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+
+        private static Control WithReadout(Slider slider, TextBlock readout) => new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Children = { slider, readout }
+        };
+
+        // Both volume sliders are the same control over AudioVolume's range,
+        // with the percentage in a readout beside it and as a tooltip. The
+        // other sliders in this window read their range from the class that
+        // owns the rule; this one does too.
+        internal static Slider VolumeSlider(double value, Action<double> write, TextBlock readout)
+        {
+            var slider = new Slider
+            {
+                Minimum = AudioVolume.Min,
+                Maximum = AudioVolume.Max,
+                Value = value,
+                MinWidth = 160,
+                SmallChange = AudioVolume.Step,
+                LargeChange = 0.25,
+                TickFrequency = AudioVolume.Step,
+                IsSnapToTickEnabled = true
+            };
+            ToolTip.SetTip(slider, AudioVolume.Percent(value));
+            readout.Text = AudioVolume.Percent(value);
+
+            slider.PropertyChanged += (_, e) =>
+            {
+                if (e.Property != Slider.ValueProperty) return;
+                write(slider.Value);
+                ToolTip.SetTip(slider, AudioVolume.Percent(slider.Value));
+                readout.Text = AudioVolume.Percent(slider.Value);
+            };
+            return slider;
         }
 
         // Two named modes rather than a switch, because "off" is not what Full
@@ -3099,7 +3239,12 @@ namespace ClaudeBuddy
                 + "the state that most needs your attention, so it always wins over a "
                 + "turn finishing elsewhere on the same scan. Set an individual orb's "
                 + "sound from its right-click menu; that override beats this default for "
-                + "that orb alone.")
+                + "that orb alone."),
+
+            // CB-200. Last rather than beside the master switch, so it reads
+            // as applying to both sounds above it — and a preview is how a
+            // level is judged, so it sits under the buttons that play one.
+            Row("Alert volume", AlertVolumeControl(), AudioVolume.AlertVolumeHelp(OperatingSystem.IsWindows()))
         };
 
         // --- Mac-ish chrome ---------------------------------------------------
@@ -3312,10 +3457,18 @@ namespace ClaudeBuddy
                 SearchText = SettingsFilter.TextOf(label, help)
             };
 
+            // Wrapped, with a gap before the control: the label sits in the
+            // star column, so a wide control takes its width. Unwrapped, a
+            // label longer than what was left was cut off mid-word and ran
+            // under the control — "When a session need" beside Windows'
+            // wider combo box (CB-200 review). Wrapping only happens when the
+            // line would not fit anyway, so a row that fit before is unchanged.
             var text = new TextBlock
             {
                 Text = label,
                 FontSize = 13,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 0, 12, 0),
                 VerticalAlignment = VerticalAlignment.Center
             };
             grid.Children.Add(text);

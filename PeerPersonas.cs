@@ -17,6 +17,13 @@ namespace ClaudeBuddy
             lock (Gate) return Registry.GetValueOrDefault(sessionId);
         }
 
+        // Every voice a paired Buddy's persona names, for
+        // SessionIdentity.PersonaVoiceRequests.
+        internal static List<string> Voices()
+        {
+            lock (Gate) return Registry.Values.Select(persona => persona.Voice).OfType<string>().ToList();
+        }
+
         // The sending Buddy bounds a portrait while reading it off its own disk
         // (PersonaFiles.ReadAvatarFile, the CB-146 cap). That is a check on the
         // *sender's* file, and it is the sender who is trusted to have run it —

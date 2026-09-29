@@ -52,6 +52,10 @@
          separate downloadable process exists to avoid. Harmless until tools/
          gained its first .cs file, which is exactly why it is easy to miss. -->
     <Compile Remove="tools\**" />
+    <!-- ...except the one file the app shares with the side-car engine: the
+         names of their contract, compiled into both so they cannot drift
+         (CB-200). -->
+    <Compile Include="tools\ClaudeBuddySpeech\SpeechEngineContract.cs" Link="SpeechEngineContract.cs" />
 
     <!-- Same trap, second door: tests/ has its own project with its own entry
          point, and the SDK's default glob would compile it into the app. It is

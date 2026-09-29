@@ -42,6 +42,26 @@ public class SettingsListParsingTests
         Assert.Equal(new[] { "-v", "Daniel", "-r", "200" }, ClaudeBuddySettings.SpeakCommandArgs);
     }
 
+    // CB-200: a custom speak command launched from a real settings file gets
+    // its own arguments in order and the saved Speech level in its
+    // environment — the file-to-process seam, where the unit tests only see
+    // the builder.
+    [Fact]
+    public void ACustomCommandIsStartedWithItsArgumentsAndTheSavedLevel()
+    {
+        Stage("""
+        { "speakCommand": "/usr/local/bin/my-tts", "speakCommandArgs": ["--model", "f5"],
+          "speakCommandVoice": "female_03", "speechVolume": 0.25 }
+        """);
+
+        var startInfo = TextToSpeech.CustomCommandStartInfo(ClaudeBuddySettings.SpeakCommand!, voice: null);
+
+        Assert.Equal("/usr/local/bin/my-tts", startInfo.FileName);
+        Assert.Equal(new[] { "--model", "f5" }, startInfo.ArgumentList);
+        Assert.Equal("female_03", startInfo.Environment["CLAUDEBUDDY_VOICE"]);
+        Assert.Equal("0.25", startInfo.Environment[SpeechEngineContract.VolumeEnvVar]);
+    }
+
     [Fact]
     public void VoicesCommandAndItsArgumentsAreReadTogether()
     {

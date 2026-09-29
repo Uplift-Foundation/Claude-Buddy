@@ -743,6 +743,12 @@ namespace ClaudeBuddy
             lock (Gate) return Registry.GetValueOrDefault(sessionId);
         }
 
+        // Every voice a local persona names, for SessionIdentity.PersonaVoiceRequests.
+        internal static List<string> Voices()
+        {
+            lock (Gate) return Registry.Values.Select(persona => persona.Voice).OfType<string>().ToList();
+        }
+
         // A test seam, matching OpenClawSessions.SetIdentitiesForTests: the only
         // thing that fills this table in production is SessionManager's scan,
         // which needs a status file on disk and a two-second timer. Without

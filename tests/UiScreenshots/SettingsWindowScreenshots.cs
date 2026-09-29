@@ -229,6 +229,130 @@ public class SettingsWindowScreenshots
         }
     }
 
+    // CB-200's two volume sliders, each captured holding a saved non-default
+    // level so a broken round trip would show as a thumb back at the right
+    // edge. No platform gate: every engine that speaks on either platform
+    // honours a level, so both rids should show the same enabled slider.
+    [AvaloniaFact]
+    public void SpeechVolumeSliderHoldsASavedLevel() =>
+        WithVolumes("system", speech: 0.4, alert: 1.0, () =>
+            CaptureGroup(ShownSettings(), "Speech volume", "Voice", "settings-speech-volume.png"));
+
+    // A custom speak command is told the level through
+    // CLAUDEBUDDY_SPEECH_VOLUME (CB-200 second review), so the slider is live;
+    // the note under it says the command has to read it.
+    [AvaloniaFact]
+    public void SpeechVolumeIsGreyedAndLabelledForACustomCommand() =>
+        WithVolumes("custom", speech: 0.4, alert: 1.0, () =>
+            CaptureGroup(ShownSettings(), "Speech volume", "Voice", "settings-speech-volume-custom.png"));
+
+    // And the Alert slider, which no engine choice affects — captured with
+    // the custom engine selected on purpose, so this one shows it enabled in
+    // exactly the state that greys the Speech one.
+    [AvaloniaFact]
+    public void AlertVolumeSliderHoldsASavedLevel() =>
+        WithVolumes("custom", speech: 1.0, alert: 0.3, () =>
+            CaptureGroup(ShownSettings(), "Alert volume", "Sounds", "settings-alert-volume.png"));
+
+    // CB-200 review: Kokoro selected while only an older engine is on disk —
+    // just after an upgrade, or a dev build whose engine was never published.
+    // The older engine ignores the level, so the row carries a note under a
+    // slider that stays enabled. Look for the note, and for the "Speech
+    // volume" label still whole beside it.
+    [AvaloniaFact]
+    public void SpeechVolumeIsNotedWhileAnOlderEngineSpeaks() =>
+        WithVolumes("neural", speech: 0.4, alert: 1.0, () =>
+            WithOlderEngineOnly(() =>
+                CaptureGroup(ShownSettings(), "Speech volume", "Voice", "settings-speech-volume-fallback.png")));
+
+    // CB-200 second review, Warren's defect: the global engine is a system
+    // voice, but an orb's persona speaks through a custom command. The note
+    // under the live slider is the one for orbs with their own custom-command
+    // voice — before this, the row said nothing at all.
+    [AvaloniaFact]
+    public void SpeechVolumeIsNotedForAnOrbOnACustomCommand() =>
+        WithVolumes("system", speech: 0.4, alert: 1.0, () =>
+        {
+            LocalPersonas.SetForTests(new Dictionary<string, LocalPersona.Persona>
+            {
+                ["orb-1"] = new("Jennifer", "female_03", null, null, null, Array.Empty<string>())
+            });
+            TextToSpeech.SetVoiceOptionsForTests(new()
+            {
+                new(TextToSpeech.SpeakEngine.System, "Samantha", "Samantha (system)"),
+                new(TextToSpeech.SpeakEngine.Custom, "female_03", "female_03 (custom)"),
+            });
+            try
+            {
+                CaptureGroup(ShownSettings(), "Speech volume", "Voice", "settings-speech-volume-orb-custom.png");
+            }
+            finally
+            {
+                LocalPersonas.SetForTests(new Dictionary<string, LocalPersona.Persona>());
+                TextToSpeech.InvalidateVoiceCache();
+            }
+        });
+
+    private static void WithOlderEngineOnly(Action capture)
+    {
+        var wasEnabled = ClaudeBuddySettings.NeuralVoiceEnabled;
+        var directory = System.IO.Path.Combine(NeuralSpeech.Root, "0.0.1-older");
+        var modelExisted = System.IO.File.Exists(NeuralSpeech.ModelPath);
+        System.IO.Directory.CreateDirectory(directory);
+        System.IO.File.WriteAllBytes(System.IO.Path.Combine(directory, NeuralSpeech.EngineExeName), Array.Empty<byte>());
+        if (!modelExisted) System.IO.File.WriteAllBytes(NeuralSpeech.ModelPath, Array.Empty<byte>());
+        try
+        {
+            ClaudeBuddySettings.NeuralVoiceEnabled = true;
+            capture();
+        }
+        finally
+        {
+            ClaudeBuddySettings.NeuralVoiceEnabled = wasEnabled;
+            System.IO.Directory.Delete(directory, recursive: true);
+            if (!modelExisted) System.IO.File.Delete(NeuralSpeech.ModelPath);
+        }
+    }
+
+    private static Avalonia.Controls.Window ShownSettings()
+    {
+        var ctor = typeof(SettingsWindow).GetConstructor(
+            BindingFlags.NonPublic | BindingFlags.Instance,
+            types: Type.EmptyTypes)
+            ?? throw new MissingMethodException("SettingsWindow", ".ctor()");
+
+        var window = (Avalonia.Controls.Window)ctor.Invoke(null);
+        window.Show();
+        ScreenshotHelper.Flush();
+        return window;
+    }
+
+    private static void WithVolumes(string engine, double speech, double alert, Action capture)
+    {
+        var wasEngine = ClaudeBuddySettings.SpeakEngine;
+        var wasSpeech = ClaudeBuddySettings.SpeechVolume;
+        var wasAlert = ClaudeBuddySettings.AlertVolume;
+        var wasCommand = ClaudeBuddySettings.SpeakCommand;
+        try
+        {
+            ClaudeBuddySettings.SpeakEngine = engine;
+            ClaudeBuddySettings.SpeechVolume = speech;
+            ClaudeBuddySettings.AlertVolume = alert;
+            // A command that exists, so "custom" is the engine that will
+            // really speak and the greyed state is the honest one. Never run:
+            // nothing here opens the voice picker.
+            ClaudeBuddySettings.SpeakCommand = "my-own-tts";
+            capture();
+        }
+        finally
+        {
+            ClaudeBuddySettings.SpeakEngine = wasEngine;
+            ClaudeBuddySettings.SpeechVolume = wasSpeech;
+            ClaudeBuddySettings.AlertVolume = wasAlert;
+            ClaudeBuddySettings.SpeakCommand = wasCommand;
+        }
+    }
+
     // The direct link's card, switched on, so the pairing controls are in frame.
     //
     // **Unlike every other scenario in this file, this one has no platform
