@@ -571,6 +571,38 @@ public class ClaudeCloudStepTests
             Now, CancellationToken.None);
 
         Assert.Equal("session_known", Assert.Single(step.Snapshot!).Id);
+
+        // CB-199 made a 404 SessionGone, which Backoff stops on. One deleted
+        // session must still not halt the arm and take every orb with it.
+        Assert.False(step.Next.Halted);
+    }
+
+    // A 404 on the *listing* is the collection moving, not a session going, so
+    // the roster reads it as it did before CB-199: retryable, no orbs dropped,
+    // and a status line that does not claim a session was deleted.
+    [Fact]
+    public async Task AFourOhFourOnTheListingBacksOffInsteadOfHalting()
+    {
+        var api = new FakeApi(_ => Fail(404));
+
+        var step = await ClaudeCloudSessions.StepAsync(api, new FakeCredentials(),
+            ClaudeCloudSessions.ArmState.Initial, Now, CancellationToken.None);
+
+        Assert.False(step.Next.Halted);
+        Assert.Null(step.Snapshot);
+        Assert.Equal(Backoff.UnavailableFloor, step.Next.Backoff);
+        Assert.Equal("the endpoint answered 404", step.Status);
+        Assert.DoesNotContain("no longer exists", step.Status, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TheRosterViewLeavesEveryOtherOutcomeAlone()
+    {
+        var refused = CloudOutcomes.OutcomeFor(401, null);
+
+        Assert.Same(refused, ClaudeCloudSessions.RosterView(refused));
+        Assert.Equal(CloudOutcomeKind.Unavailable,
+            ClaudeCloudSessions.RosterView(CloudOutcomes.OutcomeFor(404, null)).Kind);
     }
 
     // A per-session read refused for a reason that would stop the arm stops it

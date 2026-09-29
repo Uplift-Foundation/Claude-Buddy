@@ -195,6 +195,7 @@ public class ClaudeCloudOutcomeTests
     [InlineData(400)]
     [InlineData(401)]
     [InlineData(403)]
+    [InlineData(404)]
     [InlineData(409)]
     [InlineData(413)]
     [InlineData(429)]
@@ -239,7 +240,7 @@ public class ClaudeCloudOutcomeTests
     {
         const string canary = "sk-ant-oat01-CANARY-ACCESS-abcdef0123456789";
 
-        foreach (var status in new[] { 200, 400, 401, 403, 409, 413, 429, 500 })
+        foreach (var status in new[] { 200, 400, 401, 403, 404, 409, 413, 429, 500 })
         {
             var outcome = CloudOutcomes.OutcomeFor(status, $"leaked {canary} here");
             Assert.DoesNotContain(canary, outcome.Detail ?? "", StringComparison.Ordinal);
@@ -297,5 +298,41 @@ public class ClaudeCloudOutcomeTests
         var wait = Backoff.Next(CloudOutcomes.OutcomeFor(status, null), null);
 
         Assert.Equal(Backoff.UnavailableFloor, wait);
+    }
+
+    // --- a deleted session (CB-199) --------------------------------------------
+
+    // **Measured** against a deleted cloud session: this body, 404, on
+    // `GET /v1/code/sessions/{id}`. Ids invented.
+    private const string GoneBody =
+        """{"type":"error","error":{"type":"not_found_error","message":"Session session_01Invented not found"},"request_id":"req_invented"}""";
+
+    [Fact]
+    public void AFourOhFourIsASessionThatNoLongerExists()
+    {
+        var outcome = CloudOutcomes.OutcomeFor(404, GoneBody);
+
+        Assert.Equal(CloudOutcomeKind.SessionGone, outcome.Kind);
+        Assert.Equal(404, outcome.Status);
+        Assert.Equal("this cloud session no longer exists", outcome.Detail);
+        Assert.Equal(CloudOutcomes.SessionGoneDetail, outcome.Detail);
+    }
+
+    // Gone and ended are different answers: one measured, one the CLI's
+    // reading. Keeping them apart is what lets the panel say which.
+    [Fact]
+    public void GoneIsNotInactive()
+    {
+        Assert.NotEqual(CloudOutcomes.OutcomeFor(404, GoneBody).Kind,
+            CloudOutcomes.OutcomeFor(409, null).Kind);
+    }
+
+    // It used to be Unavailable and backed off forever. A deleted session is
+    // not coming back, so waiting is a stop, like a refused token.
+    [Fact]
+    public void BackoffStopsForAGoneSession()
+    {
+        Assert.Null(Backoff.Next(CloudOutcomes.OutcomeFor(404, GoneBody), null));
+        Assert.Null(Backoff.Next(CloudOutcomes.OutcomeFor(404, GoneBody), TimeSpan.FromSeconds(8)));
     }
 }

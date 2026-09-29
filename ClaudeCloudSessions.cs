@@ -297,6 +297,14 @@ namespace ClaudeBuddy
 
                 if (one.Outcome.Kind != CloudOutcomeKind.Ok)
                 {
+                    // A 404 on one session is about that session and nothing
+                    // else. Backoff stops on SessionGone, and the check below
+                    // would halt the whole arm — every cloud orb gone until the
+                    // credential changed — because one session was deleted. So
+                    // it stays what a 404 was here before CB-199: no news, the
+                    // orb kept until the next deep walk drops it.
+                    if (one.Outcome.Kind == CloudOutcomeKind.SessionGone) continue;
+
                     // A refusal that would stop the arm stops it here too — there
                     // is no point walking the rest of the list to be refused eight
                     // more times. Anything retryable is treated as **no news about
@@ -357,6 +365,8 @@ namespace ClaudeBuddy
         // retryable leaves the orbs exactly where they are and publishes nothing.
         private static StepResult Failed(ArmState state, string? stamp, CloudOutcome outcome)
         {
+            outcome = RosterView(outcome);
+
             var wait = Backoff.Next(outcome, state.Backoff);
             var status = outcome.Detail ?? $"the endpoint answered {outcome.Status}";
 
@@ -374,6 +384,25 @@ namespace ClaudeBuddy
                 status,
                 wait.Value);
         }
+
+        // What a failure on a *roster* request means.
+        //
+        // Every request Failed sees is the listing, page one of it, or a single
+        // session read whose refusal would stop the arm — and a 404 on the
+        // listing is the collection having moved, not a session having gone.
+        // OutcomeFor cannot see the path and calls every 404 SessionGone, which
+        // Backoff stops on; left alone, that would halt the arm and put "this
+        // cloud session no longer exists" on the status line for a problem with
+        // the endpoint. So on this path a 404 is what it was before CB-199:
+        // retryable, and described by its status.
+        internal static CloudOutcome RosterView(CloudOutcome outcome) =>
+            outcome.Kind == CloudOutcomeKind.SessionGone
+                ? outcome with
+                {
+                    Kind = CloudOutcomeKind.Unavailable,
+                    Detail = $"the endpoint answered {outcome.Status}",
+                }
+                : outcome;
 
         // A stop, or a retryable credential problem, in one shape.
         private static StepResult Stop(ArmState state, string? stamp, string status, TimeSpan? wait)
