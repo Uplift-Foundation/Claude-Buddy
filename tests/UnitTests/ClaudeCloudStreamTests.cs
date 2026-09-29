@@ -513,7 +513,7 @@ public class ClaudeCloudStreamTests
         CancellationToken ct = default)
     {
         var events = new List<CloudStreamEvent>();
-        await foreach (var ev in ClaudeCloudStreamEvents.ReadAsync(reader, 200, ct)) events.Add(ev);
+        await foreach (var ev in ClaudeCloudStreamEvents.ReadAsync(reader, 200, "text/event-stream", ct)) events.Add(ev);
         return events;
     }
 
@@ -627,6 +627,196 @@ public class ClaudeCloudStreamTests
         Assert.Null(ended.SequenceNum);
     }
 
+    // --- a 2xx that is not an event stream (QA) --------------------------------
+
+    private static async Task<List<CloudStreamEvent>> ReadAs(string? mediaType, TextReader reader,
+        CancellationToken ct = default)
+    {
+        var events = new List<CloudStreamEvent>();
+        await foreach (var ev in ClaudeCloudStreamEvents.ReadAsync(reader, 200, mediaType, ct)) events.Add(ev);
+        return events;
+    }
+
+    // A proxy or a moved route answering 200 with a page must not be framed
+    // as SSE and end in an Ok that reads like a healthy stream closing.
+    [Theory]
+    [InlineData("text/html", "the stream answered with text/html, not an event stream")]
+    [InlineData("application/json", "the stream answered with application/json, not an event stream")]
+    [InlineData(null, "the stream answered with no media type, not an event stream")]
+    [InlineData("  ", "the stream answered with no media type, not an event stream")]
+    public async Task ATwoHundredThatIsNotAnEventStreamIsNotRead(string? mediaType, string detail)
+    {
+        var events = await ReadAs(mediaType, new StringReader("event: client_event\nid: 1\ndata: {}\n\n"));
+
+        var ended = Assert.Single(events);
+        Assert.Equal(CloudStreamEventKind.Ended, ended.Kind);
+        Assert.Equal(CloudOutcomeKind.ShapeChanged, ended.Outcome!.Kind);
+        Assert.Equal(200, ended.Outcome.Status);
+        Assert.Equal(detail, ended.Outcome.Detail);
+    }
+
+    // And the policy treats it as a failure: backed off, counted.
+    [Fact]
+    public async Task ThePolicyBacksOffAWrongMediaType()
+    {
+        var ended = Assert.Single(await ReadAs("text/html", new StringReader("<html>")));
+
+        var d = ClaudeCloudStreamPolicy.Next(ClaudeCloudStreamPolicy.State.Initial, ended.Outcome!,
+            ClaudeCloudStreamPolicy.WasHealthy(false, TimeSpan.FromMilliseconds(50)));
+
+        Assert.Equal(Backoff.UnavailableFloor, d.Wait);
+        Assert.Equal(1, d.Next.ConsecutiveFailures);
+    }
+
+    [Theory]
+    [InlineData("text/event-stream", true)]
+    [InlineData("TEXT/Event-Stream", true)]
+    [InlineData(" text/event-stream ", true)]
+    [InlineData("text/event-stream; charset=utf-8", true)]
+    [InlineData("text/event-streams", false)]
+    [InlineData("text/plain", false)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    public void TheMediaTypeIsComparedWithoutParametersOrCase(string? mediaType, bool expected)
+    {
+        Assert.Equal(expected, ClaudeCloudStreamEvents.IsEventStream(mediaType));
+    }
+
+    // --- cancellation after a read (QA) ------------------------------------------
+
+    // A reader that hands back what it already had while the token is being
+    // cancelled under it: a line on the first call, EOF on the second.
+    private sealed class RacingReader : TextReader
+    {
+        private readonly CancellationTokenSource _cts;
+        private readonly string?[] _answers;
+        private int _call;
+        internal RacingReader(CancellationTokenSource cts, params string?[] answers)
+        {
+            _cts = cts;
+            _answers = answers;
+        }
+
+        public override ValueTask<string?> ReadLineAsync(CancellationToken cancellationToken)
+        {
+            var answer = _answers[_call++];
+            if (_call == _answers.Length) _cts.Cancel();
+            return ValueTask.FromResult(answer);
+        }
+    }
+
+    // The line that completes an event arrives as the token is cancelled:
+    // no frame is delivered for it.
+    [Fact]
+    public async Task ALineReadAsTheTokenIsCancelledYieldsNoFrame()
+    {
+        using var cts = new CancellationTokenSource();
+        var events = await ReadAs("text/event-stream",
+            new RacingReader(cts, "event: client_event", "id: 1", "data: {}", ""), cts.Token);
+
+        Assert.Empty(events);
+    }
+
+    [Fact]
+    public async Task AKeepaliveReadAsTheTokenIsCancelledYieldsNothing()
+    {
+        using var cts = new CancellationTokenSource();
+        var events = await ReadAs("text/event-stream", new RacingReader(cts, ": keepalive"), cts.Token);
+
+        Assert.Empty(events);
+    }
+
+    // An EOF that races the cancel produces no Ended either.
+    [Fact]
+    public async Task AnEndOfStreamReadAsTheTokenIsCancelledYieldsNoEnded()
+    {
+        using var cts = new CancellationTokenSource();
+        var events = await ReadAs("text/event-stream", new RacingReader(cts, ": keepalive", null), cts.Token);
+
+        Assert.Equal(CloudStreamEventKind.Keepalive, Assert.Single(events).Kind);
+    }
+
+    // --- what counts as a healthy connection (QA) --------------------------------
+
+    [Theory]
+    [InlineData(CloudStreamEventKindName.Durable, true)]
+    [InlineData(CloudStreamEventKindName.Ephemeral, true)]
+    [InlineData(CloudStreamEventKindName.Keepalive, false)]
+    [InlineData(CloudStreamEventKindName.Session, false)]
+    [InlineData(CloudStreamEventKindName.Delivery, false)]
+    [InlineData(CloudStreamEventKindName.Other, false)]
+    [InlineData(CloudStreamEventKindName.Ended, false)]
+    public void OnlyARealEventCountsTowardHealth(string kind, bool counts)
+    {
+        var ev = new CloudStreamEvent(Enum.Parse<CloudStreamEventKind>(kind), null, null, null);
+
+        Assert.Equal(counts, ClaudeCloudStreamPolicy.CountsTowardHealth(ev));
+    }
+
+    // Names rather than the internal enum, which a public theory cannot take.
+    public static class CloudStreamEventKindName
+    {
+        public const string Durable = "Durable", Ephemeral = "Ephemeral", Keepalive = "Keepalive",
+            Session = "Session", Delivery = "Delivery", Other = "Other", Ended = "Ended";
+    }
+
+    // QA's storm: a server that answers each connection with a keepalive and a
+    // session_update and then closes cleanly. Each one is backed off and
+    // counted, and the run reaches the fallback.
+    [Fact]
+    public async Task KeepalivesThenACleanCloseBackOffAndCountTowardFallback()
+    {
+        const string body = ": keepalive\nevent: session_update\ndata: {\"connection_status\":\"connected\"}\n\n";
+        var state = ClaudeCloudStreamPolicy.State.Initial;
+        var waits = new List<TimeSpan?>();
+        ClaudeCloudStreamPolicy.Decision d = default;
+
+        for (var i = 0; i < ClaudeCloudStreamPolicy.UnmeasuredFailuresBeforeFallback; i++)
+        {
+            var events = await ReadAs("text/event-stream", new StringReader(body));
+            var delivered = events.Any(ClaudeCloudStreamPolicy.CountsTowardHealth);
+            Assert.False(delivered);
+
+            d = ClaudeCloudStreamPolicy.Next(state, events[^1].Outcome!,
+                ClaudeCloudStreamPolicy.WasHealthy(delivered, TimeSpan.FromMilliseconds(300)));
+            waits.Add(d.Wait);
+            state = d.Next;
+        }
+
+        Assert.DoesNotContain(ClaudeCloudStreamPolicy.UnmeasuredReconnectAfterEnd, waits);
+        Assert.Equal(new TimeSpan?[] { Backoff.UnavailableFloor, Backoff.UnavailableFloor * 2,
+            Backoff.UnavailableFloor * 4 }, waits);
+        Assert.True(d.FallBackToPolling);
+    }
+
+    // A quiet session sends nothing but keepalives; a connection that held
+    // for the healthy age was not being turned away.
+    [Fact]
+    public void ALongLivedKeepaliveOnlyConnectionIsHealthy()
+    {
+        var healthy = ClaudeCloudStreamPolicy.WasHealthy(false,
+            ClaudeCloudStreamPolicy.UnmeasuredHealthyConnectionAge);
+        var d = ClaudeCloudStreamPolicy.Next(new ClaudeCloudStreamPolicy.State(TimeSpan.FromSeconds(8), 2),
+            new CloudOutcome(CloudOutcomeKind.Ok, 200), healthy);
+
+        Assert.True(healthy);
+        Assert.Equal(ClaudeCloudStreamPolicy.UnmeasuredReconnectAfterEnd, d.Wait);
+        Assert.Equal(0, d.Next.ConsecutiveFailures);
+        Assert.False(ClaudeCloudStreamPolicy.WasHealthy(false,
+            ClaudeCloudStreamPolicy.UnmeasuredHealthyConnectionAge - TimeSpan.FromMilliseconds(1)));
+    }
+
+    [Fact]
+    public async Task ARealEventMakesAShortConnectionHealthy()
+    {
+        var events = await ReadAs("text/event-stream", new StringReader(
+            ": keepalive\nevent: ephemeral_event\ndata: {\"payload\":{\"type\":\"stream_event\"}}\n\n"));
+        var delivered = events.Any(ClaudeCloudStreamPolicy.CountsTowardHealth);
+
+        Assert.True(delivered);
+        Assert.True(ClaudeCloudStreamPolicy.WasHealthy(delivered, TimeSpan.FromMilliseconds(10)));
+    }
+
     // --- the requests --------------------------------------------------------
 
     [Fact]
@@ -735,7 +925,7 @@ public class ClaudeCloudStreamTests
     public void AHealthyStreamThatEndsReconnectsSoonAndResetsTheRun()
     {
         var d = ClaudeCloudStreamPolicy.Next(new ClaudeCloudStreamPolicy.State(TimeSpan.FromSeconds(30), 2),
-            Ok, deliveredAny: true);
+            Ok, healthy: true);
 
         Assert.Equal(ClaudeCloudStreamPolicy.UnmeasuredReconnectAfterEnd, d.Wait);
         Assert.False(d.FallBackToPolling);
@@ -752,7 +942,7 @@ public class ClaudeCloudStreamTests
 
         for (var i = 0; i < 4; i++)
         {
-            var d = ClaudeCloudStreamPolicy.Next(state, Ok, deliveredAny: false);
+            var d = ClaudeCloudStreamPolicy.Next(state, Ok, healthy: false);
             waits.Add(d.Wait);
             fallBack.Add(d.FallBackToPolling);
             state = d.Next;
@@ -774,7 +964,7 @@ public class ClaudeCloudStreamTests
 
         var first = ClaudeCloudStreamPolicy.Next(ClaudeCloudStreamPolicy.State.Initial, unavailable, false);
         var second = ClaudeCloudStreamPolicy.Next(first.Next, unavailable, false);
-        var afterHealthy = ClaudeCloudStreamPolicy.Next(second.Next, unavailable, deliveredAny: true);
+        var afterHealthy = ClaudeCloudStreamPolicy.Next(second.Next, unavailable, healthy: true);
 
         Assert.Equal(Backoff.UnavailableFloor, first.Wait);
         Assert.Equal(Backoff.UnavailableFloor * 2, second.Wait);

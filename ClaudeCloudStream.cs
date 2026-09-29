@@ -420,10 +420,31 @@ namespace ClaudeBuddy
         // clean-EOF Ended so a consumer sees what answered. A read that throws
         // an IOException — a connection dropped mid-stream — ends Unavailable
         // with status 0, the same verdict HttpCloudApi gives a transport
-        // failure. Cancellation ends the enumeration with nothing further.
+        // failure.
+        //
+        // `mediaType` is the response's own. **A 2xx that is not an event
+        // stream is not read at all**: it ends ShapeChanged at once, which the
+        // policy backs off and counts as a failure. The failure it guards
+        // against is a proxy or a moved route answering 200 with a page — whose
+        // lines would otherwise be framed as SSE, find no events, and end in a
+        // clean Ok that reads exactly like a healthy stream closing.
+        //
+        // **Cancellation yields nothing further, ever.** The token is checked
+        // after every read as well as inside it, because a reader is entitled
+        // to return a line it already had even though the token was cancelled
+        // while it was being asked — and delivering that line, or an Ended for
+        // an EOF that raced the cancel, would hand a consumer that has already
+        // closed its panel an event it has to remember to ignore.
         internal static async IAsyncEnumerable<CloudStreamEvent> ReadAsync(TextReader reader,
-            int opened, [EnumeratorCancellation] CancellationToken ct)
+            int opened, string? mediaType, [EnumeratorCancellation] CancellationToken ct)
         {
+            if (!IsEventStream(mediaType))
+            {
+                yield return Ended(new CloudOutcome(CloudOutcomeKind.ShapeChanged, opened, null,
+                    NotAnEventStreamDetail(mediaType)));
+                yield break;
+            }
+
             var parser = new SseParser();
 
             while (true)
@@ -444,6 +465,8 @@ namespace ClaudeBuddy
                     failure = new CloudOutcome(CloudOutcomeKind.Unavailable, 0, null, ex.Message);
                 }
 
+                if (ct.IsCancellationRequested) yield break;
+
                 if (line is null)
                 {
                     parser.Reset();
@@ -457,6 +480,18 @@ namespace ClaudeBuddy
         }
 
         internal const string EndOfStreamDetail = "the stream ended";
+
+        // The measured media type, compared without its parameters (a charset
+        // would be legal) and without regard to case, as media types are.
+        internal static bool IsEventStream(string? mediaType) =>
+            mediaType is not null
+            && string.Equals(mediaType.Split(';')[0].Trim(), ClaudeCloudStreamRequest.EventStreamMediaType,
+                StringComparison.OrdinalIgnoreCase);
+
+        internal static string NotAnEventStreamDetail(string? mediaType) =>
+            "the stream answered with "
+            + (string.IsNullOrWhiteSpace(mediaType) ? "no media type" : mediaType.Trim())
+            + ", not an event stream";
 
         internal static CloudStreamEvent Ended(CloudOutcome outcome) =>
             new(CloudStreamEventKind.Ended, null, null, null, Outcome: outcome);
@@ -566,15 +601,19 @@ namespace ClaudeBuddy
         // After a clean end of a connection that was delivering events.
         internal static readonly TimeSpan UnmeasuredReconnectAfterEnd = TimeSpan.FromSeconds(1);
 
+        // How long a connection has to have stayed open to count as healthy
+        // when it delivered no real event — a quiet session sends nothing but
+        // keepalives, and one that held for this long was not being refused.
+        internal static readonly TimeSpan UnmeasuredHealthyConnectionAge = TimeSpan.FromSeconds(60);
+
         // Consecutive unhealthy connections before the panel should stop
         // relying on the stream and poll instead. It keeps retrying the stream
         // in the background at the backed-off wait; this only says when the
         // panel should not wait for it.
         internal const int UnmeasuredFailuresBeforeFallback = 3;
 
-        // Where a run of reconnects stands. A connection that delivered
-        // anything, a keepalive included, was healthy for at least a keepalive
-        // interval, and resets it.
+        // Where a run of reconnects stands. A healthy connection resets it; see
+        // WasHealthy for what counts.
         internal readonly record struct State(TimeSpan? LastWait, int ConsecutiveFailures)
         {
             internal static State Initial => new(null, 0);
@@ -585,21 +624,37 @@ namespace ClaudeBuddy
         // loop against an answer that is not going to change.
         internal readonly record struct Decision(TimeSpan? Wait, bool FallBackToPolling, State Next);
 
-        internal static Decision Next(State state, CloudOutcome ended, bool deliveredAny)
+        // Did an event count towards the connection having been healthy?
+        //
+        // **Only a client_event or an ephemeral_event.** A keepalive, a
+        // session_update and a delivery_update all arrive on a connection that
+        // is doing nothing for us — the first two are the very first things a
+        // fresh connection sends — so a server that answered each connection
+        // with them and closed would otherwise read as healthy every time, and
+        // earn the one-second reconnect forever. That was QA's reconnect storm.
+        internal static bool CountsTowardHealth(CloudStreamEvent ev) =>
+            ev.Kind is CloudStreamEventKind.Durable or CloudStreamEventKind.Ephemeral;
+
+        // A connection was healthy if it delivered a real event, or if it stayed
+        // open long enough that it was plainly not being turned away.
+        internal static bool WasHealthy(bool deliveredEvent, TimeSpan connectedFor) =>
+            deliveredEvent || connectedFor >= UnmeasuredHealthyConnectionAge;
+
+        // `healthy` is WasHealthy's answer for the connection that just ended.
+        internal static Decision Next(State state, CloudOutcome ended, bool healthy)
         {
-            var failures = deliveredAny ? 0 : state.ConsecutiveFailures;
-            var previous = deliveredAny ? null : state.LastWait;
+            var failures = healthy ? 0 : state.ConsecutiveFailures;
+            var previous = healthy ? null : state.LastWait;
 
             TimeSpan? wait;
             switch (ended.Kind)
             {
                 // A clean end. After a healthy connection it is ordinary and
-                // gets the short reconnect; a connection that ended before
-                // delivering anything is counted and backed off like a
-                // failure, so a server closing every stream at once cannot turn
-                // this into a tight loop.
+                // gets the short reconnect; an unhealthy one is counted and
+                // backed off like a failure, so a server closing every stream
+                // at once cannot turn this into a tight loop.
                 case CloudOutcomeKind.Ok:
-                    if (deliveredAny)
+                    if (healthy)
                     {
                         return new Decision(UnmeasuredReconnectAfterEnd, false,
                             new State(UnmeasuredReconnectAfterEnd, 0));
@@ -738,7 +793,8 @@ namespace ClaudeBuddy
                 // the connection when the caller stops enumerating.
                 using var reader = new StreamReader(stream, Encoding.UTF8);
                 await foreach (var ev in ClaudeCloudStreamEvents.ReadAsync(reader,
-                                   (int)response.StatusCode, ct).ConfigureAwait(false))
+                                   (int)response.StatusCode, response.Content.Headers.ContentType?.MediaType,
+                                   ct).ConfigureAwait(false))
                 {
                     yield return ev;
                 }

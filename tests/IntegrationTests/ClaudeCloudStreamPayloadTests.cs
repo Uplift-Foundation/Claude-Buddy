@@ -105,7 +105,7 @@ public class ClaudeCloudStreamPayloadTests
         using var reader = new StreamReader(stream, Encoding.UTF8);
 
         var events = new List<CloudStreamEvent>();
-        await foreach (var ev in ClaudeCloudStreamEvents.ReadAsync(reader, 200, CancellationToken.None))
+        await foreach (var ev in ClaudeCloudStreamEvents.ReadAsync(reader, 200, "text/event-stream", CancellationToken.None))
         {
             events.Add(ev);
         }
