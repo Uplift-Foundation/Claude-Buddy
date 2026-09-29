@@ -305,7 +305,7 @@ public class ClaudeCloudCredentialPlatformTests
         internal ExpiredFake(System.DateTimeOffset expiry) => _expiry = expiry;
         public string? Stamp() => "1";
         public CredentialRead Read() =>
-            new(CredentialOutcome.NotLoggedIn, null, _expiry, "the stored credential expired");
+            new(CredentialOutcome.NotLoggedIn, null, _expiry, "the stored credential expired", ClaudeCliCredentials.ExpiredLead);
     }
 
     [Fact]
@@ -410,5 +410,86 @@ public class ClaudeCloudCredentialPlatformTests
     {
         public string? Stamp() => "1";
         public CredentialRead Read() => new(CredentialOutcome.Malformed, null, null, null);
+    }
+
+    // ## Status wording: the most actionable outcome leads (CB-221)
+
+    private static readonly System.DateTimeOffset Expiry = new(2026, 9, 29, 5, 37, 0, System.TimeSpan.Zero);
+
+    [Theory]
+    [InlineData("Denied")]
+    [InlineData("NoAnswer")]
+    [InlineData("CannotPrompt")]
+    public void AnExpiredFileLeadsWhateverTheKeychainThenSaid(string laterName)
+    {
+        var later = System.Enum.Parse<CredentialOutcome>(laterName);
+        var multi = new MultiCredentialSource(new (string, ICloudCredentialSource)[]
+        {
+            ("file", new ExpiredFake(Expiry)),
+            ("svc", new Fake("1", later)),
+        });
+
+        var read = multi.Read();
+
+        // The outcome is untouched, so latching and halting behave as they did...
+        Assert.Equal(later, read.Outcome);
+        // ...but the line the user reads is the actionable one.
+        Assert.Equal(ClaudeCliCredentials.ExpiredLead, ClaudeCliCredentials.StatusFor(read));
+    }
+
+    [Fact]
+    public void AKeychainThatCouldNotAskIsNotDescribedAsDenied()
+    {
+        var read = new MultiCredentialSource(new (string, ICloudCredentialSource)[]
+        {
+            ("svc", new Fake("1", CredentialOutcome.CannotPrompt)),
+        }).Read();
+
+        var text = ClaudeCliCredentials.StatusFor(read);
+        Assert.Contains("could not ask", text);
+        Assert.DoesNotContain("denied", text, System.StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("declined", text);
+    }
+
+    [Fact]
+    public void AGenuineDenyStillReadsAsDeclined()
+    {
+        var read = new MultiCredentialSource(new (string, ICloudCredentialSource)[]
+        {
+            ("svc", new Fake("1", CredentialOutcome.Denied)),
+        }).Read();
+
+        Assert.Contains("declined", ClaudeCliCredentials.StatusFor(read));
+    }
+
+    [Fact]
+    public void CannotPromptDoesNotStopTheWalk()
+    {
+        var live = new Fake("2", CredentialOutcome.Found);
+        var multi = new MultiCredentialSource(new (string, ICloudCredentialSource)[]
+        {
+            ("svc", new Fake("1", CredentialOutcome.CannotPrompt)),
+            ("file", live),
+        });
+
+        Assert.Equal(CredentialOutcome.Found, multi.Read().Outcome);
+        Assert.Equal(1, live.Reads);
+    }
+
+    [Fact]
+    public void AnExpiredParseCarriesTheActionableLead()
+    {
+        var read = ClaudeCliCredentials.ParseCredentials(
+            "{\"claudeAiOauth\":{\"accessToken\":\"x\",\"expiresAt\":1}}",
+            new System.DateTimeOffset(2026, 9, 19, 12, 0, 0, System.TimeSpan.Zero));
+
+        Assert.Equal(ClaudeCliCredentials.ExpiredLead, ClaudeCliCredentials.StatusFor(read));
+    }
+
+    [Fact]
+    public void CannotPromptRetriesOnTheNormalCadence()
+    {
+        Assert.NotNull(Backoff.Next(CredentialOutcome.CannotPrompt, null));
+        Assert.Null(Backoff.Next(CredentialOutcome.Denied, null));
     }
 }

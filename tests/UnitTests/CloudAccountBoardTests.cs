@@ -614,4 +614,41 @@ public class CloudAccountBoardTests : IDisposable
             CloudAccounts.SourceFor(RootA), TimeSpan.FromSeconds(5), CancellationToken.None);
         Assert.True(aKeychain.Reads > keychainReads);
     }
+
+    // errSecInteractionNotAllowed is no refusal: no dialog was shown. It must not
+    // latch, so the other account still reads its Keychain child, and the account
+    // that could not ask is retried rather than halted.
+    [Fact]
+    public async Task ACannotPromptAnswerDoesNotLatchAndIsRetried()
+    {
+        var aKeychain = new Creds(TokenA) { Reading = new CredentialRead(CredentialOutcome.CannotPrompt, null, null, "no one at the screen") };
+        var (coord, ga, gb, bKeychain, _) = Gated(aKeychain);
+        var api = new Api((_, _) => Ok(Roster()));
+
+        var stepA = await Step(api, ga);
+        var stepB = await Step(api, gb);
+
+        Assert.False(coord.KeychainSkippedFor());
+        Assert.False(stepA.Next.Halted);
+        Assert.NotNull(stepA.Next.Backoff);
+        Assert.Equal(1, bKeychain.Reads);
+        Assert.NotNull(stepB.Snapshot);
+        Assert.Contains("could not ask", stepA.Status);
+    }
+
+    // The real-Mac composition: an expired file, then a Keychain that could not
+    // ask. The account says the login expired, not that anything was denied.
+    [Fact]
+    public async Task AnExpiredLoginLeadsTheAccountsLineOverAKeychainThatCouldNotAsk()
+    {
+        var multi = new MultiCredentialSource(new (string, ICloudCredentialSource)[]
+        {
+            ("file", new Creds(TokenA) { Reading = new CredentialRead(CredentialOutcome.NotLoggedIn, null, Now, "expired", ClaudeCliCredentials.ExpiredLead) }),
+            ("svc", new Creds(TokenA) { Reading = new CredentialRead(CredentialOutcome.CannotPrompt, null, null, "no one at the screen") }),
+        });
+
+        var step = await Step(new Api((_, _) => Ok(Roster())), multi);
+
+        Assert.Equal(ClaudeCliCredentials.ExpiredLead, step.Status);
+    }
 }

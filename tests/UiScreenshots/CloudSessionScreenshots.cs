@@ -136,7 +136,17 @@ public class CloudSessionScreenshots : IDisposable
             new CloudAccount("/Users/x/.claude", "default", new NoLogin(), new NoLogin()),
             new CloudAccount("/Users/x/.claude-board", "board", new NoLogin(), new NoLogin()),
         });
-        board.ApplyError("/Users/x/.claude", "1 cloud session (578 sessions inspected)");
+        // A real session folded in the way the app folds one, so the header's
+        // count comes from the merged list rather than from a string.
+        var now = System.DateTime.UtcNow;
+        var session = new ClaudeCloudSessions.Session(
+            "session_01abc", "Refactor the parser", "idle", now, "https://claude.ai/code/session_01abc",
+            "idle", false, null, null, null, null);
+        board.Apply("/Users/x/.claude",
+            new ClaudeCloudSessions.StepResult(
+                ClaudeCloudSessions.ArmState.Initial, new[] { session },
+                "1 cloud session (578 sessions inspected)", System.TimeSpan.Zero),
+            now);
         board.ApplyError("/Users/x/.claude-board", "no Claude Code login found \u2014 run `claude` and sign in");
         ClaudeCloudSessions.SetBoardForTests(board);
         try

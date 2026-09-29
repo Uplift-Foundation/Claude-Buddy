@@ -416,6 +416,10 @@ namespace ClaudeBuddy
                 case CredentialOutcome.NoAnswer:
                     return null;
 
+                // CannotPrompt is a failure with no dialog behind it: it fails
+                // instantly, costs nothing to retry, and clears the moment someone
+                // is at the screen — so it backs off like any transient failure.
+                case CredentialOutcome.CannotPrompt:
                 case CredentialOutcome.Unreadable:
                 case CredentialOutcome.Malformed:
                 default:

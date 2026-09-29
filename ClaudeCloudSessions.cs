@@ -217,7 +217,7 @@ namespace ClaudeBuddy
             if (read.Outcome != CredentialOutcome.Found || read.AccessToken is not { } token)
             {
                 var wait = Backoff.Next(read.Outcome, state.Backoff);
-                return Stop(state, stamp, ClaudeCliCredentials.Describe(read.Outcome), wait);
+                return Stop(state, stamp, ClaudeCliCredentials.StatusFor(read), wait);
             }
 
             var plan = ClaudeCloudRoster.PlanFor(state.LastWalkUtc, now, state.Sessions);

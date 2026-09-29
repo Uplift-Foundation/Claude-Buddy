@@ -226,7 +226,7 @@ internal static class Program
             Console.WriteLine($"answered {multi.AnsweredBy ?? "(none)"}");
             foreach (var (name, outcome, reason) in multi.Attempts)
                 Console.WriteLine($"tried    {name} -> {outcome}: {reason}");
-            Console.WriteLine($"meaning  {ClaudeCliCredentials.Describe(read.Outcome)}");
+            Console.WriteLine($"meaning  {ClaudeCliCredentials.StatusFor(read)}");
             if (read.Detail is { } detail) Console.WriteLine($"detail   {detail}");
             Console.WriteLine($"expires  {read.ExpiresAt?.ToString("u") ?? "(not stated)"}");
             Console.WriteLine(read.AccessToken is null ? "token    none" : "token    present");

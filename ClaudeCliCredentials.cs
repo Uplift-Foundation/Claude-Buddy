@@ -72,6 +72,15 @@ namespace ClaudeBuddy
         // asking again and producing a prompt storm.
         Denied,
 
+        // The Keychain could not ask (errSecInteractionNotAllowed): no one is at
+        // the screen, or this is a background context. **Not a refusal** — no
+        // dialog was shown and nobody said anything, so it must not latch as a
+        // decline and it is retried on the normal cadence; the read fails
+        // instantly and retrying costs nothing. Split from Denied for exactly that
+        // reason: lumping it in told the user "denied" for something nobody did,
+        // and would have left every account files-only after they logged back in.
+        CannotPrompt,
+
         // The store answered with something we could not turn into text at all:
         // an I/O error, a permission error on the file, an unmapped OSStatus.
         Unreadable,
@@ -114,7 +123,11 @@ namespace ClaudeBuddy
         CredentialOutcome Outcome,
         string? AccessToken,
         DateTimeOffset? ExpiresAt,
-        string? Detail);
+        string? Detail,
+        // A more actionable status line than the outcome's own wording, when a
+        // store further up the walk knew something the last one could not say
+        // (the file answered "expired" before the Keychain failed to answer).
+        string? Lead = null);
 
     // Where a credential comes from, as an interface, for the same reason
     // IUsageSource and IRemoteChatSession exist: the real one is an OS prompt or
@@ -361,7 +374,8 @@ namespace ClaudeBuddy
                 if (expiresAt is { } when && when <= now)
                 {
                     return new CredentialRead(CredentialOutcome.NotLoggedIn, null, when,
-                        "the stored credential expired; the CLI refreshes it on its next use");
+                        "the stored credential expired; the CLI refreshes it on its next use",
+                        ExpiredLead);
                 }
 
                 return new CredentialRead(CredentialOutcome.Found, token.GetString(), expiresAt,
@@ -404,11 +418,22 @@ namespace ClaudeBuddy
         // Every string here is safe to render: none of them is derived from the
         // credential, and the negative-control test asserts that for a fake token
         // chosen to be findable if it ever leaked into one.
+        // The stored login has a past expiry and the CLI has not refreshed it. The
+        // most actionable thing any store can say, so it leads whatever a later
+        // store failed with.
+        internal const string ExpiredLead = "the stored login expired — run `claude` to refresh it";
+
+        // What a reading says on the status line: a store's own lead if it has
+        // one, else the outcome's wording.
+        internal static string StatusFor(CredentialRead read) => read.Lead ?? Describe(read.Outcome);
+
         internal static string Describe(CredentialOutcome outcome) => outcome switch
         {
             CredentialOutcome.Found => "signed in to Claude Code",
             CredentialOutcome.NotLoggedIn => "no Claude Code login found — run `claude` and sign in",
-            CredentialOutcome.Denied => "access to the Claude Code login was denied",
+            CredentialOutcome.Denied => "access to the Claude Code login was declined",
+            CredentialOutcome.CannotPrompt =>
+                "the Keychain could not ask for permission — no one is at the screen, or this is a background context",
             CredentialOutcome.Unreadable => "the Claude Code login could not be read",
             CredentialOutcome.Malformed => "the Claude Code login is not in a shape this version understands",
             CredentialOutcome.NoAnswer =>
@@ -682,6 +707,7 @@ namespace ClaudeBuddy
         {
             var attempts = new List<(string, CredentialOutcome, string)>();
             CredentialRead? best = null;
+            string? expiredLead = null;
 
             foreach (var (name, source) in _children)
             {
@@ -703,6 +729,11 @@ namespace ClaudeBuddy
                 if (read.ExpiresAt is { } expiry) reason += $" (expiresAt {expiry:u})";
                 attempts.Add((name, read.Outcome, reason));
 
+                if (read.Outcome == CredentialOutcome.NotLoggedIn && read.Lead is { } lead)
+                {
+                    expiredLead ??= lead;
+                }
+
                 if (read.Outcome == CredentialOutcome.Found)
                 {
                     return Done(read, name, attempts);
@@ -710,7 +741,7 @@ namespace ClaudeBuddy
 
                 if (read.Outcome is CredentialOutcome.Denied or CredentialOutcome.NoAnswer)
                 {
-                    return Done(read, null, attempts);
+                    return Done(Lead(read, expiredLead), null, attempts);
                 }
 
                 if (best is null || (best.Outcome == CredentialOutcome.NotLoggedIn
@@ -718,9 +749,15 @@ namespace ClaudeBuddy
                     best = read;
             }
 
-            return Done(best ?? new CredentialRead(CredentialOutcome.NotLoggedIn, null, null,
-                "no credential stored"), null, attempts);
+            return Done(Lead(best ?? new CredentialRead(CredentialOutcome.NotLoggedIn, null, null,
+                "no credential stored"), expiredLead), null, attempts);
         }
+
+        // The most actionable outcome wins the status line, the outcome itself
+        // untouched: a Denied or NoAnswer after an expired file must still latch
+        // and halt as one, but it should not be what the user is told.
+        private static CredentialRead Lead(CredentialRead read, string? expiredLead) =>
+            expiredLead is null ? read : read with { Lead = expiredLead };
 
         private (CredentialRead, ReadTrace) Done(CredentialRead read, string? answeredBy,
             List<(string, CredentialOutcome, string)> attempts)
