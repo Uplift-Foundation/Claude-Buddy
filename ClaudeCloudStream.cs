@@ -1,5 +1,14 @@
+using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
+using System.IO;
+using System.Net.Http;
+using System.Runtime.CompilerServices;
+using System.Text;
+using System.Text.Json;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace ClaudeBuddy
 {
@@ -76,7 +85,9 @@ namespace ClaudeBuddy
     //    message_delta, message_stop.
     //  * DeliveryStatus — a delivery_update's `DELIVERY_STATUS_*`.
     //  * Uuid — the payload's `uuid`, which is how the echo of our own user
-    //    turn reconciles with the bubble added after the send's 2xx.
+    //    turn reconciles with the bubble added after the send's 2xx. On a
+    //    delivery_update it is that event's `event_id`, presumed (not
+    //    confirmed) to be the uuid we sent.
     //
     // **No field ever holds the access token.** The token goes into the
     // request's Authorization header and nowhere else; the canary tests hold
@@ -113,5 +124,596 @@ namespace ClaudeBuddy
     {
         IAsyncEnumerable<CloudStreamEvent> OpenAsync(string accessToken, string sessionId,
             long? fromSequenceNum, CancellationToken ct);
+    }
+
+    // --- SSE framing -------------------------------------------------------------
+
+    // One dispatched SSE event, or one comment line, before anything has looked
+    // at what the data means.
+    internal sealed record SseFrame(string? EventName, string? Id, string? Data, bool IsComment);
+
+    // Lines in, frames out: the text/event-stream framing, per the WHATWG rules
+    // the endpoint follows, with one deliberate departure (the id, below).
+    //
+    // Pure and stateful in the smallest way — a buffer for the event being
+    // assembled — so every framing rule is a unit test over a list of lines.
+    //
+    // The rules, and the argument for each where there is one:
+    //
+    //  * `field: value`, with **one** optional space after the colon removed.
+    //    A line with no colon is a field name with an empty value.
+    //  * `data` lines accumulate, joined by `\n`, so a multi-line payload
+    //    survives intact.
+    //  * A blank line dispatches — but only if some `data` arrived. An event
+    //    with no data is not dispatched, per the spec, and nothing measured
+    //    sends one.
+    //  * A line starting `:` is a comment. **Measured as the keepalive**, every
+    //    12–15 s, so it is surfaced as its own frame rather than swallowed: a
+    //    consumer can tell a quiet stream from a dead one by it.
+    //  * `retry` and unknown fields are ignored. The server's retry hint is not
+    //    obeyed: reconnect timing is ClaudeCloudStreamPolicy's decision, and a
+    //    server-chosen interval is the kind of number that becomes a retry storm.
+    //  * A trailing `\r` is stripped. A reader that splits on `\n` alone would
+    //    otherwise hand CRLF lines over with it attached, and `data: {..}\r` is
+    //    not JSON.
+    //
+    // **The departure: the id does not persist from one event to the next.** The
+    // spec keeps a "last event id" that later events inherit. Here only
+    // `client_event`s carry an id — it is the durable sequence number — and an
+    // ephemeral event after one must not appear to carry that event's sequence
+    // number, which is exactly what inheriting it would do. The *resume* point,
+    // which is what the spec's persistence is for, is tracked by the caller from
+    // durable events alone (ClaudeCloudStreamPolicy.ResumeFrom).
+    internal sealed class SseParser
+    {
+        private readonly StringBuilder _data = new();
+        private bool _hasData;
+        private string? _event;
+        private string? _id;
+
+        // One line, without its terminator. Returns a frame when this line
+        // completes one, and null otherwise.
+        internal SseFrame? Feed(string line)
+        {
+            if (line.EndsWith('\r')) line = line[..^1];
+
+            if (line.Length == 0) return Dispatch();
+
+            if (line[0] == ':')
+            {
+                var text = line.Length > 1 && line[1] == ' ' ? line[2..] : line[1..];
+                return new SseFrame(null, null, text, true);
+            }
+
+            var colon = line.IndexOf(':');
+            var field = colon < 0 ? line : line[..colon];
+            var value = colon < 0 ? "" : line[(colon + 1)..];
+            if (value.StartsWith(' ')) value = value[1..];
+
+            switch (field)
+            {
+                case "event":
+                    _event = value;
+                    break;
+                case "data":
+                    if (_hasData) _data.Append('\n');
+                    _data.Append(value);
+                    _hasData = true;
+                    break;
+                case "id":
+                    // The spec ignores an id containing NUL; so does this.
+                    if (!value.Contains('\0')) _id = value;
+                    break;
+            }
+
+            return null;
+        }
+
+        // The stream ended. **A half-assembled event is discarded, not
+        // dispatched** — the spec's rule, and the right one here: an event whose
+        // blank line never arrived may be missing data lines, and a durable
+        // event lost this way is replayed by the reconnect, which resumes from
+        // the last durable event actually *delivered*.
+        internal void Reset()
+        {
+            _data.Clear();
+            _hasData = false;
+            _event = null;
+            _id = null;
+        }
+
+        private SseFrame? Dispatch()
+        {
+            if (!_hasData)
+            {
+                Reset();
+                return null;
+            }
+
+            var frame = new SseFrame(_event, _id, _data.ToString(), false);
+            Reset();
+            return frame;
+        }
+    }
+
+    // --- classifying -------------------------------------------------------------
+
+    // A frame, read for what it means. Pure; the fixtures in the tests are
+    // hand-written from the measured contract's key names, with invented values.
+    //
+    // **The `data:` wrappers, measured 2026-09-29 (key names only):**
+    //
+    //  * `client_event`: `{event_id, sequence_num, event_type, source, payload,
+    //    created_at}`, the payload a transcript row.
+    //  * `ephemeral_event`: `{event_type, payload, timestamp, source}` — no
+    //    sequence_num, no event_id. A `stream_event` payload carries `event`,
+    //    the Anthropic Messages streaming event.
+    //  * `delivery_update`: flat, `{event_id, status, timestamp}`.
+    //  * `session_update`: flat, `{connection_status}`.
+    //
+    // So the two nested kinds are read from `payload` and the two flat ones
+    // from the root. A nested kind that arrives without a `payload` object is
+    // read from the root as well, rather than yielding nothing — the hints are
+    // hints, and a shape that has moved should degrade to fewer of them, not to
+    // an event with none.
+    internal static class ClaudeCloudStreamEvents
+    {
+        internal const string ClientEvent = "client_event";
+        internal const string EphemeralEvent = "ephemeral_event";
+        internal const string DeliveryUpdate = "delivery_update";
+        internal const string SessionUpdate = "session_update";
+
+        internal static CloudStreamEventKind KindFor(string? name) => name switch
+        {
+            ClientEvent => CloudStreamEventKind.Durable,
+            EphemeralEvent => CloudStreamEventKind.Ephemeral,
+            DeliveryUpdate => CloudStreamEventKind.Delivery,
+            SessionUpdate => CloudStreamEventKind.Session,
+            _ => CloudStreamEventKind.Other,
+        };
+
+        internal static CloudStreamEvent Classify(SseFrame frame)
+        {
+            if (frame.IsComment)
+            {
+                return new CloudStreamEvent(CloudStreamEventKind.Keepalive, null, null, null);
+            }
+
+            var kind = KindFor(frame.EventName);
+
+            JsonDocument? doc = null;
+            try
+            {
+                doc = string.IsNullOrWhiteSpace(frame.Data) ? null : JsonDocument.Parse(frame.Data);
+            }
+            catch (JsonException)
+            {
+                doc = null;
+            }
+
+            using (doc)
+            {
+                if (doc is null || doc.RootElement.ValueKind != JsonValueKind.Object)
+                {
+                    return new CloudStreamEvent(kind, frame.EventName,
+                        kind == CloudStreamEventKind.Durable ? SequenceFrom(frame.Id) : null,
+                        frame.Data);
+                }
+
+                var root = doc.RootElement;
+                var flat = kind is CloudStreamEventKind.Delivery or CloudStreamEventKind.Session;
+                var payload = !flat
+                              && root.TryGetProperty("payload", out var p)
+                              && p.ValueKind == JsonValueKind.Object
+                    ? p
+                    : root;
+
+                // Only a durable event has a sequence number. The SSE id is the
+                // measured carrier; the envelope's own `sequence_num` is the
+                // fallback, in either of the two types it has been seen in.
+                long? sequence = kind == CloudStreamEventKind.Durable
+                    ? SequenceFrom(frame.Id) ?? SequenceFrom(root, "sequence_num")
+                    : null;
+
+                var type = Str(payload, "type");
+                var subtype = Str(payload, "subtype");
+
+                string? status = null;
+                if (kind == CloudStreamEventKind.Session)
+                {
+                    status = Str(root, "connection_status");
+                }
+                else if (type == "system" && subtype == "status")
+                {
+                    status = Str(payload, "status");
+                }
+
+                string? inner = null;
+                string? text = null;
+                if (type == "stream_event"
+                    && payload.TryGetProperty("event", out var ev)
+                    && ev.ValueKind == JsonValueKind.Object)
+                {
+                    inner = Str(ev, "type");
+                    if (inner == "content_block_delta"
+                        && ev.TryGetProperty("delta", out var delta)
+                        && delta.ValueKind == JsonValueKind.Object
+                        && Str(delta, "type") == "text_delta")
+                    {
+                        text = Str(delta, "text");
+                    }
+                }
+
+                var isDelivery = kind == CloudStreamEventKind.Delivery;
+                var delivery = isDelivery ? Str(root, "status") : null;
+
+                // A delivery_update names its event by `event_id`, which is
+                // presumably the uuid we sent — the send's own receipt echoes
+                // our uuid as `event_id`, measured — but on this event that is
+                // unconfirmed. Carried as Uuid so a consumer can try the match;
+                // not a promise it will hold.
+                var uuid = isDelivery ? Str(root, "event_id") : Str(payload, "uuid");
+
+                return new CloudStreamEvent(kind, frame.EventName, sequence, frame.Data,
+                    type, subtype, status, text, inner, delivery, uuid);
+            }
+        }
+
+        internal static long? SequenceFrom(string? text) =>
+            long.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out var n) ? n : null;
+
+        // `sequence_num` is a JSON string where it was measured; a number is
+        // read too, as the most plausible drift.
+        internal static long? SequenceFrom(JsonElement element, string name)
+        {
+            if (!element.TryGetProperty(name, out var value)) return null;
+
+            return value.ValueKind switch
+            {
+                JsonValueKind.String => SequenceFrom(value.GetString()),
+                JsonValueKind.Number when value.TryGetInt64(out var n) && n >= 0 => n,
+                _ => null,
+            };
+        }
+
+        private static string? Str(JsonElement element, string name) =>
+            element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
+                ? value.GetString()
+                : null;
+
+        // A whole stream, line by line, as events: framing then classifying,
+        // ending with exactly one Ended event. Pure over a TextReader so the
+        // loop HttpCloudEventStream runs is the loop the tests run.
+        //
+        // `opened` is the status the stream was opened with, carried into the
+        // clean-EOF Ended so a consumer sees what answered. A read that throws
+        // an IOException — a connection dropped mid-stream — ends Unavailable
+        // with status 0, the same verdict HttpCloudApi gives a transport
+        // failure. Cancellation ends the enumeration with nothing further.
+        internal static async IAsyncEnumerable<CloudStreamEvent> ReadAsync(TextReader reader,
+            int opened, [EnumeratorCancellation] CancellationToken ct)
+        {
+            var parser = new SseParser();
+
+            while (true)
+            {
+                string? line;
+                CloudOutcome? failure = null;
+                try
+                {
+                    line = await reader.ReadLineAsync(ct).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    yield break;
+                }
+                catch (IOException ex)
+                {
+                    line = null;
+                    failure = new CloudOutcome(CloudOutcomeKind.Unavailable, 0, null, ex.Message);
+                }
+
+                if (line is null)
+                {
+                    parser.Reset();
+                    yield return Ended(failure ?? new CloudOutcome(CloudOutcomeKind.Ok, opened, null,
+                        EndOfStreamDetail));
+                    yield break;
+                }
+
+                if (parser.Feed(line) is { } frame) yield return Classify(frame);
+            }
+        }
+
+        internal const string EndOfStreamDetail = "the stream ended";
+
+        internal static CloudStreamEvent Ended(CloudOutcome outcome) =>
+            new(CloudStreamEventKind.Ended, null, null, null, Outcome: outcome);
+    }
+
+    // --- the requests ------------------------------------------------------------
+
+    // The stream request and the newest-sequence read, built through the same
+    // CloudRequest.Build every other request to this API goes through, so the
+    // header set stays one copy.
+    internal static class ClaudeCloudStreamRequest
+    {
+        internal const string EventStreamMediaType = "text/event-stream";
+        internal const string LastEventIdHeader = "Last-Event-ID";
+
+        // `.../events/stream`, resuming from a sequence number when given one.
+        // Null for an id that is not well formed, for CodeEventsPath's reason: a
+        // malformed id is refused before it becomes a request.
+        internal static string? StreamPath(string? sessionId, long? fromSequenceNum)
+        {
+            var events = CloudRequest.CodeEventsPath(sessionId);
+            if (events is null) return null;
+
+            var path = events + "/stream";
+            return fromSequenceNum is { } from && from >= 0
+                ? path + "?from_sequence_num=" + from.ToString(CultureInfo.InvariantCulture)
+                : path;
+        }
+
+        // Measured headers: Bearer, anthropic-version, and Accept
+        // text/event-stream; on a resume, Last-Event-ID carrying the same number
+        // as the query. The token reaches the Authorization header only.
+        internal static HttpRequestMessage? Build(string accessToken, string? sessionId,
+            long? fromSequenceNum)
+        {
+            var path = StreamPath(sessionId, fromSequenceNum);
+            if (path is null) return null;
+
+            var request = CloudRequest.Build(accessToken, path);
+            request.Headers.Accept.ParseAdd(EventStreamMediaType);
+
+            if (fromSequenceNum is { } from && from >= 0)
+            {
+                request.Headers.TryAddWithoutValidation(LastEventIdHeader,
+                    from.ToString(CultureInfo.InvariantCulture));
+            }
+
+            return request;
+        }
+
+        // What an OpenAsync for a malformed id ends with, having sent nothing.
+        // SessionGone rather than a retryable kind, because no amount of waiting
+        // makes a malformed id name a session — and ClaudeCloudStreamPolicy stops
+        // on SessionGone.
+        internal static readonly CloudOutcome RefusedId = new(CloudOutcomeKind.SessionGone, 0, null,
+            "not a well-formed session id, so no request was made");
+
+        // Where the stream should start: the newest durable event there is.
+        internal static string? NewestSequencePath(string? sessionId)
+        {
+            var events = CloudRequest.CodeEventsPath(sessionId);
+            return events is null ? null : events + "?limit=1&sort_order=desc";
+        }
+
+        // `data[0].sequence_num` of that read — a JSON string where measured, a
+        // number read too. Null when there is nothing to read, which for a new
+        // session with no events is a true answer rather than a failure.
+        internal static long? ParseNewestSequence(string? body)
+        {
+            if (string.IsNullOrWhiteSpace(body)) return null;
+
+            try
+            {
+                using var doc = JsonDocument.Parse(body);
+                var root = doc.RootElement;
+                if (root.ValueKind != JsonValueKind.Object
+                    || !root.TryGetProperty("data", out var data)
+                    || data.ValueKind != JsonValueKind.Array
+                    || data.GetArrayLength() == 0
+                    || data[0].ValueKind != JsonValueKind.Object)
+                {
+                    return null;
+                }
+
+                return ClaudeCloudStreamEvents.SequenceFrom(data[0], "sequence_num");
+            }
+            catch (JsonException)
+            {
+                return null;
+            }
+        }
+    }
+
+    // --- reconnecting --------------------------------------------------------------
+
+    // When to open the stream again after it ended, and when to give up on it
+    // and fall back to polling.
+    //
+    // **Every number here is a placeholder**, named Unmeasured* for CB-122's
+    // reason. What was measured: a stream held 40+ s idle with keepalives, and
+    // nothing about how long the server holds one, whether it closes them on
+    // purpose, or what it does on a token expiry mid-stream. So a clean end of
+    // stream is treated as ordinary — reconnect soon — and everything else
+    // follows Backoff, which this arm already trusts.
+    internal static class ClaudeCloudStreamPolicy
+    {
+        // After a clean end of a connection that was delivering events.
+        internal static readonly TimeSpan UnmeasuredReconnectAfterEnd = TimeSpan.FromSeconds(1);
+
+        // Consecutive unhealthy connections before the panel should stop
+        // relying on the stream and poll instead. It keeps retrying the stream
+        // in the background at the backed-off wait; this only says when the
+        // panel should not wait for it.
+        internal const int UnmeasuredFailuresBeforeFallback = 3;
+
+        // Where a run of reconnects stands. A connection that delivered
+        // anything, a keepalive included, was healthy for at least a keepalive
+        // interval, and resets it.
+        internal readonly record struct State(TimeSpan? LastWait, int ConsecutiveFailures)
+        {
+            internal static State Initial => new(null, 0);
+        }
+
+        // Wait null means **stop**: the session has gone or ended, or the
+        // credential or the account was refused. Reopening would be a retry
+        // loop against an answer that is not going to change.
+        internal readonly record struct Decision(TimeSpan? Wait, bool FallBackToPolling, State Next);
+
+        internal static Decision Next(State state, CloudOutcome ended, bool deliveredAny)
+        {
+            var failures = deliveredAny ? 0 : state.ConsecutiveFailures;
+            var previous = deliveredAny ? null : state.LastWait;
+
+            TimeSpan? wait;
+            switch (ended.Kind)
+            {
+                // A clean end. After a healthy connection it is ordinary and
+                // gets the short reconnect; a connection that ended before
+                // delivering anything is counted and backed off like a
+                // failure, so a server closing every stream at once cannot turn
+                // this into a tight loop.
+                case CloudOutcomeKind.Ok:
+                    if (deliveredAny)
+                    {
+                        return new Decision(UnmeasuredReconnectAfterEnd, false,
+                            new State(UnmeasuredReconnectAfterEnd, 0));
+                    }
+
+                    wait = Backoff.Next(new CloudOutcome(CloudOutcomeKind.Unavailable, ended.Status),
+                        previous);
+                    break;
+
+                // An ended session will not take a stream either. Backoff keeps
+                // 409 retryable because the roster reads it; the stream does not.
+                case CloudOutcomeKind.SessionInactive:
+                    wait = null;
+                    break;
+
+                default:
+                    wait = Backoff.Next(ended, previous);
+                    break;
+            }
+
+            if (wait is null)
+            {
+                return new Decision(null, true, new State(null, failures + 1));
+            }
+
+            var count = failures + 1;
+            return new Decision(wait, count >= UnmeasuredFailuresBeforeFallback, new State(wait, count));
+        }
+
+        // The sequence number to resume from after this event: a durable
+        // event's, if it is newer. Only durable events move it — an ephemeral
+        // event is never replayed, so resuming from one would skip nothing and
+        // mean nothing.
+        internal static long? ResumeFrom(long? current, CloudStreamEvent ev) =>
+            ev.Kind == CloudStreamEventKind.Durable
+            && ev.SequenceNum is { } seq
+            && (current is not { } now || seq > now)
+                ? seq
+                : current;
+    }
+
+    // --- the socket ----------------------------------------------------------------
+
+    // The real one.
+    //
+    // Excluded from coverage for HttpCloudApi's reason: it is an HttpClient
+    // talking to api.anthropic.com, and tests never touch the real network.
+    // Everything it decides is in the pure classes above — the request, the
+    // framing, the classifying, the verdict on a non-2xx — and the line loop it
+    // runs is ClaudeCloudStreamEvents.ReadAsync, which the tests run over a
+    // StringReader. What is left is the connection.
+    [ExcludeFromCodeCoverage]
+    internal sealed class HttpCloudEventStream : ICloudEventStream, IDisposable
+    {
+        // **No timeout.** A stream is supposed to stay open for as long as the
+        // panel is; HttpClient's default hundred seconds would cut every one
+        // short. What ends a stream is the caller's cancellation, the server, or
+        // the network. ResponseHeadersRead below is what lets the body be read
+        // as it arrives rather than buffered to its end, which never comes.
+        private readonly HttpClient _http = new() { Timeout = Timeout.InfiniteTimeSpan };
+
+        public async IAsyncEnumerable<CloudStreamEvent> OpenAsync(string accessToken,
+            string sessionId, long? fromSequenceNum, [EnumeratorCancellation] CancellationToken ct)
+        {
+            using var request = ClaudeCloudStreamRequest.Build(accessToken, sessionId, fromSequenceNum);
+            if (request is null)
+            {
+                yield return ClaudeCloudStreamEvents.Ended(ClaudeCloudStreamRequest.RefusedId);
+                yield break;
+            }
+
+            HttpResponseMessage? response = null;
+            CloudOutcome? failure = null;
+            try
+            {
+                response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                yield break;
+            }
+            catch (HttpRequestException ex)
+            {
+                failure = new CloudOutcome(CloudOutcomeKind.Unavailable, 0, null, ex.Message);
+            }
+
+            if (response is null)
+            {
+                yield return ClaudeCloudStreamEvents.Ended(failure!);
+                yield break;
+            }
+
+            using (response)
+            {
+                if (!response.IsSuccessStatusCode)
+                {
+                    string body;
+                    try
+                    {
+                        body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                    }
+                    catch (Exception ex) when (ex is HttpRequestException or IOException
+                                                   or OperationCanceledException)
+                    {
+                        body = "";
+                    }
+
+                    yield return ClaudeCloudStreamEvents.Ended(CloudOutcomes.OutcomeFor(
+                        (int)response.StatusCode, body, response.Headers.RetryAfter?.Delta,
+                        response.Headers.Contains("cf-mitigated")));
+                    yield break;
+                }
+
+                Stream? stream = null;
+                try
+                {
+                    stream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    yield break;
+                }
+                catch (Exception ex) when (ex is HttpRequestException or IOException)
+                {
+                    failure = new CloudOutcome(CloudOutcomeKind.Unavailable, 0, null, ex.Message);
+                }
+
+                if (stream is null)
+                {
+                    yield return ClaudeCloudStreamEvents.Ended(failure!);
+                    yield break;
+                }
+
+                // Disposing the reader disposes the stream, which is what closes
+                // the connection when the caller stops enumerating.
+                using var reader = new StreamReader(stream, Encoding.UTF8);
+                await foreach (var ev in ClaudeCloudStreamEvents.ReadAsync(reader,
+                                   (int)response.StatusCode, ct).ConfigureAwait(false))
+                {
+                    yield return ev;
+                }
+            }
+        }
+
+        public void Dispose() => _http.Dispose();
     }
 }
