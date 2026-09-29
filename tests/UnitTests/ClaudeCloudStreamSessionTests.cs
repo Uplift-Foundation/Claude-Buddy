@@ -628,18 +628,45 @@ public partial class ClaudeCloudEventsTests
 
     // Not knowing where to start is a reason to poll — never to open without a
     // sequence number and take the whole history again.
+    // A start point that cannot be read means no stream yet — never one opened
+    // without a sequence number — and polling carries a running turn, while
+    // the start read is tried again behind it at the policy's wait.
     [Fact]
-    public async Task AStartingPointThatCannotBeReadMeansNoStream()
+    public async Task AStartingPointThatCannotBeReadPollsAndKeepsTrying()
     {
-        var (chat, api, stream, _) = Streaming(BusyRow());
+        var (chat, api, stream, clock) = Streaming(BusyRow());
         api.Newest = () => Answer(500);
 
         chat.PanelOpened();
-        await chat.StreamTask!;
+        await Until(() => chat.LiveTask is not null && api.NewestReads.Count >= 2);
         await chat.LiveTask!;
 
         Assert.Equal(0, stream.OpenCount);
         Assert.NotEmpty(api.Statuses);
+        Assert.Contains(Backoff.UnavailableFloor, clock.Waits);
+
+        // And once it can be read, the stream opens from it.
+        api.Newest = () => new CloudApiResult(CloudOutcomes.OutcomeFor(200, ""),
+            "{\"data\":[{\"sequence_num\":\"9\"}]}");
+        await stream.NextOpenAsync();
+        Assert.Equal(9, stream.Opens.Single().From);
+
+        await Close(chat);
+    }
+
+    // A start read the session itself refuses — it has been deleted — takes the
+    // box away rather than being retried.
+    [Fact]
+    public async Task AStartingPointRefusedAsGoneTakesTheBoxAway()
+    {
+        var (chat, api, stream, _) = Streaming();
+        api.Newest = () => Answer(404);
+
+        chat.PanelOpened();
+        await chat.StreamTask!;
+
+        Assert.Equal(CloudSendability.Gone, chat.Sendability);
+        Assert.Equal(0, stream.OpenCount);
     }
 
     // A session with no events yet has no history to replay, so opening from
@@ -687,6 +714,63 @@ public partial class ClaudeCloudEventsTests
         Assert.Equal(0, stream.OpenCount);
         Assert.Empty(api.Requests);
         Assert.Null(chat.LiveTask);
+
+        // Not in silence: once, in the credential layer's own words.
+        Assert.Equal("Live updates paused: " + ClaudeCliCredentials.Describe(CredentialOutcome.NotLoggedIn) + ".",
+            Assert.Single(chat.History).Text);
+    }
+
+    // Said once however many live sources notice: the stream stops, then the
+    // roster reports a turn and the polling loop that starts hits the same
+    // missing login.
+    [Fact]
+    public async Task ALiveLoginPauseIsSaidOnceAcrossTheStreamAndThePoll()
+    {
+        var api = new RoutingApi(Answer(200, Receipt));
+        var creds = new CountingCredentials
+        {
+            Reading = new CredentialRead(CredentialOutcome.NotLoggedIn, null, null, "…",
+                Lead: ClaudeCliCredentials.ExpiredLead),
+        };
+        var chat = Sender(api, creds: creds, stream: new FakeStream());
+
+        chat.PanelOpened();
+        await chat.StreamTask!;
+        chat.UpdateStatus(BusyRow());
+        await chat.LiveTask!;
+
+        Assert.Equal("Live updates paused: " + ClaudeCliCredentials.ExpiredLead + ".",
+            Assert.Single(chat.History).Text);
+
+        // A new open is a fresh chance to say it.
+        chat.PanelClosed();
+        chat.PanelOpened();
+        await chat.StreamTask!;
+        Assert.Equal(2, chat.History.Count);
+    }
+
+    // After a login pause, a send that goes through brings the stream back.
+    [Fact]
+    public async Task ASendAfterALoginPauseBringsTheStreamBack()
+    {
+        var api = new RoutingApi(Answer(200, Receipt));
+        var stream = new FakeStream();
+        var creds = new CountingCredentials
+        {
+            Reading = new CredentialRead(CredentialOutcome.NotLoggedIn, null, null, "…"),
+        };
+        var chat = Sender(api, creds: creds, stream: stream);
+
+        chat.PanelOpened();
+        await chat.StreamTask!;
+        Assert.Equal(0, stream.OpenCount);
+
+        creds.Reading = new CredentialRead(CredentialOutcome.Found, Token, null, "a credential is present");
+        Assert.Equal(ChatSendOutcome.Sent, await chat.SendAsync("hello"));
+        await stream.NextOpenAsync();
+
+        Assert.Null(chat.LiveTask);
+        await Close(chat);
     }
 
     // --- the panel's lifetime ----------------------------------------------------
@@ -715,6 +799,62 @@ public partial class ClaudeCloudEventsTests
         Assert.Equal(2, api.NewestReads.Count);
         await Close(chat);
         Assert.True(chat.StreamTask!.IsCompleted);
+    }
+
+    // QA's defect F: a close and an immediate reopen — ChatPanel.Bind unbinds
+    // the previous session first, so a same-session re-bind does exactly this —
+    // must leave a stream running. The closed run is still unwinding when the
+    // reopen arrives, and it must neither block the new run nor, exiting late,
+    // clobber it.
+    [Fact]
+    public async Task ACloseAndAnImmediateReopenLeavesAStreamRunning()
+    {
+        var (chat, _, stream, _) = Streaming();
+        chat.PanelOpened();
+        await stream.NextOpenAsync();
+        var first = chat.StreamTask!;
+
+        chat.PanelClosed();
+        chat.PanelOpened();
+
+        var events = await stream.NextOpenAsync();
+        await first;
+
+        Assert.NotSame(first, chat.StreamTask);
+        Assert.True(chat.StreamTrusted);
+
+        events.TryWrite(Durable(42, "system", "init"));
+        await Until(() => chat.CanInterrupt);
+        await Close(chat);
+    }
+
+    // The same, with the closed run parked in its reconnect wait rather than in
+    // a read: it wakes cancelled and leaves the new run's resume point and
+    // trust alone.
+    [Fact]
+    public async Task AReopenDuringTheReconnectWaitIsNotUndoneByTheOldRun()
+    {
+        var api = new RoutingApi(Answer(200, Receipt));
+        var stream = new FakeStream();
+        var clock = new FakeClock { Hold = true };
+        var chat = Sender(api, clock, stream: stream);
+
+        chat.PanelOpened();
+        var events = await stream.NextOpenAsync();
+        events.TryWrite(Durable(57, "assistant", payload: AssistantRow("a1", "hi")));
+        events.TryWrite(EndedCleanly);
+        await Until(() => clock.Waits.Count == 1);
+        var first = chat.StreamTask!;
+
+        chat.PanelClosed();
+        chat.PanelOpened();
+        await stream.NextOpenAsync();
+        await first;
+
+        // The new run started from the newest event, not from the old run's 57.
+        Assert.Equal(41, stream.Opens[1].From);
+        Assert.True(chat.StreamTrusted);
+        await Close(chat);
     }
 
     // A second PanelOpened while one stream runs does not open a second.

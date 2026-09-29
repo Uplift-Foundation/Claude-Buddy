@@ -405,12 +405,16 @@ namespace ClaudeBuddy
 
         private Task<LoadResult>? _inFlight;
 
-        // The stream (CB-199): the live assistant bubble a text_delta is growing,
-        // and the last durable sequence number seen, which is where a reconnect
-        // resumes. Both are touched only inside _post, on the UI thread, except
-        // the sequence number, which the stream task alone writes.
+        // The stream (CB-199): the live assistant bubble a text_delta is growing.
+        // Touched only inside _post, on the UI thread. Where a reconnect resumes
+        // is not here: it belongs to one run of StreamAsync, so a run that has
+        // been cancelled cannot move the next run's starting point.
         private ChatTurn? _liveTurn;
-        private long? _lastSeq;
+
+        // Whether this panel has already said that live updates stopped for want
+        // of a login. Once per open or send, so a poll tick and a stream reopen
+        // do not each repeat the same sentence.
+        private bool _notedLivePause;
 
         // Set once the stored assistant message has taken over the live bubble,
         // cleared by the next message_start. Measured: order is not guaranteed
@@ -419,7 +423,6 @@ namespace ClaudeBuddy
         // second bubble repeating the end of the first.
         private bool _deltasSuperseded;
         private volatile bool _streamFellBack;
-        private bool _streamNotedRateLimit;
         private CancellationTokenSource? _streamCts;
         private CancellationTokenSource? _live;
 
@@ -531,7 +534,12 @@ namespace ClaudeBuddy
 
         internal Task? StreamTask { get; private set; }
 
-        private bool StreamRunning => StreamTask is { IsCompleted: false };
+        // Running *and not told to stop*. A closed panel cancels its run, but the
+        // run is still unwinding — awaiting a read or a wait — for a moment after,
+        // and a panel reopened in that moment must start a new one rather than
+        // be told one is already running.
+        private bool StreamRunning =>
+            StreamTask is { IsCompleted: false } && _streamCts is { IsCancellationRequested: false };
 
         // Up and trusted: running, and not fallen back. A stream the policy has
         // given up waiting on may still be retrying behind the polling loop, and
@@ -690,8 +698,13 @@ namespace ClaudeBuddy
                 Announce(before);
             });
 
-            // The stream, when it is up, reports this turn's start and end
-            // itself; polling is for when it is not.
+            // A send is a fresh go: a login that failed a live read a moment ago
+            // has just worked, so say so again if it fails again, and bring the
+            // stream back if an open panel lost it. The stream, when it is up,
+            // reports this turn's start and end itself; polling is for when it
+            // is not.
+            _notedLivePause = false;
+            if (_panelOpen) StartStream();
             if (!StreamLive) StartLive();
             return ChatSendOutcome.Sent;
         }
@@ -851,8 +864,10 @@ namespace ClaudeBuddy
             _panelOpen = true;
 
             // A new panel gets a fresh go at the stream, whatever the last one
-            // concluded about it.
+            // concluded about it, and a fresh chance to say why live updates
+            // stopped.
             _streamFellBack = false;
+            _notedLivePause = false;
             StartStream();
 
             if (_busy && !IsReadOnly && !StreamLive) EnsureLive();
@@ -896,83 +911,111 @@ namespace ClaudeBuddy
 
             var cts = new CancellationTokenSource();
             Interlocked.Exchange(ref _streamCts, cts)?.Cancel();
-            _lastSeq = null;
-            _streamNotedRateLimit = false;
             StreamTask = StreamAsync(stream, cts.Token);
         }
 
+        // One run: from a panel opening (or a send bringing the stream back) to
+        // the panel closing or the stream being given up on. **Everything a run
+        // decides with is local to it**, and it checks its token after every
+        // wait before touching anything shared — so a run cancelled by a close
+        // and still unwinding cannot undo what the run a reopen started has
+        // already done.
         private async Task StreamAsync(ICloudEventStream stream, CancellationToken ct)
         {
             var state = ClaudeCloudStreamPolicy.State.Initial;
             var knowWhereToStart = false;
+            long? resumeFrom = null;
+            var notedRateLimit = false;
 
             while (true)
             {
                 var read = await ClaudeCliCredentials
                     .ReadWithinAsync(_credentials, ReadBudget, CancellationToken.None).ConfigureAwait(false);
 
-                // No login means no stream and no poll either; the next send
-                // says why in words.
-                if (read.Outcome != CredentialOutcome.Found || read.AccessToken is not { } token) return;
+                if (ct.IsCancellationRequested) return;
 
-                // Where to start, asked once per panel. A read that failed is a
-                // reason to poll, never a reason to open without a sequence
-                // number and take the whole history again; a read that worked
-                // and found no events is a new session with no history to
-                // replay, and the stream opens from the beginning.
-                if (!knowWhereToStart)
+                // No login means no stream and no poll either. Said once, in the
+                // credential layer's own words, rather than stopping in silence:
+                // the next open or send tries again.
+                if (read.Outcome != CredentialOutcome.Found || read.AccessToken is not { } token)
                 {
-                    if (!await ReadStartAsync(token).ConfigureAwait(false))
-                    {
-                        FallBack();
-                        return;
-                    }
-
-                    knowWhereToStart = true;
-                }
-
-                CloudOutcome? ended = null;
-                var deliveredEvent = false;
-                var openedAt = Now();
-
-                try
-                {
-                    await foreach (var e in stream.OpenAsync(token, SessionId, _lastSeq, ct)
-                                       .WithCancellation(ct).ConfigureAwait(false))
-                    {
-                        if (e.Kind == CloudStreamEventKind.Ended)
-                        {
-                            ended = e.Outcome;
-                            break;
-                        }
-
-                        // A stream that delivers again after the panel fell back
-                        // is trusted again, and the polling loop runs out on its
-                        // own — but only on an event the policy counts. A
-                        // keepalive says the socket is open, not that anything
-                        // will come down it.
-                        if (ClaudeCloudStreamPolicy.CountsTowardHealth(e))
-                        {
-                            deliveredEvent = true;
-                            _streamFellBack = false;
-                        }
-
-                        Handle(e);
-                        Interlocked.Increment(ref _streamEventsSeen);
-                    }
-                }
-                catch (OperationCanceledException)
-                {
+                    NoteLivePause(read);
                     return;
                 }
 
+                CloudOutcome outcome;
+                var healthy = false;
+
+                // Where to start, asked once per run. A read that failed is a
+                // reason to poll, never a reason to open without a sequence
+                // number and take the whole history again; a read that worked
+                // and found no events is a new session with no history to
+                // replay, and the stream opens from the beginning. A failed read
+                // is otherwise one more failed connection: the panel polls, and
+                // the stream is tried again behind it at the policy's wait.
+                StartRead? start = knowWhereToStart ? null : await ReadStartAsync(token).ConfigureAwait(false);
                 if (ct.IsCancellationRequested) return;
 
-                // An enumeration that stopped without saying why is a transport
-                // failure, not a clean end.
-                var outcome = ended
+                if (start is { Ok: false } failed)
+                {
+                    if (failed.Outcome is not { } refused) return; // no path: a malformed id
+
+                    FallBack();
+                    outcome = refused;
+                }
+                else
+                {
+                    if (start is { } found)
+                    {
+                        resumeFrom = found.Sequence;
+                        knowWhereToStart = true;
+                    }
+
+                    CloudOutcome? ended = null;
+                    var deliveredEvent = false;
+                    var openedAt = Now();
+
+                    try
+                    {
+                        await foreach (var e in stream.OpenAsync(token, SessionId, resumeFrom, ct)
+                                           .WithCancellation(ct).ConfigureAwait(false))
+                        {
+                            if (e.Kind == CloudStreamEventKind.Ended)
+                            {
+                                ended = e.Outcome;
+                                break;
+                            }
+
+                            // A stream that delivers again after the panel fell
+                            // back is trusted again, and the polling loop runs
+                            // out on its own — but only on an event the policy
+                            // counts. A keepalive says the socket is open, not
+                            // that anything will come down it.
+                            if (ClaudeCloudStreamPolicy.CountsTowardHealth(e))
+                            {
+                                deliveredEvent = true;
+                                _streamFellBack = false;
+                            }
+
+                            resumeFrom = ClaudeCloudStreamPolicy.ResumeFrom(resumeFrom, e);
+                            Handle(e);
+                            Interlocked.Increment(ref _streamEventsSeen);
+                        }
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        return;
+                    }
+
+                    if (ct.IsCancellationRequested) return;
+
+                    // An enumeration that stopped without saying why is a
+                    // transport failure, not a clean end.
+                    outcome = ended
                               ?? new CloudOutcome(CloudOutcomeKind.Unavailable, 0, null,
                                   ClaudeCloudStreamEvents.EndOfStreamDetail);
+                    healthy = ClaudeCloudStreamPolicy.WasHealthy(deliveredEvent, Now() - openedAt);
+                }
 
                 // The session ended or went: the same answer a send would get,
                 // and the box goes for the same reason.
@@ -989,9 +1032,9 @@ namespace ClaudeBuddy
 
                 if (outcome.Kind is CloudOutcomeKind.TokenRefused or CloudOutcomeKind.AuthFailed) return;
 
-                if (outcome.Kind == CloudOutcomeKind.RateLimited && !_streamNotedRateLimit)
+                if (outcome.Kind == CloudOutcomeKind.RateLimited && !notedRateLimit)
                 {
-                    _streamNotedRateLimit = true;
+                    notedRateLimit = true;
                     Note(LivePausedNote);
                 }
 
@@ -999,7 +1042,6 @@ namespace ClaudeBuddy
                 // stop waiting on the stream. Falling back with a wait still
                 // left means "poll now, and keep trying the stream behind it";
                 // no wait means the stream is done for this panel.
-                var healthy = ClaudeCloudStreamPolicy.WasHealthy(deliveredEvent, Now() - openedAt);
                 var decision = ClaudeCloudStreamPolicy.Next(state, outcome, healthy);
                 state = decision.Next;
 
@@ -1027,20 +1069,35 @@ namespace ClaudeBuddy
             if (_busy && !IsReadOnly) EnsureLive();
         }
 
-        // The newest durable sequence number, from the write host's event list
-        // read newest first. False when it could not be read at all; true with
-        // _lastSeq left null when it was read and the session has no events.
-        private async Task<bool> ReadStartAsync(string token)
+        // Live updates have stopped because the login could not be read. Said
+        // once per open or send, whichever of the stream and the poll noticed
+        // first.
+        private void NoteLivePause(CredentialRead read)
         {
-            if (ClaudeCloudStreamRequest.NewestSequencePath(SessionId) is not { } path) return false;
+            if (_notedLivePause) return;
+            _notedLivePause = true;
+            Note("Live updates paused: " + ClaudeCliCredentials.StatusFor(read) + ".");
+        }
+
+        // Where the stream starts: the newest durable sequence number, from the
+        // write host's event list read newest first. Ok with a null Sequence
+        // means the session has no events yet. Not Ok carries the outcome that
+        // refused the read, or no outcome when there is no path to read.
+        private readonly record struct StartRead(bool Ok, long? Sequence, CloudOutcome? Outcome);
+
+        private async Task<StartRead> ReadStartAsync(string token)
+        {
+            if (ClaudeCloudStreamRequest.NewestSequencePath(SessionId) is not { } path)
+            {
+                return new StartRead(false, null, null);
+            }
 
             var result = await _api.SendAsync(new CloudRequestContext(token, path), CancellationToken.None)
                 .ConfigureAwait(false);
 
-            if (result.Outcome.Kind != CloudOutcomeKind.Ok) return false;
-
-            _lastSeq = ClaudeCloudStreamRequest.ParseNewestSequence(result.Body);
-            return true;
+            return result.Outcome.Kind == CloudOutcomeKind.Ok
+                ? new StartRead(true, ClaudeCloudStreamRequest.ParseNewestSequence(result.Body), null)
+                : new StartRead(false, null, result.Outcome);
         }
 
         // One event off the stream. Runs on the stream's thread; everything that
@@ -1050,7 +1107,6 @@ namespace ClaudeBuddy
             switch (e.Kind)
             {
                 case CloudStreamEventKind.Durable:
-                    _lastSeq = ClaudeCloudStreamPolicy.ResumeFrom(_lastSeq, e);
                     HandleDurable(e);
                     break;
 
@@ -1218,9 +1274,22 @@ namespace ClaudeBuddy
                 elapsed += UnmeasuredLiveStatusInterval;
                 sinceTranscript += UnmeasuredLiveStatusInterval;
 
-                // Null when there is no credential to read with or no path to
-                // read — nothing the next tick would do differently.
-                if (await ReadLiveStatusAsync().ConfigureAwait(false) is not { } result) return;
+                // No path means a malformed id, which no tick will fix. No login
+                // is said once and ends the loop; the next open or send tries
+                // again.
+                if (CloudRequest.CodeSessionPath(SessionId) is not { } path) return;
+
+                var read = await ClaudeCliCredentials
+                    .ReadWithinAsync(_credentials, ReadBudget, CancellationToken.None).ConfigureAwait(false);
+
+                if (read.Outcome != CredentialOutcome.Found || read.AccessToken is not { } token)
+                {
+                    NoteLivePause(read);
+                    return;
+                }
+
+                var result = await _api.SendAsync(new CloudRequestContext(token, path), CancellationToken.None)
+                    .ConfigureAwait(false);
 
                 var outcome = result.Outcome;
 
@@ -1284,21 +1353,6 @@ namespace ClaudeBuddy
                     }
                 }
             }
-        }
-
-        // One read of the session's own record, through the same injected
-        // source as everything else here. Null when it could not be asked.
-        private async Task<CloudApiResult?> ReadLiveStatusAsync()
-        {
-            if (CloudRequest.CodeSessionPath(SessionId) is not { } path) return null;
-
-            var read = await ClaudeCliCredentials
-                .ReadWithinAsync(_credentials, ReadBudget, CancellationToken.None).ConfigureAwait(false);
-
-            if (read.Outcome != CredentialOutcome.Found || read.AccessToken is not { } token) return null;
-
-            return await _api.SendAsync(new CloudRequestContext(token, path), CancellationToken.None)
-                .ConfigureAwait(false);
         }
 
         // Read the transcript and reconcile it against what is already shown.

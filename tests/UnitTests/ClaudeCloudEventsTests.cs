@@ -551,8 +551,21 @@ public partial class ClaudeCloudEventsTests
     // which is how a test changes the world between two refreshes.
     private sealed class FakeClock
     {
-        internal List<TimeSpan> Waits { get; } = new();
-        internal List<CancellationToken> Tokens { get; } = new();
+        private readonly List<TimeSpan> _waits = new();
+        private readonly List<CancellationToken> _tokens = new();
+
+        // Snapshots, taken under the lock: a stream that keeps retrying waits on
+        // its own thread while a test is reading these.
+        internal List<TimeSpan> Waits
+        {
+            get { lock (_waits) return _waits.ToList(); }
+        }
+
+        internal List<CancellationToken> Tokens
+        {
+            get { lock (_waits) return _tokens.ToList(); }
+        }
+
         internal Action<int, CancellationToken>? OnDelay { get; set; }
 
         // Park every wait until its token is cancelled, so a test can look at the
@@ -561,9 +574,15 @@ public partial class ClaudeCloudEventsTests
 
         internal Task Delay(TimeSpan wait, CancellationToken ct)
         {
-            Waits.Add(wait);
-            Tokens.Add(ct);
-            OnDelay?.Invoke(Waits.Count, ct);
+            int count;
+            lock (_waits)
+            {
+                _waits.Add(wait);
+                _tokens.Add(ct);
+                count = _waits.Count;
+            }
+
+            OnDelay?.Invoke(count, ct);
             return Hold ? Task.Delay(Timeout.Infinite, ct) : Task.CompletedTask;
         }
     }
@@ -1243,6 +1262,27 @@ public partial class ClaudeCloudEventsTests
 
         Assert.Single(api.Statuses);
         Assert.False(chat.CanInterrupt);
+    }
+
+    // The polling fallback, too, says once why it stopped when the login cannot
+    // be read, rather than stopping in silence.
+    [Fact]
+    public async Task ThePollSaysWhyWhenTheLoginCannotBeRead()
+    {
+        var clock = new FakeClock();
+        var api = new RoutingApi(Answer(200, Receipt));
+        var creds = new CountingCredentials
+        {
+            Reading = new CredentialRead(CredentialOutcome.Denied, null, null, "…"),
+        };
+        var chat = Sender(api, clock, creds, session: BusyRow());
+
+        chat.PanelOpened();
+        await chat.LiveTask!;
+
+        Assert.Empty(api.Requests);
+        Assert.Equal("Live updates paused: " + ClaudeCliCredentials.Describe(CredentialOutcome.Denied) + ".",
+            Assert.Single(chat.History).Text);
     }
 
     // A malformed id has no status path, so the loop stops without asking.
