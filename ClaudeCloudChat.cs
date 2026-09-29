@@ -296,8 +296,9 @@ namespace ClaudeBuddy
             _post = post ?? (action => Dispatcher.UIThread.Post(action));
         }
 
-        // Re-point at the login that owns the session now. Loads re-read the
-        // source on every call, so swapping it is all a change of owner needs.
+        // Re-point at the login that owns the session now. Loads, sends and Stop
+        // all re-read the source on every call and none keeps a token, so swapping
+        // it is all a change of owner needs.
         internal void UseCredentials(ICloudCredentialSource credentials) => _credentials = credentials;
 
         public string SessionId { get; }
@@ -428,7 +429,7 @@ namespace ClaudeBuddy
 
             if (read.Outcome != CredentialOutcome.Found || read.AccessToken is not { } token)
             {
-                Note("Not sent: " + ClaudeCliCredentials.Describe(read.Outcome) + ".");
+                Note("Not sent: " + ClaudeCliCredentials.StatusFor(read) + ".");
                 return ChatSendOutcome.Failed;
             }
 
@@ -539,7 +540,7 @@ namespace ClaudeBuddy
             string? failure;
             if (read.Outcome != CredentialOutcome.Found || read.AccessToken is not { } token)
             {
-                failure = ClaudeCliCredentials.Describe(read.Outcome);
+                failure = ClaudeCliCredentials.StatusFor(read);
             }
             else
             {

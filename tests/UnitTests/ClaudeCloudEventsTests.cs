@@ -771,6 +771,31 @@ public class ClaudeCloudEventsTests
             Assert.Single(chat.History).Text);
     }
 
+    // An expired login says so, in the credential layer's own words, rather
+    // than the generic "no login found" its outcome alone would describe.
+    [Fact]
+    public async Task AnExpiredLoginSaysItExpiredAndHowToRefreshIt()
+    {
+        var api = new RoutingApi(Answer(200, Receipt));
+        var creds = new CountingCredentials
+        {
+            Reading = new CredentialRead(CredentialOutcome.NotLoggedIn, null, null, "…",
+                Lead: ClaudeCliCredentials.ExpiredLead),
+        };
+        var chat = Sender(api, creds: creds, session: BusyRow());
+
+        Assert.Equal(ChatSendOutcome.Failed, await chat.SendAsync("hello"));
+        chat.Cancel();
+        await chat.InterruptTask!;
+
+        Assert.Empty(api.Requests);
+        Assert.Equal(new[]
+        {
+            "Not sent: " + ClaudeCliCredentials.ExpiredLead + ".",
+            "Stop did not reach the session: " + ClaudeCliCredentials.ExpiredLead + ".",
+        }, chat.History.Select(t => t.Text));
+    }
+
     // Off means no credential read and no socket, even for a panel opened before
     // the switch was flipped.
     [Fact]

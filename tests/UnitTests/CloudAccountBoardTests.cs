@@ -77,7 +77,7 @@ public class CloudAccountBoardTests : IDisposable
 
     private static ClaudeCloudSessions.Session S(string id, string? owner, int minute = 0, string title = "t") =>
         new(id, title, "idle", new DateTime(2026, 9, 19, 10, minute, 0, DateTimeKind.Utc),
-            "https://claude.ai/code/" + id, "idle", false, null, null, null, null, owner);
+            "https://claude.ai/code/" + id, "idle", false, null, null, null, null, OwnerRoot: owner);
 
     private static async Task<ClaudeCloudSessions.StepResult> Step(
         Api api, ICloudCredentialSource creds, DateTime? now = null, TimeSpan? budget = null) =>
@@ -286,10 +286,27 @@ public class CloudAccountBoardTests : IDisposable
         Assert.Equal(RootB, bSession.OwnerRoot);
 
         // The chat: resolved through the same registry, by the session's owner.
-        var chatApi = new Api((_, _) => Ok("{\"data\":[],\"has_more\":false,\"last_id\":null}"));
+        // Reads, a send (CB-199) and a Stop all go out on it — the write path is
+        // the one where the wrong account would do the most harm.
+        var chatApi = new Api((_, path) => path == CloudRequest.CodeEventsPath("session_b1")
+            ? Ok("{\"results\":[{\"duplicate\":false,\"sequence_num\":\"1\",\"event_id\":\"e\"}]}")
+            : Ok("{\"data\":[],\"has_more\":false,\"last_id\":null}"));
         var chat = new ClaudeCloudChatSession(
-            bSession, chatApi, CloudAccounts.SourceFor(bSession.OwnerRoot), action => action());
+            bSession, chatApi, CloudAccounts.SourceFor(bSession.OwnerRoot), action => action())
+        {
+            Enabled = () => true,
+            Delay = (_, _) => Task.CompletedTask,
+        };
         Assert.True(await chat.LoadAsync(CancellationToken.None));
+
+        Assert.Equal(ChatSendOutcome.Sent, await chat.SendAsync("hello from b"));
+        await chat.FollowUpTask!;
+        Assert.True(chat.CanInterrupt);
+        chat.Cancel();
+        await chat.InterruptTask!;
+
+        var writes = chatApi.Calls.Where(c => c.Path == CloudRequest.CodeEventsPath("session_b1")).ToList();
+        Assert.Equal(2, writes.Count);
 
         Assert.All(chatApi.Calls, c => Assert.Equal(TokenB, c.Token));
         Assert.DoesNotContain(chatApi.Calls, c => c.Token == TokenA);
