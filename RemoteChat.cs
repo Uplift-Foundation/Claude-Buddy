@@ -388,6 +388,53 @@ namespace ClaudeBuddy
         // also per-session and long, so as prose it is either truncated or it
         // swamps the sentence beside it.
         string? ReplyUrl { get; }
+
+        // IsReadOnly changed after the panel read it.
+        //
+        // CB-199: it used to be fixed for a session's lifetime, and a panel that
+        // read it once at bind was right. It no longer is — a cloud session is
+        // writable until the server says otherwise (a 409 once it has ended, a
+        // 404 once it has been deleted, a 403 for an account that may not write
+        // to it), and the only way to learn that is to try. So the panel has to
+        // hear about the flip rather than keep the box it drew at bind: a
+        // composer left up over a session that has just refused a message would
+        // take the next paragraph and lose it exactly the way the comment above
+        // says a hidden box exists to prevent.
+        //
+        // Carries nothing. The handler re-reads IsReadOnly, ComposerHint and
+        // ReplyUrl together, because a flip changes all three at once and an
+        // event carrying one of them would invite reading the other two stale.
+        // Raised on the UI thread, like every other event on these interfaces.
+        event Action? ReadOnlyChanged;
+    }
+
+    // A session whose reply in flight this app can actually stop.
+    //
+    // Optional, and separate from IRemoteChatSession.Cancel, which every
+    // transport has and which stays the verb: this interface says only whether
+    // pressing it right now would do anything. For CB-59's reason the panel
+    // hides a Stop control that would do nothing rather than drawing it
+    // disabled — a greyed button over a session that is not working reads as
+    // "stuck", and a Stop that silently does nothing reads as broken. A
+    // transport that does not implement this keeps whatever the panel already
+    // did for it.
+    //
+    // A property with a change event rather than something the panel infers
+    // from the turns it has, because the thing that knows whether a turn is
+    // running is the transport's own status (for a cloud session, the roster
+    // row's worker state), not the transcript — a reply can be running long
+    // before its first row arrives.
+    public interface IRemoteChatInterrupt
+    {
+        // True while there is a turn in flight that Cancel would stop. Goes
+        // false as soon as Cancel is called, optimistically, and stays false for
+        // a session that is read-only: there is nothing to stop on a session
+        // that can no longer be written to.
+        bool CanInterrupt { get; }
+
+        // CanInterrupt changed. Raised on the UI thread; carries nothing, and the
+        // handler re-reads the property.
+        event Action? InterruptChanged;
     }
 
     // A session that cannot be typed into where it is, but can be *opened*

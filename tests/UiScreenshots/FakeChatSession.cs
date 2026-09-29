@@ -7,7 +7,7 @@ namespace ClaudeBuddy.Tests;
 // the original for the four IRemoteChatSession rules this honours.
 internal sealed class FakeChatSession :
     IRemoteChatSession, IRemoteChatComposer, IRemoteChatElsewhere, IRemoteChatRoom,
-    IRemoteChatReadOnly,
+    IRemoteChatReadOnly, IRemoteChatInterrupt,
     IRemoteChatMachine
 {
     // Both default to what an ordinary typeable session answers — an ordinary
@@ -25,6 +25,26 @@ internal sealed class FakeChatSession :
     // panel then shows the sentence and no link. A test that wants the link
     // sets it.
     public string? ReplyUrl { get; set; }
+
+    // CB-199: see the UiTests copy. A capture sets the property and raises.
+    public event Action? ReadOnlyChanged;
+
+    public void RaiseReadOnlyChanged(bool isReadOnly)
+    {
+        IsReadOnly = isReadOnly;
+        ReadOnlyChanged?.Invoke();
+    }
+
+    // IRemoteChatInterrupt, false by default like a session without it.
+    public bool CanInterrupt { get; set; }
+
+    public event Action? InterruptChanged;
+
+    public void RaiseInterruptChanged(bool canInterrupt)
+    {
+        CanInterrupt = canInterrupt;
+        InterruptChanged?.Invoke();
+    }
 
     // Null by default, which is what every capture before CB-164 showed: a
     // session that names no machine is read as being on this one. Set for a

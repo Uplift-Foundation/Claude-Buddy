@@ -189,6 +189,13 @@ namespace ClaudeBuddy
 
         public bool IsReadOnly => true;
 
+        // Declared for the interface; raised once sending lands (CB-199 step 2).
+        public event Action? ReadOnlyChanged
+        {
+            add { }
+            remove { }
+        }
+
         // **Answered, and the answer is not a machine.**
         //
         // ChatHeaderMeta.MachineFor treats a session that names no machine as

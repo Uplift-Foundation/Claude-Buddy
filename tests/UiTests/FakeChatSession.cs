@@ -16,7 +16,7 @@ namespace ClaudeBuddy.Tests;
 internal sealed class FakeChatSession :
     IRemoteChatSession, IRemoteChatImages, IRemoteChatSlashCommands,
     IRemoteChatComposer, IRemoteChatElsewhere, IRemoteChatFetchWait, IRemoteChatRoom,
-    IRemoteChatReadOnly
+    IRemoteChatReadOnly, IRemoteChatInterrupt
 {
     public string SessionId { get; init; } = "fake-session";
     public string DisplayName { get; init; } = "Fake Session";
@@ -55,6 +55,33 @@ internal sealed class FakeChatSession :
     // panel then shows the sentence and no link. A test that wants the link
     // sets it.
     public string? ReplyUrl { get; set; }
+
+    // CB-199: IsReadOnly can flip after bind now, so a test calls
+    // RaiseReadOnlyChanged — the same two steps a real session takes when a send
+    // is refused: change the property, then say so.
+    public event Action? ReadOnlyChanged;
+
+    public void RaiseReadOnlyChanged(bool isReadOnly)
+    {
+        IsReadOnly = isReadOnly;
+        ReadOnlyChanged?.Invoke();
+    }
+
+    // IRemoteChatInterrupt. False by default, which is what every session that
+    // predates CB-199 answered by not implementing it at all.
+    public bool CanInterrupt { get; set; }
+
+    public event Action? InterruptChanged;
+
+    public void RaiseInterruptChanged(bool canInterrupt)
+    {
+        CanInterrupt = canInterrupt;
+        InterruptChanged?.Invoke();
+    }
+
+    // Counted, like OpenElsewhere below, so a test of the Stop control can
+    // assert that the click reached the session.
+    public int CancelCalls { get; private set; }
 
     // Counted rather than performed. The real one opens or focuses a real
     // window, which is the half this suite must never execute — what is being
@@ -101,10 +128,7 @@ internal sealed class FakeChatSession :
         return Task.FromResult(SendOutcome);
     }
 
-    public void Cancel()
-    {
-        // No-op: nothing is ever in flight in this fake.
-    }
+    public void Cancel() => CancelCalls++;
 
     // What SendWithImagesAsync was actually called with — the panel's paste
     // path takes this route instead of SendAsync whenever it is holding at
