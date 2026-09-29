@@ -380,6 +380,20 @@ public class ClaudeCloudStreamTests
         Assert.Equal("u", ev.Uuid);
     }
 
+    // A hint field that is present but not a string is no hint, not a
+    // stringified number or a crash.
+    [Fact]
+    public void AHintThatIsNotAStringIsNull()
+    {
+        var ev = Classify("client_event", """{"payload":{"type":5,"subtype":true,"uuid":{"a":1}}}""", "1");
+        Assert.Null(ev.PayloadType);
+        Assert.Null(ev.Subtype);
+        Assert.Null(ev.Uuid);
+
+        Assert.Null(Classify("session_update", """{"connection_status":3}""").StatusValue);
+        Assert.Null(Classify("delivery_update", """{"status":null,"event_id":7}""").DeliveryStatus);
+    }
+
     [Theory]
     [InlineData("client_event", "Durable")]
     [InlineData("ephemeral_event", "Ephemeral")]
