@@ -473,7 +473,9 @@ namespace ClaudeBuddy
 
                 // A new message is a new turn to stop, even if the roster has
                 // not caught up with the last one ending yet.
-                ChangeInterrupt(() => _interruptSent = false);
+                var before = Affordances();
+                _interruptSent = false;
+                Announce(before);
             });
 
             StartFollowUp();
@@ -497,7 +499,12 @@ namespace ClaudeBuddy
 
             if (CloudChatSendability.RefusalFor(outcome) is { } refusal)
             {
-                _post(() => ChangeReadOnly(() => ChangeInterrupt(() => _refusal ??= refusal)));
+                _post(() =>
+                {
+                    var before = Affordances();
+                    _refusal ??= refusal;
+                    Announce(before);
+                });
             }
         }
 
@@ -518,7 +525,9 @@ namespace ClaudeBuddy
         {
             if (!CanInterrupt) return;
 
-            ChangeInterrupt(() => _interruptSent = true);
+            var before = Affordances();
+            _interruptSent = true;
+            Announce(before);
             InterruptTask = InterruptAsync();
         }
 
@@ -559,7 +568,12 @@ namespace ClaudeBuddy
             if (failure is null) return;
 
             Note("Stop did not reach the session: " + failure + ".");
-            _post(() => ChangeInterrupt(() => _interruptSent = false));
+            _post(() =>
+            {
+                var before = Affordances();
+                _interruptSent = false;
+                Announce(before);
+            });
         }
 
         // --- live state ------------------------------------------------------
@@ -575,15 +589,16 @@ namespace ClaudeBuddy
         {
             var wasBusy = _busy;
 
-            ChangeReadOnly(() => ChangeInterrupt(() =>
-            {
-                _row = row;
-                _busy = row is not null && ClaudeCloudRoster.IsBusy(row);
+            var before = Affordances();
 
-                // The turn that Stop was pressed for is over; the next one is
-                // stoppable again.
-                if (!_busy) _interruptSent = false;
-            }));
+            _row = row;
+            _busy = row is not null && ClaudeCloudRoster.IsBusy(row);
+
+            // The turn that Stop was pressed for is over; the next one is
+            // stoppable again.
+            if (!_busy) _interruptSent = false;
+
+            Announce(before);
 
             // The turn just finished, so the reply is complete now and worth one
             // read — for a panel someone is looking at, and only then.
@@ -604,18 +619,16 @@ namespace ClaudeBuddy
             _followUp?.Cancel();
         }
 
-        private void ChangeReadOnly(Action change)
-        {
-            var before = IsReadOnly;
-            change();
-            if (before != IsReadOnly) ReadOnlyChanged?.Invoke();
-        }
+        // Every change to what the panel offers is bracketed by these two: read
+        // both answers, change the state, and say which of them moved. One pair
+        // rather than a helper per event, because most changes can move both — a
+        // refusal takes Stop away along with the box.
+        private (bool ReadOnly, bool Interrupt) Affordances() => (IsReadOnly, CanInterrupt);
 
-        private void ChangeInterrupt(Action change)
+        private void Announce((bool ReadOnly, bool Interrupt) before)
         {
-            var before = CanInterrupt;
-            change();
-            if (before != CanInterrupt) InterruptChanged?.Invoke();
+            if (before.ReadOnly != IsReadOnly) ReadOnlyChanged?.Invoke();
+            if (before.Interrupt != CanInterrupt) InterruptChanged?.Invoke();
         }
 
         // --- reading ---------------------------------------------------------

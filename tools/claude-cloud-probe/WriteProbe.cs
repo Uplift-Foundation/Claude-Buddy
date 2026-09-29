@@ -239,7 +239,7 @@ internal static class WriteProbe
             Console.WriteLine($"ctype    {response.Content.Headers.ContentType?.MediaType ?? "(none)"}");
             Console.WriteLine($"cf       {(response.Headers.Contains("cf-mitigated") ? "cf-mitigated present" : "no cf-mitigated")}");
             Console.WriteLine("response:");
-            Console.WriteLine(Summarise(text));
+            Console.WriteLine(Summarise(text, response.Content.Headers.ContentType?.MediaType));
             if (Value(opts, "--expect-uuid") is { } expect) Console.WriteLine(Echo(text, expect));
             return response.IsSuccessStatusCode ? 0 : 1;
         }
@@ -378,7 +378,7 @@ internal static class WriteProbe
     }
 
     // Shape of the whole response, plus the values of allow-listed scalars.
-    private static string Summarise(string text)
+    private static string Summarise(string text, string? contentType)
     {
         if (string.IsNullOrWhiteSpace(text)) return "  (empty)";
         try
@@ -390,8 +390,11 @@ internal static class WriteProbe
         }
         catch (JsonException)
         {
-            var head = text.Length > 120 ? text[..120] : text;
-            return $"  (not JSON) {head.ReplaceLineEndings(" ")}";
+            // Length and type only, never the text. A body this probe cannot
+            // parse is one nobody has vetted — an edge page, a proxy error, or a
+            // server echoing something back — and the allow-list that makes the
+            // JSON summary safe to paste has nothing to apply to here.
+            return $"  (not JSON) {text.Length} chars, {contentType ?? "no content type"}";
         }
     }
 
