@@ -69,7 +69,9 @@ namespace ClaudeBuddy
             string? Model,
             int? ContextPercent,
             string? StatusDetail,
-            string? RecentAction);
+            string? RecentAction,
+            string? WorkerStatus = null,
+            string? ConnectionStatus = null);
 
         // What was wrong with a payload, where something was.
         //
@@ -211,6 +213,13 @@ namespace ClaudeBuddy
             string? statusDetail = null;
             string? recentAction = null;
 
+            // Both in the payload since CB-164 and read by nothing until CB-199.
+            // Kept as the raw strings: neither has a documented vocabulary, and
+            // `WORKER_STATUS_UNSPECIFIED` turning up mid-turn is the measured
+            // reason not to turn either into an enum that would have to guess.
+            var workerStatus = Str(element, "worker_status");
+            var connectionStatus = Str(element, "connection_status");
+
             if (element.TryGetProperty("external_metadata", out var meta)
                 && meta.ValueKind == JsonValueKind.Object)
             {
@@ -231,7 +240,7 @@ namespace ClaudeBuddy
             }
 
             return new Row(id!, kind!, status!, bucket, title, updated, needsAction,
-                model, contextPercent, statusDetail, recentAction);
+                model, contextPercent, statusDetail, recentAction, workerStatus, connectionStatus);
         }
 
         // `context_usage` is `{ max_tokens, used_tokens }`. A zero or absent
@@ -334,6 +343,59 @@ namespace ClaudeBuddy
                 string.Equals(value, expected, StringComparison.OrdinalIgnoreCase);
         }
 
+        // The bucket a session is in while a turn is running.
+        internal const string WorkingBucket = "working";
+
+        // Is a turn running right now — the question a Stop button asks.
+        //
+        // **Measured by CB-199's gate, on `/v1/code/sessions/{id}` against a
+        // throwaway cloud session:** mid-turn, `status_bucket` was `working`
+        // every time, while `worker_status` was `running` on one read and
+        // `WORKER_STATUS_UNSPECIFIED` on another. After the turn the bucket was
+        // `blocked`, `review_ready` or `completed` and the worker `idle`. So the
+        // bucket is the field that answers, and `worker_status == "running"` —
+        // which the plan first proposed — would have missed a turn that was
+        // plainly in progress. The worker status is parsed and carried, and
+        // deliberately decides nothing.
+        //
+        // "generating" from StateFor still counts, so there is one busy rule and
+        // not two: anything the orb already pulses for is busy here too.
+        //
+        // **Assumed, not measured:** that the `/v2/ccr-sessions` roster row —
+        // which is where Session comes from — uses the same bucket vocabulary as
+        // the `/v1` read the gate measured. Same field name, same account, same
+        // session; nobody has read a /v2 row mid-turn.
+        internal static bool IsBusy(string? state, string? statusBucket) =>
+            string.Equals(state, "generating", StringComparison.Ordinal)
+            || string.Equals(statusBucket, WorkingBucket, StringComparison.OrdinalIgnoreCase);
+
+        internal static bool IsBusy(ClaudeCloudSessions.Session session) =>
+            IsBusy(session.State, session.StatusBucket);
+
+        // Is this shaped like a session id: the prefix, then at least one
+        // character, every one of them from the allow-list.
+        //
+        // **The one copy of the rule**, used by UrlFor before an id reaches a
+        // link, by CloudRequest.CodeEventsPath before one reaches a write, and by
+        // the probe before one reaches either. It matches the Claude Code CLI's
+        // own `^session_[A-Za-z0-9_-]+$`. An allow-list rather than a deny-list
+        // for the reason UrlFor gives.
+        internal static bool IsWellFormedId(string? id)
+        {
+            if (string.IsNullOrWhiteSpace(id)) return false;
+            if (!id.StartsWith(IdPrefix, StringComparison.Ordinal)) return false;
+            if (id.Length <= IdPrefix.Length) return false;
+
+            foreach (var c in id)
+            {
+                var ok = c is >= 'a' and <= 'z' || c is >= 'A' and <= 'Z'
+                         || c is >= '0' and <= '9' || c == '_' || c == '-';
+                if (!ok) return false;
+            }
+
+            return true;
+        }
+
         // Where a click goes.
         //
         // `session_url` is empty on every one of the 578 rows measured, so the
@@ -346,21 +408,8 @@ namespace ClaudeBuddy
         //
         // Null means "no link", which the caller shows as a session with no click
         // rather than as an error.
-        internal static string? UrlFor(string? id)
-        {
-            if (string.IsNullOrWhiteSpace(id)) return null;
-            if (!id.StartsWith(IdPrefix, StringComparison.Ordinal)) return null;
-            if (id.Length <= IdPrefix.Length) return null;
-
-            foreach (var c in id)
-            {
-                var ok = c is >= 'a' and <= 'z' || c is >= 'A' and <= 'Z'
-                         || c is >= '0' and <= '9' || c == '_' || c == '-';
-                if (!ok) return null;
-            }
-
-            return "https://claude.ai/code/" + id;
-        }
+        internal static string? UrlFor(string? id) =>
+            IsWellFormedId(id) ? "https://claude.ai/code/" + id : null;
 
         // A kept row as the orb layer's own record. Sessions with no usable id are
         // already gone by here — UrlFor's refusal drops the row rather than
@@ -381,7 +430,9 @@ namespace ClaudeBuddy
                 row.Model,
                 row.ContextPercent,
                 row.StatusDetail,
-                row.RecentAction);
+                row.RecentAction,
+                row.WorkerStatus,
+                row.ConnectionStatus);
         }
 
         // --- the walk's result ------------------------------------------------

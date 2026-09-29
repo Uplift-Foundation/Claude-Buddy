@@ -156,11 +156,15 @@ public class ClaudeCloudEventsTests
 
         internal FakeApi(Func<string, CloudApiResult> answer) => _answer = answer;
 
-        internal List<string> Paths { get; } = new();
+        // The whole context, not just the path, so a test can see the method
+        // and body a call went out with as well as where it went.
+        internal List<CloudRequestContext> Requests { get; } = new();
 
-        public Task<CloudApiResult> GetAsync(CloudRequestContext context, CancellationToken token)
+        internal List<string> Paths => Requests.Select(r => r.Path).ToList();
+
+        public Task<CloudApiResult> SendAsync(CloudRequestContext context, CancellationToken token)
         {
-            Paths.Add(context.Path);
+            Requests.Add(context);
             return Task.FromResult(_answer(context.Path));
         }
     }

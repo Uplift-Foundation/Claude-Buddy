@@ -72,8 +72,13 @@ public class CloudChatPanelTests : IDisposable
 
         internal FakeApi(Func<CloudApiResult> answer) => _answer = answer;
 
-        public Task<CloudApiResult> GetAsync(CloudRequestContext context, CancellationToken token) =>
-            Task.FromResult(_answer());
+        internal List<CloudRequestContext> Requests { get; } = new();
+
+        public Task<CloudApiResult> SendAsync(CloudRequestContext context, CancellationToken token)
+        {
+            Requests.Add(context);
+            return Task.FromResult(_answer());
+        }
     }
 
     private sealed class FakeCredentials : ICloudCredentialSource

@@ -273,7 +273,7 @@ internal static class Program
         // value nothing sends is a diagnostic that reports its own assumption as
         // the machine's problem.
         using var api = new HttpCloudApi();
-        var result = await api.GetAsync(
+        var result = await api.SendAsync(
             new CloudRequestContext(read.AccessToken,
                 CloudRequest.ListPath(CloudRequest.MaxPageSize, null)),
             CancellationToken.None);
@@ -330,7 +330,7 @@ internal static class Program
 
         for (var i = 0; i < CloudRequest.MaxPagesPerWalk; i++)
         {
-            var result = await api.GetAsync(
+            var result = await api.SendAsync(
                 new CloudRequestContext(read.AccessToken,
                     CloudRequest.ListPath(CloudRequest.MaxPageSize, after)),
                 CancellationToken.None);

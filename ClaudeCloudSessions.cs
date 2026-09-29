@@ -64,6 +64,11 @@ namespace ClaudeBuddy
         // Url is carried rather than built at the click, because the payload's
         // own `session_url` is empty on every row measured and the id is what
         // the address is actually made of.
+        //
+        // WorkerStatus and ConnectionStatus are the payload's raw strings, added
+        // by CB-199 as optional trailing fields so the many places that build a
+        // Session positionally did not all have to change. Busy is decided by
+        // ClaudeCloudRoster.IsBusy, which reads the bucket rather than either.
         internal sealed record Session(
             string Id,
             string Title,
@@ -75,7 +80,9 @@ namespace ClaudeBuddy
             string? Model,
             int? ContextPercent,
             string? StatusDetail,
-            string? RecentAction);
+            string? RecentAction,
+            string? WorkerStatus = null,
+            string? ConnectionStatus = null);
 
         // The settings gate lives here rather than in SessionManager.EnabledFor,
         // following OpenClaw: off means the app asks the OS for no credential
@@ -213,7 +220,7 @@ namespace ClaudeBuddy
 
             for (var i = 0; i < CloudRequest.MaxPagesPerWalk; i++)
             {
-                var result = await api.GetAsync(
+                var result = await api.SendAsync(
                     new CloudRequestContext(token, CloudRequest.ListPath(CloudRequest.MaxPageSize, after)),
                     ct).ConfigureAwait(false);
 
@@ -260,7 +267,7 @@ namespace ClaudeBuddy
         private static async Task<StepResult> RefreshAsync(ICloudApi api, ArmState state,
             string? stamp, string token, ClaudeCloudRoster.Plan plan, CancellationToken ct)
         {
-            var first = await api.GetAsync(
+            var first = await api.SendAsync(
                 new CloudRequestContext(token, CloudRequest.ListPath(CloudRequest.MaxPageSize, null)),
                 ct).ConfigureAwait(false);
 
@@ -284,7 +291,7 @@ namespace ClaudeBuddy
             {
                 if (resolved.Contains(id)) continue;
 
-                var one = await api.GetAsync(
+                var one = await api.SendAsync(
                     new CloudRequestContext(token, CloudRequest.SessionPath(id)), ct)
                     .ConfigureAwait(false);
 

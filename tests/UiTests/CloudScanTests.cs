@@ -642,8 +642,13 @@ public class CloudScanTests
 
     private sealed class SilentApi : ICloudApi
     {
-        public Task<CloudApiResult> GetAsync(CloudRequestContext context, CancellationToken token) =>
-            Task.FromResult(new CloudApiResult(CloudOutcomes.OutcomeFor(401, ""), null));
+        internal List<CloudRequestContext> Requests { get; } = new();
+
+        public Task<CloudApiResult> SendAsync(CloudRequestContext context, CancellationToken token)
+        {
+            Requests.Add(context);
+            return Task.FromResult(new CloudApiResult(CloudOutcomes.OutcomeFor(401, ""), null));
+        }
     }
 
     private sealed class NoCredentials : ICloudCredentialSource

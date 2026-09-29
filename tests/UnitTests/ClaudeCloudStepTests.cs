@@ -26,11 +26,15 @@ public class ClaudeCloudStepTests
 
         internal FakeApi(Func<string, CloudApiResult> answer) => _answer = answer;
 
-        internal List<string> Paths { get; } = new();
+        // The whole context, not just the path, so a test can see the method
+        // and body a call went out with as well as where it went.
+        internal List<CloudRequestContext> Requests { get; } = new();
 
-        public Task<CloudApiResult> GetAsync(CloudRequestContext context, CancellationToken token)
+        internal List<string> Paths => Requests.Select(r => r.Path).ToList();
+
+        public Task<CloudApiResult> SendAsync(CloudRequestContext context, CancellationToken token)
         {
-            Paths.Add(context.Path);
+            Requests.Add(context);
             return Task.FromResult(_answer(context.Path));
         }
     }
@@ -156,6 +160,14 @@ public class ClaudeCloudStepTests
             "/v2/ccr-sessions?limit=100&after_id=session_a",
             "/v2/ccr-sessions?limit=100&after_id=session_b",
         }, api.Paths);
+
+        // CB-199 gave the context a method and a body; the roster must still
+        // leave both unset, which Build reads as a bodiless GET.
+        Assert.All(api.Requests, r =>
+        {
+            Assert.Null(r.Method);
+            Assert.Null(r.Body);
+        });
 
         Assert.NotNull(step.Snapshot);
         Assert.Equal(new[] { "session_a", "session_b", "session_c" },
