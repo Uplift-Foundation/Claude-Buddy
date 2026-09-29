@@ -839,7 +839,7 @@ public class CloudChatPanelTests : IDisposable
     {
         public Task<CloudApiResult> SendAsync(CloudRequestContext context, CancellationToken token) =>
             Task.FromResult(new CloudApiResult(CloudOutcomes.OutcomeFor(200, ""),
-                context.Path.EndsWith(ClaudeCloudChatSession.NewestEventQuery, StringComparison.Ordinal)
+                context.Path.EndsWith("?limit=1&sort_order=desc", StringComparison.Ordinal)
                     ? "{\"data\":[{\"sequence_num\":\"7\"}]}"
                     : Envelope()));
     }

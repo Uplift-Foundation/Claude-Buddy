@@ -242,9 +242,9 @@ namespace ClaudeBuddy
                 : null;
     }
 
-    // The pure half of reading the stream: a durable event's payload as the
-    // transcript rows the history already uses, and the newest sequence number
-    // off a newest-first event list.
+    // The pure half of reading the stream that is the panel's rather than the
+    // transport's: a durable event's payload as the transcript rows the history
+    // already uses.
     internal static class CloudStreamRows
     {
         // The row is the event's `payload` object when there is one, otherwise
@@ -271,38 +271,6 @@ namespace ClaudeBuddy
             catch (JsonException)
             {
                 return Array.Empty<ChatTranscript.Row>();
-            }
-        }
-
-        // `data[0].sequence_num`, a string in every measured response and read
-        // as a number too for the reason ClaudeCloudSend gives for the receipt.
-        internal static long? NewestSequenceFrom(string? body)
-        {
-            if (string.IsNullOrWhiteSpace(body)) return null;
-
-            try
-            {
-                using var doc = JsonDocument.Parse(body);
-                if (doc.RootElement.ValueKind != JsonValueKind.Object
-                    || !doc.RootElement.TryGetProperty("data", out var data)
-                    || data.ValueKind != JsonValueKind.Array
-                    || data.GetArrayLength() == 0
-                    || data[0].ValueKind != JsonValueKind.Object
-                    || !data[0].TryGetProperty("sequence_num", out var seq))
-                {
-                    return null;
-                }
-
-                return seq.ValueKind switch
-                {
-                    JsonValueKind.String when long.TryParse(seq.GetString(), out var n) => n,
-                    JsonValueKind.Number when seq.TryGetInt64(out var n) => n,
-                    _ => null,
-                };
-            }
-            catch (JsonException)
-            {
-                return null;
             }
         }
     }
@@ -396,7 +364,7 @@ namespace ClaudeBuddy
         // the sequence number, which the stream task alone writes.
         private ChatTurn? _liveTurn;
         private long? _lastSeq;
-        private bool _streamFellBack;
+        private volatile bool _streamFellBack;
         private bool _streamNotedRateLimit;
         private CancellationTokenSource? _streamCts;
         private CancellationTokenSource? _live;
@@ -425,17 +393,7 @@ namespace ClaudeBuddy
         // session falls back to when the stream cannot be kept open.
         internal ICloudEventStream? Stream { get; init; }
 
-        // What to wait before reopening the stream after it ended, or null to
-        // stop streaming and fall back. The ended outcome and the previous wait
-        // in, the next wait out.
-        internal Func<CloudOutcome, TimeSpan?, TimeSpan?> StreamBackoff { get; init; } = StreamWaitAfter;
 
-        // How many opens in a row may fail — end without delivering anything —
-        // before the panel stops trying and polls instead. **Not measured**:
-        // three is "a blip, a retry, and a pattern". A stream that delivered
-        // events before it ended resets the count, since that is a server closing
-        // an idle connection rather than one refusing to open.
-        internal const int UnmeasuredStreamFailuresBeforeFallback = 3;
 
         // The seam that keeps this class testable without an Avalonia app.
         //
@@ -516,8 +474,16 @@ namespace ClaudeBuddy
 
         private bool StreamRunning => StreamTask is { IsCompleted: false };
 
+        // Up and trusted: running, and not fallen back. A stream the policy has
+        // given up waiting on may still be retrying behind the polling loop, and
+        // until it delivers again it is not what the panel relies on.
+        private bool StreamLive => StreamRunning && !_streamFellBack;
+
+        // The same answer, for a test to wait on rather than sleep for.
+        internal bool StreamTrusted => StreamLive;
+
         // Whoever is watching live owns busy; the roster only updates the row.
-        private bool LiveOwnsBusy => LiveRunning || StreamRunning;
+        private bool LiveOwnsBusy => LiveRunning || StreamLive;
 
         // The transcript read in flight, if any — so a test can see that the end
         // of a turn started one, or that it did not.
@@ -661,7 +627,7 @@ namespace ClaudeBuddy
 
             // The stream, when it is up, reports this turn's start and end
             // itself; polling is for when it is not.
-            if (!StreamRunning) StartLive();
+            if (!StreamLive) StartLive();
             return ChatSendOutcome.Sent;
         }
 
@@ -752,7 +718,7 @@ namespace ClaudeBuddy
             // right, and if a loop is not already watching, that is this one.
             if (failure is null)
             {
-                if (!StreamRunning) EnsureLive();
+                if (!StreamLive) EnsureLive();
                 return;
             }
 
@@ -805,7 +771,7 @@ namespace ClaudeBuddy
             // read. Or one has just started somewhere else — claude.ai, another
             // machine — and a panel someone is looking at should watch it live.
             if (wasBusy && !_busy) _ = RefreshAsync();
-            else if (!wasBusy && _busy && !StreamRunning) EnsureLive();
+            else if (!wasBusy && _busy && !StreamLive) EnsureLive();
         }
 
         // The panel's lifetime, called by ChatPanel from Bind and Unbind.
@@ -824,7 +790,7 @@ namespace ClaudeBuddy
             _streamFellBack = false;
             StartStream();
 
-            if (_busy && !IsReadOnly && !StreamRunning) EnsureLive();
+            if (_busy && !IsReadOnly && !StreamLive) EnsureLive();
         }
 
         // Whether a panel is bound right now. Read by the panel's own tests,
@@ -872,8 +838,8 @@ namespace ClaudeBuddy
 
         private async Task StreamAsync(ICloudEventStream stream, CancellationToken ct)
         {
-            TimeSpan? wait = null;
-            var failures = 0;
+            var state = ClaudeCloudStreamPolicy.State.Initial;
+            var knowWhereToStart = false;
 
             while (true)
             {
@@ -884,13 +850,20 @@ namespace ClaudeBuddy
                 // says why in words.
                 if (read.Outcome != CredentialOutcome.Found || read.AccessToken is not { } token) return;
 
-                // Where to start. Not knowing is a reason to poll, never a reason
-                // to open without one and take the whole history again.
-                _lastSeq ??= await NewestSequenceAsync(token).ConfigureAwait(false);
-                if (_lastSeq is null)
+                // Where to start, asked once per panel. A read that failed is a
+                // reason to poll, never a reason to open without a sequence
+                // number and take the whole history again; a read that worked
+                // and found no events is a new session with no history to
+                // replay, and the stream opens from the beginning.
+                if (!knowWhereToStart)
                 {
-                    FallBack();
-                    return;
+                    if (!await ReadStartAsync(token).ConfigureAwait(false))
+                    {
+                        FallBack();
+                        return;
+                    }
+
+                    knowWhereToStart = true;
                 }
 
                 CloudOutcome? ended = null;
@@ -907,7 +880,10 @@ namespace ClaudeBuddy
                             break;
                         }
 
+                        // A stream that delivers again after the panel fell back
+                        // is trusted again; the polling loop runs out on its own.
                         delivered = true;
+                        _streamFellBack = false;
                         Handle(e);
                     }
                 }
@@ -918,9 +894,11 @@ namespace ClaudeBuddy
 
                 if (ct.IsCancellationRequested) return;
 
+                // An enumeration that stopped without saying why is a transport
+                // failure, not a clean end.
                 var outcome = ended
                               ?? new CloudOutcome(CloudOutcomeKind.Unavailable, 0, null,
-                                  "the stream ended without saying why");
+                                  ClaudeCloudStreamEvents.EndOfStreamDetail);
 
                 // The session ended or went: the same answer a send would get,
                 // and the box goes for the same reason.
@@ -943,22 +921,15 @@ namespace ClaudeBuddy
                     Note(LivePausedNote);
                 }
 
-                // A stream that carried events and then ended is a server closing
-                // a connection, not one refusing it; the count and the wait start
-                // again.
-                if (delivered)
-                {
-                    failures = 0;
-                    wait = null;
-                }
+                // The shared policy decides the wait, and when the panel should
+                // stop waiting on the stream. Falling back with a wait still
+                // left means "poll now, and keep trying the stream behind it";
+                // no wait means the stream is done for this panel.
+                var decision = ClaudeCloudStreamPolicy.Next(state, outcome, delivered);
+                state = decision.Next;
 
-                failures++;
-                wait = failures < UnmeasuredStreamFailuresBeforeFallback ? StreamBackoff(outcome, wait) : null;
-                if (wait is not { } next)
-                {
-                    FallBack();
-                    return;
-                }
+                if (decision.FallBackToPolling) FallBack();
+                if (decision.Wait is not { } next) return;
 
                 try
                 {
@@ -973,13 +944,8 @@ namespace ClaudeBuddy
             }
         }
 
-        // Interim policy until the shared one lands: a clean end reconnects at
-        // the floor, and everything else follows Backoff — which stops on the
-        // refusals that will not change by waiting.
-        private static TimeSpan? StreamWaitAfter(CloudOutcome outcome, TimeSpan? previous) =>
-            outcome.Kind == CloudOutcomeKind.Ok ? Backoff.UnavailableFloor : Backoff.Next(outcome, previous);
-
-        // Stop streaming for this panel and let polling carry the turn.
+        // Stop relying on the stream for this panel and let polling carry any
+        // turn that is running.
         private void FallBack()
         {
             _streamFellBack = true;
@@ -987,19 +953,20 @@ namespace ClaudeBuddy
         }
 
         // The newest durable sequence number, from the write host's event list
-        // read newest first. Null when it could not be read or said nothing.
-        private async Task<long?> NewestSequenceAsync(string token)
+        // read newest first. False when it could not be read at all; true with
+        // _lastSeq left null when it was read and the session has no events.
+        private async Task<bool> ReadStartAsync(string token)
         {
-            if (CloudRequest.CodeEventsPath(SessionId) is not { } path) return null;
+            if (ClaudeCloudStreamRequest.NewestSequencePath(SessionId) is not { } path) return false;
 
-            var result = await _api.SendAsync(
-                new CloudRequestContext(token, path + NewestEventQuery), CancellationToken.None)
+            var result = await _api.SendAsync(new CloudRequestContext(token, path), CancellationToken.None)
                 .ConfigureAwait(false);
 
-            return result.Outcome.Kind == CloudOutcomeKind.Ok ? CloudStreamRows.NewestSequenceFrom(result.Body) : null;
-        }
+            if (result.Outcome.Kind != CloudOutcomeKind.Ok) return false;
 
-        internal const string NewestEventQuery = "?limit=1&sort_order=desc";
+            _lastSeq = ClaudeCloudStreamRequest.ParseNewestSequence(result.Body);
+            return true;
+        }
 
         // One event off the stream. Runs on the stream's thread; everything that
         // touches what the panel shows goes through _post.
@@ -1008,7 +975,7 @@ namespace ClaudeBuddy
             switch (e.Kind)
             {
                 case CloudStreamEventKind.Durable:
-                    if (e.SequenceNum is { } seq) _lastSeq = seq;
+                    _lastSeq = ClaudeCloudStreamPolicy.ResumeFrom(_lastSeq, e);
                     HandleDurable(e);
                     break;
 

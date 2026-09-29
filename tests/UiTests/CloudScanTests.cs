@@ -782,6 +782,38 @@ public class CloudScanTests
         }
     }
 
+    // A stream that is never opened: what is under test is that the manager hands
+    // the one it was given to the session it builds.
+    private sealed class UnopenedStream : ICloudEventStream
+    {
+        public IAsyncEnumerable<CloudStreamEvent> OpenAsync(string accessToken, string sessionId,
+            long? fromSequenceNum, CancellationToken ct) =>
+            throw new InvalidOperationException("no panel is open in this test");
+    }
+
+    [AvaloniaFact]
+    public void ACloudSessionIsBuiltWithTheManagersStream()
+    {
+        using var scratch = new Scratch();
+        try
+        {
+            Publish(Session("session_01abc"));
+
+            var stream = new UnopenedStream();
+            var manager = Manager(scratch.Dir);
+            manager.UseCloudChatDependenciesForTests(new SilentApi(), new NoCredentials(), stream);
+            manager.ScanAndUpdate();
+
+            var chat = (ClaudeCloudChatSession)manager.RemoteChatFor("cloud:session_01abc")!;
+
+            Assert.Same(stream, chat.Stream);
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
     // --- live state pushed to an open cloud panel (CB-199) ---------------------
 
     // The scan already walks the roster to draw the orb; an open panel hears the

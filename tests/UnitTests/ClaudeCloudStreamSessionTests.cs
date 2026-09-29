@@ -253,7 +253,7 @@ public partial class ClaudeCloudEventsTests
         await stream.NextOpenAsync();
 
         Assert.Equal(57, stream.Opens[1].From);
-        Assert.Equal(Backoff.UnavailableFloor, clock.Waits.Single());
+        Assert.Equal(ClaudeCloudStreamPolicy.UnmeasuredReconnectAfterEnd, clock.Waits.Single());
         await Close(chat);
     }
 
@@ -327,21 +327,34 @@ public partial class ClaudeCloudEventsTests
         var (chat, api, stream, _) = Streaming(BusyRow());
         chat.PanelOpened();
 
-        for (var i = 0; i < ClaudeCloudChatSession.UnmeasuredStreamFailuresBeforeFallback; i++)
+        for (var i = 0; i < ClaudeCloudStreamPolicy.UnmeasuredFailuresBeforeFallback; i++)
         {
             (await stream.NextOpenAsync()).TryWrite(EndedWith(503));
         }
 
-        await chat.StreamTask!;
+        await Until(() => chat.LiveTask is not null);
         await chat.LiveTask!;
-
-        Assert.Equal(ClaudeCloudChatSession.UnmeasuredStreamFailuresBeforeFallback, stream.OpenCount);
         Assert.NotEmpty(api.Statuses);
 
-        // A send after falling back polls rather than waiting on a stream.
+        // The stream keeps trying behind the polling...
+        var retry = await stream.NextOpenAsync();
+
+        // ...and a send meanwhile polls rather than waiting on it.
+        var before = chat.LiveTask;
         await chat.SendAsync("hello");
-        Assert.NotNull(chat.LiveTask);
+        Assert.NotSame(before, chat.LiveTask);
         await chat.LiveTask!;
+
+        // A stream that delivers again is trusted again: the next send leaves
+        // the turn to it.
+        Assert.False(chat.StreamTrusted);
+        retry.TryWrite(new CloudStreamEvent(CloudStreamEventKind.Keepalive, null, null, null));
+        await Until(() => chat.StreamTrusted);
+        var polled = chat.LiveTask;
+        await chat.SendAsync("again");
+        Assert.Same(polled, chat.LiveTask);
+
+        await Close(chat);
     }
 
     // A stream that carried events before ending is not a failure towards the
@@ -352,7 +365,7 @@ public partial class ClaudeCloudEventsTests
         var (chat, _, stream, _) = Streaming();
         chat.PanelOpened();
 
-        for (var i = 0; i < ClaudeCloudChatSession.UnmeasuredStreamFailuresBeforeFallback + 1; i++)
+        for (var i = 0; i < ClaudeCloudStreamPolicy.UnmeasuredFailuresBeforeFallback + 1; i++)
         {
             var events = await stream.NextOpenAsync();
             events.TryWrite(new CloudStreamEvent(CloudStreamEventKind.Keepalive, null, null, null));
@@ -364,37 +377,30 @@ public partial class ClaudeCloudEventsTests
         await Close(chat);
     }
 
-    // The policy saying stop is a fallback too.
+    // An answer waiting will not change — an edge block, here — ends the
+    // stream for this panel, and a running turn is polled instead.
     [Fact]
-    public async Task APolicyThatSaysStopFallsBack()
+    public async Task AnAnswerThatWillNotChangeEndsTheStreamAndPollsInstead()
     {
-        var api = new RoutingApi(Answer(200, Receipt));
-        var stream = new FakeStream();
-        var chat = new ClaudeCloudChatSession(Row(), api, new CountingCredentials(), a => a())
-        {
-            Delay = new FakeClock().Delay,
-            Enabled = () => true,
-            Stream = stream,
-            StreamBackoff = (_, _) => null,
-        };
+        var (chat, api, stream, _) = Streaming(BusyRow());
         chat.PanelOpened();
 
-        (await stream.NextOpenAsync()).TryWrite(EndedCleanly);
+        (await stream.NextOpenAsync()).TryWrite(EndedWith(403)); // no JSON body: an edge block
         await chat.StreamTask!;
+        await chat.LiveTask!;
 
         Assert.Equal(1, stream.OpenCount);
-        Assert.Null(chat.LiveTask); // idle: nothing to poll for yet
+        Assert.False(chat.IsReadOnly);
+        Assert.NotEmpty(api.Statuses);
     }
 
     // Not knowing where to start is a reason to poll — never to open without a
     // sequence number and take the whole history again.
-    [Theory]
-    [InlineData(500, null)]
-    [InlineData(200, "{\"data\":[]}")]
-    public async Task NoStartingPointMeansNoStream(int status, string? body)
+    [Fact]
+    public async Task AStartingPointThatCannotBeReadMeansNoStream()
     {
         var (chat, api, stream, _) = Streaming(BusyRow());
-        api.Newest = () => new CloudApiResult(CloudOutcomes.OutcomeFor(status, body ?? ""), body);
+        api.Newest = () => Answer(500);
 
         chat.PanelOpened();
         await chat.StreamTask!;
@@ -402,6 +408,34 @@ public partial class ClaudeCloudEventsTests
 
         Assert.Equal(0, stream.OpenCount);
         Assert.NotEmpty(api.Statuses);
+    }
+
+    // A session with no events yet has no history to replay, so opening from
+    // the beginning is the right answer rather than a fallback.
+    [Fact]
+    public async Task ASessionWithNoEventsYetIsStreamedFromTheBeginning()
+    {
+        var (chat, api, stream, _) = Streaming();
+        api.Newest = () => new CloudApiResult(CloudOutcomes.OutcomeFor(200, ""), "{\"data\":[]}");
+
+        chat.PanelOpened();
+        await stream.NextOpenAsync();
+
+        Assert.Null(stream.Opens.Single().From);
+        await Close(chat);
+    }
+
+    // A malformed id never gets as far as asking where to start.
+    [Fact]
+    public async Task AMalformedIdIsNotStreamed()
+    {
+        var (chat, api, stream, _) = Streaming(Row("not a session"));
+
+        chat.PanelOpened();
+        await chat.StreamTask!;
+
+        Assert.Equal(0, stream.OpenCount);
+        Assert.Empty(api.NewestReads);
     }
 
     [Fact]
@@ -433,14 +467,16 @@ public partial class ClaudeCloudEventsTests
         var (chat, api, stream, _) = Streaming();
         chat.PanelOpened();
 
-        for (var i = 0; i < ClaudeCloudChatSession.UnmeasuredStreamFailuresBeforeFallback; i++)
+        for (var i = 0; i < ClaudeCloudStreamPolicy.UnmeasuredFailuresBeforeFallback; i++)
         {
             (await stream.NextOpenAsync()).TryWrite(EndedWith(503));
         }
 
-        await chat.StreamTask!;
-
+        await stream.NextOpenAsync(); // still retrying behind the fallback
+        var first = chat.StreamTask!;
         chat.PanelClosed();
+        await first;
+
         chat.PanelOpened();
         await stream.NextOpenAsync();
 
@@ -588,31 +624,5 @@ public partial class ClaudeCloudEventsTests
     public void AnUnusableDurableEventHasNoRows(string? json)
     {
         Assert.Empty(CloudStreamRows.RowsFrom(json));
-    }
-
-    [Theory]
-    [InlineData("{\"data\":[{\"sequence_num\":\"41\"}]}", 41L)]
-    [InlineData("{\"data\":[{\"sequence_num\":42}]}", 42L)]
-    public void TheNewestSequenceIsReadAsAStringOrANumber(string body, long expected)
-    {
-        Assert.Equal(expected, CloudStreamRows.NewestSequenceFrom(body));
-    }
-
-    [Theory]
-    [InlineData(null)]
-    [InlineData("")]
-    [InlineData("not json")]
-    [InlineData("[]")]
-    [InlineData("{}")]
-    [InlineData("{\"data\":{}}")]
-    [InlineData("{\"data\":[]}")]
-    [InlineData("{\"data\":[3]}")]
-    [InlineData("{\"data\":[{}]}")]
-    [InlineData("{\"data\":[{\"sequence_num\":\"x\"}]}")]
-    [InlineData("{\"data\":[{\"sequence_num\":1.5}]}")]
-    [InlineData("{\"data\":[{\"sequence_num\":true}]}")]
-    public void NoUsableNewestSequenceIsNull(string? body)
-    {
-        Assert.Null(CloudStreamRows.NewestSequenceFrom(body));
     }
 }

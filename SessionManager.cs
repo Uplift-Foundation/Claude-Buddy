@@ -3023,7 +3023,10 @@ namespace ClaudeBuddy
                 // the orb is on its way out, and there is nothing to read.
                 if (row is null) return null;
 
-                var cloud = new ClaudeCloudChatSession(row, CloudChatApi, CloudChatCredentialsFor(row.OwnerRoot));
+                var cloud = new ClaudeCloudChatSession(row, CloudChatApi, CloudChatCredentialsFor(row.OwnerRoot))
+                {
+                    Stream = CloudChatStream,
+                };
                 _cloudChats[sessionId] = cloud;
                 StartCloudLoad(cloud);
                 return cloud;
@@ -3081,6 +3084,29 @@ namespace ClaudeBuddy
         [ExcludeFromCodeCoverage]
         private ICloudApi CloudChatApi => _cloudChatApi ??= new HttpCloudApi();
 
+        // One live-event stream client for every cloud panel, for CloudChatApi's
+        // reason: it owns an HttpClient. Each open panel holds one connection on
+        // it, and only while it is open (CB-199). A test that goes through the
+        // seam below has chosen its stream, a null one included, so no test can
+        // reach this real one by forgetting to.
+        [ExcludeFromCodeCoverage]
+        private ICloudEventStream? CloudChatStream
+        {
+            get
+            {
+                if (!_cloudChatStreamChosen)
+                {
+                    _cloudChatStream = new HttpCloudEventStream();
+                    _cloudChatStreamChosen = true;
+                }
+
+                return _cloudChatStream;
+            }
+        }
+
+        private ICloudEventStream? _cloudChatStream;
+        private bool _cloudChatStreamChosen;
+
         // The credential for a session's *owner*. Several accounts can be
         // listed, and a cloud session belongs to whichever one created it: sending
         // with another's login is at best refused and at worst reads a
@@ -3094,26 +3120,28 @@ namespace ClaudeBuddy
 
         // The only way into RemoteChatFor's ClaudeCloud arm from a test.
         //
-        // Both properties above build the real thing on first use: an HttpClient
-        // pointed at api.anthropic.com, and — on this platform — a Keychain query that
-        // puts a consent dialog in front of whoever is running the suite. Neither
-        // is something a headless run may do, so the arm that constructs a cloud
-        // session was unreachable and therefore uncovered, which is what this
-        // seam is for. It sets the same two fields the properties memoise into,
+        // The properties above build the real thing on first use: HttpClients
+        // pointed at api.anthropic.com — one of them holding a live event stream
+        // open — and, on this platform, a Keychain query that puts a consent
+        // dialog in front of whoever is running the suite. None is something a
+        // headless run may do, so the arm that constructs a cloud session was
+        // unreachable and therefore uncovered, which is what this seam is for.
+        // It sets the same fields the properties memoise into,
         // so production still builds each of them exactly once and nothing about
         // the app's behaviour changes when nobody calls this.
         internal void UseCloudChatDependenciesForTests(
-            ICloudApi api, ICloudCredentialSource credentials)
+            ICloudApi api, ICloudCredentialSource credentials, ICloudEventStream? stream = null)
         {
-            _cloudChatApi = api;
-            _cloudChatCredentialsFor = _ => credentials;
+            UseCloudChatDependenciesForTests(api, _ => credentials, stream);
         }
 
         internal void UseCloudChatDependenciesForTests(
-            ICloudApi api, Func<string?, ICloudCredentialSource> credentialsFor)
+            ICloudApi api, Func<string?, ICloudCredentialSource> credentialsFor, ICloudEventStream? stream = null)
         {
             _cloudChatApi = api;
             _cloudChatCredentialsFor = credentialsFor;
+            _cloudChatStream = stream;
+            _cloudChatStreamChosen = true;
         }
 
         // Hand an open cloud panel what the roster says about its session now.
