@@ -597,6 +597,64 @@ public class CloudChatPanelTests : IDisposable
         Assert.False(ComposerRow(panel).IsVisible);
     }
 
+    // The panel tells a real cloud session when it is being looked at, and when
+    // it stops being looked at (PanelOpened / PanelClosed, by concrete type).
+    //
+    // The state is read off the session's private flag by reflection, and that
+    // is deliberate. What the flag licenses — one transcript read when a turn
+    // finishes — goes through Task.Run and a single-flight guard, so a request
+    // count can show the open half (awaited below) but can never show the
+    // closed half: a read the closed panel wrongly started and a read started
+    // afterwards collapse into the same one request. The flag is the only thing
+    // that can tell those two apart. If it is renamed this fails loudly on the
+    // lookup rather than passing.
+    private static bool PanelOpenFlag(ClaudeCloudChatSession chat)
+    {
+        var field = typeof(ClaudeCloudChatSession).GetField("_panelOpen",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        Assert.NotNull(field);
+        return (bool)field!.GetValue(chat)!;
+    }
+
+    [AvaloniaFact]
+    public async Task BindAndUnbindTellACloudSessionWhetherAPanelIsOpen()
+    {
+        var id = "session_panel_" + Guid.NewGuid().ToString("N");
+        var firstRequest = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var api = new FakeApi(() =>
+        {
+            firstRequest.TrySetResult();
+            return new CloudApiResult(
+                CloudOutcomes.OutcomeFor(200, ""), Envelope(Row(UserTemplate, "u1", "hello")));
+        });
+        var chat = Chat(id, api);
+        _toClean.Add(chat.SessionId);
+
+        Assert.False(PanelOpenFlag(chat));
+
+        var orb = NewOrb();
+        ChatPanel.OpenFor(orb, chat);
+        FlushRender();
+
+        Assert.True(PanelOpenFlag(chat));
+
+        // ...and that open panel is what gets a finished turn read. Awaited on
+        // the request itself rather than a sleep, and bounded so a regression
+        // fails instead of hanging the suite.
+        chat.UpdateStatus(Session(id) with { State = "generating", StatusBucket = "working" });
+        chat.UpdateStatus(Session(id));
+        var reached = await Task.WhenAny(firstRequest.Task, Task.Delay(TimeSpan.FromSeconds(10)));
+        Assert.Same(firstRequest.Task, reached);
+
+        // Moving the panel to another session is the Unbind.
+        var other = new FakeChatSession(null) { SessionId = "cloud-after-" + Guid.NewGuid() };
+        _toClean.Add(other.SessionId);
+        ChatPanel.OpenFor(orb, other);
+        FlushRender();
+
+        Assert.False(PanelOpenFlag(chat));
+    }
+
     // --- a read that worked ---
 
     [AvaloniaFact]

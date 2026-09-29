@@ -653,6 +653,12 @@ namespace ClaudeBuddy
             if (_session is IRemoteChatReadOnly wasReadOnly) wasReadOnly.ReadOnlyChanged -= OnReadOnlyChanged;
             if (_session is IRemoteChatInterrupt wasInterruptible) wasInterruptible.InterruptChanged -= OnInterruptChanged;
 
+            // Nobody is looking any more, so its post-send follow-up reads stop.
+            // It does not stop a turn: closing a window should not cancel work
+            // somebody asked for. Concrete type, following the RemoteControl
+            // precedent below — one caller does not earn an interface.
+            if (_session is ClaudeCloudChatSession previousCloud) previousCloud.PanelClosed();
+
             if (_session is IRemoteChatMachine wasNamed) wasNamed.MachineChanged -= OnMachineChanged;
 
             // A remote session can take a turn back — its "working…" line comes
@@ -793,6 +799,10 @@ namespace ClaudeBuddy
             // ApplyComposerAffordances below for the initial state.
             if (session is IRemoteChatReadOnly readOnlyNow) readOnlyNow.ReadOnlyChanged += OnReadOnlyChanged;
             if (session is IRemoteChatInterrupt interruptible) interruptible.InterruptChanged += OnInterruptChanged;
+
+            // Somebody is looking, which is what licenses the one transcript read
+            // the session makes when a turn finishes (busy to idle on the roster).
+            if (session is ClaudeCloudChatSession cloud) cloud.PanelOpened();
 
             // "Nova — wtvamp" is built as name plus place, so it splits back
             // into the two lines the header now has. A name with no place (an
