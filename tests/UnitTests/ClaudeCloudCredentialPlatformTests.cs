@@ -377,4 +377,20 @@ public class ClaudeCloudCredentialPlatformTests
         Assert.Equal("the stored credential expired (expiresAt 2026-09-06 06:56:00Z)", multi.Attempts[2].Reason);
         Assert.Equal(("file", CredentialOutcome.Found, "a credential is present"), multi.Attempts[3]);
     }
+
+    [Fact]
+    public void AReadWithNoDetailFallsBackToTheOutcomeWording()
+    {
+        var multi = new MultiCredentialSource(new (string, ICloudCredentialSource)[] { ("a", new NoDetail()) });
+
+        multi.Read();
+
+        Assert.Equal(ClaudeCliCredentials.Describe(CredentialOutcome.Malformed), multi.Attempts[0].Reason);
+    }
+
+    private sealed class NoDetail : ICloudCredentialSource
+    {
+        public string? Stamp() => "1";
+        public CredentialRead Read() => new(CredentialOutcome.Malformed, null, null, null);
+    }
 }
