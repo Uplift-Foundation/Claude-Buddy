@@ -145,10 +145,9 @@ public class CloudSessionScreenshots : IDisposable
     }
 
     // ...and one that has ended: the box has gone, and the sentence in its place
-    // says why and links to the session. The reason text is this capture's own
-    // (the fake's), standing in for what the real session writes, so the
-    // picture is about the layout of a long reason beside the link rather than
-    // about the exact words.
+    // says why and links to the session. The hint is the real session's own
+    // Ended wording (CloudChatSendability), copied rather than referenced so the
+    // capture shows a literal a reviewer can read against the rids.
     [AvaloniaFact]
     public void AnEndedCloudSessionShowsWhyInPlaceOfTheComposer()
     {
@@ -160,7 +159,7 @@ public class CloudSessionScreenshots : IDisposable
             SessionId = id,
             DisplayName = "Refactor the parser",
             IsReadOnly = true,
-            ComposerHint = "This session has ended, so it can\u2019t be replied to.",
+            ComposerHint = "This session has ended and no longer takes messages.",
             ReplyUrl = "https://claude.ai/code/session_01abc",
             MachineName = "Anthropic's cloud",
         };
