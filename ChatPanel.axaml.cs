@@ -658,7 +658,7 @@ namespace ClaudeBuddy
             if (_session is IRemoteChatReadOnly wasReadOnly) wasReadOnly.ReadOnlyChanged -= OnReadOnlyChanged;
             if (_session is IRemoteChatInterrupt wasInterruptible) wasInterruptible.InterruptChanged -= OnInterruptChanged;
 
-            // Nobody is looking any more, so its post-send follow-up reads stop.
+            // Nobody is looking any more, so its live loop stops.
             // It does not stop a turn: closing a window should not cancel work
             // somebody asked for. Concrete type, following the RemoteControl
             // precedent below — one caller does not earn an interface.

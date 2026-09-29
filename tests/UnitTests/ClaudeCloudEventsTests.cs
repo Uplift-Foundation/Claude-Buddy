@@ -488,18 +488,36 @@ public class ClaudeCloudEventsTests
         {
         }
 
+        // What the live loop's status read answers. Idle by default, so a loop a
+        // send starts sees the turn end at its first tick and every test that
+        // is not about the loop is over quickly.
+        internal Func<CloudApiResult> Status { get; set; } = () => new CloudApiResult(
+            CloudOutcomes.OutcomeFor(200, ""), "{\"status_bucket\":\"idle\"}");
+
         internal List<CloudRequestContext> Requests { get; } = new();
 
-        internal List<CloudRequestContext> Posts =>
-            Requests.Where(r => r.Method == HttpMethod.Post).ToList();
+        internal List<CloudRequestContext> Posts => Where(r => r.Method == HttpMethod.Post);
 
-        internal List<CloudRequestContext> Gets =>
-            Requests.Where(r => r.Method is null || r.Method == HttpMethod.Get).ToList();
+        // The transcript reads, on the /v2 events path.
+        internal List<CloudRequestContext> Transcripts =>
+            Where(r => r.Method is null && r.Path.Contains("/events?", StringComparison.Ordinal));
+
+        // The live loop's reads of the session's own record.
+        internal List<CloudRequestContext> Statuses =>
+            Where(r => r.Path == CloudRequest.CodeSessionPath(r.Path.Split('/').Last()));
+
+        private List<CloudRequestContext> Where(Func<CloudRequestContext, bool> keep)
+        {
+            lock (Requests) return Requests.Where(keep).ToList();
+        }
 
         public Task<CloudApiResult> SendAsync(CloudRequestContext context, CancellationToken token)
         {
-            Requests.Add(context);
-            return Task.FromResult(_answer(context));
+            lock (Requests) Requests.Add(context);
+            var isStatus = context.Method is null
+                           && context.Path.StartsWith(CloudRequest.CodeSessionsPath + "/", StringComparison.Ordinal)
+                           && !context.Path.EndsWith("/events", StringComparison.Ordinal);
+            return Task.FromResult(isStatus ? Status() : _answer(context));
         }
     }
 
@@ -528,12 +546,16 @@ public class ClaudeCloudEventsTests
         internal List<CancellationToken> Tokens { get; } = new();
         internal Action<int, CancellationToken>? OnDelay { get; set; }
 
+        // Park every wait until its token is cancelled, so a test can look at the
+        // state a send leaves before the live loop's first tick.
+        internal bool Hold { get; init; }
+
         internal Task Delay(TimeSpan wait, CancellationToken ct)
         {
             Waits.Add(wait);
             Tokens.Add(ct);
             OnDelay?.Invoke(Waits.Count, ct);
-            return Task.CompletedTask;
+            return Hold ? Task.Delay(Timeout.Infinite, ct) : Task.CompletedTask;
         }
     }
 
@@ -578,7 +600,7 @@ public class ClaudeCloudEventsTests
         chat.TurnAdded += _ => postsWhenRaised = api.Posts.Count;
 
         Assert.Equal(ChatSendOutcome.Sent, await chat.SendAsync("please do the thing"));
-        await chat.FollowUpTask!;
+        await chat.LiveTask!;
 
         var post = Assert.Single(api.Posts);
         Assert.Equal(CloudRequest.CodeEventsPath("session_a"), post.Path);
@@ -613,7 +635,7 @@ public class ClaudeCloudEventsTests
         var chat = Sender(api);
 
         await chat.SendAsync("please do the thing");
-        await chat.FollowUpTask!;
+        await chat.LiveTask!;
 
         Assert.Equal(new[] { ChatRole.User, ChatRole.Assistant }, chat.History.Select(t => t.Role));
     }
@@ -627,7 +649,7 @@ public class ClaudeCloudEventsTests
         var chat = Sender(new RoutingApi(Answer(200, receipt)));
 
         Assert.Equal(ChatSendOutcome.Sent, await chat.SendAsync("hello"));
-        await chat.FollowUpTask!;
+        await chat.LiveTask!;
         Assert.Equal(ChatRole.User, Assert.Single(chat.History).Role);
     }
 
@@ -733,7 +755,7 @@ public class ClaudeCloudEventsTests
         var chat = Sender(api);
 
         Assert.Equal(ChatSendOutcome.Sent, await chat.SendAsync("hello"));
-        await chat.FollowUpTask!;
+        await chat.LiveTask!;
 
         Assert.Equal(2, api.Posts.Count);
         Assert.Equal(PayloadUuid(api.Posts[0]), PayloadUuid(api.Posts[1]));
@@ -835,15 +857,15 @@ public class ClaudeCloudEventsTests
         var clock = new FakeClock();
         var chat = Sender(new RoutingApi(Answer(200, Receipt)), clock, creds);
 
-        // Close the panel at the first wait, so no follow-up read joins the count.
+        // Close the panel at the first wait, so no live-loop read joins the count.
         clock.OnDelay = (_, _) => chat.PanelClosed();
 
         await chat.SendAsync("one");
-        await chat.FollowUpTask!;
+        await chat.LiveTask!;
         Assert.Equal(1, creds.Reads);
 
         await chat.SendAsync("two");
-        await chat.FollowUpTask!;
+        await chat.LiveTask!;
         Assert.Equal(2, creds.Reads);
     }
 
@@ -865,7 +887,7 @@ public class ClaudeCloudEventsTests
         var chat = Sender(api);
 
         await chat.SendAsync("hello");
-        if (chat.FollowUpTask is { } followUp) await followUp;
+        if (chat.LiveTask is { } followUp) await followUp;
 
         Assert.DoesNotContain(Token, chat.ComposerHint, StringComparison.Ordinal);
         Assert.All(chat.History,
@@ -874,117 +896,207 @@ public class ClaudeCloudEventsTests
             r => Assert.DoesNotContain(Token, r.Body ?? "", StringComparison.Ordinal));
     }
 
-    // --- the follow-up reads after a send -------------------------------------
+    // --- the live loop after a send ------------------------------------------
+    //
+    // Found on a real machine: the roster's thirty-second cycle meant a short
+    // reply was never seen as busy, so Stop never appeared and the reply did not
+    // build up. These pin the fix — busy from the 2xx, then the session's own
+    // record every status interval, the transcript every transcript interval
+    // while it runs, and one last read when it ends.
+
+    private static CloudApiResult Status(string bucket) =>
+        new(CloudOutcomes.OutcomeFor(200, ""), "{\"id\":\"session_a\",\"status_bucket\":\"" + bucket + "\"}");
+
+    private static readonly TimeSpan Tick = ClaudeCloudChatSession.UnmeasuredLiveStatusInterval;
 
     [Fact]
-    public async Task AnIdleSessionIsReadOnceAtTheEchoDelayAndThenLeftAlone()
+    public async Task ASentMessageShowsStopAtOnceWithoutWaitingForTheRoster()
+    {
+        var clock = new FakeClock { Hold = true };
+        var chat = Sender(new RoutingApi(Answer(200, Receipt)), clock);
+        var stops = 0;
+        chat.InterruptChanged += () => stops++;
+
+        Assert.Equal(ChatSendOutcome.Sent, await chat.SendAsync("write me an essay"));
+
+        Assert.True(chat.CanInterrupt);
+        Assert.Equal(1, stops);
+        Assert.Equal(CloudChatSendability.BusyHint, chat.ComposerHint);
+
+        chat.PanelClosed();
+        await chat.LiveTask!;
+    }
+
+    // The end of the turn, seen live: Stop goes, the finished reply is read
+    // once, and the loop stops asking.
+    [Fact]
+    public async Task WhenTheTurnEndsStopGoesTheReplyIsReadAndTheLoopStops()
     {
         var clock = new FakeClock();
         var api = new RoutingApi(Answer(200, Receipt));
+        var calls = 0;
+        api.Status = () => Status(++calls < 3 ? "working" : "idle");
+        var chat = Sender(api, clock);
+        var stops = 0;
+        chat.InterruptChanged += () => stops++;
+
+        await chat.SendAsync("hello");
+        await chat.LiveTask!;
+
+        Assert.Equal(3, api.Statuses.Count);
+        Assert.All(clock.Waits, w => Assert.Equal(Tick, w));
+        Assert.Single(api.Transcripts); // the final read; two ticks is under the transcript interval
+        Assert.False(chat.CanInterrupt);
+        Assert.Equal(2, stops); // on at the send, off at the end
+        Assert.Equal(CloudChatSendability.SendableHint, chat.ComposerHint);
+    }
+
+    // While it runs, the transcript is re-read on its own, longer interval, so
+    // a reply builds up rather than arriving whole.
+    [Fact]
+    public async Task WhileTheTurnRunsTheTranscriptIsReadOnItsOwnInterval()
+    {
+        var clock = new FakeClock();
+        var api = new RoutingApi(Answer(200, Receipt));
+        var calls = 0;
+        api.Status = () => Status(++calls < 7 ? "working" : "idle");
         var chat = Sender(api, clock);
 
         await chat.SendAsync("hello");
-        await chat.FollowUpTask!;
+        await chat.LiveTask!;
 
-        Assert.Equal(new[] { ClaudeCloudChatSession.EchoDelay }, clock.Waits);
-        Assert.Single(api.Gets);
+        // Six working ticks of two seconds: a transcript read at the tick where
+        // five seconds have gone by (the third) and again three ticks later,
+        // then the final read at idle.
+        var perRead = (int)Math.Ceiling(ClaudeCloudChatSession.UnmeasuredLiveTranscriptInterval / Tick);
+        Assert.Equal(6 / perRead + 1, api.Transcripts.Count);
+        Assert.Equal(7, api.Statuses.Count);
     }
 
     [Fact]
-    public async Task ABusySessionIsReadOnTheIntervalUntilTheCap()
+    public async Task ARunawayTurnIsWatchedOnlyUntilTheCap()
     {
         var clock = new FakeClock();
-        var api = new RoutingApi(Answer(200, Receipt));
-        var chat = Sender(api, clock, session: BusyRow());
+        var api = new RoutingApi(Answer(200, Receipt)) { Status = () => Status("working") };
+        var chat = Sender(api, clock);
 
         await chat.SendAsync("hello");
-        await chat.FollowUpTask!;
+        await chat.LiveTask!;
 
-        // 10 s, then every 15 s while the total stays within two minutes.
-        var expected = new List<TimeSpan> { ClaudeCloudChatSession.EchoDelay };
-        var elapsed = ClaudeCloudChatSession.EchoDelay;
-        while (elapsed + ClaudeCloudChatSession.UnmeasuredBusyRefreshInterval
-               <= ClaudeCloudChatSession.UnmeasuredRefreshCap)
-        {
-            expected.Add(ClaudeCloudChatSession.UnmeasuredBusyRefreshInterval);
-            elapsed += ClaudeCloudChatSession.UnmeasuredBusyRefreshInterval;
-        }
+        var ticks = (int)(ClaudeCloudChatSession.UnmeasuredLiveCap / Tick);
+        Assert.Equal(ticks, api.Statuses.Count);
 
-        Assert.Equal(expected, clock.Waits);
-        Assert.Equal(expected.Count, api.Gets.Count);
+        // Still busy: the roster owns the answer from here.
+        Assert.True(chat.CanInterrupt);
     }
 
-    [Fact]
-    public async Task TheFollowUpStopsWhenTheTurnEnds()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ARateLimitPausesTheLoopWithANoteAndNoRetry(bool onTheTranscript)
     {
         var clock = new FakeClock();
-        var api = new RoutingApi(Answer(200, Receipt));
-        var chat = Sender(api, clock, session: BusyRow());
-        clock.OnDelay = (n, _) => { if (n == 3) chat.UpdateStatus(Row()); };
+        var api = onTheTranscript
+            ? new RoutingApi(Answer(200, Receipt), Answer(429)) { Status = () => Status("working") }
+            : new RoutingApi(Answer(200, Receipt)) { Status = () => Answer(429) };
+        var chat = Sender(api, clock);
 
         await chat.SendAsync("hello");
-        await chat.FollowUpTask!;
+        await chat.LiveTask!;
 
-        Assert.Equal(3, clock.Waits.Count);
-        Assert.Equal(3, api.Gets.Count);
+        Assert.Equal(ClaudeCloudChatSession.LivePausedNote, chat.History.Last().Text);
+        Assert.Equal(onTheTranscript ? 3 : 1, api.Statuses.Count);
     }
 
-    // Busy and read-only at once: a roster row whose bucket says it is over.
+    [Theory]
+    [InlineData(404, "Gone")]
+    [InlineData(409, "Ended")]
+    public async Task ASessionThatEndsOrGoesMidTurnTakesTheBoxAway(int status, string expected)
+    {
+        var clock = new FakeClock();
+        var api = new RoutingApi(Answer(200, Receipt)) { Status = () => Answer(status) };
+        var chat = Sender(api, clock);
+        var flips = 0;
+        chat.ReadOnlyChanged += () => flips++;
+
+        await chat.SendAsync("hello");
+        await chat.LiveTask!;
+
+        Assert.Equal(expected, chat.Sendability.ToString());
+        Assert.Equal(1, flips);
+        Assert.False(chat.CanInterrupt);
+        Assert.Single(api.Statuses);
+    }
+
+    [Theory]
+    [InlineData(401)]
+    public async Task ALoginTheEndpointRefusesStopsTheLoopQuietly(int status)
+    {
+        var clock = new FakeClock();
+        var api = new RoutingApi(Answer(200, Receipt)) { Status = () => Answer(status) };
+        var chat = Sender(api, clock);
+
+        await chat.SendAsync("hello");
+        await chat.LiveTask!;
+
+        Assert.Single(api.Statuses);
+        Assert.Equal(ChatRole.User, Assert.Single(chat.History).Role);
+    }
+
+    // A timeout, a 5xx or a body with no bucket is no news: the loop asks again
+    // rather than guessing, and above all does not read it as idle.
     [Fact]
-    public async Task TheFollowUpStopsWhenTheSessionStopsTakingInput()
+    public async Task NoNewsIsAskedAgainAndNeverReadAsIdle()
     {
         var clock = new FakeClock();
         var api = new RoutingApi(Answer(200, Receipt));
-        var chat = Sender(api, clock, session: BusyRow());
-        clock.OnDelay = (n, _) =>
+        var calls = 0;
+        api.Status = () => ++calls switch
         {
-            if (n == 2) chat.UpdateStatus(Row(state: "generating", bucket: "archived"));
+            1 => TimedOut,
+            2 => Answer(500),
+            3 => new CloudApiResult(CloudOutcomes.OutcomeFor(200, ""), "{\"id\":\"session_a\"}"),
+            _ => Status("idle"),
         };
+        var chat = Sender(api, clock);
+        var busyAtThird = false;
+        clock.OnDelay = (n, _) => { if (n == 4) busyAtThird = chat.CanInterrupt; };
 
         await chat.SendAsync("hello");
-        await chat.FollowUpTask!;
+        await chat.LiveTask!;
 
-        Assert.Equal(2, api.Gets.Count);
+        Assert.True(busyAtThird);
+        Assert.Equal(4, api.Statuses.Count);
+        Assert.False(chat.CanInterrupt);
     }
 
     [Fact]
-    public async Task TheFollowUpStopsAtTheFirstRateLimit()
+    public async Task NoCredentialForTheStatusReadStopsTheLoop()
     {
         var clock = new FakeClock();
-        var api = new RoutingApi(Answer(200, Receipt), Answer(429));
-        var chat = Sender(api, clock, session: BusyRow());
+        var creds = new CountingCredentials();
+        var api = new RoutingApi(Answer(200, Receipt));
+        var chat = Sender(api, clock, creds);
+        clock.OnDelay = (_, _) =>
+            creds.Reading = new CredentialRead(CredentialOutcome.NotLoggedIn, null, null, "…");
 
         await chat.SendAsync("hello");
-        await chat.FollowUpTask!;
+        await chat.LiveTask!;
 
-        Assert.Single(api.Gets);
+        Assert.Empty(api.Statuses);
+        Assert.True(chat.CanInterrupt);
     }
 
-    // A read that fails for another reason does not end a busy follow-up.
-    [Fact]
-    public async Task AFailedReadThatIsNotARateLimitDoesNotEndTheFollowUp()
-    {
-        var clock = new FakeClock();
-        var api = new RoutingApi(Answer(200, Receipt), Answer(500));
-        var chat = Sender(api, clock, session: BusyRow());
-        clock.OnDelay = (n, _) => { if (n == 2) chat.UpdateStatus(Row()); };
-
-        await chat.SendAsync("hello");
-        await chat.FollowUpTask!;
-
-        Assert.Equal(2, api.Gets.Count);
-    }
-
-    // Closing the panel stops the reads, whether the wait notices by throwing
+    // Closing the panel stops the loop, whether the wait notices by throwing
     // (Task.Delay) or by returning into a cancelled token.
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public async Task ClosingThePanelStopsTheFollowUp(bool throws)
+    public async Task ClosingThePanelStopsTheLoop(bool throws)
     {
         var clock = new FakeClock();
-        var api = new RoutingApi(Answer(200, Receipt));
-        var chat = Sender(api, clock, session: BusyRow());
+        var api = new RoutingApi(Answer(200, Receipt)) { Status = () => Status("working") };
+        var chat = Sender(api, clock);
         chat.PanelOpened();
         clock.OnDelay = (_, ct) =>
         {
@@ -993,9 +1105,189 @@ public class ClaudeCloudEventsTests
         };
 
         await chat.SendAsync("hello");
-        await chat.FollowUpTask!;
+        await chat.LiveTask!;
 
-        Assert.Empty(api.Gets);
+        Assert.Empty(api.Statuses);
+    }
+
+    // The roster only updates the row while the live loop owns busy.
+    [Fact]
+    public async Task WhileTheLoopRunsTheRosterDoesNotDecideBusy()
+    {
+        var clock = new FakeClock { Hold = true };
+        var chat = Sender(new RoutingApi(Answer(200, Receipt)), clock);
+
+        await chat.SendAsync("hello");
+        chat.UpdateStatus(Row()); // the roster has not seen the turn yet
+
+        Assert.True(chat.CanInterrupt);
+
+        chat.PanelClosed();
+        await chat.LiveTask!;
+    }
+
+    // After the live read saw idle, a roster row still saying "working" is the
+    // older observation and does not put Stop back — until the roster itself
+    // has caught up once, after which it is believed again.
+    [Fact]
+    public async Task AStaleRosterRowDoesNotPutStopBack()
+    {
+        var clock = new FakeClock();
+        var api = new RoutingApi(Answer(200, Receipt));
+        var chat = Sender(api, clock);
+
+        await chat.SendAsync("hello");
+        await chat.LiveTask!;
+        Assert.False(chat.CanInterrupt);
+
+        chat.UpdateStatus(BusyRow());
+        Assert.False(chat.CanInterrupt);
+
+        chat.UpdateStatus(Row());
+        chat.UpdateStatus(BusyRow());
+        Assert.True(chat.CanInterrupt);
+    }
+
+    // A turn started somewhere else is watched live too, while a panel is open.
+    [Fact]
+    public async Task ATurnStartedElsewhereIsWatchedWhileThePanelIsOpen()
+    {
+        var clock = new FakeClock();
+        var api = new RoutingApi(Answer(200, Receipt));
+        var chat = Sender(api, clock);
+        chat.PanelOpened();
+
+        chat.UpdateStatus(BusyRow());
+        await chat.LiveTask!;
+
+        Assert.Single(api.Statuses);
+        Assert.False(chat.CanInterrupt);
+    }
+
+    [Fact]
+    public void ATurnStartedElsewhereIsNotWatchedForAClosedPanel()
+    {
+        var chat = Sender(new RoutingApi(Answer(200, Receipt)));
+
+        chat.UpdateStatus(BusyRow());
+
+        Assert.Null(chat.LiveTask);
+    }
+
+    // Opening onto a turn that is already running starts watching it; opening
+    // onto an idle one, or a read-only one, does not.
+    [Fact]
+    public async Task OpeningOntoARunningTurnWatchesIt()
+    {
+        var clock = new FakeClock();
+        var api = new RoutingApi(Answer(200, Receipt));
+        var chat = Sender(api, clock, session: BusyRow());
+
+        chat.PanelOpened();
+        await chat.LiveTask!;
+
+        Assert.Single(api.Statuses);
+    }
+
+    [Fact]
+    public void OpeningOntoAnIdleOrEndedSessionWatchesNothing()
+    {
+        var idle = Sender(new RoutingApi(Answer(200, Receipt)));
+        idle.PanelOpened();
+        Assert.Null(idle.LiveTask);
+
+        var ended = Sender(new RoutingApi(Answer(200, Receipt)),
+            session: Row(state: "generating", bucket: "archived"));
+        ended.PanelOpened();
+        Assert.Null(ended.LiveTask);
+    }
+
+    // A session that stops taking input mid-loop — the roster's own answer —
+    // ends the loop at the next tick without another request.
+    [Fact]
+    public async Task TheLoopStopsWhenTheRosterSaysTheSessionHasGone()
+    {
+        var clock = new FakeClock();
+        var api = new RoutingApi(Answer(200, Receipt)) { Status = () => Status("working") };
+        var chat = Sender(api, clock);
+        clock.OnDelay = (n, _) => { if (n == 2) chat.UpdateStatus(null); };
+
+        await chat.SendAsync("hello");
+        await chat.LiveTask!;
+
+        Assert.Single(api.Statuses);
+    }
+
+    // After a delivered Stop, something has to see the turn end; if no loop is
+    // watching, the interrupt starts one.
+    [Fact]
+    public async Task ADeliveredStopStartsWatchingIfNothingIs()
+    {
+        var clock = new FakeClock();
+        var api = new RoutingApi(Answer(200, Receipt));
+        var chat = Sender(api, clock, session: BusyRow());
+
+        chat.Cancel();
+        await chat.InterruptTask!;
+        await chat.LiveTask!;
+
+        Assert.Single(api.Statuses);
+        Assert.False(chat.CanInterrupt);
+    }
+
+    // --- the /v1 status body ---------------------------------------------------
+
+    [Theory]
+    [InlineData("{\"status_bucket\":\"working\"}", "working")]
+    [InlineData("{\"session\":{\"status_bucket\":\"idle\"}}", "idle")]
+    [InlineData("{\"a\":1,\"session\":{\"status_bucket\":\"blocked\"}}", "blocked")]
+    [InlineData("{\"status_bucket\":\"\",\"session\":{\"status_bucket\":\"idle\"}}", "idle")]
+    public void TheBucketIsReadAtTheTopOrOneObjectDown(string body, string expected)
+    {
+        Assert.Equal(expected, CloudLiveStatus.BucketFrom(body));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("not json")]
+    [InlineData("[]")]
+    [InlineData("{\"status_bucket\":3}")]
+    [InlineData("{\"session\":{\"other\":\"x\"},\"n\":1}")]
+    public void ABodyWithNoBucketIsUnknown(string? body)
+    {
+        Assert.Null(CloudLiveStatus.BucketFrom(body));
+        Assert.Null(CloudLiveStatus.WorkingFrom(body));
+    }
+
+    [Theory]
+    [InlineData("working", true)]
+    [InlineData("WORKING", true)]
+    [InlineData("idle", false)]
+    [InlineData("blocked", false)]
+    public void WorkingIsTheRostersWorkingBucket(string bucket, bool working)
+    {
+        Assert.Equal(working, CloudLiveStatus.WorkingFrom("{\"status_bucket\":\"" + bucket + "\"}"));
+    }
+
+    // The canary for the new request: the token rides the Authorization header
+    // only, and the read goes through the injected source.
+    [Fact]
+    public async Task TheStatusReadCarriesTheTokenOnlyInTheHeader()
+    {
+        var clock = new FakeClock();
+        var creds = new CountingCredentials();
+        var api = new RoutingApi(Answer(200, Receipt));
+        var chat = Sender(api, clock, creds);
+
+        await chat.SendAsync("hello");
+        await chat.LiveTask!;
+
+        var status = Assert.Single(api.Statuses);
+        Assert.Equal(Token, status.AccessToken);
+        Assert.Null(status.Body);
+        Assert.DoesNotContain(Token, status.Path, StringComparison.Ordinal);
+        Assert.Equal(3, creds.Reads); // the send, the status read, the final transcript read
     }
 
     // Closing a panel that never sent anything has nothing to stop.
@@ -1008,27 +1300,27 @@ public class ClaudeCloudEventsTests
         chat.PanelOpened();
         chat.PanelClosed();
 
-        Assert.Null(chat.FollowUpTask);
+        Assert.Null(chat.LiveTask);
         Assert.Empty(api.Requests);
     }
 
     [Fact]
-    public async Task ASecondSendReplacesTheFirstSendsFollowUp()
+    public async Task ASecondSendReplacesTheFirstSendsLoop()
     {
         var clock = new FakeClock();
         var chat = Sender(new RoutingApi(Answer(200, Receipt)), clock);
 
         await chat.SendAsync("one");
-        var first = chat.FollowUpTask!;
+        var first = chat.LiveTask!;
         await chat.SendAsync("two");
         await first;
-        await chat.FollowUpTask!;
+        await chat.LiveTask!;
 
         Assert.True(clock.Tokens[0].IsCancellationRequested);
         Assert.False(clock.Tokens[1].IsCancellationRequested);
     }
 
-    // Single flight: an open, a follow-up and the end of a turn can all ask at
+    // Single flight: an open, the live loop and the end of a turn can all ask at
     // once, and the transcript is read once for all of them.
     [Fact]
     public async Task OverlappingLoadsShareOneRead()
@@ -1145,19 +1437,22 @@ public class ClaudeCloudEventsTests
     [Fact]
     public async Task TheEndOfATurnIsReadOnceWhileThePanelIsOpen()
     {
-        var api = new RoutingApi(Answer(200, Receipt));
+        // The live loop opening the panel starts is stopped at once (a login the
+        // status read is refused with), so the roster is what sees the turn end.
+        var api = new RoutingApi(Answer(200, Receipt)) { Status = () => Answer(401) };
         var chat = Sender(api, session: BusyRow());
         chat.PanelOpened();
+        await chat.LiveTask!;
 
         chat.UpdateStatus(Row());
 
         Assert.NotNull(chat.LoadTask);
         await chat.LoadTask!;
-        Assert.Contains("/events?", Assert.Single(api.Gets).Path, StringComparison.Ordinal);
+        Assert.Contains("/events?", Assert.Single(api.Transcripts).Path, StringComparison.Ordinal);
 
         // Idle to idle is not the end of a turn.
         chat.UpdateStatus(Row());
-        Assert.Single(api.Gets);
+        Assert.Single(api.Transcripts);
     }
 
     [Fact]
@@ -1173,16 +1468,17 @@ public class ClaudeCloudEventsTests
     }
 
     [Fact]
-    public void TheEndOfATurnIsNotReadForASessionThatHasGone()
+    public async Task TheEndOfATurnIsNotReadForASessionThatHasGone()
     {
-        var api = new RoutingApi(Answer(200, Receipt));
+        var api = new RoutingApi(Answer(200, Receipt)) { Status = () => Answer(401) };
         var chat = Sender(api, session: BusyRow());
         chat.PanelOpened();
+        await chat.LiveTask!;
 
         chat.UpdateStatus(null);
 
         Assert.Null(chat.LoadTask);
-        Assert.Empty(api.Requests);
+        Assert.Empty(api.Transcripts);
     }
 
     // --- stopping -------------------------------------------------------------
@@ -1277,21 +1573,27 @@ public class ClaudeCloudEventsTests
     {
         var chat = Sender(new RoutingApi(Answer(200, Receipt)), session: BusyRow());
 
+        // Hidden at once, then the loop the delivered Stop starts sees idle.
         chat.Cancel();
+        Assert.False(chat.CanInterrupt);
         await chat.InterruptTask!;
+        await chat.LiveTask!;
         Assert.False(chat.CanInterrupt);
 
+        // A later turn the roster reports is stoppable again.
         chat.UpdateStatus(Row());
         chat.UpdateStatus(BusyRow());
         Assert.True(chat.CanInterrupt);
 
         chat.Cancel();
-        await chat.InterruptTask!;
         Assert.False(chat.CanInterrupt);
+        await chat.InterruptTask!;
+        await chat.LiveTask!;
 
+        // And so is the turn a send starts.
         await chat.SendAsync("and another thing");
         Assert.True(chat.CanInterrupt);
-        await chat.FollowUpTask!;
+        await chat.LiveTask!;
     }
 
     // --- the rules, without a session -------------------------------------------

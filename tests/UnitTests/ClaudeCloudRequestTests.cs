@@ -250,6 +250,14 @@ public class ClaudeCloudRequestTests
     public void AMalformedIdGetsNoWritePath(string? id)
     {
         Assert.Null(CloudRequest.CodeEventsPath(id));
+        Assert.Null(CloudRequest.CodeSessionPath(id));
+    }
+
+    // The live-status read (CB-199): the session's own record on the write host.
+    [Fact]
+    public void TheLiveStatusPathIsTheSessionItselfUnderV1Code()
+    {
+        Assert.Equal("/v1/code/sessions/session_01ABCdef", CloudRequest.CodeSessionPath(SessionId));
     }
 
     [Fact]

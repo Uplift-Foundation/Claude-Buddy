@@ -261,6 +261,16 @@ namespace ClaudeBuddy
                 ? CodeSessionsPath + "/" + Uri.EscapeDataString(id!) + "/events"
                 : null;
 
+        // A session's own record on the write host, which is where its live turn
+        // state is read while a panel is watching a reply (CB-199). **Measured**:
+        // 200 with the same two headers as a read, and `status_bucket` "working"
+        // mid-turn. Refused locally for a malformed id, for the reason
+        // CodeEventsPath gives, even though this one is a read.
+        internal static string? CodeSessionPath(string? id) =>
+            ClaudeCloudRoster.IsWellFormedId(id)
+                ? CodeSessionsPath + "/" + Uri.EscapeDataString(id!)
+                : null;
+
         // The media type a body goes out as. The only one the gate sent.
         internal const string JsonMediaType = "application/json";
 

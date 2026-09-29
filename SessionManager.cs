@@ -2998,10 +2998,12 @@ namespace ClaudeBuddy
                     // a rate-limited events endpoint at it would spend the
                     // account's budget on a window nobody is looking at.
                     //
-                    // CB-199 narrowed that gap without closing it: a send starts
-                    // a bounded follow-up of its own, and the scan's push below
-                    // (PushCloudStatus) triggers one read when a turn ends. A
-                    // panel nobody has typed into still reads only on open.
+                    // CB-199 narrowed that gap without closing it: while a turn
+                    // runs in an open panel — one sent from it, or one the roster
+                    // reports — the session watches it live for a bounded time,
+                    // and the scan's push below (PushCloudStatus) triggers one
+                    // read when a turn ends. An idle panel still reads only on
+                    // open.
                     //
                     // And re-pointed at the login that owns the session *now*:
                     // ownership can move between polls (see MergeAccounts), and

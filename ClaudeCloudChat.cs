@@ -184,6 +184,64 @@ namespace ClaudeBuddy
         };
     }
 
+    // What the session's own record on the write host says about its turn.
+    //
+    // Minimal on purpose: the live loop needs one fact, whether a turn is
+    // running, and reading more of a body nobody here controls is more to break.
+    // **The field is measured, its place in the body is not.** CB-199's gate read
+    // `status_bucket` "working" off `GET /v1/code/sessions/<id>` mid-turn; the
+    // findings record the value and not the nesting, so this reads it at the top
+    // level first and then one object down. A body with neither is "unknown",
+    // which the loop treats as no news rather than as idle — flipping Stop off
+    // on a shape change would be exactly the silent wrong answer CB-164 warns of.
+    internal static class CloudLiveStatus
+    {
+        internal const string BucketField = "status_bucket";
+
+        internal static string? BucketFrom(string? body)
+        {
+            if (string.IsNullOrWhiteSpace(body)) return null;
+
+            try
+            {
+                using var doc = JsonDocument.Parse(body);
+                var root = doc.RootElement;
+                if (root.ValueKind != JsonValueKind.Object) return null;
+
+                if (StringField(root) is { } top) return top;
+
+                foreach (var property in root.EnumerateObject())
+                {
+                    if (property.Value.ValueKind == JsonValueKind.Object
+                        && StringField(property.Value) is { } nested)
+                    {
+                        return nested;
+                    }
+                }
+
+                return null;
+            }
+            catch (JsonException)
+            {
+                return null;
+            }
+        }
+
+        // Null for unknown; otherwise whether the bucket is the working one —
+        // the same bucket, and the same comparison, as ClaudeCloudRoster.IsBusy.
+        internal static bool? WorkingFrom(string? body) =>
+            BucketFrom(body) is { } bucket
+                ? string.Equals(bucket, ClaudeCloudRoster.WorkingBucket, StringComparison.OrdinalIgnoreCase)
+                : null;
+
+        private static string? StringField(JsonElement element) =>
+            element.TryGetProperty(BucketField, out var value)
+            && value.ValueKind == JsonValueKind.String
+            && !string.IsNullOrWhiteSpace(value.GetString())
+                ? value.GetString()
+                : null;
+    }
+
     // A cloud session, as the chat panel sees it.
     //
     // Polled rather than streamed, and able to send. There is no live stream to
@@ -218,19 +276,29 @@ namespace ClaudeBuddy
         // the same rule that hitting it must not be silent — see LoadAsync.
         internal const int MaxEventPages = 10;
 
-        // When to look for the reply after a send.
+        // How the live loop paces itself while a panel watches a reply.
         //
-        // **The first delay is the one measured number here.** The gate's echo
-        // arrived on /v2 about ten seconds after the POST and was not there at
-        // three, so a read sooner than this mostly re-reads what is on screen.
-        // The interval and the cap are **not measured**: they are chosen to be
-        // slow against an endpoint this app is a guest on, and to give up well
-        // before a panel left open overnight could spend anything noticeable.
-        // Reaching the cap is not a failure — the busy→idle read in UpdateStatus
-        // still fetches the finished reply whenever the turn ends.
-        internal static readonly TimeSpan EchoDelay = TimeSpan.FromSeconds(10);
-        internal static readonly TimeSpan UnmeasuredBusyRefreshInterval = TimeSpan.FromSeconds(15);
-        internal static readonly TimeSpan UnmeasuredRefreshCap = TimeSpan.FromMinutes(2);
+        // **Why a loop of its own at all.** The roster is the only other source
+        // of "is a turn running", and its short cycle is thirty seconds — so a
+        // ten-to-thirty second reply was usually never seen as busy: Stop never
+        // appeared, and the reply arrived all at once or not until reopen. That
+        // was found on a real machine, not predicted by a test. The session's own
+        // record answers the question directly, and an interrupt was measured
+        // taking it to idle within about a second, so a short status interval is
+        // what lets Stop go away when it should.
+        //
+        // **All three are not measured.** Two seconds is "about as long as an
+        // interrupt takes to show"; five seconds of transcript is "a paragraph
+        // at a time" and is re-read whole each time, so it is the costlier of
+        // the two; the cap bounds a panel left open on a runaway turn. Past it,
+        // the roster push owns the busy state again, and still fetches the
+        // finished reply when it sees the turn end.
+        internal static readonly TimeSpan UnmeasuredLiveStatusInterval = TimeSpan.FromSeconds(2);
+        internal static readonly TimeSpan UnmeasuredLiveTranscriptInterval = TimeSpan.FromSeconds(5);
+        internal static readonly TimeSpan UnmeasuredLiveCap = TimeSpan.FromMinutes(2);
+
+        internal const string LivePausedNote =
+            "Live updates paused: the endpoint is rate limiting us. The reply will still appear once the turn ends.";
 
         private readonly ICloudApi _api;
         private ICloudCredentialSource _credentials;
@@ -250,8 +318,13 @@ namespace ClaudeBuddy
         private bool _interruptSent;
         private bool _panelOpen;
 
+        // Set when the live loop saw the turn end, and cleared once the roster
+        // agrees. Between the two, a roster row still saying "working" is older
+        // news than the live read and is not allowed to put Stop back.
+        private bool _liveSaidIdle;
+
         private Task<LoadResult>? _inFlight;
-        private CancellationTokenSource? _followUp;
+        private CancellationTokenSource? _live;
 
         // How long a credential read is given before this panel gives up on it.
         // An init-only property rather than a constructor parameter so the shape
@@ -260,7 +333,7 @@ namespace ClaudeBuddy
         // ClaudeCliCredentials.ReadWithinAsync for why a budget exists at all.
         internal TimeSpan ReadBudget { get; init; } = ClaudeCliCredentials.UnmeasuredReadBudget;
 
-        // The clock the follow-up reads and the one retry wait on. Task.Delay in
+        // The clock the live loop and the one retry wait on. Task.Delay in
         // the app; a test hands in one that returns at once and records what it
         // was asked for, so the cadence is asserted rather than slept through.
         internal Func<TimeSpan, CancellationToken, Task> Delay { get; init; } = Task.Delay;
@@ -338,9 +411,14 @@ namespace ClaudeBuddy
         // draws no link rather than a link to nowhere.
         public string? ReplyUrl { get; }
 
-        // What the follow-up and the interrupt are doing, for a test to await.
+        // What the live loop and the interrupt are doing, for a test to await.
         // Never awaited by the app: both are fire and forget by design.
-        internal Task? FollowUpTask { get; private set; }
+        internal Task? LiveTask { get; private set; }
+
+        // While the live loop runs it owns the busy state; the roster push only
+        // updates the row. One owner at a time is what keeps a thirty-second-old
+        // roster answer from arguing with a two-second-old live one.
+        private bool LiveRunning => LiveTask is { IsCompleted: false };
 
         // The transcript read in flight, if any — so a test can see that the end
         // of a turn started one, or that it did not.
@@ -472,14 +550,17 @@ namespace ClaudeBuddy
                 _byUuid[uuid] = turn;
                 TurnAdded?.Invoke(turn);
 
-                // A new message is a new turn to stop, even if the roster has
-                // not caught up with the last one ending yet.
+                // The server has queued the turn — measured, including into a
+                // busy session — so it is busy from here, and Stop shows now
+                // rather than whenever the roster next looks.
                 var before = Affordances();
+                _busy = true;
                 _interruptSent = false;
+                _liveSaidIdle = false;
                 Announce(before);
             });
 
-            StartFollowUp();
+            StartLive();
             return ChatSendOutcome.Sent;
         }
 
@@ -566,7 +647,13 @@ namespace ClaudeBuddy
                 }
             }
 
-            if (failure is null) return;
+            // Delivered: something has to see the turn end and put the state
+            // right, and if a loop is not already watching, that is this one.
+            if (failure is null)
+            {
+                EnsureLive();
+                return;
+            }
 
             Note("Stop did not reach the session: " + failure + ".");
             _post(() =>
@@ -593,7 +680,17 @@ namespace ClaudeBuddy
             var before = Affordances();
 
             _row = row;
-            _busy = row is not null && ClaudeCloudRoster.IsBusy(row);
+            var rosterBusy = row is not null && ClaudeCloudRoster.IsBusy(row);
+
+            // The live loop owns busy while it runs. Otherwise the roster does —
+            // except that a roster still saying "working" after the live read saw
+            // idle is the older of two observations, and waits until the roster
+            // itself catches up.
+            if (!LiveRunning)
+            {
+                if (!rosterBusy) _liveSaidIdle = false;
+                _busy = rosterBusy && !_liveSaidIdle;
+            }
 
             // The turn that Stop was pressed for is over; the next one is
             // stoppable again.
@@ -601,18 +698,27 @@ namespace ClaudeBuddy
 
             Announce(before);
 
+            if (!_panelOpen || IsReadOnly) return;
+
             // The turn just finished, so the reply is complete now and worth one
-            // read — for a panel someone is looking at, and only then.
-            if (wasBusy && !_busy && _panelOpen && !IsReadOnly) _ = RefreshAsync();
+            // read. Or one has just started somewhere else — claude.ai, another
+            // machine — and a panel someone is looking at should watch it live.
+            if (wasBusy && !_busy) _ = RefreshAsync();
+            else if (!wasBusy && _busy) EnsureLive();
         }
 
         // The panel's lifetime, called by ChatPanel from Bind and Unbind.
         //
-        // Closing stops the follow-up reads: nobody is looking, and the next open
-        // reads the transcript anyway. It does not stop a turn — closing a window
+        // Closing stops the live loop: nobody is looking, and the next open reads
+        // the transcript anyway. It does not stop a turn — closing a window
         // should never cancel work someone asked for, which is what Cancel's
-        // own comment on the interface says.
-        internal void PanelOpened() => _panelOpen = true;
+        // own comment on the interface says. Opening onto a turn already running
+        // starts watching it.
+        internal void PanelOpened()
+        {
+            _panelOpen = true;
+            if (_busy && !IsReadOnly) EnsureLive();
+        }
 
         // Whether a panel is bound right now. Read by the panel's own tests,
         // which cannot see it any other way: the read it licenses is single
@@ -623,7 +729,7 @@ namespace ClaudeBuddy
         internal void PanelClosed()
         {
             _panelOpen = false;
-            _followUp?.Cancel();
+            _live?.Cancel();
         }
 
         // Every change to what the panel offers is bracketed by these two: read
@@ -640,46 +746,123 @@ namespace ClaudeBuddy
 
         // --- reading ---------------------------------------------------------
 
-        // Look for the reply: once at the echo delay, then on the interval while
-        // the session is busy, up to the cap. A second send replaces the first
-        // send's follow-up rather than running beside it.
-        private void StartFollowUp()
+        // Watch the turn: its state every status interval, its transcript every
+        // transcript interval while it runs, one last read when it ends. A send
+        // replaces a running loop (the cap starts again for the new turn); every
+        // other caller joins the one that is running.
+        private void StartLive()
         {
             var cts = new CancellationTokenSource();
-            Interlocked.Exchange(ref _followUp, cts)?.Cancel();
-            FollowUpTask = FollowUpAsync(cts.Token);
+            Interlocked.Exchange(ref _live, cts)?.Cancel();
+            LiveTask = LiveAsync(cts.Token);
         }
 
-        private async Task FollowUpAsync(CancellationToken ct)
+        private void EnsureLive()
+        {
+            if (!LiveRunning) StartLive();
+        }
+
+        private async Task LiveAsync(CancellationToken ct)
         {
             var elapsed = TimeSpan.Zero;
-            var wait = EchoDelay;
+            var sinceTranscript = TimeSpan.Zero;
 
-            while (true)
+            while (elapsed < UnmeasuredLiveCap)
             {
                 try
                 {
-                    await Delay(wait, ct).ConfigureAwait(false);
+                    await Delay(UnmeasuredLiveStatusInterval, ct).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException)
                 {
                     return;
                 }
 
-                if (ct.IsCancellationRequested) return;
-                elapsed += wait;
+                if (ct.IsCancellationRequested || IsReadOnly) return;
+                elapsed += UnmeasuredLiveStatusInterval;
+                sinceTranscript += UnmeasuredLiveStatusInterval;
 
-                var loaded = await RefreshAsync().ConfigureAwait(false);
+                // Null when there is no credential to read with or no path to
+                // read — nothing the next tick would do differently.
+                if (await ReadLiveStatusAsync().ConfigureAwait(false) is not { } result) return;
+
+                var outcome = result.Outcome;
 
                 // Any 429 ends it, with no retry of its own: the budget being
-                // spent is the account's, and the busy→idle read still fetches
-                // the reply when the turn ends.
-                if (loaded.Kind == CloudOutcomeKind.RateLimited) return;
-                if (!_busy || IsReadOnly) return;
+                // spent is the account's. The roster push still sees the turn
+                // end, which is what the note promises.
+                if (outcome.Kind == CloudOutcomeKind.RateLimited)
+                {
+                    Note(LivePausedNote);
+                    return;
+                }
 
-                wait = UnmeasuredBusyRefreshInterval;
-                if (elapsed + wait > UnmeasuredRefreshCap) return;
+                // A session that has ended or gone says so here as surely as on
+                // a send, and the box goes for the same reason.
+                if (CloudChatSendability.RefusalFor(outcome) is { } refusal)
+                {
+                    _post(() =>
+                    {
+                        var before = Affordances();
+                        _refusal ??= refusal;
+                        Announce(before);
+                    });
+                    return;
+                }
+
+                // A login the endpoint no longer takes will not start working on
+                // the next tick. The next send explains it in words.
+                if (outcome.Kind is CloudOutcomeKind.TokenRefused or CloudOutcomeKind.AuthFailed) return;
+
+                // Anything else that is not an answer — a timeout, a 5xx, a body
+                // with no bucket in it — is no news, and the loop asks again.
+                if (outcome.Kind != CloudOutcomeKind.Ok
+                    || CloudLiveStatus.WorkingFrom(result.Body) is not { } working)
+                {
+                    continue;
+                }
+
+                if (!working)
+                {
+                    _post(() =>
+                    {
+                        var before = Affordances();
+                        _busy = false;
+                        _interruptSent = false;
+                        _liveSaidIdle = true;
+                        Announce(before);
+                    });
+
+                    await RefreshAsync().ConfigureAwait(false);
+                    return;
+                }
+
+                if (sinceTranscript >= UnmeasuredLiveTranscriptInterval)
+                {
+                    sinceTranscript = TimeSpan.Zero;
+
+                    if ((await RefreshAsync().ConfigureAwait(false)).Kind == CloudOutcomeKind.RateLimited)
+                    {
+                        Note(LivePausedNote);
+                        return;
+                    }
+                }
             }
+        }
+
+        // One read of the session's own record, through the same injected
+        // source as everything else here. Null when it could not be asked.
+        private async Task<CloudApiResult?> ReadLiveStatusAsync()
+        {
+            if (CloudRequest.CodeSessionPath(SessionId) is not { } path) return null;
+
+            var read = await ClaudeCliCredentials
+                .ReadWithinAsync(_credentials, ReadBudget, CancellationToken.None).ConfigureAwait(false);
+
+            if (read.Outcome != CredentialOutcome.Found || read.AccessToken is not { } token) return null;
+
+            return await _api.SendAsync(new CloudRequestContext(token, path), CancellationToken.None)
+                .ConfigureAwait(false);
         }
 
         // Read the transcript and reconcile it against what is already shown.
@@ -691,7 +874,7 @@ namespace ClaudeBuddy
         // identical on screen and only one of them is worth saying something about.
         //
         // **Single flight.** Every open starts one of these, and so do the
-        // follow-up and the end of a turn; two overlapping reads of the same
+        // live loop and the end of a turn; two overlapping reads of the same
         // transcript would both reconcile, and at best spend a request each for
         // one answer. A call that arrives while one is running gets that one's
         // answer. The cancellation token is accepted for the callers that have
