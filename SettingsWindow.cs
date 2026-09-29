@@ -1478,7 +1478,7 @@ namespace ClaudeBuddy
                     + "item from your Keychain. Choose \u201CAlways Allow\u201D so you are not "
                     + "asked every time; Claude Code refreshing its own login can bring the "
                     + "prompt back. Every Claude Code account directory you have listed is read "
-                    + "(one prompt per account); directories not listed are not seen. If no orbs appear, the line below says how far the read "
+                    + "(one prompt per account), and a prompt you decline is not asked again until that login changes or you press Retry; directories not listed are not seen. If no orbs appear, the line below says how far the read "
                     + "got. Read-only: clicking one opens it in your browser, which is the "
                     + "only place a cloud session can be typed into.")
             };

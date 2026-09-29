@@ -340,29 +340,51 @@ public class CloudAccountBoardTests : IDisposable
 
     // --- the gate and the latch ---------------------------------------------------
 
-    private sealed class Hanging : ICloudCredentialSource, IDisposable
+    // A source whose Read announces it has entered, then waits to be released.
+    // Ordering and "who has entered" are observed through signals and a log,
+    // never through how long anything took: a loaded runner stretches sleeps, and
+    // a test that races them fails there and only there.
+    private sealed class Blocking : ICloudCredentialSource, IDisposable
     {
-        private readonly ManualResetEventSlim _gate = new(false);
+        private readonly ManualResetEventSlim _release = new(false);
+        private readonly string _name;
+        private readonly List<string> _log;
+        private readonly CredentialRead _result;
         internal int Reads;
+        internal TaskCompletionSource Entered { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        internal Blocking(string name, List<string> log, CredentialRead result)
+        {
+            _name = name;
+            _log = log;
+            _result = result;
+        }
+
         public string? Stamp() => "s";
 
         public CredentialRead Read()
         {
             Interlocked.Increment(ref Reads);
-            _gate.Wait();
-            return new CredentialRead(CredentialOutcome.Found, "late", null, "late");
+            lock (_log) _log.Add(_name + "-start");
+            Entered.TrySetResult();
+            _release.Wait();
+            lock (_log) _log.Add(_name + "-end");
+            return _result;
         }
 
-        public void Dispose() { _gate.Set(); _gate.Dispose(); }
+        internal void Release() => _release.Set();
+
+        public void Dispose() { _release.Set(); _release.Dispose(); }
     }
 
     private static (CloudReadCoordinator Coord, CloudAccountSource GA, CloudAccountSource GB,
-        Creds BKeychain, Creds BFile) Gated(ICloudCredentialSource aKeychain)
+        Creds BKeychain, Creds BFile) Gated(ICloudCredentialSource aKeychain, ICloudCredentialSource? aFile = null)
     {
         var coord = new CloudReadCoordinator();
         var bKeychain = new Creds(TokenB);
         var bFile = new Creds(TokenB);
-        var accountA = new CloudAccount(RootA, "default", aKeychain, aKeychain);
+        var accountA = new CloudAccount(RootA, "default", aKeychain, aFile ?? aKeychain);
         var accountB = new CloudAccount(RootB, "board", bKeychain, bFile);
         return (coord, new CloudAccountSource(accountA, coord), new CloudAccountSource(accountB, coord),
             bKeychain, bFile);
@@ -370,23 +392,26 @@ public class CloudAccountBoardTests : IDisposable
 
     // The race QA found: B queues behind A's dialog having decided nothing, A
     // says no, and B must then read files only rather than raise a second dialog
-    // right after the refusal. The choice is made once B holds the gate.
+    // right after the refusal. The choice is made once B holds the gate, so the
+    // outcome does not depend on when B happened to start.
     [Theory]
     [InlineData("declined")]
     [InlineData("unanswered")]
     public async Task AQueuedAccountSkipsItsKeychainWhenTheOneAheadOfItDeclined(string how)
     {
-        using var hanging = new Hanging();
-        ICloudCredentialSource aKeychain = how == "unanswered"
-            ? hanging
-            : new Creds(TokenA) { Reading = new CredentialRead(CredentialOutcome.Denied, null, null, "declined") };
-        var (coord, ga, gb, bKeychain, bFile) = Gated(aKeychain);
+        var log = new List<string>();
+        var denied = new CredentialRead(CredentialOutcome.Denied, null, null, "declined");
+        using var a = new Blocking("A", log, denied);
+        var (coord, ga, gb, bKeychain, bFile) = Gated(a);
         var api = new Api((_, _) => Ok(Roster()));
-        var budget = TimeSpan.FromMilliseconds(400);
 
-        var stepA = Step(api, ga, budget: budget);
-        await Task.Delay(100); // A now holds the gate (parked, or about to say no)
-        var stepB = Step(api, gb, budget: budget);
+        // "unanswered": A's own short budget expires while it is parked, which
+        // only needs to happen eventually. "declined": A is released after B has
+        // been started.
+        var stepA = Step(api, ga, budget: how == "unanswered" ? TimeSpan.FromMilliseconds(200) : TimeSpan.FromSeconds(30));
+        await a.Entered.Task;
+        var stepB = Step(api, gb, budget: TimeSpan.FromSeconds(30));
+        if (how == "declined") a.Release();
 
         await stepA;
         var b = await stepB;
@@ -394,36 +419,37 @@ public class CloudAccountBoardTests : IDisposable
         Assert.Equal(0, bKeychain.Reads);
         Assert.Equal(1, bFile.Reads);
         Assert.NotNull(b.Snapshot);
-        Assert.True(coord.KeychainSkippedFor(RootB));
-        Assert.False(coord.KeychainSkippedFor(RootA));
+        Assert.True(coord.KeychainSkippedFor());
     }
 
     [Fact]
-    public async Task TheSecondReadIsNotEnteredUntilTheFirstTimesOut()
+    public async Task TheSecondReadIsNotEnteredUntilTheFirstHasFinished()
     {
-        using var first = new Hanging();
-        using var second = new Hanging();
+        var log = new List<string>();
+        var found = (string t) => new CredentialRead(CredentialOutcome.Found, t, null, "a credential is present");
+        using var a = new Blocking("A", log, found(TokenA));
+        using var b = new Blocking("B", log, found(TokenB));
+        b.Release();
         var coord = new CloudReadCoordinator();
-        var ga = new CloudAccountSource(new CloudAccount(RootA, "default", first, first), coord);
-        var gb = new CloudAccountSource(new CloudAccount(RootB, "board", second, second), coord);
+        var ga = new CloudAccountSource(new CloudAccount(RootA, "default", a, a), coord);
+        var gb = new CloudAccountSource(new CloudAccount(RootB, "board", b, b), coord);
         var api = new Api((_, _) => Ok(Roster()));
-        var budget = TimeSpan.FromMilliseconds(400);
 
-        var t1 = Step(api, ga, budget: budget);
-        await Task.Delay(100);
-        var t2 = Step(api, gb, budget: budget);
-        await Task.Delay(150);
+        var t1 = Step(api, ga, budget: TimeSpan.FromSeconds(30));
+        await a.Entered.Task; // A is inside its read and holds the gate
+        var t2 = Step(api, gb, budget: TimeSpan.FromSeconds(30));
 
-        Assert.Equal(1, first.Reads);
-        Assert.Equal(0, second.Reads);
+        // A negative that can only pass early, never fail late: however long B
+        // takes to reach the gate, it cannot have entered its read while A is
+        // parked. The log below is what proves the order.
+        await Task.Delay(50);
+        Assert.Equal(0, b.Reads);
 
-        var r1 = await t1;
-        var r2 = await t2;
-        Assert.Contains("did not answer", r1.Status, StringComparison.OrdinalIgnoreCase);
-        // B was skipped to files only after A's NoAnswer, and its file is the
-        // same hanging fake here, so it too reads exactly once.
-        Assert.Equal(1, second.Reads);
-        Assert.NotNull(r2.Status);
+        a.Release();
+        await t1;
+        await t2;
+
+        Assert.Equal(new[] { "A-start", "A-end", "B-start", "B-end" }, log);
     }
 
     [Fact]
@@ -474,7 +500,7 @@ public class CloudAccountBoardTests : IDisposable
         Assert.EndsWith("|files-only", parked);
 
         aKeychain.StampValue = "s2"; // the user signed in again
-        Assert.False(coord.KeychainSkippedFor(RootB));
+        Assert.False(coord.KeychainSkippedFor());
         Assert.DoesNotContain("|files-only", gb.Stamp());
         Assert.NotEqual(parked, gb.Stamp());
     }
@@ -556,5 +582,36 @@ public class CloudAccountBoardTests : IDisposable
         {
             ClaudeBuddySettings.RemoveClaudeCodeProfileDir(".claude-me@y.com");
         }
+    }
+
+    // The declining account is held to its own refusal too: a chat panel for one
+    // of its sessions must not put the dialog straight back, on that open or on
+    // any later one, until its login changes.
+    [Fact]
+    public async Task ADecliningAccountsOwnChatReadsItsFileOnlyUntilItsStampMoves()
+    {
+        var aKeychain = new Creds(TokenA) { Reading = new CredentialRead(CredentialOutcome.Denied, null, null, "declined") };
+        var aFile = new Creds(TokenA);
+        var (_, ga, gb, _, _) = Gated(aKeychain, aFile);
+        CloudAccounts.SetForTests(new[] { ga.Account, gb.Account });
+        var coord = CloudAccounts.Coordinator; // the registry builds its own
+        await Step(new Api((_, _) => Ok(Roster())), (ICloudCredentialSource)CloudAccounts.SourceFor(RootA));
+        var keychainReads = aKeychain.Reads;
+
+        for (var i = 0; i < 2; i++)
+        {
+            var read = await ClaudeCliCredentials.ReadWithinAsync(
+                CloudAccounts.SourceFor(RootA), TimeSpan.FromSeconds(5), CancellationToken.None);
+            Assert.Equal(CredentialOutcome.Found, read.Outcome);
+        }
+
+        Assert.Equal(keychainReads, aKeychain.Reads);
+        Assert.Equal(2, aFile.Reads);
+
+        aKeychain.StampValue = "s2";
+        Assert.False(coord.KeychainSkippedFor());
+        await ClaudeCliCredentials.ReadWithinAsync(
+            CloudAccounts.SourceFor(RootA), TimeSpan.FromSeconds(5), CancellationToken.None);
+        Assert.True(aKeychain.Reads > keychainReads);
     }
 }

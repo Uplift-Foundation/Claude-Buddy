@@ -127,7 +127,7 @@ namespace ClaudeBuddy
 
         internal SemaphoreSlim Gate { get; } = new(1, 1);
 
-        internal bool KeychainSkippedFor(string root)
+        internal bool KeychainSkippedFor()
         {
             lock (_lock)
             {
@@ -140,7 +140,10 @@ namespace ClaudeBuddy
                     }
                 }
 
-                return _declined.Keys.Any(k => !string.Equals(k, root, StringComparison.Ordinal));
+                // Any decline, the account's own included: a prompt someone just
+                // refused is not asked again — not by the poll, not by a chat panel
+                // — until that account's login changes or Retry rebuilds this.
+                return _declined.Count > 0;
             }
         }
 
@@ -185,12 +188,12 @@ namespace ClaudeBuddy
         public string? Stamp()
         {
             var stamp = _account.Source.Stamp();
-            return _coordinator.KeychainSkippedFor(_account.Root) ? stamp + "|files-only" : stamp;
+            return _coordinator.KeychainSkippedFor() ? stamp + "|files-only" : stamp;
         }
 
         public ICloudCredentialSource Choose()
         {
-            _filesOnly = _coordinator.KeychainSkippedFor(_account.Root);
+            _filesOnly = _coordinator.KeychainSkippedFor();
             return _filesOnly ? _account.FileSource : _account.Source;
         }
 
