@@ -352,23 +352,30 @@ namespace ClaudeBuddy
         string ComposerHint { get; }
     }
 
-    // A session that can be read and not written to *at all*.
+    // A session that can be read and, right now, not written to *at all*.
     //
-    // **The panel hides the composer entirely for one of these**, rather than
-    // showing a disabled box or the discouraging watermark IRemoteChatComposer
-    // above argues for. That reads as a contradiction of the paragraph directly
-    // overhead and is not one: that reasoning turns on typing being *pointless*,
-    // where SendAsync can still explain itself in the transcript afterwards.
-    // This is the case where there is nowhere for the text to go on any address
-    // — a cloud session's `/input`, `/messages`, `/turns` and `/conversation`
-    // are all 404, measured, not assumed. A box that accepts a paragraph and
-    // only then admits the transport never had a delivery route has already lost
-    // the paragraph, and the person who typed it has no copy.
+    // **The panel hides the composer entirely while IsReadOnly is true**,
+    // rather than showing a disabled box or the discouraging watermark
+    // IRemoteChatComposer above argues for. That reads as a contradiction of the
+    // paragraph directly overhead and is not one: that reasoning turns on typing
+    // being *pointless*, where SendAsync can still explain itself in the
+    // transcript afterwards. This is the case where the server has already said
+    // the text has nowhere to go — a cloud session that has ended, been deleted,
+    // or refused this login a write. A box that accepts a paragraph and only then
+    // admits the session will not take it has already lost the paragraph, and the
+    // person who typed it has no copy.
+    //
+    // This interface was written when a cloud session had no write path at all
+    // (CB-164 found `/input`, `/messages`, `/turns` and `/conversation` on the
+    // read host all 404). CB-199 found the one the Claude Code CLI uses —
+    // `POST /v1/code/sessions/{id}/events`, measured — so a cloud session is now
+    // writable until a refusal says otherwise, which is why IsReadOnly can change
+    // and ReadOnlyChanged exists.
     //
     // ComposerHint is still read for one of these, and shown where the box was.
     // Hiding the box and explaining nothing leaves a panel that looks truncated;
-    // the hint says where the session *can* be replied to, which is the useful
-    // half of the refusal.
+    // the hint says why, and ReplyUrl where the session can still be opened,
+    // which together are the useful half of the refusal.
     public interface IRemoteChatReadOnly
     {
         // A property rather than a bare marker interface, for the same reason

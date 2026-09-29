@@ -769,6 +769,96 @@ public class CloudScanTests
             ClaudeCloudSessions.SetSnapshotForTests(Array.Empty<ClaudeCloudSessions.Session>());
 
             Assert.Same(first, manager.RemoteChatFor("cloud:session_01abc"));
+
+            // CB-199: kept, but told on reopen that its row has gone, so it opens
+            // without a box the server would refuse.
+            Assert.True(((IRemoteChatReadOnly)first!).IsReadOnly);
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
+    // --- live state pushed to an open cloud panel (CB-199) ---------------------
+
+    // The scan already walks the roster to draw the orb; an open panel hears the
+    // same row, which is what moves Stop without a request of its own.
+    [AvaloniaFact]
+    public void TheScanTellsAnOpenCloudPanelWhenItsSessionGetsBusy()
+    {
+        using var scratch = new Scratch();
+        try
+        {
+            Publish(Session("session_01abc"));
+
+            var manager = CloudManager(scratch.Dir);
+            manager.ScanAndUpdate();
+
+            var chat = (IRemoteChatInterrupt)manager.RemoteChatFor("cloud:session_01abc")!;
+            Assert.False(chat.CanInterrupt);
+
+            var changes = 0;
+            chat.InterruptChanged += () => changes++;
+
+            Publish(Session("session_01abc", state: "generating"));
+            manager.ScanAndUpdate();
+
+            Assert.True(chat.CanInterrupt);
+            Assert.Equal(1, changes);
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
+    // The orb going is the scan's removal pass, and the panel hears it there.
+    [AvaloniaFact]
+    public void TheScanTellsAnOpenCloudPanelWhenItsRowHasGone()
+    {
+        using var scratch = new Scratch();
+        try
+        {
+            Publish(Session("session_01abc"));
+
+            var manager = CloudManager(scratch.Dir);
+            manager.ScanAndUpdate();
+
+            var chat = (IRemoteChatReadOnly)manager.RemoteChatFor("cloud:session_01abc")!;
+            Assert.False(chat.IsReadOnly);
+
+            ClaudeCloudSessions.SetSnapshotForTests(Array.Empty<ClaudeCloudSessions.Session>());
+            manager.ScanAndUpdate();
+
+            Assert.True(chat.IsReadOnly);
+            Assert.Equal(CloudChatSendability.GoneHint, ((IRemoteChatComposer)chat).ComposerHint);
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
+    // The negative control: with the feature off the snapshot is empty by
+    // construction, and that must not read as the session having been deleted.
+    [AvaloniaFact]
+    public void SwitchingTheFeatureOffDoesNotMakeAnOpenPanelClaimItsSessionIsGone()
+    {
+        using var scratch = new Scratch();
+        try
+        {
+            Publish(Session("session_01abc"));
+
+            var manager = CloudManager(scratch.Dir);
+            manager.ScanAndUpdate();
+
+            var chat = (IRemoteChatReadOnly)manager.RemoteChatFor("cloud:session_01abc")!;
+
+            ClaudeBuddySettings.ClaudeCloudEnabled = false;
+            manager.ScanAndUpdate();
+
+            Assert.False(chat.IsReadOnly);
         }
         finally
         {
