@@ -70,11 +70,14 @@ internal static class Program
             "read" => await ReadAsync(flags),
             "list" => await ListAsync(flags),
             "roster" => await RosterAsync(),
+            "v1-session" or "v1-events" or "v2-events" or "send" or "interrupt" =>
+                await WriteProbe.RunAsync(args[0], flags, ReadCredentialAsync, OrganizationUuid),
             _ => UnknownCommand(args[0]),
         };
     }
 
-    private static void Usage() =>
+    private static void Usage()
+    {
         Console.Error.WriteLine(
             "usage: claude-cloud-probe <command>\n" +
             "\n" +
@@ -86,6 +89,8 @@ internal static class Program
             "\n" +
             "On macOS, `read` and `list` raise a Keychain consent prompt naming this\n" +
             "binary. That prompt is the point: answer it yourself.");
+        WriteProbe.Usage();
+    }
 
     private static int UnknownCommand(string command)
     {
