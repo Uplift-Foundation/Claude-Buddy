@@ -71,7 +71,7 @@ internal static class Program
             "list" => await ListAsync(flags),
             "roster" => await RosterAsync(),
             "v1-session" or "v1-events" or "v2-events" or "send" or "interrupt" =>
-                await WriteProbe.RunAsync(args[0], flags, ReadCredentialAsync, OrganizationUuid),
+                await WriteProbe.RunAsync(args[0], flags, ReadFirstFoundAsync, OrganizationUuid),
             _ => UnknownCommand(args[0]),
         };
     }
@@ -107,8 +107,10 @@ internal static class Program
     // from a shell that has it; the app itself cannot see the CLI's environment.
     //
     // One source per account (config root), because the app now reads every
-    // account with a live login. `list` and `roster` use the first account that
-    // reads Found; `read` and `stamp` report every account.
+    // account with a live login. `list`, `roster` and the write verbs use the
+    // first account that reads Found; `read` and `stamp` report every account.
+    // The write verbs target one throwaway session, so "the first login that
+    // works" is the account the write verbs aim with.
     private static readonly IReadOnlyList<CloudAccount> Accounts = ClaudeCliCredentials.SourcesFor(
         OperatingSystem.IsMacOS(), Home, Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR"));
 
