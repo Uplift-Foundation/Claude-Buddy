@@ -559,7 +559,7 @@ public class ClaudeCloudStepTests
     public async Task ARetryablePerSessionFailureLeavesThatOrbAlone()
     {
         var api = new FakeApi(path => path.EndsWith("session_known", StringComparison.Ordinal)
-            ? Fail(404)
+            ? Fail(503)
             : Ok(Envelope(Array.Empty<string>())));
 
         var step = await ClaudeCloudSessions.StepAsync(api, new FakeCredentials(),
@@ -571,10 +571,35 @@ public class ClaudeCloudStepTests
             Now, CancellationToken.None);
 
         Assert.Equal("session_known", Assert.Single(step.Snapshot!).Id);
-
-        // CB-199 made a 404 SessionGone, which Backoff stops on. One deleted
-        // session must still not halt the arm and take every orb with it.
         Assert.False(step.Next.Halted);
+    }
+
+    // A 404 is not that. **Measured** against a deleted cloud session, it is a
+    // definite answer, so the orb goes on this short cycle rather than
+    // lingering until the next deep walk — and only that orb: the arm is not
+    // halted, and a session whose own read succeeded stays.
+    [Fact]
+    public async Task ADeletedSessionsOrbGoesAndNothingElseDoes()
+    {
+        var api = new FakeApi(path =>
+            path.EndsWith("session_deleted", StringComparison.Ordinal) ? Fail(404)
+            : path.EndsWith("session_alive", StringComparison.Ordinal) ? Ok(Row("session_alive"))
+            : Ok(Envelope(Array.Empty<string>())));
+
+        var step = await ClaudeCloudSessions.StepAsync(api, new FakeCredentials(),
+            ClaudeCloudSessions.ArmState.Initial with
+            {
+                LastWalkUtc = Now - TimeSpan.FromSeconds(1),
+                Sessions = new[] { Session("session_deleted"), Session("session_alive") },
+            },
+            Now, CancellationToken.None);
+
+        Assert.False(step.Next.Halted);
+        Assert.Equal("session_alive", Assert.Single(step.Snapshot!).Id);
+        Assert.Equal("session_alive", Assert.Single(step.Next.Sessions).Id);
+
+        // Page one, then both direct reads: the 404 did not end the cycle.
+        Assert.Equal(3, api.Paths.Count);
     }
 
     // A 404 on the *listing* is the collection moving, not a session going, so
