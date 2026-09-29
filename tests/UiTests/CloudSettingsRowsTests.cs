@@ -131,6 +131,30 @@ public class CloudSettingsRowsTests
         }
     }
 
+    // CB-199: the same switch now lets the panel send, and the copy has to say
+    // so — a toggle labelled "show" that also writes into a session is a
+    // surprise nobody consented to. Both halves pinned: the send is named, and
+    // the old claim that a cloud session can only be typed into in a browser is
+    // gone, since leaving it beside the new sentence would contradict it.
+    [AvaloniaFact]
+    public void TheHelpTextSaysTheToggleAlsoSendsAndNoLongerClaimsReadOnly()
+    {
+        Reset();
+        try
+        {
+            var help = HelpText();
+
+            Assert.Contains("send into the session", help);
+            Assert.Contains("as the account that owns it", help);
+            Assert.DoesNotContain("Read-only", help);
+            Assert.DoesNotContain("only place a cloud session can be typed into", help);
+        }
+        finally
+        {
+            Reset();
+        }
+    }
+
     // No frequency, either. "Every few hours" would be the same unmeasured claim
     // in a more precise costume, and a number in settings copy reads as
     // something somebody counted.

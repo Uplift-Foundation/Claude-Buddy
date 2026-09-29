@@ -21,6 +21,7 @@ The second-order lesson is in `tests/UnitTests/ClaudeCloudRequestTests.cs`, whic
 3. **The roster is overwhelmingly not cloud sessions.** 573 of 578 rows are the user's own local sessions, registered for remote control. The filter is the feature.
 4. **There is no server-side filtering.** Five different query parameters were sent and all five were *silently ignored*.
 5. Per-session reads and a per-session transcript exist, and the transcript is Claude Code's own format.
+6. **Writing works, on a different prefix** (CB-199): `POST /v1/code/sessions/<id>/events` with the same token and the same two headers plus `Content-Type`. Reads stay on `/v2`.
 
 ## The endpoint
 
@@ -60,7 +61,60 @@ The control is a nonsense subpath, which 404s — so the 200s below are real ans
 
 The events rows carry `type` (`user`/`assistant`/`system`/`result`/`control_request`/…), a `message` with a `role` and content blocks of `text`/`thinking`/`tool_use`/`tool_result`, plus `usage`, `model`, `stop_reason`, `uuid` and `parent_tool_use_id`. That is what `ChatTranscript` already reads, so `ClaudeCloudEvents` parses the envelope and hands the rows to that parser rather than writing a second one — two parsers over one format is how a panel comes to show something a terminal does not.
 
-**There is no input route, and that is why the panel shows no composer for a cloud session.** Every plausible write path 404s.
+**There is no input route on `/v2`, and CB-164 was wrong to conclude from that that there is none at all.** Every plausible write path under `/v2/ccr-sessions` 404s — that measurement stands. What it did not ask is where the CLI itself writes, and the answer is a different prefix: `POST /v1/code/sessions/<id>/events` on the same host. `/v2/ccr-sessions` is the in-container ingress; `/v1/code` is the client-facing API. See **Writing (CB-199)** below. It is the "what else knows about this" failure the correction at the top of this file warns about, one prefix over: every control was sound and the frame was one path too narrow.
+
+## Writing (CB-199)
+
+Measured 2026-09-28 from a real Mac against a throwaway session made with `claude --cloud` for the purpose, never a real one, with `tools/claude-cloud-probe`. The request shapes were read out of the Claude Code CLI 2.1.284 binary as strings; the binary was never executed for this.
+
+### Measured
+
+**The write.** `POST https://api.anthropic.com/v1/code/sessions/<id>/events` with a body of `{"events":[{"payload":{uuid, session_id, type:"user", parent_tool_use_id:null, message:{role:"user", content}}}]}`.
+
+| request | result |
+| --- | --- |
+| real token, `Authorization: Bearer` + `anthropic-version` + `Content-Type` only | 200, `results[0]` = `{duplicate:false, sequence_num, event_id}`, with `event_id` equal to the uuid we sent. `sequence_num` is a string |
+| the same event again, same uuid | 200, `duplicate:true` — so a retry with the same uuid is safe |
+| no `anthropic-version` | 400 |
+| no `Authorization` | 401, "Authentication failed" |
+| bogus Bearer | 401, "OAuth access token is invalid." |
+| `{"events":[]}` with a real token | 400 |
+| `{"events":[]}` with a bogus token | 400 — identical, so an empty POST **cannot** serve as a pre-flight for "may this login write"; the first real send is what finds out |
+
+No beta header and no `x-organization-uuid` are needed for either the send or the interrupt, so the app has no organisation-uuid reader to grow.
+
+**Where the sent turn lands.** It appears in the `/v2/ccr-sessions/<id>/events` history as one `user` row carrying our uuid about 10 s after the send. At 3 s it was not there yet. So history stays on `/v2`, and the panel reconciles its own bubble against the echo by uuid rather than drawing a second one.
+
+**Sending while a turn is running** → 200, queued; it lands after the current turn. So a busy session is sendable.
+
+**The interrupt.** The same endpoint, event `{type:"control_request", request_id, request:{subtype:"interrupt", cancel_queued:true}, uuid}`. Mid-turn the session went running → idle within about 1 s, and the interrupted turn ended with result `error_during_execution`; the session's earlier turns ended `success`, which is the control that says the result is the interrupt's doing. Sent while idle it is harmless.
+
+**Turn state, read two ways.**
+
+| source | mid-turn | idle |
+| --- | --- | --- |
+| `/v2` row | `session_status` "running", `status_bucket` "working", no `worker_status` field | `session_status` "idle", `status_bucket` "blocked" |
+| `/v1/code/sessions/<id>` | `status_bucket` "working", `worker_status` "running" **or** "WORKER_STATUS_UNSPECIFIED" | — |
+
+So busy is `status_bucket == "working"`. `worker_status` is not a reliable busy signal even where it exists.
+
+**A deleted session.** `GET /v1/code/sessions/<id>` answers 404 `not_found_error`, and `GET /v2/ccr-sessions/<id>/events` answers 404 too.
+
+**Rate.** Ten back-to-back `/v2` reads drew no 429. That is ten reads on one afternoon, not a statement about a day's polling.
+
+### Not measured
+
+- **409 `session_inactive` for an archived session.** The code is read out of the CLI binary, which handles it; no archived session was sent to.
+- **413** (too large). Also from the binary only.
+- **A device-bound 403.** The CLI re-sends with `device_attestation`, which Buddy cannot do. No session that demands it was available, so the 403 split stays two-way (edge block / account refusal).
+- **Sending while the session is waiting on a permission prompt** (`requires_action`).
+- **Sending to a deleted session.** The probe's own guard refused to send to anything but its throwaway session, and the throwaway was not deleted before the send was tried.
+
+### Which login a send uses (CB-221)
+
+A cloud session is listed under the account whose login found it, and a send goes out as that account — never as whichever login happens to be current. Every Claude Code account directory the user has listed is read (PR #121).
+
+On the Mac this was measured on, those logins turned out to live in the plaintext `<config dir>/.credentials.json` rather than in the Keychain. The hypothesis is that the CLI's own Keychain writes fail when it runs over SSH and it falls back to the file; that is consistent with the Keychain entries' last-written dates, which predate the file's by weeks, and it is not demonstrated. Either way the reader has to look in both places, which it does.
 
 ## The roster, measured across 578 rows
 
@@ -189,7 +243,7 @@ On macOS `read`, `list` and `roster` raise a Keychain consent prompt naming *thi
 
 **Rate limits or terms on calling this endpoint from a third-party desktop client.** Not investigated. `Backoff` is written to be a well-behaved guest — a 60-second floor on any 429 whatever `Retry-After` says — but that is caution, not knowledge.
 
-**Whether a 404 on a per-session read means the session ended.** Treated as "no news" and left for the next deep walk to resolve, because the alternative would drop an orb on one unlucky request.
+**Whether every 404 on a per-session read means the session is gone.** A deleted session was measured to answer 404 on both prefixes (CB-199), and a per-session 404 is now read as gone (`CloudOutcome.SessionGone`); the roster listing, where a 404 would mean the collection moved, undoes that itself. That a 404 is never transient — an edge hiccup, a session briefly unrouted — is assumed, not shown.
 
 **Why the Keychain data query blocks with no window server session.** Reproducible and fixed around; the cause is open. See the section above for the two stories that fit the evidence equally well, and for the lower-level fix that is not being applied until one of them is ruled out.
 
