@@ -247,6 +247,53 @@ namespace ClaudeBuddy
     // already uses.
     internal static class CloudStreamRows
     {
+        // Is this `user` row a message somebody typed, rather than a tool result
+        // handed back mid-turn? Text content — a string, or blocks with a text
+        // block among them — and no tool_result block. Everything else, and
+        // anything this cannot read, is not a new turn.
+        internal static bool IsTypedMessage(string? json)
+        {
+            if (string.IsNullOrWhiteSpace(json)) return false;
+
+            try
+            {
+                using var doc = JsonDocument.Parse(json);
+                var root = doc.RootElement;
+                if (root.ValueKind != JsonValueKind.Object) return false;
+
+                var row = root.TryGetProperty("payload", out var payload) && payload.ValueKind == JsonValueKind.Object
+                    ? payload
+                    : root;
+
+                if (!row.TryGetProperty("message", out var message) || message.ValueKind != JsonValueKind.Object
+                    || !message.TryGetProperty("content", out var content))
+                {
+                    return false;
+                }
+
+                if (content.ValueKind == JsonValueKind.String) return !string.IsNullOrWhiteSpace(content.GetString());
+                if (content.ValueKind != JsonValueKind.Array) return false;
+
+                var text = false;
+                foreach (var block in content.EnumerateArray())
+                {
+                    var type = block.ValueKind == JsonValueKind.Object
+                               && block.TryGetProperty("type", out var t) && t.ValueKind == JsonValueKind.String
+                        ? t.GetString()
+                        : null;
+
+                    if (type == "tool_result") return false;
+                    if (type == "text") text = true;
+                }
+
+                return text;
+            }
+            catch (JsonException)
+            {
+                return false;
+            }
+        }
+
         // The row is the event's `payload` object when there is one, otherwise
         // the event itself — the contract names a payload, and nobody has seen
         // the wrapper with their own eyes. Re-serialised compactly for the reason
@@ -364,6 +411,13 @@ namespace ClaudeBuddy
         // the sequence number, which the stream task alone writes.
         private ChatTurn? _liveTurn;
         private long? _lastSeq;
+
+        // Set once the stored assistant message has taken over the live bubble,
+        // cleared by the next message_start. Measured: order is not guaranteed
+        // across event kinds, and the durable message can arrive before the
+        // trailing deltas of the message it stores — which, drawn, would start a
+        // second bubble repeating the end of the first.
+        private bool _deltasSuperseded;
         private volatile bool _streamFellBack;
         private bool _streamNotedRateLimit;
         private CancellationTokenSource? _streamCts;
@@ -979,8 +1033,15 @@ namespace ClaudeBuddy
                     HandleDurable(e);
                     break;
 
+                case CloudStreamEventKind.Ephemeral when e.InnerType == "message_start":
+                    _post(() => _deltasSuperseded = false);
+                    break;
+
                 case CloudStreamEventKind.Ephemeral when e.TextDelta is { } delta:
-                    _post(() => AppendDelta(delta));
+                    _post(() =>
+                    {
+                        if (!_deltasSuperseded) AppendDelta(delta);
+                    });
                     break;
             }
         }
@@ -1001,7 +1062,23 @@ namespace ClaudeBuddy
                     _post(EndTurn);
                     break;
 
-                case "user" or "assistant":
+                // Someone typed a message — us, or the same session on claude.ai or
+                // in the CLI — so a turn is starting. Measured: an idle session
+                // took about four seconds after the echo before its first delta
+                // while the environment woke, so waiting for a `status` would
+                // leave Stop missing for exactly that stretch. A tool result is
+                // also a `user` row and arrives mid-turn; it is not a new turn.
+                case "user":
+                    var typed = CloudStreamRows.IsTypedMessage(e.PayloadJson);
+                    var users = CloudStreamRows.RowsFrom(e.PayloadJson);
+                    _post(() =>
+                    {
+                        FoldDurable(users);
+                        if (typed) SetBusy(true);
+                    });
+                    break;
+
+                case "assistant":
                     var rows = CloudStreamRows.RowsFrom(e.PayloadJson);
                     _post(() => FoldDurable(rows));
                     break;
@@ -1019,6 +1096,7 @@ namespace ClaudeBuddy
         private void EndTurn()
         {
             _liveSaidIdle = true;
+            _deltasSuperseded = false;
 
             // An interrupted reply has no durable message to replace it, so the
             // bubble that was growing is simply finished where it stands.
@@ -1063,6 +1141,10 @@ namespace ClaudeBuddy
 
             foreach (var row in rows)
             {
+                // Whatever deltas are still in flight for this message are
+                // already in it.
+                if (row.Turn.Role == ChatRole.Assistant) _deltasSuperseded = true;
+
                 if (_liveTurn is { } live && row.Turn.Role == ChatRole.Assistant
                     && (row.Uuid is null || !_byUuid.ContainsKey(row.Uuid)))
                 {

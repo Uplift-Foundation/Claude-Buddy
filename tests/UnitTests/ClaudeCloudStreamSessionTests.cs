@@ -237,6 +237,93 @@ public partial class ClaudeCloudEventsTests
         await Close(chat);
     }
 
+    // Measured: the stored assistant message can arrive before the trailing
+    // deltas of the message it stores. Those are already in it, and must not
+    // start a second bubble — until the next message begins.
+    [Fact]
+    public async Task LateDeltasAfterTheStoredMessageAreIgnoredUntilTheNextMessage()
+    {
+        var (chat, _, stream, _) = Streaming();
+        chat.PanelOpened();
+        var events = await stream.NextOpenAsync();
+
+        events.TryWrite(Durable(42, "system", "init"));
+        events.TryWrite(Delta("The first "));
+        events.TryWrite(Durable(43, "assistant", payload: AssistantRow("a1", "The first answer.")));
+        events.TryWrite(Delta("answer."));
+        events.TryWrite(new CloudStreamEvent(CloudStreamEventKind.Ephemeral, "ephemeral_event", null, "{}",
+            PayloadType: "stream_event", InnerType: "message_stop"));
+        events.TryWrite(new CloudStreamEvent(CloudStreamEventKind.Ephemeral, "ephemeral_event", null, "{}",
+            PayloadType: "stream_event", InnerType: "message_start"));
+        events.TryWrite(Delta("A second message"));
+        await Until(() => chat.History.Count == 2);
+
+        Assert.Equal("The first answer.", chat.History[0].Text);
+        Assert.True(chat.History[0].IsComplete);
+        Assert.Equal("A second message", chat.History[1].Text);
+        Assert.False(chat.History[1].IsComplete);
+
+        await Close(chat);
+    }
+
+    // A stored reply with nothing live before it still supersedes whatever
+    // deltas trail it.
+    [Fact]
+    public async Task LateDeltasAfterAWholeStoredReplyAreIgnoredToo()
+    {
+        var (chat, _, stream, _) = Streaming();
+        chat.PanelOpened();
+        var events = await stream.NextOpenAsync();
+
+        events.TryWrite(Durable(42, "assistant", payload: AssistantRow("a1", "whole")));
+        events.TryWrite(Delta("trailing"));
+        events.TryWrite(Durable(43, "result", "success"));
+        events.TryWrite(Delta("the next turn"));
+        await Until(() => chat.History.Count == 2);
+
+        Assert.Equal(new[] { "whole", "the next turn" }, chat.History.Select(t => t.Text));
+        await Close(chat);
+    }
+
+    // A turn somebody else started — the same session typed into on claude.ai
+    // or in the CLI — shows Stop from its echo, before any delta; its result
+    // hides it.
+    [Fact]
+    public async Task AMessageTypedElsewhereShowsStopAndItsResultHidesIt()
+    {
+        var (chat, _, stream, _) = Streaming();
+        chat.PanelOpened();
+        var events = await stream.NextOpenAsync();
+
+        events.TryWrite(Durable(42, "user", payload: UserRow("f1", "typed on the web")));
+        await Until(() => chat.CanInterrupt);
+        Assert.Equal(ChatRole.User, Assert.Single(chat.History).Role);
+
+        events.TryWrite(Durable(43, "result", "success"));
+        await Until(() => !chat.CanInterrupt);
+
+        await Close(chat);
+    }
+
+    private const string ToolResultRow =
+        """{"type":"user","uuid":"t1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"x","content":"ok"}]}}""";
+
+    // A tool result is a `user` row too, handed back mid-turn; it is not a turn.
+    [Fact]
+    public async Task AToolResultRowDoesNotStartATurn()
+    {
+        var (chat, _, stream, _) = Streaming();
+        chat.PanelOpened();
+        var events = await stream.NextOpenAsync();
+
+        events.TryWrite(Durable(42, "user", payload: ToolResultRow));
+        events.TryWrite(Durable(43, "assistant", payload: AssistantRow("a1", "marker")));
+        await Until(() => chat.History.Any(t => t.Text == "marker"));
+
+        Assert.False(chat.CanInterrupt);
+        await Close(chat);
+    }
+
     // --- ending, reconnecting, falling back ------------------------------------
 
     // A clean end is a server closing the connection: reopen from the last
@@ -624,5 +711,27 @@ public partial class ClaudeCloudEventsTests
     public void AnUnusableDurableEventHasNoRows(string? json)
     {
         Assert.Empty(CloudStreamRows.RowsFrom(json));
+    }
+
+    [Theory]
+    [InlineData("{\"payload\":{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"hi\"}}}", true)]
+    [InlineData("{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"hi\"}]}}", true)]
+    [InlineData("{\"message\":{\"content\":[{\"type\":\"image\"},{\"type\":\"text\",\"text\":\"look\"}]}}", true)]
+    [InlineData("{\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"x\"},{\"type\":\"tool_result\"}]}}", false)]
+    [InlineData("{\"message\":{\"content\":[{\"type\":\"tool_result\",\"content\":\"ok\"}]}}", false)]
+    [InlineData("{\"message\":{\"content\":[{\"type\":\"image\"}]}}", false)]
+    [InlineData("{\"message\":{\"content\":[3,{\"type\":4}]}}", false)]
+    [InlineData("{\"message\":{\"content\":\"   \"}}", false)]
+    [InlineData("{\"message\":{\"content\":3}}", false)]
+    [InlineData("{\"message\":{}}", false)]
+    [InlineData("{\"message\":\"hi\"}", false)]
+    [InlineData("{\"type\":\"user\"}", false)]
+    [InlineData("[]", false)]
+    [InlineData("not json", false)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    public void OnlyATypedMessageIsANewTurn(string? json, bool typed)
+    {
+        Assert.Equal(typed, CloudStreamRows.IsTypedMessage(json));
     }
 }

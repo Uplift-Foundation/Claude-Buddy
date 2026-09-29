@@ -557,7 +557,7 @@ public partial class ClaudeCloudEventsTests
 
         // Park every wait until its token is cancelled, so a test can look at the
         // state a send leaves before the live loop's first tick.
-        internal bool Hold { get; init; }
+        internal bool Hold { get; set; }
 
         internal Task Delay(TimeSpan wait, CancellationToken ct)
         {
@@ -1581,7 +1581,8 @@ public partial class ClaudeCloudEventsTests
     [Fact]
     public async Task StopComesBackForTheNextTurn()
     {
-        var chat = Sender(new RoutingApi(Answer(200, Receipt)), session: BusyRow());
+        var clock = new FakeClock();
+        var chat = Sender(new RoutingApi(Answer(200, Receipt)), clock, session: BusyRow());
 
         // Hidden at once, then the loop the delivered Stop starts sees idle.
         chat.Cancel();
@@ -1600,9 +1601,12 @@ public partial class ClaudeCloudEventsTests
         await chat.InterruptTask!;
         await chat.LiveTask!;
 
-        // And so is the turn a send starts.
+        // And so is the turn a send starts. The clock is parked first, so the
+        // loop that send starts cannot see "idle" before this looks.
+        clock.Hold = true;
         await chat.SendAsync("and another thing");
         Assert.True(chat.CanInterrupt);
+        chat.PanelClosed();
         await chat.LiveTask!;
     }
 
