@@ -65,10 +65,10 @@ namespace ClaudeBuddy
         // own `session_url` is empty on every row measured and the id is what
         // the address is actually made of.
         //
-        // WorkerStatus and ConnectionStatus are the payload's raw strings, added
-        // by CB-199 as optional trailing fields so the many places that build a
-        // Session positionally did not all have to change. Busy is decided by
-        // ClaudeCloudRoster.IsBusy, which reads the bucket rather than either.
+        // ConnectionStatus is the payload's raw string, added by CB-199 as an
+        // optional trailing field so the many places that build a Session
+        // positionally did not all have to change. Busy is decided by
+        // ClaudeCloudRoster.IsBusy from State and StatusBucket.
         internal sealed record Session(
             string Id,
             string Title,
@@ -81,7 +81,6 @@ namespace ClaudeBuddy
             int? ContextPercent,
             string? StatusDetail,
             string? RecentAction,
-            string? WorkerStatus = null,
             string? ConnectionStatus = null,
             string? OwnerRoot = null);
 

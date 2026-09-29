@@ -23,6 +23,12 @@ namespace ClaudeBuddy.Tests;
 // repository is public and an account's cloud sessions are not all work; what
 // this fixture is for is the shape, and the shape is all it carries.
 //
+// **Except the live row's state, which is measured.** `session_status`
+// "running" with `status_bucket` "working" is what a cloud session's /v2 row
+// read throughout a running turn (2026-09-28, CB-199's gate, sampled every
+// second or two for twenty seconds on a throwaway session). An earlier version
+// of this fixture had the bucket as "running", which nobody had seen.
+//
 // Two fields are deliberately empty rather than omitted: `session_url` and
 // `session_context.cwd`. They were empty on all 578 rows, which is why the link
 // is built from the id — and a fixture that quietly filled them in would let a
@@ -141,7 +147,7 @@ public class ClaudeCloudRosterPayloadTests
             CloudRow("session_c1", "archived", "archived", "another old one", "2026-09-06T10:00:00Z", false),
             CloudRow("session_c2", "archived", "archived", "a third old one", "2026-09-07T10:00:00Z", false),
             CloudRow("session_c3", "archived", "archived", "a fourth old one", "2026-09-08T10:00:00Z", false),
-            CloudRow("session_c4", "running", "running", "the live one", "2026-09-19T11:45:00Z", false),
+            CloudRow("session_c4", "running", "working", "the live one", "2026-09-19T11:45:00Z", false),
         };
 
         var all = bridge.Concat(cloud).ToList();
@@ -176,7 +182,7 @@ public class ClaudeCloudRosterPayloadTests
         Assert.Equal("session_c4", session.Id);
         Assert.Equal("the live one", session.Title);
         Assert.Equal("generating", session.State);
-        Assert.Equal("running", session.StatusBucket);
+        Assert.Equal("working", session.StatusBucket);
         Assert.False(session.NeedsAction);
         Assert.Equal("claude-opus-5", session.Model);
         Assert.Equal(32, session.ContextPercent);
