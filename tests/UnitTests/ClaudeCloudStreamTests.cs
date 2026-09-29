@@ -12,10 +12,11 @@ namespace ClaudeBuddy.Tests;
 // Covers the cloud event stream's pure half: SSE framing, reading each event
 // for what it means, the two requests, and when to reconnect.
 //
-// **The fixtures are hand-written from CB-199's measured stream contract**
-// (2026-09-29): the wrapper key names and the event order are the measured
-// ones, and every value — ids, sequence numbers, text — is invented. The probe
-// printed structure only, never a body, so there is no captured body to paste.
+// **The fixtures follow CB-199's structural stream captures** (2026-09-29,
+// /tmp/cb199-stream2.txt and /tmp/cb199-stream3.txt on the Mac they were taken
+// on): event names, which events carry an id, the wrapper and payload key
+// names and their order are the captured ones. Every value — ids, sequence
+// numbers, text — is invented, because the probe printed structure only.
 public class ClaudeCloudStreamTests
 {
     private const string Token = "sk-ant-oat01-CANARY-ACCESS-abcdef0123456789";
@@ -369,15 +370,63 @@ public class ClaudeCloudStreamTests
         Assert.Null(ev.DeliveryStatus);
     }
 
-    // A nested kind whose payload has gone missing degrades to reading the
-    // root, rather than to an event with no hints at all.
-    [Fact]
-    public void ANestedKindWithNoPayloadObjectIsReadFromTheRoot()
+    // Where the hints come from is keyed off the event name alone. A nested
+    // kind whose payload is missing or not an object has no hints — its
+    // wrapper is not read as if it were the row — but a durable one keeps its
+    // sequence number, so the resume point survives.
+    [Theory]
+    [InlineData("""{"type":"assistant","uuid":"u","payload":"not an object"}""")]
+    [InlineData("""{"type":"assistant","uuid":"u"}""")]
+    [InlineData("""{"event_type":"assistant","sequence_num":"4","payload":null}""")]
+    public void ANestedKindWithNoPayloadObjectHasNoHints(string data)
     {
-        var ev = Classify("client_event", """{"type":"assistant","uuid":"u","payload":"not an object"}""", "4");
+        var durable = Classify("client_event", data, "4");
+        Assert.Equal(4, durable.SequenceNum);
+        Assert.Null(durable.PayloadType);
+        Assert.Null(durable.Uuid);
+        Assert.Null(durable.RowJson);
+        Assert.Equal(data, durable.PayloadJson);
 
-        Assert.Equal("assistant", ev.PayloadType);
-        Assert.Equal("u", ev.Uuid);
+        var ephemeral = Classify("ephemeral_event", data);
+        Assert.Null(ephemeral.PayloadType);
+        Assert.Null(ephemeral.Uuid);
+    }
+
+    // An event name nobody has seen gets no hints, even if its data looks like
+    // a row: guessing what an unknown event means is how a new kind of event
+    // would end up drawn as a turn.
+    [Fact]
+    public void AnUnknownEventNameGetsNoHints()
+    {
+        var ev = Classify("prompt_suggestion", """{"payload":{"type":"assistant","uuid":"u"},"type":"x"}""", "9");
+
+        Assert.Equal(CloudStreamEventKind.Other, ev.Kind);
+        Assert.Null(ev.PayloadType);
+        Assert.Null(ev.Uuid);
+        Assert.Null(ev.SequenceNum);
+        Assert.Null(ev.RowJson);
+        Assert.NotNull(ev.PayloadJson);
+    }
+
+    // RowJson is the durable row itself, ready for the transcript mapping.
+    [Fact]
+    public void ADurableEventCarriesItsRowAsJson()
+    {
+        var ev = Classify("client_event", UserEcho, "101");
+
+        using var row = System.Text.Json.JsonDocument.Parse(ev.RowJson!);
+        Assert.Equal("user", row.RootElement.GetProperty("type").GetString());
+        Assert.Equal("uuid-ours", row.RootElement.GetProperty("uuid").GetString());
+        Assert.False(row.RootElement.TryGetProperty("event_type", out _));
+        Assert.False(row.RootElement.TryGetProperty("sequence_num", out _));
+    }
+
+    [Fact]
+    public void OnlyADurableEventCarriesARow()
+    {
+        Assert.Null(Classify("ephemeral_event", """{"payload":{"type":"stream_event"}}""").RowJson);
+        Assert.Null(Classify("delivery_update", """{"event_id":"e","status":"DELIVERY_STATUS_RECEIVED"}""").RowJson);
+        Assert.Null(Classify("session_update", """{"connection_status":"connected"}""").RowJson);
     }
 
     // A hint field that is present but not a string is no hint, not a

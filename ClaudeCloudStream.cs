@@ -88,6 +88,14 @@ namespace ClaudeBuddy
     //    turn reconciles with the bubble added after the send's 2xx. On a
     //    delivery_update it is that event's `event_id`, presumed (not
     //    confirmed) to be the uuid we sent.
+    //  * RowJson — for a durable event only, the raw JSON of its `payload`
+    //    object: the transcript row itself, ready for ChatTranscript without
+    //    the consumer unwrapping and re-serialising it. **Not every durable
+    //    row is a turn.** Captured alongside user/assistant/result:
+    //    env_manager_log, turn_handoff_available, active_goal,
+    //    autocompact_state, rate_limit_event, prompt_suggestion, and system
+    //    hook_started/hook_response — all durable, all with sequence numbers,
+    //    none of them chat. The mapping decides which to show.
     //
     // **No field ever holds the access token.** The token goes into the
     // request's Authorization header and nowhere else; the canary tests hold
@@ -104,7 +112,8 @@ namespace ClaudeBuddy
         string? InnerType = null,
         string? DeliveryStatus = null,
         string? Uuid = null,
-        CloudOutcome? Outcome = null);
+        CloudOutcome? Outcome = null,
+        string? RowJson = null);
 
     // The stream, as an interface, so the chat session can be driven by a fake
     // that yields a scripted turn. Same argument as ICloudApi.
@@ -251,11 +260,17 @@ namespace ClaudeBuddy
     //  * `delivery_update`: flat, `{event_id, status, timestamp}`.
     //  * `session_update`: flat, `{connection_status}`.
     //
-    // So the two nested kinds are read from `payload` and the two flat ones
-    // from the root. A nested kind that arrives without a `payload` object is
-    // read from the root as well, rather than yielding nothing — the hints are
-    // hints, and a shape that has moved should degrade to fewer of them, not to
-    // an event with none.
+    // The structural captures behind that are /tmp/cb199-stream2.txt (an
+    // interrupted turn) and /tmp/cb199-stream3.txt (a cold-start turn) on the
+    // Mac they were taken on: event names, ids, key names and order, no text.
+    //
+    // **Where the hints come from is decided by the SSE event name and nothing
+    // else.** The two nested kinds are read from `payload` and only from it;
+    // the two flat ones from the root; an unknown name gets no hints at all. A
+    // nested event whose `payload` is missing or not an object therefore has
+    // no hints — it is not read from its wrapper instead, because the wrapper
+    // carries `event_type` and friends that would then be read as if they were
+    // the row's own fields.
     internal static class ClaudeCloudStreamEvents
     {
         internal const string ClientEvent = "client_event";
@@ -301,12 +316,6 @@ namespace ClaudeBuddy
                 }
 
                 var root = doc.RootElement;
-                var flat = kind is CloudStreamEventKind.Delivery or CloudStreamEventKind.Session;
-                var payload = !flat
-                              && root.TryGetProperty("payload", out var p)
-                              && p.ValueKind == JsonValueKind.Object
-                    ? p
-                    : root;
 
                 // Only a durable event has a sequence number. The SSE id is the
                 // measured carrier; the envelope's own `sequence_num` is the
@@ -315,13 +324,34 @@ namespace ClaudeBuddy
                     ? SequenceFrom(frame.Id) ?? SequenceFrom(root, "sequence_num")
                     : null;
 
+                JsonElement payload;
+                switch (kind)
+                {
+                    case CloudStreamEventKind.Durable:
+                    case CloudStreamEventKind.Ephemeral:
+                        if (!root.TryGetProperty("payload", out payload)
+                            || payload.ValueKind != JsonValueKind.Object)
+                        {
+                            return new CloudStreamEvent(kind, frame.EventName, sequence, frame.Data);
+                        }
+                        break;
+
+                    case CloudStreamEventKind.Delivery:
+                    case CloudStreamEventKind.Session:
+                        payload = root;
+                        break;
+
+                    default:
+                        return new CloudStreamEvent(kind, frame.EventName, null, frame.Data);
+                }
+
                 var type = Str(payload, "type");
                 var subtype = Str(payload, "subtype");
 
                 string? status = null;
                 if (kind == CloudStreamEventKind.Session)
                 {
-                    status = Str(root, "connection_status");
+                    status = Str(payload, "connection_status");
                 }
                 else if (type == "system" && subtype == "status")
                 {
@@ -345,17 +375,18 @@ namespace ClaudeBuddy
                 }
 
                 var isDelivery = kind == CloudStreamEventKind.Delivery;
-                var delivery = isDelivery ? Str(root, "status") : null;
+                var delivery = isDelivery ? Str(payload, "status") : null;
 
                 // A delivery_update names its event by `event_id`, which is
                 // presumably the uuid we sent — the send's own receipt echoes
                 // our uuid as `event_id`, measured — but on this event that is
                 // unconfirmed. Carried as Uuid so a consumer can try the match;
                 // not a promise it will hold.
-                var uuid = isDelivery ? Str(root, "event_id") : Str(payload, "uuid");
+                var uuid = isDelivery ? Str(payload, "event_id") : Str(payload, "uuid");
 
                 return new CloudStreamEvent(kind, frame.EventName, sequence, frame.Data,
-                    type, subtype, status, text, inner, delivery, uuid);
+                    type, subtype, status, text, inner, delivery, uuid,
+                    RowJson: kind == CloudStreamEventKind.Durable ? payload.GetRawText() : null);
             }
         }
 

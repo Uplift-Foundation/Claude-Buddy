@@ -13,13 +13,20 @@ namespace ClaudeBuddy.Tests;
 // loop: bytes in UTF-8, read by a StreamReader exactly as HttpCloudEventStream
 // reads the socket, framed, classified, and the resume point tracked.
 //
-// **Hand-written from CB-199's measured stream contract, not captured.** The
-// probe printed structure and key names only, never a body, so the event
-// order, the event names and the wrapper keys below are the measured ones and
-// every value is invented. Two measured behaviours are pinned here because a
-// reducer built on this stream has to survive them: the durable `assistant`
-// arriving *before* the trailing `message_delta`/`message_stop`, and a cold
-// start's `env_manager_log` noise before the first delta.
+// **The structure is captured; the values are invented.** CB-199's stream
+// probe printed event names, ids, key names and order and never a body
+// (2026-09-29, /tmp/cb199-stream3.txt for the cold-start turn and
+// /tmp/cb199-stream2.txt for the interrupt, on the Mac they were taken on).
+// The fixtures below follow those captures event for event, sequence numbers
+// included, with every value made up.
+//
+// Three captured behaviours are pinned because a consumer has to survive
+// them: the durable `assistant` arriving *before* the trailing
+// `message_delta`/`message_stop`; a cold start's durable `env_manager_log`
+// rows and a second `session_update` before anything else happens; and a turn
+// full of durable rows that are not chat at all — turn_handoff_available,
+// active_goal, autocompact_state, rate_limit_event, hook_started,
+// hook_response, prompt_suggestion — every one carrying a sequence number.
 public class ClaudeCloudStreamPayloadTests
 {
     private const string Sid = "session_01StreamFixture";
@@ -45,28 +52,51 @@ public class ClaudeCloudStreamPayloadTests
         Delta("{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\""
               + text + "\"}}");
 
-    // The measured order of a normal turn, including the out-of-order tail.
+    private static string System(long seq, string subtype, string extra = "") =>
+        Client(seq, "system", "{\"type\":\"system\",\"subtype\":\"" + subtype + "\",\"session_id\":\""
+                              + Sid + "\",\"uuid\":\"u-" + seq + "\"" + extra + "}");
+
+    private static string Noise(long seq, string type) =>
+        Client(seq, type, "{\"type\":\"" + type + "\",\"session_id\":\"" + Sid + "\",\"uuid\":\"u-" + seq + "\"}");
+
+    private static string Session(string status) =>
+        "event: session_update\ndata: {\"connection_status\":\"" + status + "\"}\n\n";
+
+    // /tmp/cb199-stream3.txt, event for event: a turn on a cold session.
     private static string NormalTurn() =>
         ": keepalive\n"
-        + "event: session_update\ndata: {\"connection_status\":\"connected\"}\n\n"
-        + Client(101, "user", "{\"type\":\"user\",\"uuid\":\"uuid-ours\",\"session_id\":\"" + Sid
-                              + "\",\"message\":{\"role\":\"user\",\"content\":\"hi\"},\"parent_tool_use_id\":null}")
+        + Session("connected")
+        + Client(103, "user", "{\"message\":{\"role\":\"user\",\"content\":\"hi\"},\"parent_tool_use_id\":null,"
+                              + "\"server_received_wall_ms\":1,\"session_id\":\"" + Sid + "\",\"trace_context\":{},"
+                              + "\"type\":\"user\",\"uuid\":\"uuid-ours\"}")
+        + Session("connected")
+        + string.Concat(Enumerable.Range(104, 6).Select(seq => Noise(seq, "env_manager_log")))
         + Delivery("DELIVERY_STATUS_RECEIVED")
+        + System(110, "turn_handoff_available")
+        + Noise(111, "active_goal")
+        + Noise(112, "autocompact_state")
+        + Ephemeral("system", "{\"commands\":[],\"session_id\":\"" + Sid + "\",\"subtype\":\"commands_changed\",\"type\":\"system\",\"uuid\":\"u-c\"}")
         + Delivery("DELIVERY_STATUS_PROCESSING")
-        + Ephemeral("env_manager_log", "{\"type\":\"env_manager_log\"}")
-        + Client(102, "system", "{\"type\":\"system\",\"subtype\":\"init\",\"uuid\":\"u-init\"}")
-        + Client(103, "system", "{\"type\":\"system\",\"subtype\":\"status\",\"status\":\"requesting\",\"uuid\":\"u-st\"}")
-        + Delta("{\"type\":\"message_start\",\"message\":{}}")
-        + Delta("{\"type\":\"content_block_start\",\"index\":0}")
+        + System(113, "init")
+        + System(114, "status", ",\"status\":\"requesting\"")
+        + Delta("{\"message\":{},\"type\":\"message_start\"}")
+        + Delta("{\"content_block\":{},\"index\":0,\"type\":\"content_block_start\"}")
         + Text("Hello, ")
         + Text("world \\\"quoted\\\"")
-        + Delta("{\"type\":\"content_block_stop\",\"index\":0}")
-        + Client(104, "assistant", "{\"type\":\"assistant\",\"uuid\":\"u-final\",\"message\":{\"role\":\"assistant\",\"content\":[]}}")
-        + Delta("{\"type\":\"message_delta\",\"delta\":{},\"usage\":{}}")
+        + Delta("{\"index\":0,\"type\":\"content_block_stop\"}")
+        + Client(115, "assistant", "{\"message\":{\"role\":\"assistant\",\"content\":[]},\"parent_tool_use_id\":null,"
+                                   + "\"request_id\":\"r\",\"session_id\":\"" + Sid + "\",\"timestamp\":\"t\",\"type\":\"assistant\",\"uuid\":\"u-final\"}")
+        + Delta("{\"context_management\":{},\"delta\":{},\"type\":\"message_delta\",\"usage\":{}}")
         + Delta("{\"type\":\"message_stop\"}")
-        + Ephemeral("system", "{\"type\":\"system\",\"subtype\":\"post_turn_summary\",\"needs_action\":false}")
-        + Client(105, "result", "{\"type\":\"result\",\"subtype\":\"success\",\"uuid\":\"u-res\"}")
-        + "event: prompt_suggestion\ndata: {\"x\":1}\n\n";
+        + Noise(116, "rate_limit_event")
+        + Ephemeral("system", "{\"needs_action\":false,\"session_id\":\"" + Sid + "\",\"status_category\":\"c\",\"status_detail\":\"d\","
+                              + "\"subtype\":\"post_turn_summary\",\"summarizes_uuid\":\"u-final\",\"type\":\"system\",\"uuid\":\"u-p\"}")
+        + Delivery("DELIVERY_STATUS_PROCESSED")
+        + System(117, "hook_started")
+        + System(118, "hook_response")
+        + Client(119, "result", "{\"is_error\":false,\"num_turns\":1,\"subtype\":\"success\",\"type\":\"result\",\"uuid\":\"u-res\"}")
+        + ": keepalive\n"
+        + Noise(120, "prompt_suggestion");
 
     private static async Task<List<CloudStreamEvent>> Read(string body, bool crlf = false)
     {
@@ -85,90 +115,109 @@ public class ClaudeCloudStreamPayloadTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task ANormalTurnReadsInTheMeasuredOrder(bool crlf)
+    public async Task ACapturedColdStartTurnReadsInOrder(bool crlf)
     {
         var events = await Read(NormalTurn(), crlf);
+        var kinds = events.Select(e => e.Kind).ToList();
 
-        Assert.Equal(new[]
-        {
-            CloudStreamEventKind.Keepalive, CloudStreamEventKind.Session,
-            CloudStreamEventKind.Durable, CloudStreamEventKind.Delivery, CloudStreamEventKind.Delivery,
-            CloudStreamEventKind.Ephemeral,
-            CloudStreamEventKind.Durable, CloudStreamEventKind.Durable,
-            CloudStreamEventKind.Ephemeral, CloudStreamEventKind.Ephemeral,
-            CloudStreamEventKind.Ephemeral, CloudStreamEventKind.Ephemeral,
-            CloudStreamEventKind.Ephemeral,
-            CloudStreamEventKind.Durable,
-            CloudStreamEventKind.Ephemeral, CloudStreamEventKind.Ephemeral,
-            CloudStreamEventKind.Ephemeral,
-            CloudStreamEventKind.Durable,
-            CloudStreamEventKind.Other,
-            CloudStreamEventKind.Ended,
-        }, events.Select(e => e.Kind));
+        Assert.Equal(CloudStreamEventKind.Keepalive, kinds[0]);
+        Assert.Equal(2, kinds.Count(k => k == CloudStreamEventKind.Session));
+        Assert.Equal(3, kinds.Count(k => k == CloudStreamEventKind.Delivery));
+        Assert.Equal(2, kinds.Count(k => k == CloudStreamEventKind.Keepalive));
+        Assert.Equal(CloudStreamEventKind.Ended, kinds[^1]);
+        Assert.Equal(CloudOutcomeKind.Ok, events[^1].Outcome!.Kind);
 
-        // Our echo reconciles by uuid, and so does the delivery (presumed).
-        Assert.Equal("uuid-ours", events[2].Uuid);
-        Assert.Equal("user", events[2].PayloadType);
-        Assert.Equal(new[] { "DELIVERY_STATUS_RECEIVED", "DELIVERY_STATUS_PROCESSING" },
-            events.Where(e => e.Kind == CloudStreamEventKind.Delivery).Select(e => e.DeliveryStatus));
+        // Every durable row is here, in order, with its captured sequence number.
+        var durable = events.Where(e => e.Kind == CloudStreamEventKind.Durable).ToList();
+        Assert.Equal(Enumerable.Range(103, 18).Select(n => (long?)n), durable.Select(e => e.SequenceNum));
 
-        // Busy markers, then the text, then the stored message and the end.
-        Assert.Equal("init", events[6].Subtype);
-        Assert.Equal("requesting", events[7].StatusValue);
+        // Our echo reconciles by uuid; its row is the transcript row itself.
+        var echo = durable[0];
+        Assert.Equal("user", echo.PayloadType);
+        Assert.Equal("uuid-ours", echo.Uuid);
+        Assert.Contains("\"trace_context\"", echo.RowJson!, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"event_type\"", echo.RowJson!, StringComparison.Ordinal);
+
+        // Most durable rows are not chat — the mapping has to decide.
+        Assert.Equal(new[] { "user", "env_manager_log", "env_manager_log", "env_manager_log",
+                "env_manager_log", "env_manager_log", "env_manager_log", "system", "active_goal",
+                "autocompact_state", "system", "system", "assistant", "rate_limit_event", "system",
+                "system", "result", "prompt_suggestion" },
+            durable.Select(e => e.PayloadType));
+
+        // Busy markers, the text, the stored message, the end.
+        Assert.Equal("init", durable.Single(e => e.SequenceNum == 113).Subtype);
+        Assert.Equal("requesting", durable.Single(e => e.SequenceNum == 114).StatusValue);
         Assert.Equal("Hello, world \"quoted\"",
             string.Concat(events.Select(e => e.TextDelta).Where(t => t is not null)));
-        Assert.Equal("assistant", events[13].PayloadType);
-        Assert.Equal("success", events[17].Subtype);
-        Assert.Equal("result", events[17].PayloadType);
+        Assert.Equal("success", durable.Single(e => e.PayloadType == "result").Subtype);
+        Assert.Equal(new[] { "DELIVERY_STATUS_RECEIVED", "DELIVERY_STATUS_PROCESSING", "DELIVERY_STATUS_PROCESSED" },
+            events.Where(e => e.Kind == CloudStreamEventKind.Delivery).Select(e => e.DeliveryStatus));
 
-        // Measured: the stored assistant arrives before the trailing deltas.
+        // Captured: the stored assistant arrives before the trailing deltas.
         var assistant = events.FindIndex(e => e.PayloadType == "assistant");
-        var stop = events.FindIndex(e => e.InnerType == "message_stop");
-        Assert.True(assistant < stop);
+        Assert.True(assistant < events.FindIndex(e => e.InnerType == "message_delta"));
+        Assert.True(assistant < events.FindIndex(e => e.InnerType == "message_stop"));
 
-        Assert.Equal(CloudOutcomeKind.Ok, events[^1].Outcome!.Kind);
+        // Ephemeral system rows: commands_changed and the post-turn summary.
+        Assert.Equal(new[] { "commands_changed", "post_turn_summary" },
+            events.Where(e => e.Kind == CloudStreamEventKind.Ephemeral && e.PayloadType == "system")
+                .Select(e => e.Subtype));
     }
 
-    // The resume point is the last durable sequence number, and ephemeral
-    // events in between never move it.
+    // The resume point is the last durable sequence number — here a
+    // prompt_suggestion, which is not chat but is durable — and no ephemeral
+    // event in between moves it.
     [Fact]
     public async Task TheResumePointIsTheLastDurableEvent()
     {
-        long? resume = 100;
+        long? resume = 102;
         foreach (var ev in await Read(NormalTurn()))
         {
             resume = ClaudeCloudStreamPolicy.ResumeFrom(resume, ev);
         }
 
-        Assert.Equal(105, resume);
-
-        // …and it is exactly the path a reconnect asks for.
-        Assert.Equal("/v1/code/sessions/session_01StreamFixture/events/stream?from_sequence_num=105",
+        Assert.Equal(120, resume);
+        Assert.Equal("/v1/code/sessions/session_01StreamFixture/events/stream?from_sequence_num=120",
             ClaudeCloudStreamRequest.StreamPath(Sid, resume));
     }
 
-    // The measured interrupt: control_request, control_response, the partial
-    // assistant (with `aborted`), a user row, result error_during_execution,
-    // and a PROCESSED delivery.
+    // /tmp/cb199-stream2.txt from the interrupt on: control_request (96),
+    // a late delta, a RECEIVED delivery, control_response (97), the partial
+    // assistant carrying `aborted` (98), a user row (99), result
+    // error_during_execution (100), two PROCESSED deliveries, then
+    // rate_limit_event and prompt_suggestion.
     [Fact]
-    public async Task AnInterruptedTurnEndsWithAnErrorResult()
+    public async Task ACapturedInterruptEndsWithAnErrorResult()
     {
         var body =
             Text("partial")
-            + Client(201, "control_request", "{\"type\":\"control_request\",\"request_id\":\"r\",\"request\":{\"subtype\":\"interrupt\"}}")
-            + Client(202, "control_response", "{\"type\":\"control_response\"}")
-            + Client(203, "assistant", "{\"type\":\"assistant\",\"uuid\":\"u-part\",\"aborted\":true,\"message\":{}}")
-            + Client(204, "user", "{\"type\":\"user\",\"uuid\":\"u-int\",\"message\":{}}")
-            + Client(205, "result", "{\"type\":\"result\",\"subtype\":\"error_during_execution\"}")
-            + Delivery("DELIVERY_STATUS_PROCESSED");
+            + Client(96, "control_request", "{\"request\":{\"subtype\":\"interrupt\"},\"request_id\":\"r\",\"type\":\"control_request\",\"uuid\":\"u-96\"}")
+            + Text(" more")
+            + Delivery("DELIVERY_STATUS_RECEIVED")
+            + Client(97, "control_response", "{\"response\":{},\"type\":\"control_response\",\"uuid\":\"u-97\"}")
+            + Client(98, "assistant", "{\"aborted\":true,\"message\":{},\"parent_tool_use_id\":null,\"request_id\":\"r\",\"session_id\":\"" + Sid + "\",\"timestamp\":\"t\",\"type\":\"assistant\",\"uuid\":\"u-98\"}")
+            + Client(99, "user", "{\"message\":{},\"parent_tool_use_id\":null,\"session_id\":\"" + Sid + "\",\"timestamp\":\"t\",\"type\":\"user\",\"uuid\":\"u-99\"}")
+            + Client(100, "result", "{\"is_error\":true,\"subtype\":\"error_during_execution\",\"type\":\"result\",\"uuid\":\"u-100\"}")
+            + Delivery("DELIVERY_STATUS_PROCESSED")
+            + Delivery("DELIVERY_STATUS_PROCESSED")
+            + Noise(101, "rate_limit_event")
+            + Noise(102, "prompt_suggestion");
 
         var events = await Read(body);
 
-        Assert.Equal(new[] { "stream_event", "control_request", "control_response", "assistant", "user", "result", null, null },
+        Assert.Equal(new[] { "stream_event", "control_request", "stream_event", null, "control_response",
+                "assistant", "user", "result", null, null, "rate_limit_event", "prompt_suggestion", null },
             events.Select(e => e.PayloadType));
-        Assert.Equal("error_during_execution", events[5].Subtype);
-        Assert.Equal("DELIVERY_STATUS_PROCESSED", events[6].DeliveryStatus);
-        Assert.Equal(new long?[] { null, 201, 202, 203, 204, 205, null, null }, events.Select(e => e.SequenceNum));
+        Assert.Equal(new long?[] { null, 96, null, null, 97, 98, 99, 100, null, null, 101, 102, null },
+            events.Select(e => e.SequenceNum));
+
+        // A delta after the interrupt went out is still text; stopping it is
+        // the consumer's call on the result, not the parser's.
+        Assert.Equal(" more", events[2].TextDelta);
+        Assert.Contains("\"aborted\":true", events[5].RowJson!, StringComparison.Ordinal);
+        Assert.Equal("error_during_execution", events[7].Subtype);
+        Assert.Equal(CloudStreamEventKind.Ended, events[^1].Kind);
     }
 
     // Multi-byte text split across nothing in particular still reads whole:
