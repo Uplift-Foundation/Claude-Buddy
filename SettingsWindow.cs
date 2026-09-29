@@ -1472,6 +1472,13 @@ namespace ClaudeBuddy
                     // mistake in a more precise costume, and the status line
                     // below is what tells the user where the read actually got
                     // to on this machine today.
+                    //
+                    // CB-199: the same switch now lets the panel *send*, and the
+                    // copy says so because a toggle labelled "show" that also
+                    // writes into a session would be a surprise. No second
+                    // setting, by decision. "As the account that owns it" is the
+                    // true half of the multi-account story: a send uses the login
+                    // the session was listed under, never whichever is current.
                     "Shows an orb for each Claude Code session running in Anthropic's cloud. "
                     + "Reads the login the Claude Code CLI already stores on this machine, so "
                     + "there is nothing to sign in to — macOS will ask permission to read that "
@@ -1479,8 +1486,8 @@ namespace ClaudeBuddy
                     + "asked every time; Claude Code refreshing its own login can bring the "
                     + "prompt back. Every Claude Code account directory you have listed is read "
                     + "(one prompt per account), and a prompt you decline is not asked again until that login changes or you press Retry; directories not listed are not seen. If no orbs appear, the line below says how far the read "
-                    + "got. Read-only: clicking one opens it in your browser, which is the "
-                    + "only place a cloud session can be typed into.")
+                    + "got. Its chat panel can also send into the session, as the account that "
+                    + "owns it, using that same login.")
             };
 
             // Progressive disclosure, the same as every other section here: off
