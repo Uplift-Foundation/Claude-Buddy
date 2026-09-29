@@ -2301,7 +2301,8 @@ namespace ClaudeBuddy
             rows.Add(Row("Speech volume", SpeechVolumeControl(),
                 "How loud replies are read aloud, whichever voice reads them. A custom "
                 + "speak command decides its own volume, so this is greyed out while one "
-                + "is selected."));
+                + "is selected. With the high-quality voice it takes effect once this "
+                + "version's voice engine is installed."));
 
             rows.Add(Row("Speaks", SpeakScopePicker(),
                 "What the speaker reads. The full response is everything the assistant "
@@ -2393,21 +2394,27 @@ namespace ClaudeBuddy
             SpeechVolumeSlider = VolumeSlider(ClaudeBuddySettings.SpeechVolume,
                 level => ClaudeBuddySettings.SpeechVolume = level);
 
+            // Under the slider rather than beside it, and wrapped: the
+            // fallback-engine note is a sentence, and beside a 160px slider it
+            // would squeeze the row's label into a clip on Windows — the same
+            // failure the Sounds rows had.
             SpeechVolumeNote = new TextBlock
             {
-                Text = AudioVolume.CustomCommandUnsupportedNote,
                 FontSize = 11,
                 Opacity = 0.7,
-                VerticalAlignment = VerticalAlignment.Center
+                MaxWidth = 200,
+                TextWrapping = TextWrapping.Wrap,
+                TextAlignment = TextAlignment.Right,
+                HorizontalAlignment = HorizontalAlignment.Right
             };
 
             RefreshSpeechVolumeAvailability();
 
             return new StackPanel
             {
-                Orientation = Orientation.Horizontal,
-                Spacing = 8,
-                Children = { SpeechVolumeNote, SpeechVolumeSlider }
+                Orientation = Orientation.Vertical,
+                Spacing = 4,
+                Children = { SpeechVolumeSlider, SpeechVolumeNote }
             };
         }
 
@@ -2419,13 +2426,18 @@ namespace ClaudeBuddy
         // No null guard: the constructor builds every row, and VoiceRows
         // builds this slider before anything that could call here can fire —
         // the picker's SelectionChanged only follows a user's choice.
+        //
+        // The note and the enabled state are two decisions, not one: an older
+        // engine standing in for this build's gets a note but keeps a live
+        // slider — AudioVolume.SpeechVolumeNote says why.
         internal void RefreshSpeechVolumeAvailability()
         {
-            var applies = AudioVolume.EngineAppliesVolume(
-                TextToSpeech.EngineNamed(ClaudeBuddySettings.SpeakEngine));
+            var engine = TextToSpeech.EngineNamed(ClaudeBuddySettings.SpeakEngine);
+            var note = AudioVolume.SpeechVolumeNote(engine, NeuralSpeech.SpeaksWithFallbackEngine);
 
-            SpeechVolumeSlider!.IsEnabled = applies;
-            SpeechVolumeNote!.IsVisible = !applies;
+            SpeechVolumeSlider!.IsEnabled = AudioVolume.EngineAppliesVolume(engine);
+            SpeechVolumeNote!.Text = note;
+            SpeechVolumeNote.IsVisible = note is not null;
         }
 
         // CB-200's Alert slider — every chime, whichever engine speaks.
@@ -3409,10 +3421,18 @@ namespace ClaudeBuddy
                 SearchText = SettingsFilter.TextOf(label, help)
             };
 
+            // Wrapped, with a gap before the control: the label sits in the
+            // star column, so a wide control takes its width. Unwrapped, a
+            // label longer than what was left was cut off mid-word and ran
+            // under the control — "When a session need" beside Windows'
+            // wider combo box (CB-200 review). Wrapping only happens when the
+            // line would not fit anyway, so a row that fit before is unchanged.
             var text = new TextBlock
             {
                 Text = label,
                 FontSize = 13,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 0, 12, 0),
                 VerticalAlignment = VerticalAlignment.Center
             };
             grid.Children.Add(text);

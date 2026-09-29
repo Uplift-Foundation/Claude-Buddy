@@ -238,6 +238,60 @@ public class NeuralSpeechLayoutTests : IDisposable
         }
     }
 
+    // ---- SpeaksWithFallbackEngine (CB-200) -------------------------------
+
+    // The path comparison it rests on, checked both ways rather than assumed:
+    // this build's own engine compares equal to EnginePath (the Speech volume
+    // row stays quiet), and an older one does not (the row explains why the
+    // level will not apply yet). Each is the other's negative control.
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    public void SpeaksWithFallbackEngineOnlyWhenAnOlderEngineIsTheOneSpeaking(bool olderOnly, bool expected)
+    {
+        PlaceEngine(olderOnly ? "0.1.0-beta" : NeuralSpeech.EngineVersion);
+        PlaceModel();
+
+        var original = ClaudeBuddySettings.NeuralVoiceEnabled;
+        try
+        {
+            ClaudeBuddySettings.NeuralVoiceEnabled = true;
+            Assert.Equal(expected, NeuralSpeech.SpeaksWithFallbackEngine);
+            Assert.Equal(expected, NeuralSpeech.NeedsUpdate);
+        }
+        finally
+        {
+            ClaudeBuddySettings.NeuralVoiceEnabled = original;
+        }
+    }
+
+    // An older engine with the neural voice switched off speaks nothing — a
+    // system voice does, and honours the level — so there is nothing to note.
+    // The same with nothing on disk at all, where UsableEnginePath is null
+    // and would compare unequal to EnginePath if Available did not come first.
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public void NoFallbackIsReportedWhenNothingNeuralSpeaks(bool placeOlder, bool enabled)
+    {
+        if (placeOlder)
+        {
+            PlaceEngine("0.1.0-beta");
+            PlaceModel();
+        }
+
+        var original = ClaudeBuddySettings.NeuralVoiceEnabled;
+        try
+        {
+            ClaudeBuddySettings.NeuralVoiceEnabled = enabled;
+            Assert.False(NeuralSpeech.SpeaksWithFallbackEngine);
+        }
+        finally
+        {
+            ClaudeBuddySettings.NeuralVoiceEnabled = original;
+        }
+    }
+
     [Fact]
     public void TheDefaultVoiceIsAnAmericanFemaleKokoroVoice()
     {

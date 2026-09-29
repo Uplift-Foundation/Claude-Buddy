@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Linq;
 using System.Reflection;
 using Avalonia.Controls;
@@ -167,6 +168,67 @@ public class VolumeSliderTests
 
             Assert.True(alert.IsEnabled);
             Assert.False(window.SpeechVolumeSlider!.IsEnabled);
+        });
+
+    // ---- noted on a fallback engine (CB-200 review) -------------------------
+
+    // Kokoro selected, but only an older engine on disk: it ignores the level,
+    // so the row says so — and the slider stays live, because the level is
+    // saved for when this build's engine arrives. The negative control is the
+    // same setup with this build's own engine, which must show no note; a
+    // fixture that failed to place anything would fail that half, not pass it.
+    [AvaloniaTheory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void AnOlderNeuralEngineIsNotedWithoutGreyingTheSlider(bool olderOnly) =>
+        With("neural", 0.4, 1.0, () => WithEngineOnDisk(olderOnly ? "0.0.1-older" : NeuralSpeech.EngineVersion, () =>
+        {
+            var window = NewWindow();
+            var row = RowLabelled(window.VoiceRows(), "Speech volume");
+
+            Assert.True(window.SpeechVolumeSlider!.IsEnabled);
+            Assert.Equal(olderOnly, window.SpeechVolumeNote!.IsVisible);
+            Assert.Equal(olderOnly ? AudioVolume.FallbackEngineNote : null, window.SpeechVolumeNote.Text);
+            Assert.Contains(window.SpeechVolumeNote, row.GetLogicalDescendants());
+        }));
+
+    // Puts a fake engine (and the model) where NeuralSpeech looks, under the
+    // per-run settings directory TestBootstrap isolates, with the neural voice
+    // switched on — and removes exactly what it placed.
+    private static void WithEngineOnDisk(string version, Action body)
+    {
+        var wasEnabled = ClaudeBuddySettings.NeuralVoiceEnabled;
+        var directory = Path.Combine(NeuralSpeech.Root, version);
+        var modelExisted = File.Exists(NeuralSpeech.ModelPath);
+        Directory.CreateDirectory(directory);
+        File.WriteAllBytes(Path.Combine(directory, NeuralSpeech.EngineExeName), Array.Empty<byte>());
+        if (!modelExisted) File.WriteAllBytes(NeuralSpeech.ModelPath, Array.Empty<byte>());
+        try
+        {
+            ClaudeBuddySettings.NeuralVoiceEnabled = true;
+            body();
+        }
+        finally
+        {
+            ClaudeBuddySettings.NeuralVoiceEnabled = wasEnabled;
+            Directory.Delete(directory, recursive: true);
+            if (!modelExisted) File.Delete(NeuralSpeech.ModelPath);
+        }
+    }
+
+    // ---- labels wrap rather than clip --------------------------------------
+
+    // The Sounds row's "When a session needs you" was cut to "When a session
+    // need" beside Windows' wider combo box. Every Row label now wraps, so a
+    // long one takes a second line instead of running under its control.
+    [AvaloniaFact]
+    public void ALongRowLabelWrapsInsteadOfClipping() =>
+        With("system", 1.0, 1.0, () =>
+        {
+            var label = RowLabelled(NewWindow().SoundRows(), "When a session needs you")
+                .GetLogicalDescendants().OfType<TextBlock>().First(t => t.Text == "When a session needs you");
+
+            Assert.Equal(Avalonia.Media.TextWrapping.Wrap, label.TextWrapping);
         });
 
     // Choosing a voice can change the engine without rebuilding the window;

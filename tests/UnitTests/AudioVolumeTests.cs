@@ -26,6 +26,28 @@ public class AudioVolumeTests
     public void OnlyACustomCommandCannotBeToldALevel(SpeakEngine engine, bool applies) =>
         Assert.Equal(applies, AudioVolume.EngineAppliesVolume(engine));
 
+    // The Speech row's note — one case per arm. The fallback flag only means
+    // anything for Kokoro; a custom command's note wins whatever it says, and
+    // a system voice has no note either way.
+    [Theory]
+    [InlineData(SpeakEngine.Custom, false, AudioVolume.CustomCommandUnsupportedNote)]
+    [InlineData(SpeakEngine.Custom, true, AudioVolume.CustomCommandUnsupportedNote)]
+    [InlineData(SpeakEngine.Neural, true, AudioVolume.FallbackEngineNote)]
+    [InlineData(SpeakEngine.Neural, false, null)]
+    [InlineData(SpeakEngine.System, false, null)]
+    [InlineData(SpeakEngine.System, true, null)]
+    public void TheSpeechRowSaysWhyALevelWillNotApply(SpeakEngine engine, bool usingFallback, string? expected) =>
+        Assert.Equal(expected, AudioVolume.SpeechVolumeNote(engine, usingFallback));
+
+    // The fallback engine gets a note but keeps a working slider: the two
+    // decisions are deliberately different for exactly that one state.
+    [Fact]
+    public void AFallbackEngineIsNotedButStillTakesALevel()
+    {
+        Assert.NotNull(AudioVolume.SpeechVolumeNote(SpeakEngine.Neural, usingFallbackEngine: true));
+        Assert.True(AudioVolume.EngineAppliesVolume(SpeakEngine.Neural));
+    }
+
     [Theory]
     [InlineData("custom", SpeakEngine.Custom)]
     [InlineData("neural", SpeakEngine.Neural)]

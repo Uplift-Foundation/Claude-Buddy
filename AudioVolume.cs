@@ -104,6 +104,33 @@ namespace ClaudeBuddy
         // cannot drift apart on it.
         public const string CustomCommandUnsupportedNote = "Not supported for custom commands";
 
+        // The label beside the Speech slider while Kokoro is selected but
+        // speaking through an older engine (NeuralSpeech.SpeaksWithFallbackEngine)
+        // — just after an upgrade, before this build's engine has downloaded,
+        // and indefinitely on a dev build whose engine was never published.
+        // An engine from before CB-200 ignores SpeechVolumeEnvVar and speaks
+        // at full volume, so the slider would otherwise move and change
+        // nothing. "Installed" rather than "downloaded" because the dev-build
+        // case never downloads; the sentence has to be true for both.
+        public const string FallbackEngineNote = "Takes effect once the updated voice engine is installed";
+
+        // What the Speech row says beside its slider, or null for nothing.
+        //
+        // Separate from EngineAppliesVolume on purpose: the two disagree for
+        // the fallback engine. It cannot apply a level today, but the slider
+        // stays enabled — the level is saved and takes effect the moment the
+        // right engine lands, and a system voice speaking in its place (the
+        // neural path falls through to one whenever the engine fails to
+        // start) honours it already. A custom command never will, so that
+        // slider is the one that greys out.
+        public static string? SpeechVolumeNote(TextToSpeech.SpeakEngine engine, bool usingFallbackEngine) =>
+            engine switch
+            {
+                TextToSpeech.SpeakEngine.Custom => CustomCommandUnsupportedNote,
+                TextToSpeech.SpeakEngine.Neural when usingFallbackEngine => FallbackEngineNote,
+                _ => null
+            };
+
         // What the settings window shows beside a slider.
         public static string Percent(double level) =>
             ((int)Math.Round(Clamp(level) * 100)).ToString(CultureInfo.InvariantCulture) + "%";

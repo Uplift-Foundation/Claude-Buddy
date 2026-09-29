@@ -146,6 +146,20 @@ namespace ClaudeBuddy
         internal static string? UsableEnginePath =>
             File.Exists(EnginePath) ? EnginePath : NewestOtherEngine();
 
+        // "Kokoro speaks, but not with this build's engine." What the Speech
+        // volume row asks (CB-200), because an engine from before CB-200
+        // ignores the level and speaks at full volume.
+        //
+        // Available first, because when it is false nothing neural speaks at
+        // all — a system voice does, and that honours the level. Once it is
+        // true UsableEnginePath is non-null, and it returns EnginePath itself
+        // (the same string, built the same way) exactly when this build's
+        // engine is on disk; any other answer is a sibling version directory,
+        // which is a different path by construction. Pinned both ways in
+        // NeuralSpeechLayoutTests.
+        internal static bool SpeaksWithFallbackEngine =>
+            Available && UsableEnginePath != EnginePath;
+
         internal static string? NewestOtherEngine()
         {
             try

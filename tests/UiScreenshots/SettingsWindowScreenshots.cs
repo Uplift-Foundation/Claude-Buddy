@@ -254,6 +254,38 @@ public class SettingsWindowScreenshots
         WithVolumes("custom", speech: 1.0, alert: 0.3, () =>
             CaptureGroup(ShownSettings(), "Alert volume", "Sounds", "settings-alert-volume.png"));
 
+    // CB-200 review: Kokoro selected while only an older engine is on disk —
+    // just after an upgrade, or a dev build whose engine was never published.
+    // The older engine ignores the level, so the row carries a note under a
+    // slider that stays enabled. Look for the note, and for the "Speech
+    // volume" label still whole beside it.
+    [AvaloniaFact]
+    public void SpeechVolumeIsNotedWhileAnOlderEngineSpeaks() =>
+        WithVolumes("neural", speech: 0.4, alert: 1.0, () =>
+            WithOlderEngineOnly(() =>
+                CaptureGroup(ShownSettings(), "Speech volume", "Voice", "settings-speech-volume-fallback.png")));
+
+    private static void WithOlderEngineOnly(Action capture)
+    {
+        var wasEnabled = ClaudeBuddySettings.NeuralVoiceEnabled;
+        var directory = System.IO.Path.Combine(NeuralSpeech.Root, "0.0.1-older");
+        var modelExisted = System.IO.File.Exists(NeuralSpeech.ModelPath);
+        System.IO.Directory.CreateDirectory(directory);
+        System.IO.File.WriteAllBytes(System.IO.Path.Combine(directory, NeuralSpeech.EngineExeName), Array.Empty<byte>());
+        if (!modelExisted) System.IO.File.WriteAllBytes(NeuralSpeech.ModelPath, Array.Empty<byte>());
+        try
+        {
+            ClaudeBuddySettings.NeuralVoiceEnabled = true;
+            capture();
+        }
+        finally
+        {
+            ClaudeBuddySettings.NeuralVoiceEnabled = wasEnabled;
+            System.IO.Directory.Delete(directory, recursive: true);
+            if (!modelExisted) System.IO.File.Delete(NeuralSpeech.ModelPath);
+        }
+    }
+
     private static Avalonia.Controls.Window ShownSettings()
     {
         var ctor = typeof(SettingsWindow).GetConstructor(
