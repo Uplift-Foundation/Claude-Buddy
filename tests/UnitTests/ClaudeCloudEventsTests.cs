@@ -646,11 +646,14 @@ public class ClaudeCloudEventsTests
         var api = new RoutingApi(Answer(status, body));
         var chat = Sender(api);
         var flips = 0;
+        var announced = 0;
         chat.ReadOnlyChanged += () => flips++;
+        chat.TurnAdded += _ => announced++;
 
         Assert.Equal(ChatSendOutcome.Failed, await chat.SendAsync("hello"));
 
         Assert.Single(api.Posts);
+        Assert.Equal(1, announced);
         var note = Assert.Single(chat.History);
         Assert.Equal(ChatRole.System, note.Role);
         Assert.StartsWith("Not sent: ", note.Text, StringComparison.Ordinal);
@@ -968,6 +971,20 @@ public class ClaudeCloudEventsTests
         await chat.FollowUpTask!;
 
         Assert.Empty(api.Gets);
+    }
+
+    // Closing a panel that never sent anything has nothing to stop.
+    [Fact]
+    public void ClosingAPanelThatNeverSentIsHarmless()
+    {
+        var api = new RoutingApi(Answer(200, Receipt));
+        var chat = Sender(api);
+
+        chat.PanelOpened();
+        chat.PanelClosed();
+
+        Assert.Null(chat.FollowUpTask);
+        Assert.Empty(api.Requests);
     }
 
     [Fact]

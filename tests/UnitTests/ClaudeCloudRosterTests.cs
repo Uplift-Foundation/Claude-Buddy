@@ -749,7 +749,7 @@ public class ClaudeCloudRosterTests
     [Theory]
     [InlineData("session_01ABCdef-_123")]
     [InlineData("session_a")]
-    [InlineData("session_01WnTt6GTLUrmJ5pu8vmfpKs")]
+    [InlineData("session_01FixtureOnly2")]
     public void AWellFormedIdIsTheCliRule(string id)
     {
         Assert.True(ClaudeCloudRoster.IsWellFormedId(id));
