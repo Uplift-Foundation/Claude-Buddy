@@ -148,6 +148,48 @@ public class CloudSessionScreenshots : IDisposable
     // says why and links to the session. The hint is the real session's own
     // Ended wording (CloudChatSendability), copied rather than referenced so the
     // capture shows a literal a reviewer can read against the rids.
+    // CB-199: a reply mid-stream. The assistant row is the live bubble a
+    // text_delta is growing — incomplete, ending mid-sentence the way it does on
+    // screen while the stream is running — with the composer and Stop under it.
+    // What a reviewer is checking is that an unfinished reply reads as being
+    // written rather than as cut off, and that Stop is where it can be reached.
+    [AvaloniaFact]
+    public void AStreamingCloudReplyShowsPartialTextWithStop()
+    {
+        var id = "screenshot-cloud-streaming-" + Guid.NewGuid();
+        _panelsToClean.Add(id);
+
+        var fake = new FakeChatSession(new[]
+        {
+            new ChatTurn { Role = ChatRole.User, Text = "write me a short essay on why tests should be written first", IsComplete = true },
+            new ChatTurn
+            {
+                Role = ChatRole.Assistant,
+                Text = "Writing the test first changes what the test is for. Written afterwards, a test "
+                       + "describes the code that exists; written first, it describes the behaviour "
+                       + "somebody asked for, and the code has to",
+                IsComplete = false,
+            },
+        })
+        {
+            SessionId = id,
+            DisplayName = "Essay on testing",
+            IsReadOnly = false,
+            CanInterrupt = true,
+            ComposerHint = "Message… (queued until this turn finishes)",
+            MachineName = "Anthropic's cloud",
+        };
+
+        ChatPanel.OpenFor(new OrbWindow(Guid.NewGuid().ToString()), fake);
+        ScreenshotHelper.Flush();
+
+        var panel = ChatPanelTestAccess.Instance!;
+        Assert.True(panel.FindControl<Grid>("ComposerRow")!.IsVisible);
+        Assert.True(panel.FindControl<Grid>("StopButton")!.IsVisible);
+
+        ScreenshotHelper.CaptureAlreadyShown(panel, "chat-panel-cloud-streaming.png");
+    }
+
     [AvaloniaFact]
     public void AnEndedCloudSessionShowsWhyInPlaceOfTheComposer()
     {

@@ -1,4 +1,6 @@
+using System.Runtime.CompilerServices;
 using System.Threading;
+using System.Threading.Channels;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
@@ -6,6 +8,7 @@ using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.Media;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using Xunit;
 
 namespace ClaudeBuddy.Tests;
@@ -806,5 +809,105 @@ public class CloudChatPanelTests : IDisposable
         Assert.False(await chat.LoadAsync(CancellationToken.None));
         Assert.Equal(RemoteChatState.Error, chat.State);
         Assert.Empty(chat.History);
+    }
+
+    // --- a streamed reply (CB-199) ---
+
+    // One connection, handed to the test as a channel to write the turn into.
+    private sealed class PanelStream : ICloudEventStream
+    {
+        private readonly Channel<Channel<CloudStreamEvent>> _opened = Channel.CreateUnbounded<Channel<CloudStreamEvent>>();
+
+        public async IAsyncEnumerable<CloudStreamEvent> OpenAsync(string accessToken, string sessionId,
+            long? fromSequenceNum, [EnumeratorCancellation] CancellationToken ct)
+        {
+            var events = Channel.CreateUnbounded<CloudStreamEvent>();
+            _opened.Writer.TryWrite(events);
+            await foreach (var e in events.Reader.ReadAllAsync(ct)) yield return e;
+        }
+
+        internal async Task<ChannelWriter<CloudStreamEvent>> NextOpenAsync()
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            return (await _opened.Reader.ReadAsync(timeout.Token)).Writer;
+        }
+    }
+
+    // Answers the stream's starting-point read with a sequence number, and
+    // everything else with an empty transcript.
+    private sealed class NewestApi : ICloudApi
+    {
+        public Task<CloudApiResult> SendAsync(CloudRequestContext context, CancellationToken token) =>
+            Task.FromResult(new CloudApiResult(CloudOutcomes.OutcomeFor(200, ""),
+                context.Path.EndsWith(ClaudeCloudChatSession.NewestEventQuery, StringComparison.Ordinal)
+                    ? "{\"data\":[{\"sequence_num\":\"7\"}]}"
+                    : Envelope()));
+    }
+
+    private static async Task PumpUntil(Func<bool> condition)
+    {
+        for (var i = 0; i < 1000 && !condition(); i++)
+        {
+            FlushRender();
+            await Task.Delay(5);
+        }
+
+        FlushRender();
+        Assert.True(condition(), "the panel did not reach the expected state within five seconds");
+    }
+
+    private static string ShownText(ChatPanel panel) =>
+        string.Concat(panel.FindControl<ItemsControl>("Turns")!.GetVisualDescendants().OfType<TextBlock>()
+            .Select(tb => !string.IsNullOrEmpty(tb.Text)
+                ? tb.Text
+                : string.Concat((tb.Inlines ?? new Avalonia.Controls.Documents.InlineCollection())
+                    .OfType<Avalonia.Controls.Documents.Run>().Select(r => r.Text))));
+
+    // What the real-machine report asked for: the reply builds up in one row
+    // while it is written, Stop is up the whole time, and both settle when the
+    // turn ends. Driven through the real session and the real panel, with the
+    // session posting to the real dispatcher.
+    [AvaloniaFact]
+    public async Task AStreamedReplyGrowsInOneRowWithStopShowing()
+    {
+        var id = "session_stream_" + Guid.NewGuid().ToString("N");
+        _toClean.Add(id);
+        var stream = new PanelStream();
+        var chat = new ClaudeCloudChatSession(Session(id), new NewestApi(), new FakeCredentials(),
+            action => Dispatcher.UIThread.Post(action))
+        {
+            Stream = stream,
+            Enabled = () => true,
+        };
+
+        ChatPanel.OpenFor(NewOrb(), chat);
+        FlushRender();
+        var panel = ChatPanelTestAccess.Instance!;
+        var events = await stream.NextOpenAsync();
+
+        events.TryWrite(new CloudStreamEvent(CloudStreamEventKind.Durable, "client_event", 8, "{}",
+            PayloadType: "system", Subtype: "init"));
+        events.TryWrite(new CloudStreamEvent(CloudStreamEventKind.Ephemeral, "ephemeral_event", null, "{}",
+            PayloadType: "stream_event", TextDelta: "Once upon ", InnerType: "content_block_delta"));
+        await PumpUntil(() => RenderedRows(panel).Count == 1 && ShownText(panel).Contains("Once upon"));
+        Assert.True(StopButton(panel).IsVisible);
+
+        events.TryWrite(new CloudStreamEvent(CloudStreamEventKind.Ephemeral, "ephemeral_event", null, "{}",
+            PayloadType: "stream_event", TextDelta: "a time", InnerType: "content_block_delta"));
+        await PumpUntil(() => ShownText(panel).Contains("Once upon a time"));
+        Assert.Single(RenderedRows(panel));
+        Assert.True(StopButton(panel).IsVisible);
+
+        events.TryWrite(new CloudStreamEvent(CloudStreamEventKind.Durable, "client_event", 9,
+            "{\"payload\":" + Row(AssistantTemplate, "a1", "Once upon a time, the end.") + "}",
+            PayloadType: "assistant"));
+        events.TryWrite(new CloudStreamEvent(CloudStreamEventKind.Durable, "client_event", 10, "{}",
+            PayloadType: "result", Subtype: "success"));
+        await PumpUntil(() => !StopButton(panel).IsVisible && ShownText(panel).Contains("the end."));
+        Assert.Single(RenderedRows(panel));
+
+        ChatPanel.HideFor(id);
+        FlushRender();
+        await chat.StreamTask!;
     }
 }
