@@ -157,7 +157,7 @@ namespace ClaudeBuddy
         // of a path but of how the CLI was launched, and this function therefore
         // does not try to recognise ~/.claude: null or empty means "launched with
         // no CLAUDE_CONFIG_DIR", anything else is hashed as given. Callers that
-        // know a root can be reached both ways (see CandidateServices) ask twice.
+        // know a root can be reached both ways (see ServicesForRoot) ask twice.
         //
         // configDir is the CLAUDE_CONFIG_DIR value; secureStorageDir is
         // CLAUDE_SECURESTORAGE_CONFIG_DIR, null meaning unset — an *empty* value
@@ -201,34 +201,42 @@ namespace ClaudeBuddy
             return roots;
         }
 
-        // The Keychain service names to try, in order, for those roots.
+        // The folder's name, never an email. A directory can be named after the
+        // account it holds ("~/.claude-me@example.com"), and the label is shown on
+        // a screen someone else may be looking at, so anything from an "@" on is
+        // dropped; a name that was nothing else becomes "account".
+        internal static string SafeLabel(string root)
+        {
+            var label = UsageAccounts.FallbackLabel(root);
+            var at = label.IndexOf('@');
+            if (at < 0) return label;
+            return at == 0 ? "account" : label[..at];
+        }
+
+        // A root spelt the way the CLI would have been given it: no trailing
+        // separator. A settings entry of ".claude-board/" reaches here as
+        // "<home>/.claude-board/", but a shell exports CLAUDE_CONFIG_DIR without
+        // the slash, and the CLI hashes what it was given verbatim. A root that is
+        // nothing but separators is left as it was.
+        internal static string TrimRoot(string root)
+        {
+            var trimmed = root.TrimEnd('/', '\\');
+            return trimmed.Length == 0 ? root : trimmed;
+        }
+
+        // The Keychain service names to try for ONE root, in order.
         //
         // The default root is asked twice: unsuffixed (CLI launched without
         // CLAUDE_CONFIG_DIR) and suffixed (launched with CLAUDE_CONFIG_DIR=~/.claude).
         // Every other root can only have been reached through CLAUDE_CONFIG_DIR, so
-        // only suffixed. Duplicates are dropped.
-        internal static IReadOnlyList<string> CandidateServices(string home, IReadOnlyList<string> roots)
+        // only suffixed.
+        internal static IReadOnlyList<string> ServicesForRoot(string home, string root)
         {
-            var defaultRoot = Path.Combine(home, ".claude");
-            var services = new List<string>();
-            foreach (var root in roots)
-            {
-                if (string.Equals(root, defaultRoot, StringComparison.Ordinal))
-                    AddOnce(services, KeychainServiceFor(null));
-                // A settings entry of ".claude-board/" reaches here as
-                // "<home>/.claude-board/", but a shell exports CLAUDE_CONFIG_DIR
-                // without the slash, and the CLI hashes what it was given
-                // verbatim. Trim so the two spell the same directory the same way;
-                // a root that is nothing but separators is left as it was.
-                var trimmed = root.TrimEnd('/', '\\');
-                AddOnce(services, KeychainServiceFor(trimmed.Length == 0 ? root : trimmed));
-            }
-            return services;
-        }
-
-        private static void AddOnce(List<string> list, string value)
-        {
-            if (!list.Contains(value, StringComparer.Ordinal)) list.Add(value);
+            var trimmed = TrimRoot(root);
+            var suffixed = KeychainServiceFor(trimmed);
+            return string.Equals(trimmed, TrimRoot(Path.Combine(home, ".claude")), StringComparison.Ordinal)
+                ? new[] { KeychainServiceFor(null), suffixed }
+                : new[] { suffixed };
         }
 
         // Where the CLI keeps the same thing on Windows and Linux.
@@ -497,36 +505,64 @@ namespace ClaudeBuddy
         // choice itself is testable on either machine — the same reason OrbGlyph
         // takes the two-letter setting instead of reading it.
         //
-        // Either way the answer is a MultiCredentialSource over every candidate
-        // config root, because the login lives wherever the CLI was pointed.
-        // On Windows/Linux the file under a custom root is ASSUMED to be
-        // `<root>/.credentials.json`; only the macOS Keychain naming was read out
-        // of the binary.
-        internal static MultiCredentialSource SourceFor(
+        // **One source per account, not one flat walk.** The first version put
+        // every root's stores in a single MultiCredentialSource, whose first Found
+        // wins — so on a Mac with two logged-in accounts one was read and the
+        // other never looked at. An account is a config root; each gets its own
+        // MultiCredentialSource over that root's candidates only.
+        //
+        // Within a root the file is tried first, then the Keychain. A live file
+        // needs no prompt and a stale one falls through to the Keychain; one root
+        // cannot hold two different live identities, so the order never changes
+        // *which* account is found, only how many prompts it costs.
+        //
+        // Read out of the 2.1.284 binary: the CLI's store is "keychain with
+        // plaintext fallback", and `<config dir>/.credentials.json` (unhashed) is
+        // where it writes when the Keychain write fails. Confirmed on a real Mac,
+        // where both ~/.claude and ~/.claude-board held live logins in files. The
+        // location under a custom root on Windows/Linux is ASSUMED to be the same.
+        internal static IReadOnlyList<CloudAccount> SourcesFor(
             bool isMacOS, string home, string? configDirEnv = null)
         {
-            var roots = CandidateRoots(home, configDirEnv);
-            var children = new List<(string Name, ICloudCredentialSource Source)>();
-            if (isMacOS)
+            var defaultRoot = Path.Combine(home, ".claude");
+            var accounts = new List<CloudAccount>();
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+
+            foreach (var raw in CandidateRoots(home, configDirEnv))
             {
-                foreach (var service in CandidateServices(home, roots))
-                    children.Add((service, new KeychainCredentialSource(service)));
+                var root = TrimRoot(raw);
+                if (!seen.Add(root)) continue;
+
+                var file = (Name: CredentialsFilePath(root),
+                    Source: (ICloudCredentialSource)new FileCredentialSource(CredentialsFilePath(root)));
+                var children = new List<(string Name, ICloudCredentialSource Source)> { file };
+                if (isMacOS)
+                {
+                    foreach (var service in ServicesForRoot(home, root))
+                        children.Add((service, new KeychainCredentialSource(service)));
+                }
+
+                accounts.Add(new CloudAccount(
+                    root,
+                    string.Equals(root, TrimRoot(defaultRoot), StringComparison.Ordinal)
+                        ? "default" : SafeLabel(root),
+                    new MultiCredentialSource(children),
+                    new MultiCredentialSource(new[] { file })));
             }
 
-            // Files are walked on macOS too, after the Keychain candidates. Read
-            // out of the 2.1.284 binary: on every platform the CLI's store is
-            // `Ns(keychain, plaintext)` — "keychain-with-plaintext-fallback" — and
-            // when the Keychain write fails non-transiently it writes
-            // `<config dir>/.credentials.json` (mode 0600) instead and deletes the
-            // Keychain item. The file is not hashed or suffixed; its directory is
-            // CLAUDE_SECURESTORAGE_CONFIG_DIR or the config dir itself. (The CLI
-            // itself would only look at the file when the Keychain holds nothing;
-            // walking past a blanked Keychain entry to a file is a superset.)
-            foreach (var root in roots)
-                children.Add((CredentialsFilePath(root), new FileCredentialSource(CredentialsFilePath(root))));
-            return new MultiCredentialSource(children);
+            return accounts;
         }
     }
+
+    // One Claude Code account: a config root, the name it goes by on screen, and
+    // where its login lives.
+    //
+    // Label is the folder's name (UsageAccounts.FallbackLabel), never an email:
+    // the settings line is shown to whoever is looking over a shoulder.
+    // FileSource is the same account's file stores alone, used while another
+    // account's declined Keychain prompt is latched — a file needs no prompt.
+    internal sealed record CloudAccount(
+        string Root, string Label, ICloudCredentialSource Source, ICloudCredentialSource FileSource);
 
     // Tries several stores in order and answers with the first login found.
     //
@@ -696,7 +732,7 @@ namespace ClaudeBuddy
     // is a call into Security.framework about an item a CI runner does not have,
     // behind a consent dialog no runner can answer. The mapping it performs is in
     // MacOSKeychain and is equally untestable here; what *is* covered is
-    // SourceFor choosing this class, which is the decision this repository owns.
+    // SourcesFor choosing this class, which is the decision this repository owns.
     [ExcludeFromCodeCoverage]
     internal sealed class KeychainCredentialSource : ICloudCredentialSource
     {
@@ -717,7 +753,7 @@ namespace ClaudeBuddy
         {
             // A test process never asks the OS for this.
             //
-            // The seam is here rather than at SourceFor because SourceFor's
+            // The seam is here rather than at SourcesFor because SourcesFor's
             // answer is itself a tested decision — ClaudeCloudCredentialPlatformTests
             // asserts macOS gets this class, and it should keep doing so.
             // Constructing one queries nothing; only this call does.

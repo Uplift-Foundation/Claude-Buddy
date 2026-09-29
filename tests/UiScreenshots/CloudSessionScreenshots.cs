@@ -125,7 +125,37 @@ public class CloudSessionScreenshots : IDisposable
         Capture(enabled: true, "settings-claude-cloud-on.png");
     }
 
-    private static void Capture(bool enabled, string name)
+    // Several accounts: the header and one line per account, labelled by folder.
+    // The rows are what a second Claude Code login adds to this card, and a
+    // capture is the only thing that shows they wrap sensibly.
+    [AvaloniaFact]
+    public void TheCloudSettingsGroupOnWithTwoAccounts()
+    {
+        var board = new CloudAccountBoard(new[]
+        {
+            new CloudAccount("/Users/x/.claude", "default", new NoLogin(), new NoLogin()),
+            new CloudAccount("/Users/x/.claude-board", "board", new NoLogin(), new NoLogin()),
+        });
+        board.ApplyError("/Users/x/.claude", "1 cloud session (578 sessions inspected)");
+        board.ApplyError("/Users/x/.claude-board", "no Claude Code login found \u2014 run `claude` and sign in");
+        ClaudeCloudSessions.SetBoardForTests(board);
+        try
+        {
+            Capture(enabled: true, "settings-claude-cloud-on-two-accounts.png", keepState: true);
+        }
+        finally
+        {
+            ClaudeCloudSessions.SetBoardForTests(null);
+        }
+    }
+
+    private sealed class NoLogin : ICloudCredentialSource
+    {
+        public string? Stamp() => null;
+        public CredentialRead Read() => new(CredentialOutcome.NotLoggedIn, null, null, "none");
+    }
+
+    private static void Capture(bool enabled, string name, bool keepState = false)
     {
         var was = ClaudeBuddySettings.ClaudeCloudEnabled;
         try
@@ -137,7 +167,7 @@ public class CloudSessionScreenshots : IDisposable
             // nothing called Restart() here — and a picture of the enabled
             // section whose status says off is a picture that teaches a
             // reviewer the wrong thing about the feature.
-            ClaudeCloudSessions.SetStateForTests("checking\u2026");
+            if (!keepState) ClaudeCloudSessions.SetStateForTests("checking\u2026");
 
             var ctor = typeof(SettingsWindow).GetConstructor(
                 BindingFlags.NonPublic | BindingFlags.Instance,

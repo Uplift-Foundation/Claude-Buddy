@@ -1477,7 +1477,8 @@ namespace ClaudeBuddy
                     + "there is nothing to sign in to — macOS will ask permission to read that "
                     + "item from your Keychain. Choose \u201CAlways Allow\u201D so you are not "
                     + "asked every time; Claude Code refreshing its own login can bring the "
-                    + "prompt back. If no orbs appear, the line below says how far the read "
+                    + "prompt back. Every Claude Code account directory you have listed is read "
+                    + "(one prompt per account); directories not listed are not seen. If no orbs appear, the line below says how far the read "
                     + "got. Read-only: clicking one opens it in your browser, which is the "
                     + "only place a cloud session can be typed into.")
             };

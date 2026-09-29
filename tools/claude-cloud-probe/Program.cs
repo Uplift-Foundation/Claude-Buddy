@@ -100,10 +100,12 @@ internal static class Program
     // One instance, because it remembers which store answered and the probe
     // reports that afterwards. CLAUDE_CONFIG_DIR is honoured when the probe is run
     // from a shell that has it; the app itself cannot see the CLI's environment.
-    private static readonly MultiCredentialSource Multi = ClaudeCliCredentials.SourceFor(
+    //
+    // One source per account (config root), because the app now reads every
+    // account with a live login. `list` and `roster` use the first account that
+    // reads Found; `read` and `stamp` report every account.
+    private static readonly IReadOnlyList<CloudAccount> Accounts = ClaudeCliCredentials.SourcesFor(
         OperatingSystem.IsMacOS(), Home, Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR"));
-
-    private static ICloudCredentialSource Source() => Multi;
 
     // How long this tool waits for the credential store before giving up.
     //
@@ -138,10 +140,23 @@ internal static class Program
     //
     // CredentialBudgetTests guards it: nothing in the app or this tool may reach a
     // credential source's read except through ClaudeCliCredentials.
-    private static async Task<CredentialRead> ReadCredentialAsync()
+    private static async Task<CredentialRead> ReadFirstFoundAsync()
+    {
+        CredentialRead? first = null;
+        foreach (var account in Accounts)
+        {
+            var read = await ReadCredentialAsync(account);
+            if (read.Outcome == CredentialOutcome.Found) return read;
+            first ??= read;
+        }
+
+        return first!;
+    }
+
+    private static async Task<CredentialRead> ReadCredentialAsync(CloudAccount account)
     {
         var read = await ClaudeCliCredentials.ReadWithinAsync(
-            Source(), UnmeasuredProbeReadBudget, CancellationToken.None);
+            account.Source, UnmeasuredProbeReadBudget, CancellationToken.None);
 
         if (read.Outcome == CredentialOutcome.NoAnswer)
         {
@@ -176,15 +191,17 @@ internal static class Program
     // that less true.
     private static int Stamp()
     {
-        var stamp = Source().Stamp();
-        if (stamp is null)
+        var any = false;
+        foreach (var account in Accounts)
         {
-            Console.WriteLine("no credential found (nothing stored, or not readable without prompting)");
-            return 1;
+            var stamp = account.Source.Stamp();
+            any |= stamp is not null;
+            Console.WriteLine(stamp is null
+                ? $"account {account.Label} ({account.Root}): no credential found"
+                : $"account {account.Label} ({account.Root}): credential present; stamp {stamp}");
         }
 
-        Console.WriteLine($"credential present; stamp {stamp}");
-        return 0;
+        return any ? 0 : 1;
     }
 
     private static async Task<int> ReadAsync(string[] flags)
@@ -197,28 +214,25 @@ internal static class Program
             return 2;
         }
 
-        var read = await ReadCredentialAsync();
-
-        Console.WriteLine($"outcome  {read.Outcome}");
-        // Store names and outcomes only — never a value.
-        Console.WriteLine($"answered {Multi.AnsweredBy ?? "(none)"}");
-        foreach (var (name, outcome, reason) in Multi.Attempts)
-            Console.WriteLine($"tried    {name} -> {outcome}: {reason}");
-        Console.WriteLine($"meaning  {ClaudeCliCredentials.Describe(read.Outcome)}");
-        if (read.Detail is { } detail) Console.WriteLine($"detail   {detail}");
-        Console.WriteLine($"expires  {read.ExpiresAt?.ToString("u") ?? "(not stated)"}");
-
-        if (read.AccessToken is { } token)
+        var exit = 1;
+        foreach (var account in Accounts)
         {
-            // Length and a four-character prefix. The prefix is the CLI's token
-            // scheme marker rather than anything secret, and it is what tells a
-            // reader the parse found a token rather than an empty string.
-            var prefix = token.Length >= 4 ? token[..4] : token;
-            Console.WriteLine($"token    present, {token.Length} chars, starts \"{prefix}…\"");
-        }
-        else
-        {
-            Console.WriteLine("token    none");
+            var read = await ReadCredentialAsync(account);
+            var multi = (MultiCredentialSource)account.Source;
+
+            Console.WriteLine($"account  {account.Label} ({account.Root})");
+            Console.WriteLine($"outcome  {read.Outcome}");
+            // Store names and outcomes only — never a value.
+            Console.WriteLine($"answered {multi.AnsweredBy ?? "(none)"}");
+            foreach (var (name, outcome, reason) in multi.Attempts)
+                Console.WriteLine($"tried    {name} -> {outcome}: {reason}");
+            Console.WriteLine($"meaning  {ClaudeCliCredentials.Describe(read.Outcome)}");
+            if (read.Detail is { } detail) Console.WriteLine($"detail   {detail}");
+            Console.WriteLine($"expires  {read.ExpiresAt?.ToString("u") ?? "(not stated)"}");
+            Console.WriteLine(read.AccessToken is null ? "token    none" : "token    present");
+            Console.WriteLine();
+
+            if (read.Outcome == CredentialOutcome.Found) exit = 0;
         }
 
         // Printed as a presence, never as a value, and nothing sends it — see
@@ -228,7 +242,7 @@ internal static class Program
         var orgUuid = OrganizationUuid();
         Console.WriteLine($"org      {(orgUuid is null ? "(not found in ~/.claude.json)" : "found")}");
 
-        return read.Outcome == CredentialOutcome.Found ? 0 : 1;
+        return exit;
     }
 
     private static string? OrganizationUuid()
@@ -261,7 +275,7 @@ internal static class Program
             return 2;
         }
 
-        var read = await ReadCredentialAsync();
+        var read = await ReadFirstFoundAsync();
         if (read.Outcome != CredentialOutcome.Found || read.AccessToken is null)
         {
             Console.Error.WriteLine(
@@ -319,7 +333,7 @@ internal static class Program
     // cheaper to read here than to diagnose from a screenshot of missing orbs.
     private static async Task<int> RosterAsync()
     {
-        var read = await ReadCredentialAsync();
+        var read = await ReadFirstFoundAsync();
         if (read.Outcome != CredentialOutcome.Found || read.AccessToken is null)
         {
             Console.Error.WriteLine(

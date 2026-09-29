@@ -75,7 +75,8 @@ namespace ClaudeBuddy
             string? Model,
             int? ContextPercent,
             string? StatusDetail,
-            string? RecentAction);
+            string? RecentAction,
+            string? OwnerRoot = null);
 
         // The settings gate lives here rather than in SessionManager.EnabledFor,
         // following OpenClaw: off means the app asks the OS for no credential
@@ -85,7 +86,12 @@ namespace ClaudeBuddy
             ClaudeBuddySettings.ClaudeCloudEnabled ? _snapshot : Array.Empty<Session>();
 
         // What the settings window shows on its status row.
-        public static string StatusText { get { lock (Gate) return _state; } }
+        public static string StatusText
+        {
+            get { lock (Gate) return _board is { } board ? board.StatusText : _state; }
+        }
+
+        private static CloudAccountBoard? _board;
 
         // The seam every downstream test uses, matching
         // OpenClawSessions.SetSnapshotForTests: the poll loop is the only
@@ -98,7 +104,16 @@ namespace ClaudeBuddy
 
         internal static void SetStateForTests(string state)
         {
-            lock (Gate) _state = state;
+            lock (Gate)
+            {
+                _board = null;
+                _state = state;
+            }
+        }
+
+        internal static void SetBoardForTests(CloudAccountBoard? board)
+        {
+            lock (Gate) _board = board;
         }
 
         // How long a halted arm waits before looking again.
@@ -150,11 +165,17 @@ namespace ClaudeBuddy
         //
         // An empty list, by contrast, is a real answer — "we have access and there
         // is nothing" or "we have no access at all" — and does clear the orbs.
+        //
+        // PromptDeclined and RateLimited exist for the accounts above this arm:
+        // one account's declined Keychain prompt stops the others stacking dialogs
+        // behind it, and one account's 429 backs all of them off.
         internal sealed record StepResult(
             ArmState Next,
             IReadOnlyList<Session>? Snapshot,
             string Status,
-            TimeSpan Wait);
+            TimeSpan Wait,
+            bool PromptDeclined = false,
+            bool RateLimited = false);
 
         // One tick. Every decision this arm makes is here.
         //
@@ -169,7 +190,8 @@ namespace ClaudeBuddy
             ArmState state,
             DateTime now,
             CancellationToken ct,
-            TimeSpan? readBudget = null)
+            TimeSpan? readBudget = null,
+            SemaphoreSlim? readGate = null)
         {
             var stamp = credentials.Stamp();
 
@@ -187,14 +209,31 @@ namespace ClaudeBuddy
             // status on "checking…" and the user with no orbs and no error, which
             // is indistinguishable from having no cloud sessions. The budget is the
             // only thing standing between that measurement and a silent app.
-            var read = await ClaudeCliCredentials.ReadWithinAsync(
-                credentials, readBudget ?? ClaudeCliCredentials.UnmeasuredReadBudget, ct)
-                .ConfigureAwait(false);
+            //
+            // `readGate` serialises reads across accounts: with several, two
+            // Keychain consent dialogs on screen at once would be unanswerable,
+            // and one account's 45-second budget must not be spent waiting behind
+            // another's dialog. It is taken here, around the read alone and not
+            // inside ReadWithinAsync, so time queued for the gate is not charged
+            // against the budget.
+            if (readGate is not null) await readGate.WaitAsync(ct).ConfigureAwait(false);
+            CredentialRead read;
+            try
+            {
+                read = await ClaudeCliCredentials.ReadWithinAsync(
+                    credentials, readBudget ?? ClaudeCliCredentials.UnmeasuredReadBudget, ct)
+                    .ConfigureAwait(false);
+            }
+            finally
+            {
+                readGate?.Release();
+            }
 
             if (read.Outcome != CredentialOutcome.Found || read.AccessToken is not { } token)
             {
                 var wait = Backoff.Next(read.Outcome, state.Backoff);
-                return Stop(state, stamp, ClaudeCliCredentials.Describe(read.Outcome), wait);
+                return Stop(state, stamp, ClaudeCliCredentials.Describe(read.Outcome), wait)
+                    with { PromptDeclined = read.Outcome is CredentialOutcome.Denied or CredentialOutcome.NoAnswer };
             }
 
             var plan = ClaudeCloudRoster.PlanFor(state.LastWalkUtc, now, state.Sessions);
@@ -365,7 +404,8 @@ namespace ClaudeBuddy
                 },
                 null,
                 status,
-                wait.Value);
+                wait.Value,
+                RateLimited: outcome.Kind == CloudOutcomeKind.RateLimited);
         }
 
         // A stop, or a retryable credential problem, in one shape.
@@ -397,20 +437,31 @@ namespace ClaudeBuddy
         // --- the loop ---------------------------------------------------------
 
         // Excluded from coverage: a `while` around StepAsync and a `Task.Delay`.
-        // Everything it would be worth testing is in StepAsync, which is why this
-        // is as short as it is.
+        // Everything it would be worth testing is in StepAsync and
+        // CloudAccountBoard, which is why this is as short as it is. One of these
+        // runs per account, so one account's hung read or refused token never
+        // stalls another's.
         [ExcludeFromCodeCoverage]
-        private static async Task RunAsync(ICloudApi api, ICloudCredentialSource credentials,
-            CancellationToken ct)
+        private static async Task RunAccountAsync(ICloudApi api, CloudAccountBoard board,
+            CloudAccount account, SemaphoreSlim readGate, TimeSpan stagger, CancellationToken ct)
         {
             var state = ArmState.Initial;
 
+            try { await Task.Delay(stagger, ct).ConfigureAwait(false); } catch { return; }
+
             while (!ct.IsCancellationRequested)
             {
+                if (board.HoldRemaining(DateTime.UtcNow) is { } hold && hold > TimeSpan.Zero)
+                {
+                    try { await Task.Delay(hold, ct).ConfigureAwait(false); } catch { break; }
+                }
+
+                var skipped = board.KeychainSkippedFor(account.Root);
                 StepResult step;
                 try
                 {
-                    step = await StepAsync(api, credentials, state, DateTime.UtcNow, ct)
+                    step = await StepAsync(api, skipped ? account.FileSource : account.Source,
+                            state, DateTime.UtcNow, ct, readGate: readGate)
                         .ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -422,24 +473,20 @@ namespace ClaudeBuddy
                     // Nothing below this is allowed to take the app down. The arm
                     // keeps its sessions and says what happened.
                     state = state with { Status = ex.Message, Backoff = Backoff.Cap };
-                    lock (Gate) _state = ex.Message;
+                    board.ApplyError(account.Root, ex.Message);
                     try { await Task.Delay(Backoff.Cap, ct).ConfigureAwait(false); } catch { break; }
                     continue;
                 }
 
                 state = step.Next;
-
-                if (step.Snapshot is { } published) _snapshot = published;
-                lock (Gate) _state = step.Status;
+                _snapshot = board.Apply(account.Root, step, skipped, account.Source.Stamp, DateTime.UtcNow);
 
                 try { await Task.Delay(step.Wait, ct).ConfigureAwait(false); } catch { break; }
             }
         }
 
-        // Excluded from coverage: starts the poll loop that talks to the real
+        // Excluded from coverage: starts the poll loops that talk to the real
         // endpoint, and on macOS is the path that can raise a Keychain prompt.
-        // Everything it decides lives in ClaudeCloudRoster and StepAsync, both of
-        // which are pure or driven by fakes and covered.
         [ExcludeFromCodeCoverage]
         public static void Restart()
         {
@@ -447,6 +494,7 @@ namespace ClaudeBuddy
             {
                 _cts?.Cancel();
                 _cts = null;
+                _board = null;
                 _snapshot = Array.Empty<Session>();
 
                 if (!ClaudeBuddySettings.ClaudeCloudEnabled)
@@ -461,11 +509,18 @@ namespace ClaudeBuddy
                 _cts = cts;
 
                 var api = new HttpCloudApi();
-                var credentials = ClaudeCliCredentials.SourceFor(
-                    OperatingSystem.IsMacOS(),
-                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+                var accounts = CloudAccounts.Rebuild();
+                var board = new CloudAccountBoard(accounts);
+                _board = board;
+                var readGate = new SemaphoreSlim(1, 1);
 
-                _ = Task.Run(() => RunAsync(api, credentials, cts.Token), cts.Token);
+                for (var i = 0; i < accounts.Count; i++)
+                {
+                    var account = accounts[i];
+                    var stagger = TimeSpan.FromSeconds(3 * i);
+                    _ = Task.Run(() => RunAccountAsync(api, board, account, readGate, stagger, cts.Token),
+                        cts.Token);
+                }
             }
         }
     }

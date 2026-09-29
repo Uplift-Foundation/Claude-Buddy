@@ -73,7 +73,8 @@ public class CloudScanTests
         int? contextPercent = null,
         bool needsAction = false,
         string? statusDetail = null,
-        string? recentAction = null) =>
+        string? recentAction = null,
+        string? owner = null) =>
         new(
             Id: id,
             Title: "Refactor the parser",
@@ -85,7 +86,8 @@ public class CloudScanTests
             Model: "claude-opus-5",
             ContextPercent: contextPercent,
             StatusDetail: statusDetail,
-            RecentAction: recentAction);
+            RecentAction: recentAction,
+            OwnerRoot: owner);
 
     private static void Publish(params ClaudeCloudSessions.Session[] sessions)
     {
@@ -764,6 +766,63 @@ public class CloudScanTests
             ClaudeCloudSessions.SetSnapshotForTests(Array.Empty<ClaudeCloudSessions.Session>());
 
             Assert.Same(first, manager.RemoteChatFor("cloud:session_01abc"));
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
+    // Two accounts' sessions arrive already merged and deduplicated, so the scan
+    // draws one orb per id and the "cloud:" keys are exactly what one account
+    // would have produced: nothing about ownership reaches the orb layer.
+    [AvaloniaFact]
+    public void SessionsFromTwoAccountsAreOneOrbEachWithUnchangedKeys()
+    {
+        using var scratch = new Scratch();
+        try
+        {
+            Publish(Session("session_01abc", owner: "/Users/x/.claude"),
+                Session("session_02def", owner: "/Users/x/.claude-board"));
+
+            var manager = Manager(scratch.Dir);
+            manager.ScanAndUpdate();
+
+            var orbs = Orbs(manager);
+            Assert.Equal(new[] { "cloud:session_01abc", "cloud:session_02def" }, orbs.Keys.OrderBy(k => k));
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
+    // The panel is built with the *owner's* credential: the manager asks for the
+    // login by the row's OwnerRoot, and asks again on reopen so a session whose
+    // ownership moved is not read with the old owner's login.
+    [AvaloniaFact]
+    public void TheChatPanelIsBuiltAndReopenedWithTheOwnersLogin()
+    {
+        using var scratch = new Scratch();
+        try
+        {
+            Publish(Session("session_02def", owner: "/Users/x/.claude-board"));
+            var asked = new System.Collections.Generic.List<string?>();
+
+            var manager = Manager(scratch.Dir);
+            manager.UseCloudChatDependenciesForTests(new SilentApi(), root =>
+            {
+                asked.Add(root);
+                return new NoCredentials();
+            });
+            manager.ScanAndUpdate();
+
+            manager.RemoteChatFor("cloud:session_02def");
+            Publish(Session("session_02def", owner: "/Users/x/.claude"));
+            manager.ScanAndUpdate();
+            manager.RemoteChatFor("cloud:session_02def");
+
+            Assert.Equal(new string?[] { "/Users/x/.claude-board", "/Users/x/.claude" }, asked);
         }
         finally
         {

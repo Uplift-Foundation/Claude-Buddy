@@ -509,6 +509,58 @@ namespace ClaudeBuddy
             return Order(merged);
         }
 
+        // --- several accounts, one list ----------------------------------------
+
+        // Fold each account's sessions into one list, one entry per session id.
+        //
+        // `accounts` is in root order and every session in it already carries its
+        // OwnerRoot. When two or more accounts see the same id:
+        //   * the owner is whichever account owned it in `previous`, provided it
+        //     still sees it — ownership is stable, so a send does not silently
+        //     change login between two polls;
+        //   * otherwise the first account in root order;
+        //   * the row data (title, state, activity) comes from the copy with the
+        //     newest LastActivity, whoever owns it.
+        internal static IReadOnlyList<ClaudeCloudSessions.Session> MergeAccounts(
+            IReadOnlyList<IReadOnlyList<ClaudeCloudSessions.Session>> accounts,
+            IReadOnlyList<ClaudeCloudSessions.Session> previous)
+        {
+            var owners = previous.ToDictionary(s => s.Id, s => s.OwnerRoot, StringComparer.Ordinal);
+            var byId = new Dictionary<string, List<ClaudeCloudSessions.Session>>(StringComparer.Ordinal);
+            var order = new List<string>();
+
+            foreach (var account in accounts)
+            {
+                foreach (var session in account)
+                {
+                    if (!byId.TryGetValue(session.Id, out var copies))
+                    {
+                        byId[session.Id] = copies = new List<ClaudeCloudSessions.Session>();
+                        order.Add(session.Id);
+                    }
+
+                    copies.Add(session);
+                }
+            }
+
+            var merged = new List<ClaudeCloudSessions.Session>();
+            foreach (var id in order)
+            {
+                var copies = byId[id];
+                var owner = copies[0].OwnerRoot;
+                if (owners.TryGetValue(id, out var prior)
+                    && copies.Any(c => string.Equals(c.OwnerRoot, prior, StringComparison.Ordinal)))
+                {
+                    owner = prior;
+                }
+
+                var newest = copies.OrderByDescending(c => c.LastActivity).First();
+                merged.Add(newest with { OwnerRoot = owner });
+            }
+
+            return Order(merged);
+        }
+
         // --- what to say ------------------------------------------------------
 
         // The status line, and the one place the "no cloud sessions" wording is
@@ -561,6 +613,22 @@ namespace ClaudeBuddy
             }
 
             return string.Join("; ", parts.Where(p => !string.IsNullOrWhiteSpace(p)));
+        }
+
+        // The settings line for every account together.
+        //
+        // One account reads exactly as it always did, so a single-account machine
+        // sees no change. Several get a header and one line each, by folder label
+        // — never by email, which Describe has no way to reach.
+        internal static string DescribeAccounts(
+            IReadOnlyList<(string Label, string Status)> accounts, int sessionCount)
+        {
+            if (accounts.Count == 1) return accounts[0].Status;
+
+            var header = $"{accounts.Count} accounts, "
+                         + (sessionCount == 1 ? "1 cloud session" : $"{sessionCount} cloud sessions");
+
+            return string.Join("\n", new[] { header }.Concat(accounts.Select(a => $"{a.Label}: {a.Status}")));
         }
     }
 }
