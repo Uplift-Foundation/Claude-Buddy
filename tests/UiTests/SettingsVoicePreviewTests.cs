@@ -197,7 +197,7 @@ public class SettingsVoicePreviewTests : IDisposable
         var window = NewWindow();
 
         Assert.Contains(window.GetLogicalDescendants().OfType<TextBlock>(),
-            t => t.Text is not null && t.Text.Contains("hear the voice first", StringComparison.Ordinal));
+            t => t.Text is not null && t.Text.Contains("persona sets its own voice", StringComparison.Ordinal));
     }
 
     // ---- clicking -------------------------------------------------------------
@@ -289,7 +289,9 @@ public class SettingsVoicePreviewTests : IDisposable
         Click(button);
         await Settle();
 
-        Assert.True(_spoken.Count <= 2);   // start, stop, start, stop: never a pile-up
+        // start, stop, start, stop: whatever ran, the last click stopped it.
+        Assert.True(_spoken.Count <= 2);
+        Assert.True(_cancelsOnUiThread.Count <= _spoken.Count);
         AssertLooksIdle(button);
     }
 

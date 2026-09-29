@@ -2303,7 +2303,8 @@ namespace ClaudeBuddy
                 + "assistant turn aloud. Marked (system) for the ones Windows or macOS "
                 + "provides, (Kokoro) for the high-quality engine above, and (custom) for "
                 + "anything your own speakCommand lists. Press the play button beside it "
-                + "to hear the voice first."));
+                + "to hear the voice first. It previews this global voice; an orb whose "
+                + "persona sets its own voice speaks that one instead."));
 
             rows.Add(Row("Speaks", SpeakScopePicker(),
                 "What the speaker reads. The full response is everything the assistant "

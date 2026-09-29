@@ -363,6 +363,33 @@ public class VoicePreviewTests : IDisposable
         Assert.Equal(before, Volatile.Read(ref _changed));
     }
 
+    // End() must only retire the request that asked for it: a worker that finds
+    // nothing to speak with, after a newer Toggle has replaced its request, must
+    // leave the newer preview alone.
+    [Fact]
+    public async Task ASupersededWorkerThatResolvesNoVoiceDoesNotRetireTheNewerRequest()
+    {
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        VoicePreview.ResolveSavedForTests = () =>
+        {
+            entered.Set();
+            release.Wait(TimeSpan.FromSeconds(10));
+            return null;
+        };
+
+        _ = VoicePreview.Toggle(null);            // A: held inside resolve
+        Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
+        _ = VoicePreview.StopIfLive();
+        var b = VoicePreview.Toggle(Kokoro);      // B: newer request, queued
+
+        release.Set();
+        await b;
+
+        Assert.Same(Kokoro, Assert.Single(_spoken).Voice);
+        Assert.Equal(Speak.Speaking, VoicePreview.Look);
+    }
+
     [Fact]
     public async Task ResetForTestsClearsAPreviewInFlight()
     {

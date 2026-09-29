@@ -540,7 +540,8 @@ closing the window stops it too, and starting a read-aloud from an orb replaces
 it, since only one voice ever speaks at a time. With a custom command, the
 preview runs your command exactly as a read-aloud would (the voice in
 `CLAUDEBUDDY_VOICE`, the sentence on stdin); if it fails the button just goes
-back to idle, and no system voice is substituted.
+back to idle, and no system voice is substituted. The preview uses this global
+voice: an orb whose persona sets its own voice speaks that one instead.
 
 The whole contract:
 
