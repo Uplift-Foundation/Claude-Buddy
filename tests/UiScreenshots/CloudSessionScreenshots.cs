@@ -66,14 +66,20 @@ public class CloudSessionScreenshots : IDisposable
         ScreenshotHelper.Capture(orb, "orb-window-cloud-session-no-ring.png");
     }
 
-    // The chat panel for a cloud session: a transcript with no box under it, and
-    // a sentence where the box was.
+    // The chat panel for a cloud session that cannot be written to: a transcript
+    // with no box under it, and a sentence where the box was.
     //
-    // This is the capture that matters most of the four, because what it shows
-    // is a *judgement* rather than a mechanism — whether one line of grey text
-    // is enough for somebody who clicked an orb expecting to be able to reply,
-    // and whether the panel reads as deliberate rather than as one that failed
-    // to finish drawing. No test can answer that; the picture can.
+    // CB-199 changed what this state means. It used to be every cloud session,
+    // because nobody had found a write path; now a live cloud session is sent to
+    // through /v1/code (see chat-panel-cloud-sendable.png below), and this is the
+    // generic read-only case — the sentence and link a session shows once it
+    // may not be written to. chat-panel-cloud-ended.png is the same state with
+    // the reason a user will most often actually see.
+    //
+    // What it shows is still a *judgement* rather than a mechanism — whether one
+    // line of grey text is enough for somebody who clicked an orb expecting to be
+    // able to reply, and whether the panel reads as deliberate rather than as one
+    // that failed to finish drawing. No test can answer that; the picture can.
     [AvaloniaFact]
     public void ACloudSessionsPanelShowsItsTranscriptAndNoComposer()
     {
@@ -104,6 +110,82 @@ public class CloudSessionScreenshots : IDisposable
         ScreenshotHelper.CaptureAlreadyShown(
             ChatPanelTestAccess.Instance!, "chat-panel-cloud-read-only.png");
     }
+
+    // CB-199: a live cloud session mid-reply. The ordinary composer, and Stop
+    // beside Send because a turn is running (CanInterrupt). The two things a
+    // reviewer comparing rids is looking for are that the box is there at all
+    // and that the new button sits in the row with its neighbours rather than
+    // below or on top of them.
+    [AvaloniaFact]
+    public void ASendableCloudSessionShowsTheComposerAndStop()
+    {
+        var id = "screenshot-cloud-sendable-" + Guid.NewGuid();
+        _panelsToClean.Add(id);
+
+        var fake = new FakeChatSession(CloudTranscript())
+        {
+            SessionId = id,
+            DisplayName = "Refactor the parser",
+            IsReadOnly = false,
+            CanInterrupt = true,
+            MachineName = "Anthropic's cloud",
+        };
+
+        ChatPanel.OpenFor(new OrbWindow(Guid.NewGuid().ToString()), fake);
+        ScreenshotHelper.Flush();
+
+        var panel = ChatPanelTestAccess.Instance!;
+
+        // Asserted before the capture so a picture of the wrong state fails
+        // rather than being reviewed as the right one.
+        Assert.True(panel.FindControl<Grid>("ComposerRow")!.IsVisible);
+        Assert.True(panel.FindControl<Grid>("StopButton")!.IsVisible);
+
+        ScreenshotHelper.CaptureAlreadyShown(panel, "chat-panel-cloud-sendable.png");
+    }
+
+    // ...and one that has ended: the box has gone, and the sentence in its place
+    // says why and links to the session. The reason text is this capture's own
+    // (the fake's), standing in for what the real session writes, so the
+    // picture is about the layout of a long reason beside the link rather than
+    // about the exact words.
+    [AvaloniaFact]
+    public void AnEndedCloudSessionShowsWhyInPlaceOfTheComposer()
+    {
+        var id = "screenshot-cloud-ended-" + Guid.NewGuid();
+        _panelsToClean.Add(id);
+
+        var fake = new FakeChatSession(CloudTranscript())
+        {
+            SessionId = id,
+            DisplayName = "Refactor the parser",
+            IsReadOnly = true,
+            ComposerHint = "This session has ended, so it can\u2019t be replied to.",
+            ReplyUrl = "https://claude.ai/code/session_01abc",
+            MachineName = "Anthropic's cloud",
+        };
+
+        ChatPanel.OpenFor(new OrbWindow(Guid.NewGuid().ToString()), fake);
+        ScreenshotHelper.Flush();
+
+        var panel = ChatPanelTestAccess.Instance!;
+
+        Assert.True(panel.FindControl<Control>("ReadOnlyBox")!.IsVisible);
+        Assert.False(panel.FindControl<Grid>("ComposerRow")!.IsVisible);
+
+        ScreenshotHelper.CaptureAlreadyShown(panel, "chat-panel-cloud-ended.png");
+    }
+
+    private static ChatTurn[] CloudTranscript() => new[]
+    {
+        new ChatTurn { Role = ChatRole.User, Text = "refactor the transcript parser" },
+        new ChatTurn
+        {
+            Role = ChatRole.Assistant,
+            Text = "Pulled the envelope handling out into its own type and left the row "
+                   + "mapping alone — the second half was already covered.",
+        },
+    };
 
     // The settings group, switched off: one row and the help text that names the
     // Keychain prompt. That sentence is the whole of the feature's first-run
