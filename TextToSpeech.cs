@@ -209,6 +209,15 @@ namespace ClaudeBuddy
             }
         }
 
+        // Seeds the option cache AllVoiceOptions() returns from, so a UI test can
+        // open the real settings dropdown — and drive its real FillVoiceList —
+        // without the scan that would run `say -v ?` or SAPI. InvalidateVoiceCache
+        // is the way back.
+        internal static void SetVoiceOptionsForTests(List<VoiceOption> options)
+        {
+            lock (Gate) _cachedOptions = options;
+        }
+
         // Which of the three ways of speaking a voice belongs to.
         //
         // These used to be decided by precedence — a configured command beat the

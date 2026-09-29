@@ -123,6 +123,13 @@ namespace ClaudeBuddy
             // nothing here holds uncommitted state — each control writes its
             // setting as it changes.
             ActualThemeVariantChanged += (_, _) => Rebuild();
+
+            // A voice preview belongs to this window: closing it stops the preview
+            // (and only a preview — VoicePreview leaves a read-aloud it did not
+            // start alone). Subscribed here rather than in Toggle()'s Closed
+            // handler, which is excluded from coverage and which tests never
+            // reach, since they construct the window directly.
+            Closed += (_, _) => VoicePreview.StopIfLive();
         }
 
         // Split out from the KeyDown handler above so the decision is testable
@@ -2295,7 +2302,8 @@ namespace ClaudeBuddy
                 "Which voice the speaker button on the orb flyout uses to read the latest "
                 + "assistant turn aloud. Marked (system) for the ones Windows or macOS "
                 + "provides, (Kokoro) for the high-quality engine above, and (custom) for "
-                + "anything your own speakCommand lists."));
+                + "anything your own speakCommand lists. Press the play button beside it "
+                + "to hear the voice first."));
 
             rows.Add(Row("Speaks", SpeakScopePicker(),
                 "What the speaker reads. The full response is everything the assistant "
@@ -2363,10 +2371,116 @@ namespace ClaudeBuddy
 
             List<TextToSpeech.VoiceOption>? options = null;
 
-            combo.DropDownOpened += (_, _) => options = FillVoiceList(combo, options);
-            combo.SelectionChanged += (_, _) => ChooseVoice(combo, options);
+            // FillVoiceList replaces the placeholder and sets the selection, which
+            // raises SelectionChanged for what is the scan arriving and not a
+            // choice. Only a choice should stop a live preview (a preview of the
+            // voice that was showing is no longer a preview of the one that is),
+            // so the scan is fenced off.
+            var filling = false;
 
-            return combo;
+            combo.DropDownOpened += (_, _) =>
+            {
+                filling = true;
+                try { options = FillVoiceList(combo, options); }
+                finally { filling = false; }
+            };
+            combo.SelectionChanged += (_, _) =>
+            {
+                if (!filling) VoicePreview.StopIfLive();
+                ChooseVoice(combo, options);
+            };
+
+            // The button previews whatever the picker shows; null while it still
+            // shows the unscanned placeholder, which VoicePreview resolves off the
+            // UI thread the way a real read-aloud would.
+            return new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Spacing = 6,
+                Children =
+                {
+                    combo,
+                    VoicePreviewButton(
+                        () => VoicePreview.PreviewTarget(options, combo.SelectedIndex), combo)
+                }
+            };
+        }
+
+        // What the preview button shows for each state: its tooltip, and the fill
+        // the flyout's own speaker button uses for the same state (amber while the
+        // engine is working towards its first sound, blue while audio plays), or
+        // null for the theme's ordinary button. The same colours on purpose, so
+        // "preparing" and "playing" mean the same thing wherever they appear.
+        internal static (string Tip, IBrush? Fill) VoicePreviewLook(TextToSpeech.SpeakState state) =>
+            state switch
+            {
+                TextToSpeech.SpeakState.Speaking => ("Stop", OrbFlyout.SpeakActiveFill),
+                TextToSpeech.SpeakState.Preparing => ("Preparing…", OrbFlyout.SpeakPreparingFill),
+                _ => ("Preview voice", null)
+            };
+
+        // Drawn geometry, not "▶"/"⏹"/"⏳" — CB-173, see PlayGlyph. White on the
+        // coloured states, since the amber and blue are the same on both themes.
+        private static Control FilledGlyph(string data, double width, double height) =>
+            new Shapes.Path
+            {
+                Data = Geometry.Parse(data),
+                Fill = Brushes.White,
+                Width = width,
+                Height = height,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+
+        // internal: a test drives it directly, like PreviewButton. Lives as long as
+        // its row, which Rebuild() replaces wholesale, so it listens to
+        // VoicePreview only while attached: a subscription made at construction
+        // would leak one handler per rebuild and keep every dead button alive.
+        internal Button VoicePreviewButton(
+            Func<TextToSpeech.VoiceOption?> target, ComboBox picker)
+        {
+            var button = new Button
+            {
+                Padding = new Thickness(9, 5),
+                VerticalAlignment = VerticalAlignment.Center,
+                IsEnabled = picker.IsEnabled
+            };
+
+            void Apply()
+            {
+                var state = VoicePreview.Look;
+                var (tip, fill) = VoicePreviewLook(state);
+
+                button.Content = state switch
+                {
+                    TextToSpeech.SpeakState.Speaking => FilledGlyph("M 0,0 L 7,0 L 7,7 L 0,7 Z", 7, 7),
+                    TextToSpeech.SpeakState.Preparing => FilledGlyph("M 0,0 L 8,0 L 4,4.5 Z M 4,4.5 L 8,9 L 0,9 Z", 8, 9),
+                    _ => PlayGlyph()
+                };
+
+                if (fill is null) button.ClearValue(BackgroundProperty);
+                else button.Background = fill;
+
+                ToolTip.SetTip(button, tip);
+            }
+
+            Apply();
+
+            button.AttachedToVisualTree += (_, _) =>
+            {
+                VoicePreview.Changed += Apply;
+                Apply();   // it may have moved while this button did not exist
+            };
+            button.DetachedFromVisualTree += (_, _) => VoicePreview.Changed -= Apply;
+
+            // FillVoiceList disables the picker when there are no voices, and a
+            // preview button beside a dead picker would have nothing to say.
+            picker.PropertyChanged += (_, e) =>
+            {
+                if (e.Property == IsEnabledProperty) button.IsEnabled = picker.IsEnabled;
+            };
+
+            button.Click += (_, _) => _ = VoicePreview.Toggle(target());
+            return button;
         }
 
         // Two named modes rather than a switch, because "off" is not what Full

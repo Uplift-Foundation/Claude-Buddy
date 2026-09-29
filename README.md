@@ -530,6 +530,18 @@ marked `(custom)` — the system voices are marked `(system)` and the neural one
 `(Kokoro)`. Picking a voice is what selects the engine, so all three are
 available at once rather than one hiding the others.
 
+The play button beside the picker lets you hear a voice before choosing it. It
+speaks one fixed sentence in the voice the picker is showing, on that voice's
+own engine — and if you haven't opened the list yet, in the voice a real
+read-aloud would use. A Kokoro voice takes a few seconds to start, so the button
+turns amber with an hourglass until audio begins, then blue with a stop square;
+pressing it in either state stops the preview. Choosing a different voice or
+closing the window stops it too, and starting a read-aloud from an orb replaces
+it, since only one voice ever speaks at a time. With a custom command, the
+preview runs your command exactly as a read-aloud would (the voice in
+`CLAUDEBUDDY_VOICE`, the sentence on stdin); if it fails the button just goes
+back to idle, and no system voice is substituted.
+
 The whole contract:
 
 - The text arrives on **stdin as UTF-8**. Not as an argument — an assistant turn

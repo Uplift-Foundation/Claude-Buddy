@@ -26,13 +26,13 @@ namespace ClaudeBuddy
         private static readonly IBrush ArrangeActiveFill = new SolidColorBrush(Color.Parse("#E0B8860B"));
 
         private static readonly IBrush SpeakNormalFill = new SolidColorBrush(Color.Parse("#E0202024"));
-        private static readonly IBrush SpeakActiveFill = new SolidColorBrush(Color.Parse("#E04A90D9"));
+        internal static readonly IBrush SpeakActiveFill = new SolidColorBrush(Color.Parse("#E04A90D9"));
 
         // Amber rather than the speaking blue, so "working on it" and "playing"
         // are told apart at a glance and not only by the glyph. The neural engine
         // takes a few seconds to reach its first sound (see NeuralSpeech), and a
         // stop button sitting over silence reads as a hang.
-        private static readonly IBrush SpeakPreparingFill = new SolidColorBrush(Color.Parse("#E0B8860B"));
+        internal static readonly IBrush SpeakPreparingFill = new SolidColorBrush(Color.Parse("#E0B8860B"));
 
         public event Action? MicClicked;
         public event Action? ArrangeClicked;
