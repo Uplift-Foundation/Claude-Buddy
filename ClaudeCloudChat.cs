@@ -242,6 +242,71 @@ namespace ClaudeBuddy
                 : null;
     }
 
+    // The pure half of reading the stream: a durable event's payload as the
+    // transcript rows the history already uses, and the newest sequence number
+    // off a newest-first event list.
+    internal static class CloudStreamRows
+    {
+        // The row is the event's `payload` object when there is one, otherwise
+        // the event itself — the contract names a payload, and nobody has seen
+        // the wrapper with their own eyes. Re-serialised compactly for the reason
+        // ClaudeCloudEvents.ParsePage gives: ChatTranscript's row test is a
+        // substring test and cares about whitespace.
+        internal static IReadOnlyList<ChatTranscript.Row> RowsFrom(string? json)
+        {
+            if (string.IsNullOrWhiteSpace(json)) return Array.Empty<ChatTranscript.Row>();
+
+            try
+            {
+                using var doc = JsonDocument.Parse(json);
+                var root = doc.RootElement;
+                if (root.ValueKind != JsonValueKind.Object) return Array.Empty<ChatTranscript.Row>();
+
+                var row = root.TryGetProperty("payload", out var payload) && payload.ValueKind == JsonValueKind.Object
+                    ? payload
+                    : root;
+
+                return ChatTranscript.Map(new[] { JsonSerializer.Serialize(row) });
+            }
+            catch (JsonException)
+            {
+                return Array.Empty<ChatTranscript.Row>();
+            }
+        }
+
+        // `data[0].sequence_num`, a string in every measured response and read
+        // as a number too for the reason ClaudeCloudSend gives for the receipt.
+        internal static long? NewestSequenceFrom(string? body)
+        {
+            if (string.IsNullOrWhiteSpace(body)) return null;
+
+            try
+            {
+                using var doc = JsonDocument.Parse(body);
+                if (doc.RootElement.ValueKind != JsonValueKind.Object
+                    || !doc.RootElement.TryGetProperty("data", out var data)
+                    || data.ValueKind != JsonValueKind.Array
+                    || data.GetArrayLength() == 0
+                    || data[0].ValueKind != JsonValueKind.Object
+                    || !data[0].TryGetProperty("sequence_num", out var seq))
+                {
+                    return null;
+                }
+
+                return seq.ValueKind switch
+                {
+                    JsonValueKind.String when long.TryParse(seq.GetString(), out var n) => n,
+                    JsonValueKind.Number when seq.TryGetInt64(out var n) => n,
+                    _ => null,
+                };
+            }
+            catch (JsonException)
+            {
+                return null;
+            }
+        }
+    }
+
     // A cloud session, as the chat panel sees it.
     //
     // Polled rather than streamed, and able to send. There is no live stream to
@@ -324,6 +389,16 @@ namespace ClaudeBuddy
         private bool _liveSaidIdle;
 
         private Task<LoadResult>? _inFlight;
+
+        // The stream (CB-199): the live assistant bubble a text_delta is growing,
+        // and the last durable sequence number seen, which is where a reconnect
+        // resumes. Both are touched only inside _post, on the UI thread, except
+        // the sequence number, which the stream task alone writes.
+        private ChatTurn? _liveTurn;
+        private long? _lastSeq;
+        private bool _streamFellBack;
+        private bool _streamNotedRateLimit;
+        private CancellationTokenSource? _streamCts;
         private CancellationTokenSource? _live;
 
         // How long a credential read is given before this panel gives up on it.
@@ -344,6 +419,23 @@ namespace ClaudeBuddy
         // flipped must not be a way round it. A seam so a test does not depend on
         // the settings file of the machine running it.
         internal Func<bool> Enabled { get; init; } = () => ClaudeBuddySettings.ClaudeCloudEnabled;
+
+        // The live event stream, primary whenever there is one. Null means none —
+        // the polling loop is then the only live source, which is also what this
+        // session falls back to when the stream cannot be kept open.
+        internal ICloudEventStream? Stream { get; init; }
+
+        // What to wait before reopening the stream after it ended, or null to
+        // stop streaming and fall back. The ended outcome and the previous wait
+        // in, the next wait out.
+        internal Func<CloudOutcome, TimeSpan?, TimeSpan?> StreamBackoff { get; init; } = StreamWaitAfter;
+
+        // How many opens in a row may fail — end without delivering anything —
+        // before the panel stops trying and polls instead. **Not measured**:
+        // three is "a blip, a retry, and a pattern". A stream that delivered
+        // events before it ended resets the count, since that is a server closing
+        // an idle connection rather than one refusing to open.
+        internal const int UnmeasuredStreamFailuresBeforeFallback = 3;
 
         // The seam that keeps this class testable without an Avalonia app.
         //
@@ -419,6 +511,13 @@ namespace ClaudeBuddy
         // updates the row. One owner at a time is what keeps a thirty-second-old
         // roster answer from arguing with a two-second-old live one.
         private bool LiveRunning => LiveTask is { IsCompleted: false };
+
+        internal Task? StreamTask { get; private set; }
+
+        private bool StreamRunning => StreamTask is { IsCompleted: false };
+
+        // Whoever is watching live owns busy; the roster only updates the row.
+        private bool LiveOwnsBusy => LiveRunning || StreamRunning;
 
         // The transcript read in flight, if any — so a test can see that the end
         // of a turn started one, or that it did not.
@@ -560,7 +659,9 @@ namespace ClaudeBuddy
                 Announce(before);
             });
 
-            StartLive();
+            // The stream, when it is up, reports this turn's start and end
+            // itself; polling is for when it is not.
+            if (!StreamRunning) StartLive();
             return ChatSendOutcome.Sent;
         }
 
@@ -651,7 +752,7 @@ namespace ClaudeBuddy
             // right, and if a loop is not already watching, that is this one.
             if (failure is null)
             {
-                EnsureLive();
+                if (!StreamRunning) EnsureLive();
                 return;
             }
 
@@ -686,7 +787,7 @@ namespace ClaudeBuddy
             // except that a roster still saying "working" after the live read saw
             // idle is the older of two observations, and waits until the roster
             // itself catches up.
-            if (!LiveRunning)
+            if (!LiveOwnsBusy)
             {
                 if (!rosterBusy) _liveSaidIdle = false;
                 _busy = rosterBusy && !_liveSaidIdle;
@@ -704,7 +805,7 @@ namespace ClaudeBuddy
             // read. Or one has just started somewhere else — claude.ai, another
             // machine — and a panel someone is looking at should watch it live.
             if (wasBusy && !_busy) _ = RefreshAsync();
-            else if (!wasBusy && _busy) EnsureLive();
+            else if (!wasBusy && _busy && !StreamRunning) EnsureLive();
         }
 
         // The panel's lifetime, called by ChatPanel from Bind and Unbind.
@@ -717,7 +818,13 @@ namespace ClaudeBuddy
         internal void PanelOpened()
         {
             _panelOpen = true;
-            if (_busy && !IsReadOnly) EnsureLive();
+
+            // A new panel gets a fresh go at the stream, whatever the last one
+            // concluded about it.
+            _streamFellBack = false;
+            StartStream();
+
+            if (_busy && !IsReadOnly && !StreamRunning) EnsureLive();
         }
 
         // Whether a panel is bound right now. Read by the panel's own tests,
@@ -730,6 +837,7 @@ namespace ClaudeBuddy
         {
             _panelOpen = false;
             _live?.Cancel();
+            _streamCts?.Cancel();
         }
 
         // Every change to what the panel offers is bracketed by these two: read
@@ -745,6 +853,265 @@ namespace ClaudeBuddy
         }
 
         // --- reading ---------------------------------------------------------
+
+        // --- the stream --------------------------------------------------------
+
+        // One stream per open panel. Opened from the newest durable event, so the
+        // server sends only what happens from here — measured: without a
+        // sequence number it replays the whole history first.
+        private void StartStream()
+        {
+            if (Stream is not { } stream || _streamFellBack || StreamRunning || IsReadOnly) return;
+
+            var cts = new CancellationTokenSource();
+            Interlocked.Exchange(ref _streamCts, cts)?.Cancel();
+            _lastSeq = null;
+            _streamNotedRateLimit = false;
+            StreamTask = StreamAsync(stream, cts.Token);
+        }
+
+        private async Task StreamAsync(ICloudEventStream stream, CancellationToken ct)
+        {
+            TimeSpan? wait = null;
+            var failures = 0;
+
+            while (true)
+            {
+                var read = await ClaudeCliCredentials
+                    .ReadWithinAsync(_credentials, ReadBudget, CancellationToken.None).ConfigureAwait(false);
+
+                // No login means no stream and no poll either; the next send
+                // says why in words.
+                if (read.Outcome != CredentialOutcome.Found || read.AccessToken is not { } token) return;
+
+                // Where to start. Not knowing is a reason to poll, never a reason
+                // to open without one and take the whole history again.
+                _lastSeq ??= await NewestSequenceAsync(token).ConfigureAwait(false);
+                if (_lastSeq is null)
+                {
+                    FallBack();
+                    return;
+                }
+
+                CloudOutcome? ended = null;
+                var delivered = false;
+
+                try
+                {
+                    await foreach (var e in stream.OpenAsync(token, SessionId, _lastSeq, ct)
+                                       .WithCancellation(ct).ConfigureAwait(false))
+                    {
+                        if (e.Kind == CloudStreamEventKind.Ended)
+                        {
+                            ended = e.Outcome;
+                            break;
+                        }
+
+                        delivered = true;
+                        Handle(e);
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+
+                if (ct.IsCancellationRequested) return;
+
+                var outcome = ended
+                              ?? new CloudOutcome(CloudOutcomeKind.Unavailable, 0, null,
+                                  "the stream ended without saying why");
+
+                // The session ended or went: the same answer a send would get,
+                // and the box goes for the same reason.
+                if (CloudChatSendability.RefusalFor(outcome) is { } refusal)
+                {
+                    _post(() =>
+                    {
+                        var before = Affordances();
+                        _refusal ??= refusal;
+                        Announce(before);
+                    });
+                    return;
+                }
+
+                if (outcome.Kind is CloudOutcomeKind.TokenRefused or CloudOutcomeKind.AuthFailed) return;
+
+                if (outcome.Kind == CloudOutcomeKind.RateLimited && !_streamNotedRateLimit)
+                {
+                    _streamNotedRateLimit = true;
+                    Note(LivePausedNote);
+                }
+
+                // A stream that carried events and then ended is a server closing
+                // a connection, not one refusing it; the count and the wait start
+                // again.
+                if (delivered)
+                {
+                    failures = 0;
+                    wait = null;
+                }
+
+                failures++;
+                wait = failures < UnmeasuredStreamFailuresBeforeFallback ? StreamBackoff(outcome, wait) : null;
+                if (wait is not { } next)
+                {
+                    FallBack();
+                    return;
+                }
+
+                try
+                {
+                    await Delay(next, ct).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+
+                if (ct.IsCancellationRequested) return;
+            }
+        }
+
+        // Interim policy until the shared one lands: a clean end reconnects at
+        // the floor, and everything else follows Backoff — which stops on the
+        // refusals that will not change by waiting.
+        private static TimeSpan? StreamWaitAfter(CloudOutcome outcome, TimeSpan? previous) =>
+            outcome.Kind == CloudOutcomeKind.Ok ? Backoff.UnavailableFloor : Backoff.Next(outcome, previous);
+
+        // Stop streaming for this panel and let polling carry the turn.
+        private void FallBack()
+        {
+            _streamFellBack = true;
+            if (_busy && !IsReadOnly) EnsureLive();
+        }
+
+        // The newest durable sequence number, from the write host's event list
+        // read newest first. Null when it could not be read or said nothing.
+        private async Task<long?> NewestSequenceAsync(string token)
+        {
+            if (CloudRequest.CodeEventsPath(SessionId) is not { } path) return null;
+
+            var result = await _api.SendAsync(
+                new CloudRequestContext(token, path + NewestEventQuery), CancellationToken.None)
+                .ConfigureAwait(false);
+
+            return result.Outcome.Kind == CloudOutcomeKind.Ok ? CloudStreamRows.NewestSequenceFrom(result.Body) : null;
+        }
+
+        internal const string NewestEventQuery = "?limit=1&sort_order=desc";
+
+        // One event off the stream. Runs on the stream's thread; everything that
+        // touches what the panel shows goes through _post.
+        private void Handle(CloudStreamEvent e)
+        {
+            switch (e.Kind)
+            {
+                case CloudStreamEventKind.Durable:
+                    if (e.SequenceNum is { } seq) _lastSeq = seq;
+                    HandleDurable(e);
+                    break;
+
+                case CloudStreamEventKind.Ephemeral when e.TextDelta is { } delta:
+                    _post(() => AppendDelta(delta));
+                    break;
+            }
+        }
+
+        private void HandleDurable(CloudStreamEvent e)
+        {
+            switch (e.PayloadType)
+            {
+                // The turn has started — measured: `system init`, then a
+                // `status` of "requesting".
+                case "system" when e.Subtype == "init" || (e.Subtype == "status" && e.StatusValue == "requesting"):
+                    _post(() => SetBusy(true));
+                    break;
+
+                // The turn is over, whatever the subtype — success, or
+                // error_during_execution after an interrupt.
+                case "result":
+                    _post(EndTurn);
+                    break;
+
+                case "user" or "assistant":
+                    var rows = CloudStreamRows.RowsFrom(e.PayloadJson);
+                    _post(() => FoldDurable(rows));
+                    break;
+            }
+        }
+
+        private void SetBusy(bool busy)
+        {
+            var before = Affordances();
+            _busy = busy;
+            if (!busy) _interruptSent = false;
+            Announce(before);
+        }
+
+        private void EndTurn()
+        {
+            _liveSaidIdle = true;
+
+            // An interrupted reply has no durable message to replace it, so the
+            // bubble that was growing is simply finished where it stands.
+            if (_liveTurn is { } live)
+            {
+                _liveTurn = null;
+                if (!live.IsComplete)
+                {
+                    live.IsComplete = true;
+                    TurnUpdated?.Invoke(live);
+                }
+            }
+
+            SetBusy(false);
+        }
+
+        // Text as it is written: one in-progress bubble, added once and grown.
+        private void AppendDelta(string delta)
+        {
+            if (_liveTurn is { } live)
+            {
+                live.Text += delta;
+                TurnUpdated?.Invoke(live);
+            }
+            else
+            {
+                _liveTurn = new ChatTurn { Role = ChatRole.Assistant, Text = delta, IsComplete = false };
+                _history.Add(_liveTurn);
+                TurnAdded?.Invoke(_liveTurn);
+            }
+
+            if (!_busy) SetBusy(true);
+        }
+
+        // A durable row. The stored assistant message takes over the live bubble
+        // in place — same row on screen, now carrying the uuid a later history
+        // read will match — and everything else reconciles by uuid as a history
+        // read would, which is how the echo of our own message finds its bubble.
+        private void FoldDurable(IReadOnlyList<ChatTranscript.Row> rows)
+        {
+            var rest = new List<ChatTranscript.Row>();
+
+            foreach (var row in rows)
+            {
+                if (_liveTurn is { } live && row.Turn.Role == ChatRole.Assistant
+                    && (row.Uuid is null || !_byUuid.ContainsKey(row.Uuid)))
+                {
+                    _liveTurn = null;
+                    live.Text = row.Turn.Text;
+                    live.IsComplete = row.Turn.IsComplete;
+                    if (row.Uuid is { } uuid) _byUuid[uuid] = live;
+                    TurnUpdated?.Invoke(live);
+                    continue;
+                }
+
+                rest.Add(row);
+            }
+
+            Reconcile(rest);
+        }
 
         // Watch the turn: its state every status interval, its transcript every
         // transcript interval while it runs, one last read when it ends. A send

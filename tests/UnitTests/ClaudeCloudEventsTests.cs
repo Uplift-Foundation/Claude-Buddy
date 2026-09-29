@@ -20,7 +20,7 @@ namespace ClaudeBuddy.Tests;
 // **Every value in the fixture is invented.** The row shape is real — captured
 // field by field from a /events response — and the uuids, text and instants are
 // not.
-public class ClaudeCloudEventsTests
+public partial class ClaudeCloudEventsTests
 {
     private const string Token = "sk-ant-oat01-CANARY-ACCESS-abcdef0123456789";
 
@@ -494,13 +494,21 @@ public class ClaudeCloudEventsTests
         internal Func<CloudApiResult> Status { get; set; } = () => new CloudApiResult(
             CloudOutcomes.OutcomeFor(200, ""), "{\"status_bucket\":\"idle\"}");
 
+        // What the stream's newest-event read answers: sequence 41 by default.
+        internal Func<CloudApiResult> Newest { get; set; } = () => new CloudApiResult(
+            CloudOutcomes.OutcomeFor(200, ""), "{\"data\":[{\"sequence_num\":\"41\"}]}");
+
         internal List<CloudRequestContext> Requests { get; } = new();
 
         internal List<CloudRequestContext> Posts => Where(r => r.Method == HttpMethod.Post);
 
         // The transcript reads, on the /v2 events path.
         internal List<CloudRequestContext> Transcripts =>
-            Where(r => r.Method is null && r.Path.Contains("/events?", StringComparison.Ordinal));
+            Where(r => r.Method is null && r.Path.Contains("/events?", StringComparison.Ordinal)
+                                        && !r.Path.StartsWith(CloudRequest.CodeSessionsPath, StringComparison.Ordinal));
+
+        internal List<CloudRequestContext> NewestReads =>
+            Where(r => r.Path.EndsWith(ClaudeCloudChatSession.NewestEventQuery, StringComparison.Ordinal));
 
         // The live loop's reads of the session's own record.
         internal List<CloudRequestContext> Statuses =>
@@ -516,8 +524,9 @@ public class ClaudeCloudEventsTests
             lock (Requests) Requests.Add(context);
             var isStatus = context.Method is null
                            && context.Path.StartsWith(CloudRequest.CodeSessionsPath + "/", StringComparison.Ordinal)
-                           && !context.Path.EndsWith("/events", StringComparison.Ordinal);
-            return Task.FromResult(isStatus ? Status() : _answer(context));
+                           && !context.Path.Contains("/events", StringComparison.Ordinal);
+            var isNewest = context.Path.EndsWith(ClaudeCloudChatSession.NewestEventQuery, StringComparison.Ordinal);
+            return Task.FromResult(isStatus ? Status() : isNewest ? Newest() : _answer(context));
         }
     }
 
@@ -569,7 +578,7 @@ public class ClaudeCloudEventsTests
 
     private static ClaudeCloudChatSession Sender(ICloudApi api, FakeClock? clock = null,
         ICloudCredentialSource? creds = null, ClaudeCloudSessions.Session? session = null,
-        bool enabled = true)
+        bool enabled = true, ICloudEventStream? stream = null)
     {
         var tick = clock ?? new FakeClock();
         return new ClaudeCloudChatSession(session ?? Row(), api, creds ?? new CountingCredentials(),
@@ -577,6 +586,7 @@ public class ClaudeCloudEventsTests
         {
             Delay = tick.Delay,
             Enabled = () => enabled,
+            Stream = stream,
         };
     }
 
