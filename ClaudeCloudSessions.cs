@@ -297,12 +297,18 @@ namespace ClaudeBuddy
                 if (one.Outcome.Kind != CloudOutcomeKind.Ok)
                 {
                     // A 404 on one session is about that session and nothing
-                    // else. Backoff stops on SessionGone, and the check below
-                    // would halt the whole arm — every cloud orb gone until the
-                    // credential changed — because one session was deleted. So
-                    // it stays what a 404 was here before CB-199: no news, the
-                    // orb kept until the next deep walk drops it.
-                    if (one.Outcome.Kind == CloudOutcomeKind.SessionGone) continue;
+                    // else, and it is a definite answer: the session has been
+                    // deleted. So it is *resolved* — Merge drops its orb now,
+                    // rather than at the next deep walk up to five minutes on —
+                    // and the cycle carries on. It must not reach the check
+                    // below: Backoff stops on SessionGone, and that would halt
+                    // the whole arm, every cloud orb gone until the credential
+                    // changed, because one session was deleted.
+                    if (one.Outcome.Kind == CloudOutcomeKind.SessionGone)
+                    {
+                        resolved.Add(id);
+                        continue;
+                    }
 
                     // A refusal that would stop the arm stops it here too — there
                     // is no point walking the rest of the list to be refused eight
