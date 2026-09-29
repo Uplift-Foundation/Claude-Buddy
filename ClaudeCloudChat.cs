@@ -537,9 +537,10 @@ namespace ClaudeBuddy
         // Running *and not told to stop*. A closed panel cancels its run, but the
         // run is still unwinding — awaiting a read or a wait — for a moment after,
         // and a panel reopened in that moment must start a new one rather than
-        // be told one is already running.
+        // be told one is already running. StartStream sets the token source
+        // before the task, so a task means a source.
         private bool StreamRunning =>
-            StreamTask is { IsCompleted: false } && _streamCts is { IsCancellationRequested: false };
+            StreamTask is { IsCompleted: false } && !_streamCts!.IsCancellationRequested;
 
         // Up and trusted: running, and not fallen back. A stream the policy has
         // given up waiting on may still be retrying behind the polling loop, and

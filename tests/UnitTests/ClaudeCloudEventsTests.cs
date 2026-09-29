@@ -537,11 +537,16 @@ public partial class ClaudeCloudEventsTests
 
         internal int Reads { get; private set; }
 
+        // Runs inside the read, before it answers — how a test closes the panel
+        // while a read is in flight.
+        internal Action? OnRead { get; set; }
+
         public string? Stamp() => "stamp-1";
 
         public CredentialRead Read()
         {
             Reads++;
+            OnRead?.Invoke();
             return Reading;
         }
     }

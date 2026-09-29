@@ -857,6 +857,39 @@ public partial class ClaudeCloudEventsTests
         await Close(chat);
     }
 
+    // Closed while a read is in flight — the login, or the start point — the
+    // run notices when the read answers and opens nothing.
+    [Theory]
+    [InlineData("login")]
+    [InlineData("start")]
+    public async Task ClosedDuringAReadOpensNothing(string which)
+    {
+        var api = new RoutingApi(Answer(200, Receipt));
+        var stream = new FakeStream();
+        var creds = new CountingCredentials();
+        var chat = Sender(api, creds: creds, stream: stream);
+
+        if (which == "login")
+        {
+            creds.OnRead = () => chat.PanelClosed();
+        }
+        else
+        {
+            api.Newest = () =>
+            {
+                chat.PanelClosed();
+                return new CloudApiResult(CloudOutcomes.OutcomeFor(200, ""), "{\"data\":[{\"sequence_num\":\"41\"}]}");
+            };
+        }
+
+        chat.PanelOpened();
+        await chat.StreamTask!;
+
+        Assert.Equal(0, stream.OpenCount);
+        Assert.Empty(chat.History);
+        Assert.Equal(which == "login" ? 0 : 1, api.NewestReads.Count);
+    }
+
     // A second PanelOpened while one stream runs does not open a second.
     [Fact]
     public async Task OneStreamPerOpenPanel()
