@@ -2441,7 +2441,7 @@ namespace ClaudeBuddy
             // "custom" with no command behind it speaks with a system voice.
             var engine = TextToSpeech.EngineThatWillSpeak(
                 ClaudeBuddySettings.SpeakEngine, TextToSpeech.CustomCommandConfigured);
-            var note = AudioVolume.SpeechVolumeNote(engine, NeuralSpeech.SpeaksWithFallbackEngine,
+            var note = AudioVolume.SpeechVolumeNote(engine, NeuralSpeech.EngineIgnoresVolume,
                 SessionIdentity.OrbEngines(SessionIdentity.PersonaVoiceRequests(), TextToSpeech.CachedVoiceOptions));
 
             SpeechVolumeNote!.Text = note;

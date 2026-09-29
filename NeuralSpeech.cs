@@ -146,19 +146,49 @@ namespace ClaudeBuddy
         internal static string? UsableEnginePath =>
             File.Exists(EnginePath) ? EnginePath : NewestOtherEngine();
 
-        // "Kokoro speaks, but not with this build's engine." What the Speech
-        // volume row asks (CB-200), because an engine from before CB-200
-        // ignores the level and speaks at full volume.
+        // "Kokoro speaks, through an engine that cannot prove it honours the
+        // level." What the Speech volume row asks (CB-200).
+        //
+        // Asked of the engine's contract stamp, not of its path. This used to
+        // be UsableEnginePath != EnginePath, and that was wrong in exactly the
+        // case it was for: the directory is keyed by the app's version, so a
+        // rebuild that keeps the version finds an older engine at its own
+        // path. Measured on the MacBook with the branch build of 0.5.9-beta —
+        // the released 0.5.9-beta engine answered to EnginePath, the note
+        // never showed, and its afplay ran without -v while the app had set
+        // the variable. See SpeechEngineContract.ContractVersion.
         //
         // Available first, because when it is false nothing neural speaks at
         // all — a system voice does, and that honours the level. Once it is
-        // true UsableEnginePath is non-null, and it returns EnginePath itself
-        // (the same string, built the same way) exactly when this build's
-        // engine is on disk; any other answer is a sibling version directory,
-        // which is a different path by construction. Pinned both ways in
-        // NeuralSpeechLayoutTests.
-        internal static bool SpeaksWithFallbackEngine =>
-            Available && UsableEnginePath != EnginePath;
+        // true UsableEnginePath is non-null.
+        internal static bool EngineIgnoresVolume =>
+            Available && !HonoursVolume(ReadStamp(UsableEnginePath!));
+
+        // The stamp beside an engine executable, or null when there is none
+        // or it cannot be read — both of which mean "from before CB-200".
+        internal static string? ReadStamp(string enginePath)
+        {
+            try
+            {
+                var stamp = Path.Combine(Path.GetDirectoryName(enginePath)!, SpeechEngineContract.StampFileName);
+                return File.Exists(stamp) ? File.ReadAllText(stamp) : null;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return null;
+            }
+        }
+
+        // Whether a stamp's contents promise the volume variable: a whole
+        // number at least 1. Anything else — missing, empty, garbage, a
+        // future format this build cannot read — is an engine that has not
+        // proved it, and gets the note. Erring that way costs a sentence that
+        // might be unnecessary; the other way is a slider that silently does
+        // nothing, which is the one thing the ticket forbids.
+        internal static bool HonoursVolume(string? stamp) =>
+            int.TryParse(stamp?.Trim(), System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture, out var version)
+            && version >= 1;
 
         internal static string? NewestOtherEngine()
         {

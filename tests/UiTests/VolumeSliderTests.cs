@@ -324,6 +324,11 @@ public class VolumeSliderTests
         var modelExisted = File.Exists(NeuralSpeech.ModelPath);
         Directory.CreateDirectory(directory);
         File.WriteAllBytes(Path.Combine(directory, NeuralSpeech.EngineExeName), Array.Empty<byte>());
+        // This build's engine carries its contract stamp; an older one does not.
+        if (version == NeuralSpeech.EngineVersion)
+        {
+            File.WriteAllText(Path.Combine(directory, SpeechEngineContract.StampFileName), "1");
+        }
         if (!modelExisted) File.WriteAllBytes(NeuralSpeech.ModelPath, Array.Empty<byte>());
         try
         {

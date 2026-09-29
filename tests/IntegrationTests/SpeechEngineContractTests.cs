@@ -50,6 +50,29 @@ public class SpeechEngineContractTests
         Assert.Contains(@"tools\ClaudeBuddySpeech\SpeechEngineContract.cs", Read("ClaudeBuddy.csproj"));
     }
 
+    // The contract stamp (CB-200 second review): the engine's csproj writes
+    // StampFileName holding a number it reads out of SpeechEngineContract.cs
+    // with a regex. Pinned here from both ends — the csproj names the same
+    // file the app reads, and the csproj's regex, run over the real source,
+    // finds the same number the app compiled in. A renamed constant or a
+    // reworded declaration fails here rather than as an engine with an empty
+    // stamp that every app reads as "ignores the level".
+    [Fact]
+    public void TheEngineBuildStampsTheContractVersionTheAppExpects()
+    {
+        var csproj = Read("tools", "ClaudeBuddySpeech", "ClaudeBuddySpeech.csproj");
+        Assert.Contains("<SpeechEngineStampFile>" + SpeechEngineContract.StampFileName + "</SpeechEngineStampFile>", csproj);
+        Assert.Contains("AfterTargets=\"Build\"", csproj);
+        Assert.Contains("AfterTargets=\"Publish\"", csproj);
+
+        var pattern = System.Text.RegularExpressions.Regex.Match(csproj, @"'(ContractVersion = \(\\d\+\);)'").Groups[1].Value;
+        Assert.Equal(@"ContractVersion = (\d+);", pattern);
+
+        var source = Read("tools", "ClaudeBuddySpeech", "SpeechEngineContract.cs");
+        var stamped = System.Text.RegularExpressions.Regex.Match(source, pattern).Groups[1].Value;
+        Assert.Equal(SpeechEngineContract.ContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture), stamped);
+    }
+
     // And nowhere else in the app's own sources spells it out.
     [Fact]
     public void NoAppSourceCarriesItsOwnCopy()

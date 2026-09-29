@@ -98,12 +98,13 @@ namespace ClaudeBuddy
         //   The contract is text on stdin and an exit code; the variable is
         //   an optional extra, and a command that ignores it speaks exactly
         //   as it did before.
-        // - Kokoro speaking through an older engine
-        //   (NeuralSpeech.SpeaksWithFallbackEngine) — just after an upgrade,
-        //   before this build's engine has downloaded, and indefinitely on a
-        //   dev build whose engine was never published. An engine from before
-        //   CB-200 ignores the variable. "Installed" rather than "downloaded"
-        //   because the dev-build case never downloads.
+        // - Kokoro speaking through an engine that has not proved it honours
+        //   the variable (NeuralSpeech.EngineIgnoresVolume, from the engine's
+        //   contract stamp) — an older engine just after an upgrade, a dev
+        //   build whose engine was never published, or a released engine of
+        //   the same version number sitting where a rebuild expects its own.
+        //   "Installed" rather than "downloaded" because not every one of
+        //   those cases ever downloads.
         //
         // The slider stays live in both: the level is saved, and applies the
         // moment the command reads it or the right engine lands.

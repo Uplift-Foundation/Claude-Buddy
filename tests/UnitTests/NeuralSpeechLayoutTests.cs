@@ -238,26 +238,18 @@ public class NeuralSpeechLayoutTests : IDisposable
         }
     }
 
-    // ---- SpeaksWithFallbackEngine (CB-200) -------------------------------
+    // ---- EngineIgnoresVolume (CB-200) ------------------------------------
 
-    // The path comparison it rests on, checked both ways rather than assumed:
-    // this build's own engine compares equal to EnginePath (the Speech volume
-    // row stays quiet), and an older one does not (the row explains why the
-    // level will not apply yet). Each is the other's negative control.
-    [Theory]
-    [InlineData(false, false)]
-    [InlineData(true, true)]
-    public void SpeaksWithFallbackEngineOnlyWhenAnOlderEngineIsTheOneSpeaking(bool olderOnly, bool expected)
+    private void PlaceStamp(string version, string contents) =>
+        File.WriteAllText(Path.Combine(_root, version, SpeechEngineContract.StampFileName), contents);
+
+    private static void WithNeuralVoice(bool enabled, Action body)
     {
-        PlaceEngine(olderOnly ? "0.1.0-beta" : NeuralSpeech.EngineVersion);
-        PlaceModel();
-
         var original = ClaudeBuddySettings.NeuralVoiceEnabled;
         try
         {
-            ClaudeBuddySettings.NeuralVoiceEnabled = true;
-            Assert.Equal(expected, NeuralSpeech.SpeaksWithFallbackEngine);
-            Assert.Equal(expected, NeuralSpeech.NeedsUpdate);
+            ClaudeBuddySettings.NeuralVoiceEnabled = enabled;
+            body();
         }
         finally
         {
@@ -265,14 +257,43 @@ public class NeuralSpeechLayoutTests : IDisposable
         }
     }
 
-    // An older engine with the neural voice switched off speaks nothing — a
-    // system voice does, and honours the level — so there is nothing to note.
-    // The same with nothing on disk at all, where UsableEnginePath is null
-    // and would compare unequal to EnginePath if Available did not come first.
+    // The defect this replaced: an engine at this build's own path that has
+    // no stamp — the released engine of the same version number, which a
+    // branch build takes for its own. The path check called it current; the
+    // stamp check calls it what it is. Its negative control is the same path
+    // with a stamp, which must not be noted.
+    [Theory]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    public void AnEngineAtThisBuildsOwnPathIsJudgedByItsStamp(bool stamped, bool ignores)
+    {
+        PlaceEngine(NeuralSpeech.EngineVersion);
+        if (stamped) PlaceStamp(NeuralSpeech.EngineVersion, SpeechEngineContract.ContractVersion + "\n");
+        PlaceModel();
+
+        WithNeuralVoice(true, () =>
+        {
+            Assert.Equal(NeuralSpeech.EnginePath, NeuralSpeech.UsableEnginePath);
+            Assert.Equal(ignores, NeuralSpeech.EngineIgnoresVolume);
+        });
+    }
+
+    // And an older fallback engine by version, which has no stamp either.
+    [Fact]
+    public void AnOlderFallbackEngineWithNoStampIgnoresTheLevel()
+    {
+        PlaceEngine("0.1.0-beta");
+        PlaceModel();
+
+        WithNeuralVoice(true, () => Assert.True(NeuralSpeech.EngineIgnoresVolume));
+    }
+
+    // Nothing neural speaks — the voice is off, or nothing is on disk — so a
+    // system voice does, which honours the level: nothing to note.
     [Theory]
     [InlineData(true, false)]
     [InlineData(false, true)]
-    public void NoFallbackIsReportedWhenNothingNeuralSpeaks(bool placeOlder, bool enabled)
+    public void NoEngineIsReportedWhenNothingNeuralSpeaks(bool placeOlder, bool enabled)
     {
         if (placeOlder)
         {
@@ -280,15 +301,56 @@ public class NeuralSpeechLayoutTests : IDisposable
             PlaceModel();
         }
 
-        var original = ClaudeBuddySettings.NeuralVoiceEnabled;
+        WithNeuralVoice(enabled, () => Assert.False(NeuralSpeech.EngineIgnoresVolume));
+    }
+
+    // The stamp's contents, one case per arm: a whole number of at least 1,
+    // surrounding whitespace allowed; anything else has not proved it.
+    [Theory]
+    [InlineData("1", true)]
+    [InlineData("1\n", true)]
+    [InlineData(" 2 ", true)]
+    [InlineData("0", false)]
+    [InlineData("-1", false)]
+    [InlineData("1.5", false)]
+    [InlineData("one", false)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    public void AStampPromisesVolumeOnlyAsAWholeNumberOfAtLeastOne(string? stamp, bool honours) =>
+        Assert.Equal(honours, NeuralSpeech.HonoursVolume(stamp));
+
+    [Fact]
+    public void ANamedEngineWithNoStampBesideItReadsAsNone()
+    {
+        PlaceEngine("0.1.0-beta");
+        Assert.Null(NeuralSpeech.ReadStamp(Path.Combine(_root, "0.1.0-beta", NeuralSpeech.EngineExeName)));
+    }
+
+    // A stamp that exists but cannot be read is the same as none. Reachable on
+    // Unix by taking the file's mode bits away; on Windows the ACL route is
+    // Windows-only API for a defensive catch, so there this asserts the
+    // ordinary readable case instead and the catch is covered on macOS.
+    [Fact]
+    public void AnUnreadableStampReadsAsNone()
+    {
+        PlaceEngine(NeuralSpeech.EngineVersion);
+        PlaceStamp(NeuralSpeech.EngineVersion, "1");
+        var stamp = Path.Combine(_root, NeuralSpeech.EngineVersion, SpeechEngineContract.StampFileName);
+
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.Equal("1", NeuralSpeech.ReadStamp(NeuralSpeech.EnginePath));
+            return;
+        }
+
+        File.SetUnixFileMode(stamp, UnixFileMode.None);
         try
         {
-            ClaudeBuddySettings.NeuralVoiceEnabled = enabled;
-            Assert.False(NeuralSpeech.SpeaksWithFallbackEngine);
+            Assert.Null(NeuralSpeech.ReadStamp(NeuralSpeech.EnginePath));
         }
         finally
         {
-            ClaudeBuddySettings.NeuralVoiceEnabled = original;
+            File.SetUnixFileMode(stamp, UnixFileMode.UserRead | UnixFileMode.UserWrite);
         }
     }
 
