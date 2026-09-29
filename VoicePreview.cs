@@ -167,7 +167,17 @@ namespace ClaudeBuddy
                 _ownedGeneration = null;
                 task = Enqueue(() =>
                 {
-                    if (ShouldCancel(owned, TextToSpeech.StopGeneration)) DoCancel();
+                    try
+                    {
+                        if (ShouldCancel(owned, TextToSpeech.StopGeneration)) DoCancel();
+                    }
+                    catch (Exception ex)
+                    {
+                        // Enqueue relies on its work catching its own exceptions, and
+                        // a Cancel() that throws would otherwise fault the chain and
+                        // hand the caller's await an exception nobody observes.
+                        Console.Error.WriteLine($"Claude Buddy: voice preview stop failed: {ex.Message}");
+                    }
                 });
             }
 

@@ -255,6 +255,24 @@ public class VoicePreviewTests : IDisposable
         Assert.Equal(0, _cancels);
     }
 
+    // The stop path runs on the same serial chain as every start, so a Cancel()
+    // that throws must not fault it: the caller's await, and every preview queued
+    // behind, would inherit the exception.
+    [Fact]
+    public async Task AStopWhoseCancelThrowsDoesNotFaultTheChain()
+    {
+        await VoicePreview.Toggle(Kokoro);
+        VoicePreview.CancelForTests = () => throw new InvalidOperationException("taskkill failed");
+
+        await VoicePreview.StopIfLive();   // would rethrow if the chain had faulted
+
+        Assert.Equal(Speak.Idle, VoicePreview.Look);
+
+        VoicePreview.CancelForTests = () => _cancels++;
+        await VoicePreview.Toggle(Sapi);   // the chain still works afterwards
+        Assert.Equal(Speak.Speaking, VoicePreview.Look);
+    }
+
     // AC 9 and AC 11 together: another read-aloud takes the speaker, the preview
     // is over, and stopping it afterwards must not stop the read-aloud.
     [Fact]
