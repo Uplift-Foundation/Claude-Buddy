@@ -524,7 +524,8 @@ namespace ClaudeBuddy
         // showing a stop button over silence.
         // Excluded from coverage: starts the side-car engine process.
         [ExcludeFromCodeCoverage]
-        public static Process? Start(string text, string? voice, double? rate, Action? onSpeaking)
+        public static Process? Start(string text, string? voice, double? rate, Action? onSpeaking,
+            double volume = AudioVolume.Default)
         {
             var engine = UsableEnginePath;
             if (engine is null || !File.Exists(ModelPath)) return null;
@@ -552,6 +553,14 @@ namespace ClaudeBuddy
             {
                 startInfo.ArgumentList.Add("--rate");
                 startInfo.ArgumentList.Add(spoken.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            }
+
+            // CB-200: the Speech level, through the environment rather than an
+            // argument — AudioVolume.SpeechVolumeEnvVar says why. Left unset
+            // at full volume, which is how the engine has always been run.
+            if (AudioVolume.EngineEnvironmentValue(volume) is { } level)
+            {
+                startInfo.Environment[AudioVolume.SpeechVolumeEnvVar] = level;
             }
 
             var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };

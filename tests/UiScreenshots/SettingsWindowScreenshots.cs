@@ -229,6 +229,64 @@ public class SettingsWindowScreenshots
         }
     }
 
+    // CB-200's two volume sliders, each captured holding a saved non-default
+    // level so a broken round trip would show as a thumb back at the right
+    // edge. No platform gate: every engine that speaks on either platform
+    // honours a level, so both rids should show the same enabled slider.
+    [AvaloniaFact]
+    public void SpeechVolumeSliderHoldsASavedLevel() =>
+        WithVolumes("system", speech: 0.4, alert: 1.0, () =>
+            CaptureGroup(ShownSettings(), "Speech volume", "Voice", "settings-speech-volume.png"));
+
+    // The disabled case the ticket insists on: a custom speak command cannot
+    // be told a level, so the slider is greyed and labelled rather than left
+    // to move silently. The label beside it is the thing to look for.
+    [AvaloniaFact]
+    public void SpeechVolumeIsGreyedAndLabelledForACustomCommand() =>
+        WithVolumes("custom", speech: 0.4, alert: 1.0, () =>
+            CaptureGroup(ShownSettings(), "Speech volume", "Voice", "settings-speech-volume-custom.png"));
+
+    // And the Alert slider, which no engine choice affects — captured with
+    // the custom engine selected on purpose, so this one shows it enabled in
+    // exactly the state that greys the Speech one.
+    [AvaloniaFact]
+    public void AlertVolumeSliderHoldsASavedLevel() =>
+        WithVolumes("custom", speech: 1.0, alert: 0.3, () =>
+            CaptureGroup(ShownSettings(), "Alert volume", "Sounds", "settings-alert-volume.png"));
+
+    private static Avalonia.Controls.Window ShownSettings()
+    {
+        var ctor = typeof(SettingsWindow).GetConstructor(
+            BindingFlags.NonPublic | BindingFlags.Instance,
+            types: Type.EmptyTypes)
+            ?? throw new MissingMethodException("SettingsWindow", ".ctor()");
+
+        var window = (Avalonia.Controls.Window)ctor.Invoke(null);
+        window.Show();
+        ScreenshotHelper.Flush();
+        return window;
+    }
+
+    private static void WithVolumes(string engine, double speech, double alert, Action capture)
+    {
+        var wasEngine = ClaudeBuddySettings.SpeakEngine;
+        var wasSpeech = ClaudeBuddySettings.SpeechVolume;
+        var wasAlert = ClaudeBuddySettings.AlertVolume;
+        try
+        {
+            ClaudeBuddySettings.SpeakEngine = engine;
+            ClaudeBuddySettings.SpeechVolume = speech;
+            ClaudeBuddySettings.AlertVolume = alert;
+            capture();
+        }
+        finally
+        {
+            ClaudeBuddySettings.SpeakEngine = wasEngine;
+            ClaudeBuddySettings.SpeechVolume = wasSpeech;
+            ClaudeBuddySettings.AlertVolume = wasAlert;
+        }
+    }
+
     // The direct link's card, switched on, so the pairing controls are in frame.
     //
     // **Unlike every other scenario in this file, this one has no platform

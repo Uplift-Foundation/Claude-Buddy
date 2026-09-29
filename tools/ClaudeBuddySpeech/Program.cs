@@ -144,12 +144,37 @@ namespace ClaudeBuddySpeech
                 return ExitNoModel;
             }
 
+            var volume = VolumeFrom(Environment.GetEnvironmentVariable(VolumeEnvVar));
+
             // macOS deliberately does not go through KokoroSharp's own playback.
             // SpeakThroughAfplay carries the whole story of why.
             return OperatingSystem.IsMacOS()
-                ? SpeakThroughAfplay(modelPath, chosen, text, rate)
-                : Speak(modelPath, chosen, text, rate);
+                ? SpeakThroughAfplay(modelPath, chosen, text, rate, volume)
+                : Speak(modelPath, chosen, text, rate, volume);
         }
+
+        // CB-200: how loud to speak, from the app's Speech slider. The same
+        // name as AudioVolume.SpeechVolumeEnvVar in the app, which is the
+        // other half of this contract.
+        //
+        // An environment variable rather than a --volume argument on purpose.
+        // Every argument this process does not know is a usage error (see Run),
+        // so an app new enough to send --volume to an engine too old to know
+        // it would get silence; an unknown environment variable is simply
+        // ignored, so the mismatch in either direction costs the level and
+        // never the voice.
+        private const string VolumeEnvVar = "CLAUDEBUDDY_SPEECH_VOLUME";
+
+        // Unset, unparsable or out of range all mean "full volume" — the
+        // --rate rule: the caller already clamped it, so a value that still
+        // fails here is nothing worth refusing an utterance over. Null rather
+        // than 1 so a full-volume run touches nothing it did not touch before.
+        private static float? VolumeFrom(string? text) =>
+            float.TryParse(text, System.Globalization.NumberStyles.AllowDecimalPoint,
+                System.Globalization.CultureInfo.InvariantCulture, out var parsed)
+            && parsed is >= 0f and < 1f
+                ? parsed
+                : null;
 
         // Voices the user dropped in themselves, from a directory outside the
         // engine's own — an upgrade replaces the versioned engine folder wholesale,
@@ -262,7 +287,8 @@ namespace ClaudeBuddySpeech
         // written that way, having already been bitten by a .cmd wrapper whose
         // grandchild kept talking after the tracked child died; an afplay
         // started here is exactly that grandchild, and dies with us.
-        private static int SpeakThroughAfplay(string modelPath, KokoroVoice voice, string text, float? rate)
+        private static int SpeakThroughAfplay(string modelPath, KokoroVoice voice, string text, float? rate,
+            float? volume)
         {
             using var synth = KokoroWavSynthesizer.LoadModel(modelPath, SessionOptionsForBackgroundUse());
 
@@ -304,13 +330,26 @@ namespace ClaudeBuddySpeech
                     {
                         File.WriteAllBytes(path, WavBytes(samples));
 
-                        using var afplay = Process.Start(new ProcessStartInfo("/usr/bin/afplay")
+                        var startInfo = new ProcessStartInfo("/usr/bin/afplay")
                         {
-                            ArgumentList = { path },
                             UseShellExecute = false,
                             RedirectStandardOutput = true,
                             RedirectStandardError = true
-                        });
+                        };
+
+                        // CB-200: afplay's own gain, formatted invariant —
+                        // afplay reads "0,5" as zero and plays silence
+                        // rather than failing. Absent at full volume.
+                        if (volume is { } level)
+                        {
+                            startInfo.ArgumentList.Add("-v");
+                            startInfo.ArgumentList.Add(
+                                level.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture));
+                        }
+
+                        startInfo.ArgumentList.Add(path);
+
+                        using var afplay = Process.Start(startInfo);
 
                         if (afplay is null)
                         {
@@ -469,9 +508,17 @@ namespace ClaudeBuddySpeech
             return buffer.ToArray();
         }
 
-        private static int Speak(string modelPath, KokoroVoice voice, string text, float? rate)
+        private static int Speak(string modelPath, KokoroVoice voice, string text, float? rate, float? volume)
         {
             using var tts = KokoroTTS.LoadModel(modelPath, SessionOptionsForBackgroundUse());
+
+            // CB-200: KokoroSharp 0.8.4's own gain. On Windows its player is
+            // NAudio's WaveOutEvent behind a VolumeSampleProvider — a
+            // multiplier on the samples of this stream alone, not the
+            // process's mixer session — and SetVolume stores the level on the
+            // player so every segment played afterwards picks it up. Read out
+            // of the package (WindowsAudioPlayer.Play/SetVolume), not assumed.
+            if (volume is { } level) tts.SetVolume(level);
 
             // Segmented, streaming synthesis. Not an optimisation — a whole
             // 1500-character turn is up to ~100 seconds of audio, and measured

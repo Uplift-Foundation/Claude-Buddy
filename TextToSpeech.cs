@@ -295,12 +295,7 @@ namespace ClaudeBuddy
         {
             if (options.Count == 0) return null;
 
-            var engine = ClaudeBuddySettings.SpeakEngine switch
-            {
-                "custom" => SpeakEngine.Custom,
-                "neural" => SpeakEngine.Neural,
-                _ => SpeakEngine.System
-            };
+            var engine = EngineNamed(ClaudeBuddySettings.SpeakEngine);
 
             var name = engine switch
             {
@@ -314,6 +309,18 @@ namespace ClaudeBuddy
                    ?? options.FirstOrDefault(o => o.Engine == engine)
                    ?? options[0];
         }
+
+        // The engine a stored "speakEngine" value names. Split out of
+        // SelectedFrom for CB-200: the settings window has to ask "is the
+        // selected engine one that can be told how loud to speak?" without
+        // enumerating a single voice to find out, and that question starts
+        // from exactly this mapping.
+        internal static SpeakEngine EngineNamed(string? setting) => setting switch
+        {
+            "custom" => SpeakEngine.Custom,
+            "neural" => SpeakEngine.Neural,
+            _ => SpeakEngine.System
+        };
 
         // Records a choice made in the settings window, writing both which engine
         // speaks and that engine's own voice key. The per-engine keys are kept
@@ -736,6 +743,10 @@ namespace ClaudeBuddy
                 ? selected.Name
                 : DefaultVoice;
 
+            // CB-200: read once per utterance, so moving the slider mid-sentence
+            // takes effect from the next one rather than half-way through.
+            var volume = ClaudeBuddySettings.SpeechVolume;
+
             Process proc;
             if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
             {
@@ -744,7 +755,9 @@ namespace ClaudeBuddy
                     StartInfo = new ProcessStartInfo
                     {
                         FileName = "/usr/bin/say",
-                        ArgumentList = { "-v", voice, text },
+                        // `say` has no volume flag; [[volm]] embedded in the
+                        // text is how it is told. See AudioVolume.SayText.
+                        ArgumentList = { "-v", voice, AudioVolume.SayText(text, volume) },
                         UseShellExecute = false,
                         CreateNoWindow = true,
                         RedirectStandardOutput = true,
@@ -755,8 +768,6 @@ namespace ClaudeBuddy
             }
             else if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             {
-                var escaped = text.Replace("'", "''");
-                var voiceEscaped = voice.Replace("'", "''");
                 proc = new Process
                 {
                     StartInfo = new ProcessStartInfo
@@ -765,19 +776,7 @@ namespace ClaudeBuddy
                         ArgumentList =
                         {
                             "-NoProfile", "-Command",
-                            // SelectVoice is guarded so an unusable voice name
-                            // costs the *choice* of voice, not the speech.
-                            // It throws rather than returning false when a name
-                            // doesn't match, and with stderr discarded the only
-                            // symptom was silence — which is how a bad default
-                            // ("David", never a real SAPI name) read as "the
-                            // speak button does nothing". A voice saved before
-                            // this fix, or one that has since been uninstalled,
-                            // lands in the same place and now still speaks.
-                            $"Add-Type -AssemblyName System.Speech; " +
-                            $"$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; " +
-                            $"try {{ $s.SelectVoice('{voiceEscaped}') }} catch {{ }}; " +
-                            $"$s.Speak('{escaped}')"
+                            WindowsSpeakScript(text, voice, volume)
                         },
                         UseShellExecute = false,
                         CreateNoWindow = true,
@@ -810,6 +809,41 @@ namespace ClaudeBuddy
                 proc.Dispose();
                 Enter(SpeakState.Idle);
             }
+        }
+
+        // The Windows PowerShell script that speaks one utterance through SAPI.
+        // A value rather than built inline inside Speak, which is excluded for
+        // starting a real engine, so the CB-200 volume line — and the escaping
+        // it sits beside — can be asserted on without a Windows machine to run
+        // it on.
+        //
+        // SelectVoice is guarded so an unusable voice name costs the *choice*
+        // of voice, not the speech. It throws rather than returning false when
+        // a name doesn't match, and with stderr discarded the only symptom was
+        // silence — which is how a bad default ("David", never a real SAPI
+        // name) read as "the speak button does nothing". A voice saved before
+        // that fix, or one that has since been uninstalled, lands in the same
+        // place and still speaks.
+        //
+        // Volume is only set below full, so at the default this is exactly the
+        // script every earlier build ran; SAPI's own default is 100. The value
+        // is an integer SapiVolume has already clamped, because the property
+        // throws outside 0-100 — measured, not assumed (see AudioVolume).
+        internal static string WindowsSpeakScript(string text, string voice, double volume)
+        {
+            var escaped = text.Replace("'", "''");
+            var voiceEscaped = voice.Replace("'", "''");
+            var volumeLine = AudioVolume.IsFull(volume)
+                ? ""
+                : "$s.Volume = "
+                  + AudioVolume.SapiVolume(volume).ToString(System.Globalization.CultureInfo.InvariantCulture)
+                  + "; ";
+
+            return "Add-Type -AssemblyName System.Speech; " +
+                   "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; " +
+                   $"try {{ $s.SelectVoice('{voiceEscaped}') }} catch {{ }}; " +
+                   volumeLine +
+                   $"$s.Speak('{escaped}')";
         }
 
         // Whatever the user pointed ClaudeBuddySettings.SpeakCommand at. Returns
@@ -929,7 +963,8 @@ namespace ClaudeBuddy
                 text,
                 voice ?? ClaudeBuddySettings.NeuralVoice,
                 rate,
-                onSpeaking: () => Enter(SpeakState.Speaking));
+                onSpeaking: () => Enter(SpeakState.Speaking),
+                volume: ClaudeBuddySettings.SpeechVolume);
 
             if (proc is null)
             {

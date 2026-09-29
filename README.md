@@ -543,6 +543,7 @@ The whole contract:
 - Optionally, print `speaking` on stdout the moment audio actually starts, and
   the button will show an hourglass until then instead. Skip it and the button
   simply shows stop for the whole run.
+- Your command decides its own volume. The **Speech volume** slider in settings is greyed out, labelled "Not supported for custom commands", while one of its voices is selected — nothing in this contract carries a level, and a slider that silently did nothing would be worse than one that says so.
 
 That's it — no plugin API, no manifest, nothing to compile against. A batch file
 that pipes stdin into some other tool is a complete implementation. Arguments go
@@ -2582,3 +2583,4 @@ outside the app (a launchd agent, an installer replacing the bundle) stopped it.
   only, every system sound, or a chosen file); an individual orb can override
   either trigger from its right-click "Sound" submenu, keyed by
   `SessionManager.SoundKeyFor`.
+- **Volume** (CB-200): two independent levels in settings, `speechVolume` and `alertVolume`, each 0 to 1 and defaulting to 1 — at which every backend gets exactly the argv, script and text it got before the sliders existed. `AudioVolume.cs` owns every rule turning a level into a backend's units: `[[volm N]]` embedded in the text for `say` (which has no volume flag), `SpeechSynthesizer.Volume` 0–100 for SAPI, a `CLAUDEBUDDY_SPEECH_VOLUME` environment variable for the Kokoro engine (which hands it to `afplay -v` on macOS and KokoroSharp's own `SetVolume` on Windows), `afplay -v` for macOS chimes, and a sample-scaled cached copy of the WAV for Windows chimes, since `Media.SoundPlayer` has no volume. A custom `speakCommand` cannot be told a level, so the Speech slider is greyed out and labelled while one is selected; the Alert slider does not depend on the engine.

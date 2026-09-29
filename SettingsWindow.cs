@@ -2298,6 +2298,11 @@ namespace ClaudeBuddy
                 + "provides, (Kokoro) for the high-quality engine above, and (custom) for "
                 + "anything your own speakCommand lists."));
 
+            rows.Add(Row("Speech volume", SpeechVolumeControl(),
+                "How loud replies are read aloud, whichever voice reads them. A custom "
+                + "speak command decides its own volume, so this is greyed out while one "
+                + "is selected."));
+
             rows.Add(Row("Speaks", SpeakScopePicker(),
                 "What the speaker reads. The full response is everything the assistant "
                 + "said, which is what it has always done. A vibe code summary condenses "
@@ -2365,9 +2370,94 @@ namespace ClaudeBuddy
             List<TextToSpeech.VoiceOption>? options = null;
 
             combo.DropDownOpened += (_, _) => options = FillVoiceList(combo, options);
-            combo.SelectionChanged += (_, _) => ChooseVoice(combo, options);
+            combo.SelectionChanged += (_, _) =>
+            {
+                ChooseVoice(combo, options);
+
+                // Choosing a voice can change the engine, and the engine is
+                // what decides whether the Speech slider means anything.
+                RefreshSpeechVolumeAvailability();
+            };
 
             return combo;
+        }
+
+        // CB-200's Speech slider and the note that stands in for it when the
+        // selected engine cannot be told a level. Kept as fields so choosing a
+        // different voice can flip the slider without rebuilding the window.
+        internal Slider? SpeechVolumeSlider { get; private set; }
+        internal TextBlock? SpeechVolumeNote { get; private set; }
+
+        internal Control SpeechVolumeControl()
+        {
+            SpeechVolumeSlider = VolumeSlider(ClaudeBuddySettings.SpeechVolume,
+                level => ClaudeBuddySettings.SpeechVolume = level);
+
+            SpeechVolumeNote = new TextBlock
+            {
+                Text = AudioVolume.CustomCommandUnsupportedNote,
+                FontSize = 11,
+                Opacity = 0.7,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+
+            RefreshSpeechVolumeAvailability();
+
+            return new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Spacing = 8,
+                Children = { SpeechVolumeNote, SpeechVolumeSlider }
+            };
+        }
+
+        // Decided from the saved engine alone — no voice is enumerated to find
+        // out, for the reason SavedVoiceNameForPlaceholder gives. Disabled and
+        // labelled rather than hidden, so the setting is still discoverable
+        // and the reason it does nothing is on screen beside it.
+        //
+        // No null guard: the constructor builds every row, and VoiceRows
+        // builds this slider before anything that could call here can fire —
+        // the picker's SelectionChanged only follows a user's choice.
+        internal void RefreshSpeechVolumeAvailability()
+        {
+            var applies = AudioVolume.EngineAppliesVolume(
+                TextToSpeech.EngineNamed(ClaudeBuddySettings.SpeakEngine));
+
+            SpeechVolumeSlider!.IsEnabled = applies;
+            SpeechVolumeNote!.IsVisible = !applies;
+        }
+
+        // CB-200's Alert slider — every chime, whichever engine speaks.
+        internal Slider AlertVolumeSlider() =>
+            VolumeSlider(ClaudeBuddySettings.AlertVolume, level => ClaudeBuddySettings.AlertVolume = level);
+
+        // Both volume sliders are the same control over AudioVolume's range,
+        // with the percentage as a tooltip so a position has a number. The
+        // other sliders in this window read their range from the class that
+        // owns the rule; this one does too.
+        internal static Slider VolumeSlider(double value, Action<double> write)
+        {
+            var slider = new Slider
+            {
+                Minimum = AudioVolume.Min,
+                Maximum = AudioVolume.Max,
+                Value = value,
+                MinWidth = 160,
+                SmallChange = AudioVolume.Step,
+                LargeChange = 0.25,
+                TickFrequency = AudioVolume.Step,
+                IsSnapToTickEnabled = true
+            };
+            ToolTip.SetTip(slider, AudioVolume.Percent(value));
+
+            slider.PropertyChanged += (_, e) =>
+            {
+                if (e.Property != Slider.ValueProperty) return;
+                write(slider.Value);
+                ToolTip.SetTip(slider, AudioVolume.Percent(slider.Value));
+            };
+            return slider;
         }
 
         // Two named modes rather than a switch, because "off" is not what Full
@@ -3099,7 +3189,14 @@ namespace ClaudeBuddy
                 + "the state that most needs your attention, so it always wins over a "
                 + "turn finishing elsewhere on the same scan. Set an individual orb's "
                 + "sound from its right-click menu; that override beats this default for "
-                + "that orb alone.")
+                + "that orb alone."),
+
+            // CB-200. Last rather than beside the master switch, so it reads
+            // as applying to both sounds above it — and a preview is how a
+            // level is judged, so it sits under the buttons that play one.
+            Row("Alert volume", AlertVolumeSlider(),
+                "How loud both sounds above play, previews included. Separate from the "
+                + "speech volume, so a quiet chime never means a quiet voice.")
         };
 
         // --- Mac-ish chrome ---------------------------------------------------
