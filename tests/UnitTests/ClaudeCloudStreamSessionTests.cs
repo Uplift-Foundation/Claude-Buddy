@@ -567,23 +567,45 @@ public partial class ClaudeCloudEventsTests
         await Close(chat);
     }
 
-    // A stream that carried events before ending is not a failure towards the
-    // fallback count.
-    [Fact]
-    public async Task AStreamThatDeliveredEventsDoesNotCountTowardsFallingBack()
+    // A connection is healthy if it carried a real event, or if it stayed open
+    // long enough, and a healthy one is not a failure towards falling back. A
+    // keepalive alone is neither: the negative control, which does fall back.
+    [Theory]
+    [InlineData("event", true)]
+    [InlineData("old", true)]
+    [InlineData("keepalive", false)]
+    public async Task OnlyAHealthyConnectionKeepsTheStreamTrusted(string what, bool trusted)
     {
-        var (chat, _, stream, _) = Streaming();
+        var api = new RoutingApi(Answer(200, Receipt));
+        var stream = new FakeStream();
+        var now = new DateTimeOffset(2026, 9, 29, 10, 0, 0, TimeSpan.Zero);
+        var chat = new ClaudeCloudChatSession(Row(), api, new CountingCredentials(), a => a())
+        {
+            Delay = new FakeClock().Delay,
+            Enabled = () => true,
+            Stream = stream,
+
+            // Each reading moves the clock on: an open and its end are one
+            // reading apart, so "old" connections read as open past the age.
+            Now = () => now += what == "old"
+                ? ClaudeCloudStreamPolicy.UnmeasuredHealthyConnectionAge
+                : TimeSpan.FromSeconds(1),
+        };
         chat.PanelOpened();
 
-        for (var i = 0; i < ClaudeCloudStreamPolicy.UnmeasuredFailuresBeforeFallback + 1; i++)
+        for (var i = 0; i < ClaudeCloudStreamPolicy.UnmeasuredFailuresBeforeFallback; i++)
         {
             var events = await stream.NextOpenAsync();
-            events.TryWrite(new CloudStreamEvent(CloudStreamEventKind.Keepalive, null, null, null));
+            var seen = chat.StreamEventsSeen;
+            events.TryWrite(what == "event"
+                ? Durable(42 + i, "prompt_suggestion")
+                : new CloudStreamEvent(CloudStreamEventKind.Keepalive, null, null, null));
+            await Until(() => chat.StreamEventsSeen == seen + 1);
             events.TryWrite(EndedWith(503));
         }
 
         await stream.NextOpenAsync();
-        Assert.True(chat.StreamTask is { IsCompleted: false });
+        Assert.Equal(trusted, chat.StreamTrusted);
         await Close(chat);
     }
 

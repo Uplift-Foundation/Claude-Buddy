@@ -435,6 +435,11 @@ namespace ClaudeBuddy
         // was asked for, so the cadence is asserted rather than slept through.
         internal Func<TimeSpan, CancellationToken, Task> Delay { get; init; } = Task.Delay;
 
+        // The clock a stream connection's age is read off, for the policy's
+        // "stayed open long enough to count as healthy". A seam for the reason
+        // Delay is one: a test does not wait a minute to reach that arm.
+        internal Func<DateTimeOffset> Now { get; init; } = () => DateTimeOffset.UtcNow;
+
         // The settings gate, read at the moment of sending. Off means no
         // credential read and no socket, which is the promise the settings copy
         // makes for the whole cloud arm; a panel opened before the switch was
@@ -927,7 +932,8 @@ namespace ClaudeBuddy
                 }
 
                 CloudOutcome? ended = null;
-                var delivered = false;
+                var deliveredEvent = false;
+                var openedAt = Now();
 
                 try
                 {
@@ -942,11 +948,12 @@ namespace ClaudeBuddy
 
                         // A stream that delivers again after the panel fell back
                         // is trusted again, and the polling loop runs out on its
-                        // own — but only on a real event. A keepalive says the
-                        // socket is open, not that anything will come down it.
-                        delivered = true;
-                        if (e.Kind is CloudStreamEventKind.Durable or CloudStreamEventKind.Ephemeral)
+                        // own — but only on an event the policy counts. A
+                        // keepalive says the socket is open, not that anything
+                        // will come down it.
+                        if (ClaudeCloudStreamPolicy.CountsTowardHealth(e))
                         {
+                            deliveredEvent = true;
                             _streamFellBack = false;
                         }
 
@@ -992,7 +999,8 @@ namespace ClaudeBuddy
                 // stop waiting on the stream. Falling back with a wait still
                 // left means "poll now, and keep trying the stream behind it";
                 // no wait means the stream is done for this panel.
-                var decision = ClaudeCloudStreamPolicy.Next(state, outcome, delivered);
+                var healthy = ClaudeCloudStreamPolicy.WasHealthy(deliveredEvent, Now() - openedAt);
+                var decision = ClaudeCloudStreamPolicy.Next(state, outcome, healthy);
                 state = decision.Next;
 
                 if (decision.FallBackToPolling) FallBack();
