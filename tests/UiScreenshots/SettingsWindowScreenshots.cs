@@ -192,6 +192,68 @@ public class SettingsWindowScreenshots
         }
     }
 
+    // CB-222's preview button beside the Speak voice picker, in the two states
+    // worth a reviewer's eye: idle (a drawn triangle) and playing (blue, a drawn
+    // stop square). The glyphs are drawn geometry precisely because a text
+    // glyph renders as a colour emoji on Windows (CB-173), and only a real Skia
+    // capture on the Windows rid can show that they did not.
+    //
+    // The same Voice group as settings-speak-scope.png, which changes with it:
+    // the row now carries the button.
+    private static void CaptureVoicePreview(bool playing, string fileName)
+    {
+        VoicePreview.ResetForTests();
+        VoicePreview.SpeakForTests = (_, _) =>
+        {
+            TextToSpeech.Cancel();
+            TextToSpeech.Enter(TextToSpeech.SpeakState.Speaking);
+        };
+        VoicePreview.CancelForTests = () => { };
+        VoicePreview.ResolveSavedForTests = () => new TextToSpeech.VoiceOption(
+            TextToSpeech.SpeakEngine.System, "Voice", "Voice (system)");
+
+        try
+        {
+            var ctor = typeof(SettingsWindow).GetConstructor(
+                BindingFlags.NonPublic | BindingFlags.Instance,
+                types: Type.EmptyTypes)
+                ?? throw new MissingMethodException("SettingsWindow", ".ctor()");
+
+            var window = (Avalonia.Controls.Window)ctor.Invoke(null);
+            window.Show();
+            ScreenshotHelper.Flush();
+
+            if (playing)
+            {
+                // Through the real click path, so the capture is of what a click
+                // produces and not of a look set by hand.
+                var label = window.GetLogicalDescendants().OfType<TextBlock>()
+                    .First(t => t.Text == "Speak voice");
+                var button = label.GetLogicalParent()!.GetLogicalDescendants()
+                    .OfType<Button>().Single();
+                button.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+                VoicePreview.Drained().GetAwaiter().GetResult();
+                ScreenshotHelper.Flush();
+            }
+
+            CaptureGroup(window, "Speak voice", "Voice", fileName);
+        }
+        finally
+        {
+            VoicePreview.ResetForTests();
+            TextToSpeech.Cancel();
+            TextToSpeech.Enter(TextToSpeech.SpeakState.Idle);
+        }
+    }
+
+    [AvaloniaFact]
+    public void VoiceGroupShowsThePreviewButtonIdle() =>
+        CaptureVoicePreview(playing: false, "settings-voice-preview-idle.png");
+
+    [AvaloniaFact]
+    public void VoiceGroupShowsThePreviewButtonPlaying() =>
+        CaptureVoicePreview(playing: true, "settings-voice-preview-playing.png");
+
     // CB-167's Sounds group, captured with a non-default value saved so the
     // capture shows the picker holding a real choice rather than its initial
     // "Default (…)" state — the same reason SpeechGroupShowsTheSpeakScopePicker
