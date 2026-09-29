@@ -486,6 +486,24 @@ public class CloudChatPanelTests : IDisposable
         Assert.False(stop.IsVisible);
     }
 
+    // A press that lands after the session said there is nothing to stop — the
+    // race between a turn ending and a click — reaches no Cancel. The button is
+    // hidden by then, so the press is synthesized directly.
+    [AvaloniaFact]
+    public void AStopPressWithNothingToStopReachesNoCancel()
+    {
+        var fake = SendableCloud("cloud-stop-late");
+
+        ChatPanel.OpenFor(NewOrb(), fake);
+        FlushRender();
+
+        var panel = ChatPanelTestAccess.Instance!;
+        Click(StopButton(panel), panel);
+        Flush();
+
+        Assert.Equal(0, fake.CancelCalls);
+    }
+
     // Already interruptible when the panel opens — a reply was running before
     // anybody clicked the orb — shows Stop from the first frame rather than
     // waiting for a change that may never come.

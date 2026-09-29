@@ -290,11 +290,16 @@ namespace ClaudeBuddy
             };
             SendButton.PointerPressed += (_, e) => { e.Handled = true; Send(); };
 
-            // Only ever visible while the bound session says a Stop would do
-            // something (see ApplyStop), so the click does not re-check: the
-            // session owns what an interrupt means, and CanInterrupt going false
-            // on the click itself is its job, not the panel's.
-            StopButton.PointerPressed += (_, e) => { e.Handled = true; _session?.Cancel(); };
+            // The click asks the same question the button's visibility does
+            // (StopOffered), so a press that races a state change — or one that
+            // arrives with nothing bound — reaches no Cancel. What an interrupt
+            // means, and CanInterrupt going false on the click itself, stay the
+            // session's job.
+            StopButton.PointerPressed += (_, e) =>
+            {
+                e.Handled = true;
+                if (StopOffered(_session)) _session!.Cancel();
+            };
 
             // Fire and forget, like the click on the orb it shares its
             // implementation with. Nothing is awaited and nothing about the panel
@@ -950,12 +955,15 @@ namespace ClaudeBuddy
         // as "stuck". The read-only half is already true of the row it sits in;
         // it is stated here too so the button's own visibility says the true
         // thing rather than relying on its parent to hide a lie.
-        private void ApplyStop(IRemoteChatSession? session)
-        {
-            StopButton.IsVisible =
-                session is IRemoteChatInterrupt { CanInterrupt: true }
-                && session is not IRemoteChatReadOnly { IsReadOnly: true };
-        }
+        private void ApplyStop(IRemoteChatSession? session) => StopButton.IsVisible = StopOffered(session);
+
+        // The one rule for both the button and its click. Static and pure, so
+        // each arm is a unit case rather than a panel to build — including the
+        // ones no real transport produces today, like an interruptible session
+        // that is not read-only-capable at all.
+        internal static bool StopOffered(IRemoteChatSession? session) =>
+            session is IRemoteChatInterrupt { CanInterrupt: true }
+            && session is not IRemoteChatReadOnly { IsReadOnly: true };
 
         // Raised on the UI thread by contract (see IRemoteChatReadOnly), and only
         // by the session currently bound: Unbind takes both subscriptions off.
