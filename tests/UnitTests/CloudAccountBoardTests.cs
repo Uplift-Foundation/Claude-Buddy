@@ -405,4 +405,29 @@ public class CloudAccountBoardTests : IDisposable
         Assert.Same(a, CloudAccounts.SourceFor("/somewhere/else"));
         Assert.Same(b, CloudAccounts.SourceFor(RootB));
     }
+
+    [Fact]
+    public async Task ASkippedAccountThatIsNotHaltedKeepsItsOwnStatus()
+    {
+        var (board, a, _) = TwoAccounts();
+        var step = await Step(new Api((_, _) => Ok(Roster("session_1"))), a);
+        Assert.False(step.Next.Halted);
+
+        board.Apply(RootA, step, keychainSkipped: true, a.Stamp, Now);
+
+        Assert.DoesNotContain(CloudAccountBoard.NotAsked, board.StatusText);
+    }
+
+    // Both build the real stores without querying any of them; the registry is
+    // the same list the poll and the chat panels share.
+    [Fact]
+    public void TheRegistryBuildsItselfOnFirstUseAndRebuildsOnRequest()
+    {
+        CloudAccounts.SetForTests(null);
+
+        var first = CloudAccounts.Current;
+        Assert.NotEmpty(first);
+        Assert.Same(first, CloudAccounts.Current);
+        Assert.NotSame(first, CloudAccounts.Rebuild());
+    }
 }

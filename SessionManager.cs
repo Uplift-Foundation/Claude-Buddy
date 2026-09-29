@@ -3065,10 +3065,10 @@ namespace ClaudeBuddy
         // conversation as the wrong person. The instances come from CloudAccounts,
         // the same ones the poll loop uses.
         private ICloudCredentialSource CloudChatCredentialsFor(string? ownerRoot) =>
-            (_cloudChatCredentialsFor ?? CloudAccounts.SourceFor)(ownerRoot);
+            _cloudChatCredentialsFor(ownerRoot);
 
         private ICloudApi? _cloudChatApi;
-        private Func<string?, ICloudCredentialSource>? _cloudChatCredentialsFor;
+        private Func<string?, ICloudCredentialSource> _cloudChatCredentialsFor = CloudAccounts.SourceFor;
 
         // The only way into RemoteChatFor's ClaudeCloud arm from a test.
         //

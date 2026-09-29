@@ -829,4 +829,35 @@ public class CloudScanTests
             PublishNothing();
         }
     }
+
+    // A panel already cached whose roster row has since gone: the reopen returns
+    // the cached panel untouched, with no owner to re-point it at.
+    [AvaloniaFact]
+    public void ACachedPanelWhoseRowHasGoneIsReturnedWithoutReasking()
+    {
+        using var scratch = new Scratch();
+        try
+        {
+            Publish(Session("session_01abc", owner: "/Users/x/.claude"));
+            var asked = 0;
+
+            var manager = Manager(scratch.Dir);
+            manager.UseCloudChatDependenciesForTests(new SilentApi(), _ =>
+            {
+                asked++;
+                return new NoCredentials();
+            });
+            manager.ScanAndUpdate();
+            var first = manager.RemoteChatFor("cloud:session_01abc");
+
+            ClaudeCloudSessions.SetSnapshotForTests(Array.Empty<ClaudeCloudSessions.Session>());
+
+            Assert.Same(first, manager.RemoteChatFor("cloud:session_01abc"));
+            Assert.Equal(1, asked);
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
 }
