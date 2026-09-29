@@ -48,6 +48,20 @@ public class AudioVolumeTests
         Assert.True(AudioVolume.EngineAppliesVolume(SpeakEngine.Neural));
     }
 
+    // The Alert row's description names the compressed-WAV gap on Windows
+    // only; macOS's afplay applies its own gain to any format.
+    [Fact]
+    public void OnlyWindowsIsToldCompressedChimesPlayAtFullVolume()
+    {
+        var windows = AudioVolume.AlertVolumeHelp(windows: true);
+        var mac = AudioVolume.AlertVolumeHelp(windows: false);
+
+        Assert.Contains("compressed", windows);
+        Assert.Contains("full volume", windows);
+        Assert.DoesNotContain("compressed", mac);
+        Assert.StartsWith(mac, windows);
+    }
+
     [Theory]
     [InlineData("custom", SpeakEngine.Custom)]
     [InlineData("neural", SpeakEngine.Neural)]
@@ -363,6 +377,40 @@ public class AudioVolumeTests
     {
         var bytes = Wav(1, 16, Shorts(1));
         BitConverter.TryWriteBytes(bytes.AsSpan(16, 4), -8);   // the fmt chunk's size
+        Assert.Null(AudioVolume.ScaleWav(bytes, 0.5));
+    }
+
+    // CB-200 QA: a chunk size near int.MaxValue used to wrap the walk's
+    // offset negative and throw ArgumentOutOfRange out of a chime. Walked in
+    // long, it now steps past the end, finds no data chunk and is refused —
+    // which plays the original, like any WAV this cannot scale. MaxValue-3
+    // and -8 are the sizes that land the wrapped offset on a readable
+    // negative and just short of the header; MaxValue is odd, so it also adds
+    // the pad byte.
+    [Theory]
+    [InlineData(int.MaxValue)]
+    [InlineData(int.MaxValue - 3)]
+    [InlineData(int.MaxValue - 8)]
+    public void AChunkSizeNearIntMaxIsRefusedRatherThanThrown(int size)
+    {
+        var junk = new List<byte>();
+        junk.AddRange("junk"u8.ToArray());
+        junk.AddRange(BitConverter.GetBytes(size));
+        junk.AddRange(new byte[] { 1, 2, 3, 4 });
+
+        Assert.Null(AudioVolume.ScaleWav(Wav(1, 16, Shorts(1000), extra: junk.ToArray()), 0.5));
+    }
+
+    // The same sizes on the fmt chunk itself, which is read before the jump.
+    [Theory]
+    [InlineData(int.MaxValue)]
+    [InlineData(int.MaxValue - 3)]
+    [InlineData(int.MaxValue - 8)]
+    public void AnFmtChunkSizeNearIntMaxIsRefusedRatherThanThrown(int size)
+    {
+        var bytes = Wav(1, 16, Shorts(1000));
+        BitConverter.TryWriteBytes(bytes.AsSpan(16, 4), size);   // the fmt chunk's size
+
         Assert.Null(AudioVolume.ScaleWav(bytes, 0.5));
     }
 

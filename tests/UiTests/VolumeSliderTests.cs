@@ -24,16 +24,22 @@ public class VolumeSliderTests
         (SettingsWindow)typeof(SettingsWindow).GetConstructor(
             BindingFlags.NonPublic | BindingFlags.Instance, Type.EmptyTypes)!.Invoke(null);
 
+    // A speak command is configured throughout, so "custom" means a command
+    // that will really run; AStaleCustomChoiceWithNoCommandLeavesTheSliderLive
+    // clears it to test the other case. Nothing here opens the voice picker,
+    // so the command is never actually run.
     private static void With(string engine, double speech, double alert, Action body)
     {
         var wasEngine = ClaudeBuddySettings.SpeakEngine;
         var wasSpeech = ClaudeBuddySettings.SpeechVolume;
         var wasAlert = ClaudeBuddySettings.AlertVolume;
+        var wasCommand = ClaudeBuddySettings.SpeakCommand;
         try
         {
             ClaudeBuddySettings.SpeakEngine = engine;
             ClaudeBuddySettings.SpeechVolume = speech;
             ClaudeBuddySettings.AlertVolume = alert;
+            ClaudeBuddySettings.SpeakCommand = "my-own-tts";
             body();
         }
         finally
@@ -41,6 +47,7 @@ public class VolumeSliderTests
             ClaudeBuddySettings.SpeakEngine = wasEngine;
             ClaudeBuddySettings.SpeechVolume = wasSpeech;
             ClaudeBuddySettings.AlertVolume = wasAlert;
+            ClaudeBuddySettings.SpeakCommand = wasCommand;
         }
     }
 
@@ -100,6 +107,7 @@ public class VolumeSliderTests
             Assert.Equal(0.5, ClaudeBuddySettings.SpeechVolume, 3);
             Assert.Equal(0.8, ClaudeBuddySettings.AlertVolume, 3);
             Assert.Equal("50%", ToolTip.GetTip(slider));
+            Assert.Equal("50%", window.SpeechVolumeReadout!.Text);
 
             // An unrelated property changing is not a level change.
             slider.MinWidth = 200;
@@ -114,11 +122,14 @@ public class VolumeSliderTests
     public void MovingTheAlertSliderWritesOnlyTheAlertLevel() =>
         With("system", 0.9, 1.0, () =>
         {
-            var slider = NewWindow().AlertVolumeSlider();
+            var window = NewWindow();
+            window.AlertVolumeControl();
+            var slider = window.AlertVolumeSlider!;
 
             slider.Value = 0.25;
             Assert.Equal(0.25, ClaudeBuddySettings.AlertVolume, 3);
             Assert.Equal(0.9, ClaudeBuddySettings.SpeechVolume, 3);
+            Assert.Equal("25%", window.AlertVolumeReadout!.Text);
 
             ClaudeBuddySettings.ReloadForTests();
             Assert.Equal(0.25, ClaudeBuddySettings.AlertVolume, 3);
@@ -169,6 +180,55 @@ public class VolumeSliderTests
             Assert.True(alert.IsEnabled);
             Assert.False(window.SpeechVolumeSlider!.IsEnabled);
         });
+
+    // ---- a visible percentage (CB-200 QA) -----------------------------------
+
+    // Both rows show their level as text beside the slider, in the row itself
+    // — not only in a tooltip nobody sees without hovering.
+    [AvaloniaFact]
+    public void EachRowShowsItsPercentageBesideTheSlider() =>
+        With("system", 0.4, 0.65, () =>
+        {
+            var window = NewWindow();
+            var speechRow = RowLabelled(window.VoiceRows(), "Speech volume");
+            var alertRow = RowLabelled(window.SoundRows(), "Alert volume");
+
+            Assert.Equal("40%", window.SpeechVolumeReadout!.Text);
+            Assert.Equal("65%", window.AlertVolumeReadout!.Text);
+            Assert.Contains(window.SpeechVolumeReadout, speechRow.GetLogicalDescendants());
+            Assert.Contains(window.AlertVolumeReadout, alertRow.GetLogicalDescendants());
+        });
+
+    // ---- follows the engine that will actually speak (CB-200 QA) -----------
+
+    // speakEngine still says "custom" but the command behind it is gone: a
+    // system voice speaks, so the slider is live and nothing claims otherwise.
+    // Its pair is ACustomCommandGreysTheSpeechSliderAndSaysWhy below, with a
+    // command configured.
+    [AvaloniaFact]
+    public void AStaleCustomChoiceWithNoCommandLeavesTheSliderLive() =>
+        With("custom", 0.4, 1.0, () => WithSpeakCommand(null, () =>
+        {
+            var window = NewWindow();
+            window.VoiceRows();
+
+            Assert.True(window.SpeechVolumeSlider!.IsEnabled);
+            Assert.False(window.SpeechVolumeNote!.IsVisible);
+        }));
+
+    private static void WithSpeakCommand(string? command, Action body)
+    {
+        var saved = ClaudeBuddySettings.SpeakCommand;
+        try
+        {
+            ClaudeBuddySettings.SpeakCommand = command;
+            body();
+        }
+        finally
+        {
+            ClaudeBuddySettings.SpeakCommand = saved;
+        }
+    }
 
     // ---- noted on a fallback engine (CB-200 review) -------------------------
 

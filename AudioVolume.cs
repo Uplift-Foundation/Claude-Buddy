@@ -65,7 +65,9 @@ namespace ClaudeBuddy
         // answers an argument it does not know with a usage error — which is
         // silence. It ignores an environment variable it does not know, and
         // speaks at full volume instead. Worse volume beats no voice.
-        internal const string SpeechVolumeEnvVar = "CLAUDEBUDDY_SPEECH_VOLUME";
+        // The name itself lives in SpeechEngineContract, compiled into the engine
+        // as well, so the two sides spell it from one place.
+        internal const string SpeechVolumeEnvVar = SpeechEngineContract.VolumeEnvVar;
 
         // Where Windows keeps scaled chime copies. Under the temp directory
         // because every one of them can be rebuilt from its source on demand.
@@ -131,6 +133,21 @@ namespace ClaudeBuddy
                 _ => null
             };
 
+        // The Alert volume row's description. Windows gets one more sentence
+        // (CB-200 PM review): its chimes are made quieter by scaling a copy of
+        // the WAV's samples, which only works for uncompressed audio, so a
+        // compressed file a user picked themselves plays at full volume
+        // there. Said where the slider is rather than only in the README.
+        // macOS's afplay applies its own gain to any format, so the sentence
+        // would be false there. A parameter rather than an OS check so both
+        // arms are tested on either CI leg.
+        public static string AlertVolumeHelp(bool windows) =>
+            "How loud both sounds above play, previews included. Separate from the "
+            + "speech volume, so a quiet chime never means a quiet voice."
+            + (windows
+                ? " A compressed WAV file you chose yourself can't be made quieter and plays at full volume."
+                : "");
+
         // What the settings window shows beside a slider.
         public static string Percent(double level) =>
             ((int)Math.Round(Clamp(level) * 100)).ToString(CultureInfo.InvariantCulture) + "%";
@@ -188,29 +205,38 @@ namespace ClaudeBuddy
             // Chunks are walked rather than assumed at fixed offsets: real
             // files carry LIST/fact/bext chunks between the header and the
             // data, and a fixed offset would scale a header.
-            var at = 12;
+            //
+            // In long, because a chunk's size is whatever the file says it is.
+            // CB-200 QA: a size near int.MaxValue wrapped `body + size + pad`
+            // negative in int, and the next read threw ArgumentOutOfRange out
+            // of a chime — nothing above caught it. In long the walk simply
+            // steps past the end of the file, finds no data chunk, and the
+            // file plays unscaled like any other WAV this cannot read.
+            // Offsets inside the loop are only ever used once they are known
+            // to be inside the array, which is what makes the casts safe.
+            long at = 12;
             while (at + 8 <= wav.Length)
             {
-                var size = BitConverter.ToInt32(wav, at + 4);
+                var size = BitConverter.ToInt32(wav, (int)at + 4);
                 if (size < 0) return null;
                 var body = at + 8;
 
-                if (Tag(wav, at, "fmt ") && size >= 16 && body + 16 <= wav.Length)
+                if (Tag(wav, (int)at, "fmt ") && size >= 16 && body + 16 <= wav.Length)
                 {
-                    format = BitConverter.ToUInt16(wav, body);
-                    bits = BitConverter.ToUInt16(wav, body + 14);
+                    format = BitConverter.ToUInt16(wav, (int)body);
+                    bits = BitConverter.ToUInt16(wav, (int)body + 14);
 
                     // WAVE_FORMAT_EXTENSIBLE carries the real format in the
                     // first two bytes of its SubFormat GUID.
                     if (format == 0xFFFE && size >= 40 && body + 26 <= wav.Length)
                     {
-                        format = BitConverter.ToUInt16(wav, body + 24);
+                        format = BitConverter.ToUInt16(wav, (int)body + 24);
                     }
                 }
-                else if (Tag(wav, at, "data"))
+                else if (Tag(wav, (int)at, "data"))
                 {
-                    dataStart = body;
-                    dataLength = Math.Min(size, wav.Length - body);
+                    dataStart = (int)body;
+                    dataLength = (int)Math.Min(size, wav.Length - body);
                     break;
                 }
 

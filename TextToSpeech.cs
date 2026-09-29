@@ -322,6 +322,22 @@ namespace ClaudeBuddy
             _ => SpeakEngine.System
         };
 
+        // The engine that will actually speak, as far as the settings alone can
+        // say — what the Speech volume row greys and labels itself on.
+        //
+        // Differs from EngineNamed in one case (CB-200 QA): speakEngine still
+        // reads "custom" after the speakCommand behind it was cleared. No
+        // custom option exists then, so SelectedFrom falls off the engine to a
+        // system voice and Speak never reaches StartCustomCommand — and a
+        // system voice honours the level, so a greyed "not supported" slider
+        // would be describing an engine that is not going to run. Neural needs
+        // no such rule: it falls back to a system voice too, but both honour a
+        // level, and the fallback-engine note already asks NeuralSpeech.
+        internal static SpeakEngine EngineThatWillSpeak(string? setting, bool customCommandConfigured) =>
+            EngineNamed(setting) is SpeakEngine.Custom && !customCommandConfigured
+                ? SpeakEngine.System
+                : EngineNamed(setting);
+
         // Records a choice made in the settings window, writing both which engine
         // speaks and that engine's own voice key. The per-engine keys are kept
         // separate so switching away from an engine and back remembers what was
@@ -743,53 +759,14 @@ namespace ClaudeBuddy
                 ? selected.Name
                 : DefaultVoice;
 
-            // CB-200: read once per utterance, so moving the slider mid-sentence
-            // takes effect from the next one rather than half-way through.
-            var volume = ClaudeBuddySettings.SpeechVolume;
+            // Linux and anything else: no system voice to start.
+            var startInfo = SystemSpeechStartInfo(text, voice,
+                RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ? OSPlatform.OSX
+                : RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? OSPlatform.Windows
+                : OSPlatform.Linux);
+            if (startInfo is null) return;
 
-            Process proc;
-            if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
-            {
-                proc = new Process
-                {
-                    StartInfo = new ProcessStartInfo
-                    {
-                        FileName = "/usr/bin/say",
-                        // `say` has no volume flag; [[volm]] embedded in the
-                        // text is how it is told. See AudioVolume.SayText.
-                        ArgumentList = { "-v", voice, AudioVolume.SayText(text, volume) },
-                        UseShellExecute = false,
-                        CreateNoWindow = true,
-                        RedirectStandardOutput = true,
-                        RedirectStandardError = true
-                    },
-                    EnableRaisingEvents = true
-                };
-            }
-            else if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-            {
-                proc = new Process
-                {
-                    StartInfo = new ProcessStartInfo
-                    {
-                        FileName = "powershell",
-                        ArgumentList =
-                        {
-                            "-NoProfile", "-Command",
-                            WindowsSpeakScript(text, voice, volume)
-                        },
-                        UseShellExecute = false,
-                        CreateNoWindow = true,
-                        RedirectStandardOutput = true,
-                        RedirectStandardError = true
-                    },
-                    EnableRaisingEvents = true
-                };
-            }
-            else
-            {
-                return;
-            }
+            var proc = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
 
             proc.Exited += (_, _) => Finished(proc);
 
@@ -809,6 +786,53 @@ namespace ClaudeBuddy
                 proc.Dispose();
                 Enter(SpeakState.Idle);
             }
+        }
+
+        // What starts one system-voice utterance on `platform`, or null where
+        // there is no system voice. Split out of Speak, which is excluded for
+        // launching a real engine, because this is where the Speech level is
+        // read and applied — and CB-200 QA mutated exactly those lines (the
+        // read replaced with 1.0, SayText replaced with the bare text) and the
+        // suites stayed green, since nothing outside the exclusion saw them.
+        //
+        // The platform is a parameter rather than asked of the OS so both
+        // arms run on either CI leg; Speak passes the real one.
+        //
+        // Read once per utterance, so moving the slider mid-sentence takes
+        // effect from the next one rather than half-way through.
+        internal static ProcessStartInfo? SystemSpeechStartInfo(string text, string voice, OSPlatform platform) =>
+            SystemSpeechStartInfo(text, voice, platform, ClaudeBuddySettings.SpeechVolume);
+
+        internal static ProcessStartInfo? SystemSpeechStartInfo(string text, string voice, OSPlatform platform,
+            double volume)
+        {
+            ProcessStartInfo startInfo;
+            if (platform == OSPlatform.OSX)
+            {
+                // `say` has no volume flag; [[volm]] embedded in the text is
+                // how it is told. See AudioVolume.SayText.
+                startInfo = new ProcessStartInfo("/usr/bin/say")
+                {
+                    ArgumentList = { "-v", voice, AudioVolume.SayText(text, volume) }
+                };
+            }
+            else if (platform == OSPlatform.Windows)
+            {
+                startInfo = new ProcessStartInfo("powershell")
+                {
+                    ArgumentList = { "-NoProfile", "-Command", WindowsSpeakScript(text, voice, volume) }
+                };
+            }
+            else
+            {
+                return null;
+            }
+
+            startInfo.UseShellExecute = false;
+            startInfo.CreateNoWindow = true;
+            startInfo.RedirectStandardOutput = true;
+            startInfo.RedirectStandardError = true;
+            return startInfo;
         }
 
         // The Windows PowerShell script that speaks one utterance through SAPI.
@@ -963,8 +987,7 @@ namespace ClaudeBuddy
                 text,
                 voice ?? ClaudeBuddySettings.NeuralVoice,
                 rate,
-                onSpeaking: () => Enter(SpeakState.Speaking),
-                volume: ClaudeBuddySettings.SpeechVolume);
+                onSpeaking: () => Enter(SpeakState.Speaking));
 
             if (proc is null)
             {

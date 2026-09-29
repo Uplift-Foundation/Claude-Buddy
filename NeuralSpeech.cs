@@ -521,29 +521,17 @@ namespace ClaudeBuddy
             return voices;
         }
 
-        // Starts the engine on this text and hands the process back for
-        // TextToSpeech to own — it already knows how to treat a running child as
-        // "speaking" and a kill as "stop".
-        //
-        // Text goes in over stdin, not on the command line. An assistant turn runs
-        // to 1500 characters of quotes, apostrophes, newlines and code
-        // punctuation; the PowerShell path this replaces has to double every
-        // apostrophe to survive being spliced into a script and got it wrong once
-        // already. A pipe has no escaping rules to get wrong.
-        //
-        // onSpeaking fires when the engine reports that audio has actually begun.
-        // There is a real wait in front of the first sound — process start, then a
-        // model load, then the first segment's synthesis, measured at ~3.3s — so
-        // the caller needs to distinguish "preparing" from "speaking" rather than
-        // showing a stop button over silence.
-        // Excluded from coverage: starts the side-car engine process.
-        [ExcludeFromCodeCoverage]
-        public static Process? Start(string text, string? voice, double? rate, Action? onSpeaking,
-            double volume = AudioVolume.Default)
-        {
-            var engine = UsableEnginePath;
-            if (engine is null || !File.Exists(ModelPath)) return null;
+        // Everything about launching the engine except the launch: its argv and
+        // environment. Split out of Start, which is excluded for starting a
+        // real process, because CB-200 QA removed the volume line from inside
+        // that exclusion and nothing noticed. The one-argument-shorter
+        // overload is the one Start calls, and it is where the Speech level
+        // is read — the other mutant QA planted was that read replaced with 1.
+        internal static ProcessStartInfo StartInfoFor(string engine, string? voice, double? rate) =>
+            StartInfoFor(engine, voice, rate, ClaudeBuddySettings.SpeechVolume);
 
+        internal static ProcessStartInfo StartInfoFor(string engine, string? voice, double? rate, double volume)
+        {
             var startInfo = new ProcessStartInfo(engine)
             {
                 ArgumentList =
@@ -576,6 +564,33 @@ namespace ClaudeBuddy
             {
                 startInfo.Environment[AudioVolume.SpeechVolumeEnvVar] = level;
             }
+
+            return startInfo;
+        }
+
+        // Starts the engine on this text and hands the process back for
+        // TextToSpeech to own — it already knows how to treat a running child as
+        // "speaking" and a kill as "stop".
+        //
+        // Text goes in over stdin, not on the command line. An assistant turn runs
+        // to 1500 characters of quotes, apostrophes, newlines and code
+        // punctuation; the PowerShell path this replaces has to double every
+        // apostrophe to survive being spliced into a script and got it wrong once
+        // already. A pipe has no escaping rules to get wrong.
+        //
+        // onSpeaking fires when the engine reports that audio has actually begun.
+        // There is a real wait in front of the first sound — process start, then a
+        // model load, then the first segment's synthesis, measured at ~3.3s — so
+        // the caller needs to distinguish "preparing" from "speaking" rather than
+        // showing a stop button over silence.
+        // Excluded from coverage: starts the side-car engine process.
+        [ExcludeFromCodeCoverage]
+        public static Process? Start(string text, string? voice, double? rate, Action? onSpeaking)
+        {
+            var engine = UsableEnginePath;
+            if (engine is null || !File.Exists(ModelPath)) return null;
+
+            var startInfo = StartInfoFor(engine, voice, rate);
 
             var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
 

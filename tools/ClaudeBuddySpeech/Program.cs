@@ -153,9 +153,7 @@ namespace ClaudeBuddySpeech
                 : Speak(modelPath, chosen, text, rate, volume);
         }
 
-        // CB-200: how loud to speak, from the app's Speech slider. The same
-        // name as AudioVolume.SpeechVolumeEnvVar in the app, which is the
-        // other half of this contract.
+        // CB-200: how loud to speak, from the app's Speech slider.
         //
         // An environment variable rather than a --volume argument on purpose.
         // Every argument this process does not know is a usage error (see Run),
@@ -163,7 +161,10 @@ namespace ClaudeBuddySpeech
         // it would get silence; an unknown environment variable is simply
         // ignored, so the mismatch in either direction costs the level and
         // never the voice.
-        private const string VolumeEnvVar = "CLAUDEBUDDY_SPEECH_VOLUME";
+        //
+        // The name comes from SpeechEngineContract.cs, the one file this
+        // project shares with the app, so the two cannot spell it differently.
+        private const string VolumeEnvVar = ClaudeBuddy.SpeechEngineContract.VolumeEnvVar;
 
         // Unset, unparsable or out of range all mean "full volume" — the
         // --rate rule: the caller already clamped it, so a value that still

@@ -134,6 +134,33 @@ public class ChimeVolumeTests
         Assert.Contains("full volume", captured.ToString());
     }
 
+    // CB-200 QA: the file that used to throw out of the chunk walk now plays
+    // unscaled, through the same fallback as a compressed WAV, instead of
+    // taking the chime down with it.
+    [Theory]
+    [InlineData(int.MaxValue)]
+    [InlineData(int.MaxValue - 3)]
+    [InlineData(int.MaxValue - 8)]
+    public void AWavWithAnAbsurdChunkSizeStillPlaysAtFullVolume(int size)
+    {
+        var dir = NewDir();
+        var source = Path.Combine(dir, "malformed.wav");
+        var bytes = SixteenBitWav(1000);
+        BitConverter.TryWriteBytes(bytes.AsSpan(16, 4), size);
+        File.WriteAllBytes(source, bytes);
+
+        var saved = Console.Error;
+        Console.SetError(new StringWriter());
+        try
+        {
+            Assert.Equal(source, ChimePlayer.WindowsPlayablePath(source, 0.5, Path.Combine(dir, "cache")));
+        }
+        finally
+        {
+            Console.SetError(saved);
+        }
+    }
+
     [Fact]
     public void TheDefaultCacheIsUsedWhenNoneIsGiven()
     {

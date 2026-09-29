@@ -2299,10 +2299,10 @@ namespace ClaudeBuddy
                 + "anything your own speakCommand lists."));
 
             rows.Add(Row("Speech volume", SpeechVolumeControl(),
-                "How loud replies are read aloud, whichever voice reads them. A custom "
-                + "speak command decides its own volume, so this is greyed out while one "
-                + "is selected. With the high-quality voice it takes effect once this "
-                + "version's voice engine is installed."));
+                "How loud the system voices and the high-quality voice read replies "
+                + "aloud. A custom speak command sets its own volume, so this is greyed "
+                + "out while one is selected. How much quieter a given step sounds "
+                + "depends on the voice."));
 
             rows.Add(Row("Speaks", SpeakScopePicker(),
                 "What the speaker reads. The full response is everything the assistant "
@@ -2389,10 +2389,13 @@ namespace ClaudeBuddy
         internal Slider? SpeechVolumeSlider { get; private set; }
         internal TextBlock? SpeechVolumeNote { get; private set; }
 
+        internal TextBlock? SpeechVolumeReadout { get; private set; }
+
         internal Control SpeechVolumeControl()
         {
+            SpeechVolumeReadout = VolumeReadout();
             SpeechVolumeSlider = VolumeSlider(ClaudeBuddySettings.SpeechVolume,
-                level => ClaudeBuddySettings.SpeechVolume = level);
+                level => ClaudeBuddySettings.SpeechVolume = level, SpeechVolumeReadout);
 
             // Under the slider rather than beside it, and wrapped: the
             // fallback-engine note is a sentence, and beside a 160px slider it
@@ -2414,7 +2417,7 @@ namespace ClaudeBuddy
             {
                 Orientation = Orientation.Vertical,
                 Spacing = 4,
-                Children = { SpeechVolumeSlider, SpeechVolumeNote }
+                Children = { WithReadout(SpeechVolumeSlider, SpeechVolumeReadout), SpeechVolumeNote }
             };
         }
 
@@ -2432,7 +2435,10 @@ namespace ClaudeBuddy
         // slider — AudioVolume.SpeechVolumeNote says why.
         internal void RefreshSpeechVolumeAvailability()
         {
-            var engine = TextToSpeech.EngineNamed(ClaudeBuddySettings.SpeakEngine);
+            // The engine that will speak, not merely the one named: a stale
+            // "custom" with no command behind it speaks with a system voice.
+            var engine = TextToSpeech.EngineThatWillSpeak(
+                ClaudeBuddySettings.SpeakEngine, TextToSpeech.CustomCommandConfigured);
             var note = AudioVolume.SpeechVolumeNote(engine, NeuralSpeech.SpeaksWithFallbackEngine);
 
             SpeechVolumeSlider!.IsEnabled = AudioVolume.EngineAppliesVolume(engine);
@@ -2441,14 +2447,42 @@ namespace ClaudeBuddy
         }
 
         // CB-200's Alert slider — every chime, whichever engine speaks.
-        internal Slider AlertVolumeSlider() =>
-            VolumeSlider(ClaudeBuddySettings.AlertVolume, level => ClaudeBuddySettings.AlertVolume = level);
+        internal Slider? AlertVolumeSlider { get; private set; }
+        internal TextBlock? AlertVolumeReadout { get; private set; }
+
+        internal Control AlertVolumeControl()
+        {
+            AlertVolumeReadout = VolumeReadout();
+            AlertVolumeSlider = VolumeSlider(ClaudeBuddySettings.AlertVolume,
+                level => ClaudeBuddySettings.AlertVolume = level, AlertVolumeReadout);
+            return WithReadout(AlertVolumeSlider, AlertVolumeReadout);
+        }
+
+        // The percentage beside each slider (CB-200 QA): a tooltip is a
+        // number nobody sees without hovering, and "how loud is it now" is the
+        // first thing anyone asks of a volume control. Fixed width, right
+        // aligned, so the slider does not shift as 5% becomes 100%.
+        private static TextBlock VolumeReadout() => new()
+        {
+            FontSize = 12,
+            Width = 36,
+            TextAlignment = TextAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+
+        private static Control WithReadout(Slider slider, TextBlock readout) => new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Children = { slider, readout }
+        };
 
         // Both volume sliders are the same control over AudioVolume's range,
-        // with the percentage as a tooltip so a position has a number. The
+        // with the percentage in a readout beside it and as a tooltip. The
         // other sliders in this window read their range from the class that
         // owns the rule; this one does too.
-        internal static Slider VolumeSlider(double value, Action<double> write)
+        internal static Slider VolumeSlider(double value, Action<double> write, TextBlock readout)
         {
             var slider = new Slider
             {
@@ -2462,12 +2496,14 @@ namespace ClaudeBuddy
                 IsSnapToTickEnabled = true
             };
             ToolTip.SetTip(slider, AudioVolume.Percent(value));
+            readout.Text = AudioVolume.Percent(value);
 
             slider.PropertyChanged += (_, e) =>
             {
                 if (e.Property != Slider.ValueProperty) return;
                 write(slider.Value);
                 ToolTip.SetTip(slider, AudioVolume.Percent(slider.Value));
+                readout.Text = AudioVolume.Percent(slider.Value);
             };
             return slider;
         }
@@ -3206,9 +3242,7 @@ namespace ClaudeBuddy
             // CB-200. Last rather than beside the master switch, so it reads
             // as applying to both sounds above it — and a preview is how a
             // level is judged, so it sits under the buttons that play one.
-            Row("Alert volume", AlertVolumeSlider(),
-                "How loud both sounds above play, previews included. Separate from the "
-                + "speech volume, so a quiet chime never means a quiet voice.")
+            Row("Alert volume", AlertVolumeControl(), AudioVolume.AlertVolumeHelp(OperatingSystem.IsWindows()))
         };
 
         // --- Mac-ish chrome ---------------------------------------------------

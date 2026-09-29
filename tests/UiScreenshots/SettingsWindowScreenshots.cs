@@ -304,11 +304,16 @@ public class SettingsWindowScreenshots
         var wasEngine = ClaudeBuddySettings.SpeakEngine;
         var wasSpeech = ClaudeBuddySettings.SpeechVolume;
         var wasAlert = ClaudeBuddySettings.AlertVolume;
+        var wasCommand = ClaudeBuddySettings.SpeakCommand;
         try
         {
             ClaudeBuddySettings.SpeakEngine = engine;
             ClaudeBuddySettings.SpeechVolume = speech;
             ClaudeBuddySettings.AlertVolume = alert;
+            // A command that exists, so "custom" is the engine that will
+            // really speak and the greyed state is the honest one. Never run:
+            // nothing here opens the voice picker.
+            ClaudeBuddySettings.SpeakCommand = "my-own-tts";
             capture();
         }
         finally
@@ -316,6 +321,7 @@ public class SettingsWindowScreenshots
             ClaudeBuddySettings.SpeakEngine = wasEngine;
             ClaudeBuddySettings.SpeechVolume = wasSpeech;
             ClaudeBuddySettings.AlertVolume = wasAlert;
+            ClaudeBuddySettings.SpeakCommand = wasCommand;
         }
     }
 
