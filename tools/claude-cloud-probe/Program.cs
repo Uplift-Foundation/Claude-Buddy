@@ -331,57 +331,82 @@ internal static class Program
     // was built on. A run showing a kind this version does not know is the
     // earliest warning that the filter has stopped matching, and it is much
     // cheaper to read here than to diagnose from a screenshot of missing orbs.
-    private static async Task<int> RosterAsync()
+    // Wraps the real API to count what each account's tick asked for, so the
+    // probe can report pages and kinds without a second implementation of the
+    // walk. Only shapes are recorded — never a body, id or title.
+    private sealed class CountingApi : ICloudApi
     {
-        var read = await ReadFirstFoundAsync();
-        if (read.Outcome != CredentialOutcome.Found || read.AccessToken is null)
+        private readonly ICloudApi _inner;
+        internal int Pages;
+        internal int Inspected;
+        internal Dictionary<string, int> Kinds { get; } = new(StringComparer.Ordinal);
+
+        internal CountingApi(ICloudApi inner) => _inner = inner;
+
+        public async Task<CloudApiResult> GetAsync(CloudRequestContext context, CancellationToken token)
         {
-            Console.Error.WriteLine(
-                $"no usable credential: {ClaudeCliCredentials.Describe(read.Outcome)}");
-            return 1;
-        }
-
-        using var api = new HttpCloudApi();
-
-        var pages = new List<ClaudeCloudRoster.Page>();
-        string? after = null;
-
-        for (var i = 0; i < CloudRequest.MaxPagesPerWalk; i++)
-        {
-            var result = await api.GetAsync(
-                new CloudRequestContext(read.AccessToken,
-                    CloudRequest.ListPath(CloudRequest.MaxPageSize, after)),
-                CancellationToken.None);
-
-            if (result.Outcome.Kind != CloudOutcomeKind.Ok)
+            var result = await _inner.GetAsync(context, token);
+            if (result.Outcome.Kind == CloudOutcomeKind.Ok
+                && context.Path.StartsWith(CloudRequest.ListPath(CloudRequest.MaxPageSize, null).Split('?')[0],
+                    StringComparison.Ordinal)
+                && !context.Path.Contains("/session_", StringComparison.Ordinal))
             {
-                Console.Error.WriteLine($"page {i + 1}: {result.Outcome.Kind} {result.Outcome.Status}");
-                if (result.Outcome.Detail is { } why) Console.Error.WriteLine($"  {why}");
-                return 1;
+                var page = ClaudeCloudRoster.ParsePage(result.Body);
+                Pages++;
+                Inspected += page.Inspected;
+                foreach (var row in page.Rows)
+                    Kinds[row.Kind] = Kinds.TryGetValue(row.Kind, out var n) ? n + 1 : 1;
             }
 
-            var page = ClaudeCloudRoster.ParsePage(result.Body);
-            pages.Add(page);
-
-            if (!page.HasMore || page.LastId is null) { after = null; break; }
-            after = page.LastId;
+            return result;
         }
+    }
 
-        var reduction = ClaudeCloudRoster.Reduce(pages, after is not null);
+    // **Runs the shipped per-account path, not a re-implementation of it.** Each
+    // account goes through ClaudeCloudSessions.StepAsync (the same call the app's
+    // poll loop makes), then CloudAccountBoard.Apply folds the results exactly as
+    // the app does, and the status text is DescribeAccounts' output — what
+    // Settings would show. Output is labels, counts and kinds only: no ids, no
+    // titles, no tokens.
+    private static async Task<int> RosterAsync()
+    {
+        using var http = new HttpCloudApi();
+        var board = new CloudAccountBoard(Accounts);
+        var gate = new SemaphoreSlim(1, 1);
+        var exit = 0;
 
-        Console.WriteLine($"pages     {pages.Count}");
-        Console.WriteLine($"inspected {reduction.Inspected}");
-        Console.WriteLine($"truncated {reduction.Truncated}");
-        Console.WriteLine("kinds:");
-        foreach (var kind in reduction.Kinds.OrderByDescending(k => k.Value))
+        foreach (var account in Accounts)
         {
-            var known = ClaudeCloudRoster.IsKnownKind(kind.Key) ? "" : "   <- unknown to this version";
-            Console.WriteLine($"  {kind.Key,-20} {kind.Value}{known}");
+            var api = new CountingApi(http);
+            var step = await ClaudeCloudSessions.StepAsync(
+                api, account.Source, ClaudeCloudSessions.ArmState.Initial, DateTime.UtcNow,
+                CancellationToken.None, UnmeasuredProbeReadBudget, gate);
+            board.Apply(account.Root, step, keychainSkipped: false, account.Source.Stamp, DateTime.UtcNow);
+
+            Console.WriteLine($"account   {account.Label}");
+            Console.WriteLine($"pages     {api.Pages}");
+            Console.WriteLine($"inspected {api.Inspected}");
+            Console.WriteLine("kinds:");
+            foreach (var kind in api.Kinds.OrderByDescending(k => k.Value))
+            {
+                var known = ClaudeCloudRoster.IsKnownKind(kind.Key) ? "" : "   <- unknown to this version";
+                Console.WriteLine($"  {kind.Key,-20} {kind.Value}{known}");
+            }
+
+            Console.WriteLine($"orbs      {step.Snapshot?.Count ?? 0}");
+            Console.WriteLine($"status    {step.Status}");
+            Console.WriteLine();
+            if (step.Snapshot is null || step.Next.Halted) exit = 1;
         }
 
-        Console.WriteLine($"orbs      {reduction.Sessions.Count}");
-        Console.WriteLine($"status    {ClaudeCloudRoster.Describe(reduction)}");
-        return 0;
+        var merged = board.Merged;
+        Console.WriteLine($"merged orbs after dedup  {merged.Count}");
+        foreach (var owner in merged.GroupBy(m => Accounts.First(a => a.Root == m.OwnerRoot).Label))
+            Console.WriteLine($"  owned by {owner.Key}: {owner.Count()}");
+        Console.WriteLine();
+        Console.WriteLine("settings status text:");
+        Console.WriteLine(board.StatusText);
+        return exit;
     }
 
     // Field names and JSON types, no values anywhere.
