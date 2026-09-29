@@ -24,6 +24,11 @@ public partial class ClaudeCloudEventsTests
 
         internal List<(string Token, string SessionId, long? From)> Opens { get; } = new();
 
+        // What E1's real stream does on cancellation: the enumeration simply
+        // ends, with no Ended event and no exception. Off by default, where a
+        // cancelled read throws, which is what Task-based waits do.
+        internal bool EndsQuietlyOnCancel { get; init; }
+
         public async IAsyncEnumerable<CloudStreamEvent> OpenAsync(string accessToken, string sessionId,
             long? fromSequenceNum, [EnumeratorCancellation] CancellationToken ct)
         {
@@ -31,7 +36,21 @@ public partial class ClaudeCloudEventsTests
             lock (Opens) Opens.Add((accessToken, sessionId, fromSequenceNum));
             _opened.Writer.TryWrite(events);
 
-            await foreach (var e in events.Reader.ReadAllAsync(ct)) yield return e;
+            while (true)
+            {
+                CloudStreamEvent next;
+                try
+                {
+                    if (!await events.Reader.WaitToReadAsync(ct)) yield break;
+                    if (!events.Reader.TryRead(out next!)) continue;
+                }
+                catch (OperationCanceledException) when (EndsQuietlyOnCancel)
+                {
+                    yield break;
+                }
+
+                yield return next;
+            }
         }
 
         // The next connection the session opens, as something to write events to.
@@ -324,6 +343,109 @@ public partial class ClaudeCloudEventsTests
         await Close(chat);
     }
 
+    // With nobody subscribed the reducer still does its work: a reply grows,
+    // finishes where it stands when interrupted, and the history says so.
+    [Fact]
+    public async Task AReplyGrowsAndFinishesWithNobodyListening()
+    {
+        var (chat, _, stream, _) = Streaming();
+        chat.PanelOpened();
+        var events = await stream.NextOpenAsync();
+
+        events.TryWrite(Delta("one "));
+        events.TryWrite(Delta("two"));
+        events.TryWrite(Durable(42, "result", "error_during_execution"));
+        await Until(() => chat.History.Count == 1 && chat.History[0].IsComplete);
+
+        Assert.Equal("one two", chat.History[0].Text);
+        await Close(chat);
+    }
+
+    // A stored assistant row with no uuid still takes over the live bubble; one
+    // whose uuid is already on screen updates that turn and leaves the live
+    // bubble to the turn's end.
+    [Fact]
+    public async Task AStoredRowWithNoUuidTakesOverTheLiveBubble()
+    {
+        var (chat, _, stream, _) = Streaming();
+        chat.PanelOpened();
+        var events = await stream.NextOpenAsync();
+
+        events.TryWrite(Delta("partial"));
+        events.TryWrite(Durable(42, "assistant", payload:
+            """{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"whole"}]}}"""));
+        await Until(() => chat.History.Count == 1 && chat.History[0].IsComplete);
+
+        Assert.Equal("whole", chat.History[0].Text);
+        await Close(chat);
+    }
+
+    [Fact]
+    public async Task AStoredRowAlreadyOnScreenUpdatesItAndLeavesTheLiveBubble()
+    {
+        var api = new RoutingApi(Answer(200, Receipt),
+            new CloudApiResult(CloudOutcomes.OutcomeFor(200, ""), Envelope(new[] { AssistantRow("a1", "earlier") })));
+        var stream = new FakeStream();
+        var chat = Sender(api, stream: stream);
+        await chat.LoadAsync(CancellationToken.None);
+
+        chat.PanelOpened();
+        var events = await stream.NextOpenAsync();
+
+        events.TryWrite(Delta("live"));
+        events.TryWrite(Durable(42, "assistant", payload: AssistantRow("a1", "earlier, amended")));
+        events.TryWrite(Durable(43, "result", "success"));
+        await Until(() => chat.History.Count == 2 && chat.History[1].IsComplete);
+
+        Assert.Equal(new[] { "earlier, amended", "live" }, chat.History.Select(t => t.Text));
+        await Close(chat);
+    }
+
+    // A keepalive says the socket is open, not that anything will come down it:
+    // it does not restore trust in a stream the panel has fallen back from.
+    [Fact]
+    public async Task AKeepaliveAloneDoesNotRestoreTrustAfterAFallback()
+    {
+        var (chat, _, stream, _) = Streaming();
+        chat.PanelOpened();
+
+        for (var i = 0; i < ClaudeCloudStreamPolicy.UnmeasuredFailuresBeforeFallback; i++)
+        {
+            (await stream.NextOpenAsync()).TryWrite(EndedWith(503));
+        }
+
+        var retry = await stream.NextOpenAsync();
+        var seen = chat.StreamEventsSeen;
+        retry.TryWrite(new CloudStreamEvent(CloudStreamEventKind.Keepalive, null, null, null));
+        retry.TryWrite(new CloudStreamEvent(CloudStreamEventKind.Session, "session_update", null, "{}"));
+        await Until(() => chat.StreamEventsSeen == seen + 2);
+        Assert.False(chat.StreamTrusted);
+
+        // The negative control: a real event on the same connection does.
+        retry.TryWrite(Durable(42, "assistant", payload: AssistantRow("a1", "marker")));
+        await Until(() => chat.StreamTrusted);
+        await Close(chat);
+    }
+
+    // The real stream ends quietly when cancelled — no Ended event, no
+    // exception — and that is not read as a transport failure to reconnect from.
+    [Fact]
+    public async Task AStreamThatEndsQuietlyOnCancelIsNotReopened()
+    {
+        var api = new RoutingApi(Answer(200, Receipt));
+        var stream = new FakeStream { EndsQuietlyOnCancel = true };
+        var clock = new FakeClock();
+        var chat = Sender(api, clock, stream: stream);
+
+        chat.PanelOpened();
+        await stream.NextOpenAsync();
+        chat.PanelClosed();
+        await chat.StreamTask!;
+
+        Assert.Equal(1, stream.OpenCount);
+        Assert.Empty(clock.Waits);
+    }
+
     // --- ending, reconnecting, falling back ------------------------------------
 
     // A clean end is a server closing the connection: reopen from the last
@@ -435,7 +557,8 @@ public partial class ClaudeCloudEventsTests
         // A stream that delivers again is trusted again: the next send leaves
         // the turn to it.
         Assert.False(chat.StreamTrusted);
-        retry.TryWrite(new CloudStreamEvent(CloudStreamEventKind.Keepalive, null, null, null));
+        retry.TryWrite(new CloudStreamEvent(CloudStreamEventKind.Ephemeral, "ephemeral_event", null, "{}",
+            PayloadType: "system", Subtype: "commands_changed"));
         await Until(() => chat.StreamTrusted);
         var polled = chat.LiveTask;
         await chat.SendAsync("again");

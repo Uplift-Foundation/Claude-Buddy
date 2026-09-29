@@ -176,7 +176,7 @@ public class CloudSessionScreenshots : IDisposable
             DisplayName = "Essay on testing",
             IsReadOnly = false,
             CanInterrupt = true,
-            ComposerHint = "Message… (queued until this turn finishes)",
+            ComposerHint = "Message… (queued after this turn)",
             MachineName = "Anthropic's cloud",
         };
 

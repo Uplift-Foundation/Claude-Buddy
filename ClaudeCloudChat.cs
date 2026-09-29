@@ -167,7 +167,7 @@ namespace ClaudeBuddy
 
         // Short, because it is a watermark. Says the one thing a person would
         // otherwise get wrong: the message is not lost, it is waiting.
-        internal const string BusyHint = "Message… (queued until this turn finishes)";
+        internal const string BusyHint = "Message… (queued after this turn)";
 
         internal const string EndedHint = "This session has ended and no longer takes messages.";
 
@@ -533,8 +533,14 @@ namespace ClaudeBuddy
         // until it delivers again it is not what the panel relies on.
         private bool StreamLive => StreamRunning && !_streamFellBack;
 
-        // The same answer, for a test to wait on rather than sleep for.
+        // The same answer, for a test to wait on rather than sleep for — and how
+        // many stream events have been handled, so a test can know an event it
+        // wrote has been seen before asserting what it did not change.
         internal bool StreamTrusted => StreamLive;
+
+        internal int StreamEventsSeen => Volatile.Read(ref _streamEventsSeen);
+
+        private int _streamEventsSeen;
 
         // Whoever is watching live owns busy; the roster only updates the row.
         private bool LiveOwnsBusy => LiveRunning || StreamLive;
@@ -935,10 +941,17 @@ namespace ClaudeBuddy
                         }
 
                         // A stream that delivers again after the panel fell back
-                        // is trusted again; the polling loop runs out on its own.
+                        // is trusted again, and the polling loop runs out on its
+                        // own — but only on a real event. A keepalive says the
+                        // socket is open, not that anything will come down it.
                         delivered = true;
-                        _streamFellBack = false;
+                        if (e.Kind is CloudStreamEventKind.Durable or CloudStreamEventKind.Ephemeral)
+                        {
+                            _streamFellBack = false;
+                        }
+
                         Handle(e);
+                        Interlocked.Increment(ref _streamEventsSeen);
                     }
                 }
                 catch (OperationCanceledException)
@@ -1099,15 +1112,14 @@ namespace ClaudeBuddy
             _deltasSuperseded = false;
 
             // An interrupted reply has no durable message to replace it, so the
-            // bubble that was growing is simply finished where it stands.
+            // bubble that was growing is simply finished where it stands. A live
+            // bubble is always unfinished — the stored message clears it — so
+            // there is nothing to check first.
             if (_liveTurn is { } live)
             {
                 _liveTurn = null;
-                if (!live.IsComplete)
-                {
-                    live.IsComplete = true;
-                    TurnUpdated?.Invoke(live);
-                }
+                live.IsComplete = true;
+                TurnUpdated?.Invoke(live);
             }
 
             SetBusy(false);

@@ -1245,6 +1245,20 @@ public partial class ClaudeCloudEventsTests
         Assert.False(chat.CanInterrupt);
     }
 
+    // A malformed id has no status path, so the loop stops without asking.
+    [Fact]
+    public async Task AMalformedIdIsNotPolled()
+    {
+        var clock = new FakeClock();
+        var api = new RoutingApi(Answer(200, Receipt));
+        var chat = Sender(api, clock, session: BusyRow("not a session"));
+
+        chat.PanelOpened();
+        await chat.LiveTask!;
+
+        Assert.Empty(api.Requests);
+    }
+
     // --- the /v1 status body ---------------------------------------------------
 
     [Theory]
