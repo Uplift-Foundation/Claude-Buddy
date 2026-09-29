@@ -77,6 +77,20 @@ namespace ClaudeBuddy
         // 413. Plain HTTP: the body was bigger than the endpoint takes. The CLI
         // handles it on the same route; the limit itself is not known here.
         TooLarge,
+
+        // 404 on a session: it no longer exists. **Measured** against a deleted
+        // cloud session: `GET /v1/code/sessions/{id}` answered 404
+        // `not_found_error` "Session <id> not found", and
+        // `GET /v2/ccr-sessions/{id}/events` answered 404 as well. Distinct from
+        // SessionInactive, which is an ended session and is not measured. A
+        // POST to a deleted session is not measured either; it is assumed to be
+        // 404 like the reads, and lands here if so.
+        //
+        // OutcomeFor cannot see the path, so a 404 anywhere reads as this. The
+        // one caller where that would be wrong — the roster listing, where a
+        // 404 means the collection moved rather than a session went — undoes it
+        // itself; see ClaudeCloudSessions.RosterView.
+        SessionGone,
     }
 
     // One attempt's verdict. Status is the HTTP status where there was one and 0
@@ -330,6 +344,8 @@ namespace ClaudeBuddy
         internal const string SessionInactiveDetail =
             "the endpoint answered 409, which Claude Code reads as the session no longer taking input";
 
+        internal const string SessionGoneDetail = "this cloud session no longer exists";
+
         internal const string TooLargeDetail =
             "the endpoint answered 413: the message was larger than it accepts";
 
@@ -399,6 +415,10 @@ namespace ClaudeBuddy
                             ? EdgeBlockedDetail
                             : AccountBlockedDetail);
 
+                case 404:
+                    return new CloudOutcome(CloudOutcomeKind.SessionGone, status, null,
+                        SessionGoneDetail);
+
                 case 409:
                     return new CloudOutcome(CloudOutcomeKind.SessionInactive, status, null,
                         SessionInactiveDetail);
@@ -449,6 +469,13 @@ namespace ClaudeBuddy
                 case CloudOutcomeKind.TokenRefused:
                 case CloudOutcomeKind.AuthFailed:
                 case CloudOutcomeKind.Blocked:
+                    return null;
+
+                // A session that has been deleted is not coming back, and
+                // asking again on a schedule would be a retry loop against a
+                // measured answer. Before CB-199 a 404 fell to Unavailable and
+                // was retried with exponential backoff, which was wrong for this.
+                case CloudOutcomeKind.SessionGone:
                     return null;
 
                 case CloudOutcomeKind.RateLimited:

@@ -54,6 +54,12 @@ public class ClaudeCloudSendPayloadTests
     private const string InactiveBody =
         """{"type":"error","error":{"type":"session_inactive","message":"session is not active"},"request_id":"req_fixture_4"}""";
 
+    // **Measured**, on `GET /v1/code/sessions/{id}` for a deleted session. The
+    // write to one is not measured and is assumed to answer the same, which
+    // is why this fixture is run through the send exchange as well.
+    private const string GoneBody =
+        """{"type":"error","error":{"type":"not_found_error","message":"Session session_01FixtureOnly not found"},"request_id":"req_fixture_5"}""";
+
     // One status and body per call, recording what was asked, so the whole
     // exchange is checkable: where it went, with what, and what came back.
     private sealed class FixtureApi : ICloudApi
@@ -122,6 +128,7 @@ public class ClaudeCloudSendPayloadTests
     [InlineData(400, NoVersionBody, "ShapeChanged")]
     [InlineData(401, NoAuthBody, "AuthFailed")]
     [InlineData(401, BogusTokenBody, "TokenRefused")]
+    [InlineData(404, GoneBody, "SessionGone")]
     [InlineData(409, InactiveBody, "SessionInactive")]
     [InlineData(413, "", "TooLarge")]
     public async Task EachRefusalIsItsOwnVerdictAndCarriesNoBody(int status, string body,
@@ -144,7 +151,7 @@ public class ClaudeCloudSendPayloadTests
         foreach (var (status, body) in new[]
                  {
                      (200, SentBody), (400, EmptyRefusedBody), (401, BogusTokenBody),
-                     (403, "<html></html>"), (409, InactiveBody), (413, ""), (429, ""), (500, ""),
+                     (403, "<html></html>"), (404, GoneBody), (409, InactiveBody), (413, ""), (429, ""), (500, ""),
                  })
         {
             var (result, api) = await Send(status, body);
