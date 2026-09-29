@@ -11,8 +11,10 @@ namespace ClaudeBuddy.UiTests;
 
 // CB-200's two sliders in the settings window: that each renders over the
 // right range holding the saved level, that moving it writes the setting,
-// and that the Speech one is disabled and labelled — never a slider that
-// silently does nothing — while a custom speak command is selected.
+// and that the Speech one is always live but carries a note whenever the
+// engine that will speak — globally, or for an orb's own voice — might not
+// act on the level: a custom command that has to read it, or Kokoro on an
+// older engine that ignores it.
 //
 // In the Settings collection because every case flips process-wide settings
 // (the engine and both levels) before building a window; see
@@ -36,6 +38,10 @@ public class VolumeSliderTests
         var wasCommand = ClaudeBuddySettings.SpeakCommand;
         try
         {
+            // No orb voices and no built voice list unless a case adds them,
+            // so the note reflects the global engine alone.
+            LocalPersonas.SetForTests(new System.Collections.Generic.Dictionary<string, LocalPersona.Persona>());
+            TextToSpeech.InvalidateVoiceCache();
             ClaudeBuddySettings.SpeakEngine = engine;
             ClaudeBuddySettings.SpeechVolume = speech;
             ClaudeBuddySettings.AlertVolume = alert;
@@ -48,6 +54,8 @@ public class VolumeSliderTests
             ClaudeBuddySettings.SpeechVolume = wasSpeech;
             ClaudeBuddySettings.AlertVolume = wasAlert;
             ClaudeBuddySettings.SpeakCommand = wasCommand;
+            LocalPersonas.SetForTests(new System.Collections.Generic.Dictionary<string, LocalPersona.Persona>());
+            TextToSpeech.InvalidateVoiceCache();
         }
     }
 
@@ -135,12 +143,12 @@ public class VolumeSliderTests
             Assert.Equal(0.25, ClaudeBuddySettings.AlertVolume, 3);
         });
 
-    // ---- disabled on Custom ------------------------------------------------
+    // ---- always live; noted where the level may not be heard ------------------
 
     [AvaloniaTheory]
     [InlineData("system")]
     [InlineData("neural")]
-    public void AnEngineThatHonoursALevelHasAnEnabledSliderAndNoNote(string engine) =>
+    public void AnEngineThatHonoursALevelHasNoNote(string engine) =>
         With(engine, 1.0, 1.0, () =>
         {
             var window = NewWindow();
@@ -150,21 +158,21 @@ public class VolumeSliderTests
             Assert.False(window.SpeechVolumeNote!.IsVisible);
         });
 
+    // CB-200 second review (Warren's call): a custom command is told the
+    // level through CLAUDEBUDDY_SPEECH_VOLUME, so the slider is live — and the
+    // row says the command has to read it.
     [AvaloniaFact]
-    public void ACustomCommandGreysTheSpeechSliderAndSaysWhy() =>
+    public void ACustomCommandKeepsALiveSliderAndSaysTheCommandMustReadIt() =>
         With("custom", 0.4, 1.0, () =>
         {
             var window = NewWindow();
             var row = RowLabelled(window.VoiceRows(), "Speech volume");
 
-            Assert.False(window.SpeechVolumeSlider!.IsEnabled);
+            Assert.True(window.SpeechVolumeSlider!.IsEnabled);
             Assert.True(window.SpeechVolumeNote!.IsVisible);
-            Assert.Equal("Not supported for custom commands", window.SpeechVolumeNote.Text);
-
-            // The note is inside the row itself, beside the slider it explains.
+            Assert.Equal(AudioVolume.CustomCommandNote, window.SpeechVolumeNote.Text);
+            Assert.Contains("CLAUDEBUDDY_SPEECH_VOLUME", window.SpeechVolumeNote.Text);
             Assert.Contains(window.SpeechVolumeNote, row.GetLogicalDescendants());
-            // The saved level is still shown, not reset, so switching back to a
-            // voice that honours it finds it where it was left.
             Assert.Equal(0.4, window.SpeechVolumeSlider.Value, 3);
         });
 
@@ -178,7 +186,61 @@ public class VolumeSliderTests
                 .GetLogicalDescendants().OfType<Slider>().Single();
 
             Assert.True(alert.IsEnabled);
-            Assert.False(window.SpeechVolumeSlider!.IsEnabled);
+            Assert.Equal(0.5, alert.Value, 3);
+        });
+
+    // ---- an orb's own voice (CB-200 second review) ---------------------------
+
+    // Warren's defect: global engine "system", an orb's persona on his F5-TTS
+    // custom command. The row used to say nothing; now it says what an orb on
+    // a custom command needs. Its negative control is the same orb with no
+    // voice list built, which states both rules instead — and, below, an orb
+    // whose voice is the global engine's, which adds nothing.
+    [AvaloniaTheory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void AnOrbOnACustomCommandIsNotedWhenTheGlobalEngineIsSystem(bool voiceListBuilt) =>
+        With("system", 0.4, 1.0, () =>
+        {
+            LocalPersonas.SetForTests(new System.Collections.Generic.Dictionary<string, LocalPersona.Persona>
+            {
+                ["orb-1"] = new("Jennifer", "female_03", null, null, null, Array.Empty<string>())
+            });
+            if (voiceListBuilt)
+            {
+                TextToSpeech.SetVoiceOptionsForTests(new()
+                {
+                    new(TextToSpeech.SpeakEngine.System, "Samantha", "Samantha (system)"),
+                    new(TextToSpeech.SpeakEngine.Custom, "female_03", "female_03 (custom)"),
+                });
+            }
+
+            var window = NewWindow();
+            window.VoiceRows();
+
+            Assert.True(window.SpeechVolumeSlider!.IsEnabled);
+            Assert.True(window.SpeechVolumeNote!.IsVisible);
+            Assert.Equal(voiceListBuilt ? AudioVolume.OrbCustomCommandNote : AudioVolume.OrbVoicesUnknownNote,
+                window.SpeechVolumeNote.Text);
+        });
+
+    [AvaloniaFact]
+    public void AnOrbOnTheGlobalEngineAddsNoNote() =>
+        With("system", 0.4, 1.0, () =>
+        {
+            LocalPersonas.SetForTests(new System.Collections.Generic.Dictionary<string, LocalPersona.Persona>
+            {
+                ["orb-1"] = new("Sam", "Samantha", null, null, null, Array.Empty<string>())
+            });
+            TextToSpeech.SetVoiceOptionsForTests(new()
+            {
+                new(TextToSpeech.SpeakEngine.System, "Samantha", "Samantha (system)"),
+            });
+
+            var window = NewWindow();
+            window.VoiceRows();
+
+            Assert.False(window.SpeechVolumeNote!.IsVisible);
         });
 
     // ---- a visible percentage (CB-200 QA) -----------------------------------
@@ -202,11 +264,11 @@ public class VolumeSliderTests
     // ---- follows the engine that will actually speak (CB-200 QA) -----------
 
     // speakEngine still says "custom" but the command behind it is gone: a
-    // system voice speaks, so the slider is live and nothing claims otherwise.
-    // Its pair is ACustomCommandGreysTheSpeechSliderAndSaysWhy below, with a
+    // system voice speaks, so there is no command caveat to state. Its pair is
+    // ACustomCommandKeepsALiveSliderAndSaysTheCommandMustReadIt, with a
     // command configured.
     [AvaloniaFact]
-    public void AStaleCustomChoiceWithNoCommandLeavesTheSliderLive() =>
+    public void AStaleCustomChoiceWithNoCommandHasNoNote() =>
         With("custom", 0.4, 1.0, () => WithSpeakCommand(null, () =>
         {
             var window = NewWindow();
@@ -292,23 +354,22 @@ public class VolumeSliderTests
         });
 
     // Choosing a voice can change the engine without rebuilding the window;
-    // the slider has to follow it both ways.
+    // the note has to follow it both ways, and the slider never greys.
     [AvaloniaFact]
-    public void TheSliderFollowsTheEngineWhenTheChoiceChanges() =>
+    public void TheNoteFollowsTheEngineWhenTheChoiceChanges() =>
         With("system", 1.0, 1.0, () =>
         {
             var window = NewWindow();
             window.VoiceRows();
-            Assert.True(window.SpeechVolumeSlider!.IsEnabled);
+            Assert.False(window.SpeechVolumeNote!.IsVisible);
 
             ClaudeBuddySettings.SpeakEngine = "custom";
-            window.RefreshSpeechVolumeAvailability();
-            Assert.False(window.SpeechVolumeSlider.IsEnabled);
-            Assert.True(window.SpeechVolumeNote!.IsVisible);
+            window.RefreshSpeechVolumeNote();
+            Assert.True(window.SpeechVolumeNote.IsVisible);
+            Assert.True(window.SpeechVolumeSlider!.IsEnabled);
 
             ClaudeBuddySettings.SpeakEngine = "neural";
-            window.RefreshSpeechVolumeAvailability();
-            Assert.True(window.SpeechVolumeSlider.IsEnabled);
+            window.RefreshSpeechVolumeNote();
             Assert.False(window.SpeechVolumeNote.IsVisible);
         });
 
@@ -318,18 +379,18 @@ public class VolumeSliderTests
     // and selecting it; ChooseVoice returns early on the unscanned
     // placeholder, and the refresh still runs.
     [AvaloniaFact]
-    public void TheVoicePickersSelectionChangeRefreshesTheSlider() =>
+    public void TheVoicePickersSelectionChangeRefreshesTheNote() =>
         With("system", 1.0, 1.0, () =>
         {
             var window = NewWindow();
             var rows = window.VoiceRows();
             var picker = RowLabelled(rows, "Speak voice").GetLogicalDescendants().OfType<ComboBox>().Single();
-            Assert.True(window.SpeechVolumeSlider!.IsEnabled);
+            Assert.False(window.SpeechVolumeNote!.IsVisible);
 
             ClaudeBuddySettings.SpeakEngine = "custom";
             picker.ItemsSource = new[] { "placeholder", "another" };
             picker.SelectedIndex = 1;
 
-            Assert.False(window.SpeechVolumeSlider.IsEnabled);
+            Assert.Equal(AudioVolume.CustomCommandNote, window.SpeechVolumeNote.Text);
         });
 }

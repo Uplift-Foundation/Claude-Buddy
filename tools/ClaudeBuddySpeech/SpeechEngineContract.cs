@@ -14,7 +14,10 @@ namespace ClaudeBuddy
     {
         // How the Speech level reaches the engine: an invariant decimal in
         // 0..1, unset at full volume. AudioVolume.SpeechVolumeEnvVar says why
-        // an environment variable rather than an argument.
+        // an environment variable rather than an argument. A user's custom
+        // speak command gets the same name (always set there, "1" included —
+        // see TextToSpeech.CustomCommandStartInfo), which is part of why the
+        // name must never drift: the README promises it to them too.
         public const string VolumeEnvVar = "CLAUDEBUDDY_SPEECH_VOLUME";
     }
 }

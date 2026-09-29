@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -85,51 +86,95 @@ namespace ClaudeBuddy
         // byte-for-byte alone.
         public static bool IsFull(double level) => Clamp(level) >= Max;
 
-        // Whether a speech engine can be told how loud to speak. The whole
-        // reason the Speech slider can be greyed out.
+        // Every engine is told the level now — `say` through [[volm]], SAPI
+        // through Volume, Kokoro through SpeechVolumeEnvVar, and (since
+        // CB-200's second review, Warren's call) a custom speak command through
+        // the same variable. So the Speech slider is never greyed out. What
+        // the row still has to be honest about is the two cases where telling
+        // is not the same as hearing, and it says so in a note under the
+        // slider rather than by disabling it:
         //
-        // A custom SpeakCommand is opaque by design: its contract with this
-        // app is text on stdin and an exit code (see StartCustomCommand), and
-        // there is nowhere in that contract to put a level without inventing
-        // a new one every user's wrapper would then have to learn. So it is
-        // not supported, and the slider says so rather than moving silently.
+        // - A custom command gets the level only if it reads the variable.
+        //   The contract is text on stdin and an exit code; the variable is
+        //   an optional extra, and a command that ignores it speaks exactly
+        //   as it did before.
+        // - Kokoro speaking through an older engine
+        //   (NeuralSpeech.SpeaksWithFallbackEngine) — just after an upgrade,
+        //   before this build's engine has downloaded, and indefinitely on a
+        //   dev build whose engine was never published. An engine from before
+        //   CB-200 ignores the variable. "Installed" rather than "downloaded"
+        //   because the dev-build case never downloads.
         //
-        // No platform argument, because none is needed: every engine that
-        // speaks at all on either platform honours a level — `say` through
-        // [[volm]], SAPI through Volume, Kokoro through its own playback gain.
-        // If one ever stops, this is the one place that says so.
-        public static bool EngineAppliesVolume(TextToSpeech.SpeakEngine engine) =>
-            engine != TextToSpeech.SpeakEngine.Custom;
+        // The slider stays live in both: the level is saved, and applies the
+        // moment the command reads it or the right engine lands.
+        public const string CustomCommandNote =
+            "Sent to your command as " + SpeechEngineContract.VolumeEnvVar + "; applies only if the command reads it";
 
-        // The label beside a greyed-out Speech slider — the ticket's own
-        // wording, kept in one place so the settings window and its tests
-        // cannot drift apart on it.
-        public const string CustomCommandUnsupportedNote = "Not supported for custom commands";
-
-        // The label beside the Speech slider while Kokoro is selected but
-        // speaking through an older engine (NeuralSpeech.SpeaksWithFallbackEngine)
-        // — just after an upgrade, before this build's engine has downloaded,
-        // and indefinitely on a dev build whose engine was never published.
-        // An engine from before CB-200 ignores SpeechVolumeEnvVar and speaks
-        // at full volume, so the slider would otherwise move and change
-        // nothing. "Installed" rather than "downloaded" because the dev-build
-        // case never downloads; the sentence has to be true for both.
         public const string FallbackEngineNote = "Takes effect once the updated voice engine is installed";
 
-        // What the Speech row says beside its slider, or null for nothing.
+        // The same two caveats for an orb whose own voice (a persona's) runs
+        // on a different engine from the global one — which is how Warren's
+        // vibe summaries went through his F5-TTS command while the global
+        // engine said "system" and the row said nothing at all.
+        public const string OrbCustomCommandNote =
+            "An orb with its own custom-command voice gets it only if that command reads "
+            + SpeechEngineContract.VolumeEnvVar;
+
+        public const string OrbFallbackEngineNote =
+            "An orb with its own Kokoro voice also waits for the updated voice engine";
+
+        // When orbs have voices of their own but which engines they resolve to
+        // is not known without enumerating every voice on the machine — two
+        // process launches the settings window will not make just to draw a
+        // row. Both caveats, stated as rules rather than as facts about any
+        // particular orb.
+        public const string OrbVoicesUnknownNote =
+            "Orbs with their own voice follow the same rules: a custom command must read "
+            + SpeechEngineContract.VolumeEnvVar + ", and Kokoro needs the updated voice engine";
+
+        // What the Speech row says under its slider, or null for nothing.
         //
-        // Separate from EngineAppliesVolume on purpose: the two disagree for
-        // the fallback engine. It cannot apply a level today, but the slider
-        // stays enabled — the level is saved and takes effect the moment the
-        // right engine lands, and a system voice speaking in its place (the
-        // neural path falls through to one whenever the engine fails to
-        // start) honours it already. A custom command never will, so that
-        // slider is the one that greys out.
-        public static string? SpeechVolumeNote(TextToSpeech.SpeakEngine engine, bool usingFallbackEngine) =>
+        // `globalEngine` is the engine the user's own voice will actually use
+        // (TextToSpeech.EngineThatWillSpeak). `orbEngines` is the set of
+        // engines orbs' own voices resolve to — empty when no orb has a voice
+        // of its own, null when some do but the engines are not known (see
+        // SessionIdentity.OrbEngines). An orb on the global engine adds
+        // nothing: the global line already covers it. One line per caveat,
+        // global first, so the most common case reads first.
+        public static string? SpeechVolumeNote(TextToSpeech.SpeakEngine globalEngine, bool usingFallbackEngine,
+            IReadOnlyCollection<TextToSpeech.SpeakEngine>? orbEngines)
+        {
+            var lines = new List<string>();
+
+            if (Caveat(globalEngine, usingFallbackEngine, CustomCommandNote, FallbackEngineNote) is { } global)
+            {
+                lines.Add(global);
+            }
+
+            if (orbEngines is null)
+            {
+                lines.Add(OrbVoicesUnknownNote);
+            }
+            else
+            {
+                foreach (var engine in orbEngines.Where(e => e != globalEngine).Distinct().OrderBy(e => e))
+                {
+                    if (Caveat(engine, usingFallbackEngine, OrbCustomCommandNote, OrbFallbackEngineNote) is { } orb)
+                    {
+                        lines.Add(orb);
+                    }
+                }
+            }
+
+            return lines.Count == 0 ? null : string.Join("\n", lines);
+        }
+
+        private static string? Caveat(TextToSpeech.SpeakEngine engine, bool usingFallbackEngine,
+            string customNote, string fallbackNote) =>
             engine switch
             {
-                TextToSpeech.SpeakEngine.Custom => CustomCommandUnsupportedNote,
-                TextToSpeech.SpeakEngine.Neural when usingFallbackEngine => FallbackEngineNote,
+                TextToSpeech.SpeakEngine.Custom => customNote,
+                TextToSpeech.SpeakEngine.Neural when usingFallbackEngine => fallbackNote,
                 _ => null
             };
 

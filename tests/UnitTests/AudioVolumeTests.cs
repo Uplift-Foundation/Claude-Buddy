@@ -19,34 +19,24 @@ public class AudioVolumeTests
 {
     // --- the engine decision ------------------------------------------------
 
+    // The Speech row's note from the global engine alone (no orb voices) —
+    // one case per arm. The fallback flag only means anything for Kokoro; a
+    // custom command's note stands whatever it says, and a system voice has
+    // no note either way. The slider itself is never disabled any more: every
+    // engine, a custom command included, is told the level.
     [Theory]
-    [InlineData(SpeakEngine.System, true)]
-    [InlineData(SpeakEngine.Neural, true)]
-    [InlineData(SpeakEngine.Custom, false)]
-    public void OnlyACustomCommandCannotBeToldALevel(SpeakEngine engine, bool applies) =>
-        Assert.Equal(applies, AudioVolume.EngineAppliesVolume(engine));
-
-    // The Speech row's note — one case per arm. The fallback flag only means
-    // anything for Kokoro; a custom command's note wins whatever it says, and
-    // a system voice has no note either way.
-    [Theory]
-    [InlineData(SpeakEngine.Custom, false, AudioVolume.CustomCommandUnsupportedNote)]
-    [InlineData(SpeakEngine.Custom, true, AudioVolume.CustomCommandUnsupportedNote)]
+    [InlineData(SpeakEngine.Custom, false, AudioVolume.CustomCommandNote)]
+    [InlineData(SpeakEngine.Custom, true, AudioVolume.CustomCommandNote)]
     [InlineData(SpeakEngine.Neural, true, AudioVolume.FallbackEngineNote)]
     [InlineData(SpeakEngine.Neural, false, null)]
     [InlineData(SpeakEngine.System, false, null)]
     [InlineData(SpeakEngine.System, true, null)]
-    public void TheSpeechRowSaysWhyALevelWillNotApply(SpeakEngine engine, bool usingFallback, string? expected) =>
-        Assert.Equal(expected, AudioVolume.SpeechVolumeNote(engine, usingFallback));
+    public void TheSpeechRowSaysWhenALevelMayNotBeHeard(SpeakEngine engine, bool usingFallback, string? expected) =>
+        Assert.Equal(expected, AudioVolume.SpeechVolumeNote(engine, usingFallback, Array.Empty<SpeakEngine>()));
 
-    // The fallback engine gets a note but keeps a working slider: the two
-    // decisions are deliberately different for exactly that one state.
     [Fact]
-    public void AFallbackEngineIsNotedButStillTakesALevel()
-    {
-        Assert.NotNull(AudioVolume.SpeechVolumeNote(SpeakEngine.Neural, usingFallbackEngine: true));
-        Assert.True(AudioVolume.EngineAppliesVolume(SpeakEngine.Neural));
-    }
+    public void TheCustomCommandNoteNamesTheVariable() =>
+        Assert.Contains(SpeechEngineContract.VolumeEnvVar, AudioVolume.CustomCommandNote);
 
     // The Alert row's description names the compressed-WAV gap on Windows
     // only; macOS's afplay applies its own gain to any format.

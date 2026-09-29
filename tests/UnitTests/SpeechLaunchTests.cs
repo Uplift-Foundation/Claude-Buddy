@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.InteropServices;
 using Xunit;
@@ -126,6 +127,73 @@ public class SpeechLaunchTests
 
             Assert.Equal(new[] { "--rate", "1.25" }, args.Skip(args.Count - 2));
         });
+
+    // --- a custom speak command (CB-200 second review) ----------------------
+
+    private static void WithCommandVoice(Action body)
+    {
+        var savedVoice = ClaudeBuddySettings.SpeakCommandVoice;
+        try
+        {
+            ClaudeBuddySettings.SpeakCommandVoice = "female_03";
+            body();
+        }
+        finally
+        {
+            ClaudeBuddySettings.SpeakCommandVoice = savedVoice;
+        }
+    }
+
+    // Kills "the assignment removed" and "the read replaced with 1.0": the
+    // saved level has to reach the command's environment through the
+    // overload StartCustomCommand calls.
+    [Fact]
+    public void ACustomCommandIsHandedTheSavedLevelInItsEnvironment() =>
+        WithSpeechVolume(0.3, () => WithCommandVoice(() =>
+        {
+            var startInfo = CustomCommandStartInfo("/Users/me/bin/cb-voice.sh", voice: null);
+
+            Assert.Equal("0.3", startInfo.Environment[SpeechEngineContract.VolumeEnvVar]);
+            Assert.Equal("female_03", startInfo.Environment["CLAUDEBUDDY_VOICE"]);
+            Assert.Equal("/Users/me/bin/cb-voice.sh", startInfo.FileName);
+            Assert.Equal(ClaudeBuddySettings.SpeakCommandArgs, startInfo.ArgumentList);
+            Assert.True(startInfo.RedirectStandardInput);
+            Assert.True(startInfo.RedirectStandardOutput);
+            Assert.True(startInfo.RedirectStandardError);
+            Assert.True(startInfo.CreateNoWindow);
+            Assert.False(startInfo.UseShellExecute);
+        }));
+
+    // Always set, "1" included, so a wrapper never reads a stale value
+    // inherited from this process's environment.
+    [Fact]
+    public void AtFullVolumeACustomCommandIsStillToldOne() =>
+        WithSpeechVolume(1.0, () => WithCommandVoice(() =>
+            Assert.Equal("1", CustomCommandStartInfo("cmd", "v").Environment[SpeechEngineContract.VolumeEnvVar])));
+
+    // Invariant whatever the user's culture: "0.5", never "0,5" — a wrapper
+    // doing arithmetic on "0,5" gets zero or an error.
+    [Fact]
+    public void ACustomCommandsLevelIsWrittenInvariantUnderACommaCulture()
+    {
+        var saved = System.Globalization.CultureInfo.CurrentCulture;
+        try
+        {
+            System.Globalization.CultureInfo.CurrentCulture = new System.Globalization.CultureInfo("de-DE");
+            WithCommandVoice(() =>
+                Assert.Equal("0.5", CustomCommandStartInfo("cmd", "v", 0.5).Environment[SpeechEngineContract.VolumeEnvVar]));
+        }
+        finally
+        {
+            System.Globalization.CultureInfo.CurrentCulture = saved;
+        }
+    }
+
+    // The voice passed in wins over the saved one, as before.
+    [Fact]
+    public void AnExplicitVoiceWinsOverTheSavedOne() =>
+        WithCommandVoice(() =>
+            Assert.Equal("male_01", CustomCommandStartInfo("cmd", "male_01", 1.0).Environment["CLAUDEBUDDY_VOICE"]));
 
     // --- which engine will actually speak -----------------------------------
 

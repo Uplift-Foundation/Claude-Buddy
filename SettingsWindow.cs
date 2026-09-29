@@ -2299,10 +2299,10 @@ namespace ClaudeBuddy
                 + "anything your own speakCommand lists."));
 
             rows.Add(Row("Speech volume", SpeechVolumeControl(),
-                "How loud the system voices and the high-quality voice read replies "
-                + "aloud. A custom speak command sets its own volume, so this is greyed "
-                + "out while one is selected. How much quieter a given step sounds "
-                + "depends on the voice."));
+                "How loud replies are read aloud — the system voices, the high-quality "
+                + "voice, and orbs with voices of their own. A custom speak command is "
+                + "sent the level and decides what to do with it. How much quieter a "
+                + "given step sounds depends on the voice."));
 
             rows.Add(Row("Speaks", SpeakScopePicker(),
                 "What the speaker reads. The full response is everything the assistant "
@@ -2376,16 +2376,17 @@ namespace ClaudeBuddy
                 ChooseVoice(combo, options);
 
                 // Choosing a voice can change the engine, and the engine is
-                // what decides whether the Speech slider means anything.
-                RefreshSpeechVolumeAvailability();
+                // what decides what the Speech row's note has to say.
+                RefreshSpeechVolumeNote();
             };
 
             return combo;
         }
 
-        // CB-200's Speech slider and the note that stands in for it when the
-        // selected engine cannot be told a level. Kept as fields so choosing a
-        // different voice can flip the slider without rebuilding the window.
+        // CB-200's Speech slider and the note under it for the cases where
+        // telling an engine the level is not the same as hearing it. Kept as
+        // fields so choosing a different voice can change the note without
+        // rebuilding the window.
         internal Slider? SpeechVolumeSlider { get; private set; }
         internal TextBlock? SpeechVolumeNote { get; private set; }
 
@@ -2397,21 +2398,21 @@ namespace ClaudeBuddy
             SpeechVolumeSlider = VolumeSlider(ClaudeBuddySettings.SpeechVolume,
                 level => ClaudeBuddySettings.SpeechVolume = level, SpeechVolumeReadout);
 
-            // Under the slider rather than beside it, and wrapped: the
-            // fallback-engine note is a sentence, and beside a 160px slider it
+            // Under the slider rather than beside it, and wrapped: every
+            // note is a sentence or two, and beside a 160px slider it
             // would squeeze the row's label into a clip on Windows — the same
             // failure the Sounds rows had.
             SpeechVolumeNote = new TextBlock
             {
                 FontSize = 11,
                 Opacity = 0.7,
-                MaxWidth = 200,
+                MaxWidth = 240,
                 TextWrapping = TextWrapping.Wrap,
                 TextAlignment = TextAlignment.Right,
                 HorizontalAlignment = HorizontalAlignment.Right
             };
 
-            RefreshSpeechVolumeAvailability();
+            RefreshSpeechVolumeNote();
 
             return new StackPanel
             {
@@ -2421,27 +2422,28 @@ namespace ClaudeBuddy
             };
         }
 
-        // Decided from the saved engine alone — no voice is enumerated to find
-        // out, for the reason SavedVoiceNameForPlaceholder gives. Disabled and
-        // labelled rather than hidden, so the setting is still discoverable
-        // and the reason it does nothing is on screen beside it.
+        // The slider is never disabled: every engine is told the level
+        // (AudioVolume.SpeechVolumeNote says what is and is not promised).
+        // This decides only the note, from the saved engine and from the
+        // engines orbs' own voices resolve to — CB-200's second review found
+        // an orb's persona speaking through a custom command while the row,
+        // reading the global engine alone, said nothing. No voice is
+        // enumerated to find out, for the reason SavedVoiceNameForPlaceholder
+        // gives; the orbs' engines come from the voice list only if something
+        // has already built it.
         //
         // No null guard: the constructor builds every row, and VoiceRows
-        // builds this slider before anything that could call here can fire —
+        // builds this note before anything that could call here can fire —
         // the picker's SelectionChanged only follows a user's choice.
-        //
-        // The note and the enabled state are two decisions, not one: an older
-        // engine standing in for this build's gets a note but keeps a live
-        // slider — AudioVolume.SpeechVolumeNote says why.
-        internal void RefreshSpeechVolumeAvailability()
+        internal void RefreshSpeechVolumeNote()
         {
             // The engine that will speak, not merely the one named: a stale
             // "custom" with no command behind it speaks with a system voice.
             var engine = TextToSpeech.EngineThatWillSpeak(
                 ClaudeBuddySettings.SpeakEngine, TextToSpeech.CustomCommandConfigured);
-            var note = AudioVolume.SpeechVolumeNote(engine, NeuralSpeech.SpeaksWithFallbackEngine);
+            var note = AudioVolume.SpeechVolumeNote(engine, NeuralSpeech.SpeaksWithFallbackEngine,
+                SessionIdentity.OrbEngines(SessionIdentity.PersonaVoiceRequests(), TextToSpeech.CachedVoiceOptions));
 
-            SpeechVolumeSlider!.IsEnabled = AudioVolume.EngineAppliesVolume(engine);
             SpeechVolumeNote!.Text = note;
             SpeechVolumeNote.IsVisible = note is not null;
         }

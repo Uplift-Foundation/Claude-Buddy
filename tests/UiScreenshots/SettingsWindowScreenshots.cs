@@ -238,9 +238,9 @@ public class SettingsWindowScreenshots
         WithVolumes("system", speech: 0.4, alert: 1.0, () =>
             CaptureGroup(ShownSettings(), "Speech volume", "Voice", "settings-speech-volume.png"));
 
-    // The disabled case the ticket insists on: a custom speak command cannot
-    // be told a level, so the slider is greyed and labelled rather than left
-    // to move silently. The label beside it is the thing to look for.
+    // A custom speak command is told the level through
+    // CLAUDEBUDDY_SPEECH_VOLUME (CB-200 second review), so the slider is live;
+    // the note under it says the command has to read it.
     [AvaloniaFact]
     public void SpeechVolumeIsGreyedAndLabelledForACustomCommand() =>
         WithVolumes("custom", speech: 0.4, alert: 1.0, () =>
@@ -264,6 +264,34 @@ public class SettingsWindowScreenshots
         WithVolumes("neural", speech: 0.4, alert: 1.0, () =>
             WithOlderEngineOnly(() =>
                 CaptureGroup(ShownSettings(), "Speech volume", "Voice", "settings-speech-volume-fallback.png")));
+
+    // CB-200 second review, Warren's defect: the global engine is a system
+    // voice, but an orb's persona speaks through a custom command. The note
+    // under the live slider is the one for orbs with their own custom-command
+    // voice — before this, the row said nothing at all.
+    [AvaloniaFact]
+    public void SpeechVolumeIsNotedForAnOrbOnACustomCommand() =>
+        WithVolumes("system", speech: 0.4, alert: 1.0, () =>
+        {
+            LocalPersonas.SetForTests(new Dictionary<string, LocalPersona.Persona>
+            {
+                ["orb-1"] = new("Jennifer", "female_03", null, null, null, Array.Empty<string>())
+            });
+            TextToSpeech.SetVoiceOptionsForTests(new()
+            {
+                new(TextToSpeech.SpeakEngine.System, "Samantha", "Samantha (system)"),
+                new(TextToSpeech.SpeakEngine.Custom, "female_03", "female_03 (custom)"),
+            });
+            try
+            {
+                CaptureGroup(ShownSettings(), "Speech volume", "Voice", "settings-speech-volume-orb-custom.png");
+            }
+            finally
+            {
+                LocalPersonas.SetForTests(new Dictionary<string, LocalPersona.Persona>());
+                TextToSpeech.InvalidateVoiceCache();
+            }
+        });
 
     private static void WithOlderEngineOnly(Action capture)
     {

@@ -279,6 +279,24 @@ namespace ClaudeBuddy
             return options;
         }
 
+        // The voice list if it has already been built, or null — never a
+        // reason to build it. For the settings window's Speech row, which
+        // wants to know which engines orbs' own voices land on but must not
+        // launch the neural engine and the user's listing command just to draw
+        // a note. In practice it is built the first time anything speaks.
+        internal static IReadOnlyList<VoiceOption>? CachedVoiceOptions
+        {
+            get { lock (Gate) return _cachedOptions; }
+        }
+
+        // A test seam for CachedVoiceOptions: the only thing that fills the
+        // cache in production is AllVoiceOptions, which is two process
+        // launches. InvalidateVoiceCache empties it again.
+        internal static void SetVoiceOptionsForTests(List<VoiceOption> options)
+        {
+            lock (Gate) _cachedOptions = options;
+        }
+
         // The voice currently selected, resolved against what is actually
         // available. Falls back rather than failing: a saved selection can name an
         // engine that has since been uninstalled or a voice that no longer exists,
@@ -870,23 +888,20 @@ namespace ClaudeBuddy
                    $"$s.Speak('{escaped}')";
         }
 
-        // Whatever the user pointed ClaudeBuddySettings.SpeakCommand at. Returns
-        // false only when no command is configured — a configured command that
-        // fails to launch returns true, having reported why, because falling
-        // through to a system voice would disguise the problem.
+        // Everything about starting the user's speak command except the start:
+        // its argv and environment. Out of StartCustomCommand, which is
+        // excluded for launching someone else's program, for the reason
+        // SystemSpeechStartInfo and NeuralSpeech.StartInfoFor are — the Speech
+        // level is set here, and a line inside an exclusion is a line no
+        // mutant can be caught removing.
         //
-        // The interface is the one this class already had for `say` and
-        // PowerShell, which is the point: text on stdin, exit when finished,
-        // killed to cancel. Nothing else is required of it — printing "speaking"
-        // on stdout when audio starts is optional and only sharpens the button's
-        // state, never a condition of working.
-        // Excluded from coverage: starts the user's command as a subprocess.
-        [ExcludeFromCodeCoverage]
-        private static bool StartCustomCommand(string text, string? voice = null)
-        {
-            var command = ClaudeBuddySettings.SpeakCommand;
-            if (string.IsNullOrWhiteSpace(command)) return false;
+        // The shorter overload is what StartCustomCommand calls, and it is
+        // where the level is read.
+        internal static ProcessStartInfo CustomCommandStartInfo(string command, string? voice) =>
+            CustomCommandStartInfo(command, voice, ClaudeBuddySettings.SpeechVolume);
 
+        internal static ProcessStartInfo CustomCommandStartInfo(string command, string? voice, double volume)
+        {
             var startInfo = new ProcessStartInfo(command)
             {
                 UseShellExecute = false,
@@ -909,6 +924,42 @@ namespace ClaudeBuddy
             // inherited from this process's own environment.
             startInfo.Environment["CLAUDEBUDDY_VOICE"] = voice ??
                 ClaudeBuddySettings.SpeakCommandVoice ?? "";
+
+            // CB-200: the Speech level, 0 to 1, invariant ("0.5", never "0,5"),
+            // under the same name the Kokoro engine reads. Optional for the
+            // command — one that ignores it speaks exactly as it always did —
+            // which is why it can be offered at all when this contract once
+            // had nowhere to put a level.
+            //
+            // Always set, including "1" at full volume, unlike the engine's
+            // copy: for the same reason CLAUDEBUDDY_VOICE is always set, a
+            // wrapper reading it must never see a stale value inherited from
+            // this process's own environment. The engine can leave it unset
+            // because unset has always meant full volume there; a user's
+            // wrapper has no such history to rely on.
+            startInfo.Environment[AudioVolume.SpeechVolumeEnvVar] = AudioVolume.Format(volume);
+
+            return startInfo;
+        }
+
+        // Whatever the user pointed ClaudeBuddySettings.SpeakCommand at. Returns
+        // false only when no command is configured — a configured command that
+        // fails to launch returns true, having reported why, because falling
+        // through to a system voice would disguise the problem.
+        //
+        // The interface is the one this class already had for `say` and
+        // PowerShell, which is the point: text on stdin, exit when finished,
+        // killed to cancel. Nothing else is required of it — printing "speaking"
+        // on stdout when audio starts is optional and only sharpens the button's
+        // state, never a condition of working.
+        // Excluded from coverage: starts the user's command as a subprocess.
+        [ExcludeFromCodeCoverage]
+        private static bool StartCustomCommand(string text, string? voice = null)
+        {
+            var command = ClaudeBuddySettings.SpeakCommand;
+            if (string.IsNullOrWhiteSpace(command)) return false;
+
+            var startInfo = CustomCommandStartInfo(command, voice);
 
             var proc = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
 
