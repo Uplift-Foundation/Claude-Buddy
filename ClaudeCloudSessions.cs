@@ -166,15 +166,13 @@ namespace ClaudeBuddy
         // An empty list, by contrast, is a real answer — "we have access and there
         // is nothing" or "we have no access at all" — and does clear the orbs.
         //
-        // PromptDeclined and RateLimited exist for the accounts above this arm:
-        // one account's declined Keychain prompt stops the others stacking dialogs
-        // behind it, and one account's 429 backs all of them off.
+        // RateLimited exists for the accounts above this arm: one account's 429
+        // backs all of them off.
         internal sealed record StepResult(
             ArmState Next,
             IReadOnlyList<Session>? Snapshot,
             string Status,
             TimeSpan Wait,
-            bool PromptDeclined = false,
             bool RateLimited = false);
 
         // One tick. Every decision this arm makes is here.
@@ -190,8 +188,7 @@ namespace ClaudeBuddy
             ArmState state,
             DateTime now,
             CancellationToken ct,
-            TimeSpan? readBudget = null,
-            SemaphoreSlim? readGate = null)
+            TimeSpan? readBudget = null)
         {
             var stamp = credentials.Stamp();
 
@@ -210,30 +207,17 @@ namespace ClaudeBuddy
             // is indistinguishable from having no cloud sessions. The budget is the
             // only thing standing between that measurement and a silent app.
             //
-            // `readGate` serialises reads across accounts: with several, two
-            // Keychain consent dialogs on screen at once would be unanswerable,
-            // and one account's 45-second budget must not be spent waiting behind
-            // another's dialog. It is taken here, around the read alone and not
-            // inside ReadWithinAsync, so time queued for the gate is not charged
-            // against the budget.
-            if (readGate is not null) await readGate.WaitAsync(ct).ConfigureAwait(false);
-            CredentialRead read;
-            try
-            {
-                read = await ClaudeCliCredentials.ReadWithinAsync(
-                    credentials, readBudget ?? ClaudeCliCredentials.UnmeasuredReadBudget, ct)
-                    .ConfigureAwait(false);
-            }
-            finally
-            {
-                readGate?.Release();
-            }
+            // A gated source (one per account, see CloudAccountSource) is read one
+            // at a time across the whole process, and chooses what to read only
+            // once it holds the gate. That happens inside ReadWithinAsync.
+            var read = await ClaudeCliCredentials.ReadWithinAsync(
+                credentials, readBudget ?? ClaudeCliCredentials.UnmeasuredReadBudget, ct)
+                .ConfigureAwait(false);
 
             if (read.Outcome != CredentialOutcome.Found || read.AccessToken is not { } token)
             {
                 var wait = Backoff.Next(read.Outcome, state.Backoff);
-                return Stop(state, stamp, ClaudeCliCredentials.Describe(read.Outcome), wait)
-                    with { PromptDeclined = read.Outcome is CredentialOutcome.Denied or CredentialOutcome.NoAnswer };
+                return Stop(state, stamp, ClaudeCliCredentials.Describe(read.Outcome), wait);
             }
 
             var plan = ClaudeCloudRoster.PlanFor(state.LastWalkUtc, now, state.Sessions);
@@ -443,7 +427,7 @@ namespace ClaudeBuddy
         // stalls another's.
         [ExcludeFromCodeCoverage]
         private static async Task RunAccountAsync(ICloudApi api, CloudAccountBoard board,
-            CloudAccount account, SemaphoreSlim readGate, TimeSpan stagger, CancellationToken ct)
+            CloudAccount account, TimeSpan stagger, CancellationToken ct)
         {
             var state = ArmState.Initial;
 
@@ -456,12 +440,11 @@ namespace ClaudeBuddy
                     try { await Task.Delay(hold, ct).ConfigureAwait(false); } catch { break; }
                 }
 
-                var skipped = board.KeychainSkippedFor(account.Root);
                 StepResult step;
                 try
                 {
-                    step = await StepAsync(api, skipped ? account.FileSource : account.Source,
-                            state, DateTime.UtcNow, ct, readGate: readGate)
+                    step = await StepAsync(api, CloudAccounts.GatedFor(account),
+                            state, DateTime.UtcNow, ct)
                         .ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -479,7 +462,7 @@ namespace ClaudeBuddy
                 }
 
                 state = step.Next;
-                _snapshot = board.Apply(account.Root, step, skipped, account.Source.Stamp, DateTime.UtcNow);
+                _snapshot = board.Apply(account.Root, step, DateTime.UtcNow);
 
                 try { await Task.Delay(step.Wait, ct).ConfigureAwait(false); } catch { break; }
             }
@@ -510,15 +493,14 @@ namespace ClaudeBuddy
 
                 var api = new HttpCloudApi();
                 var accounts = CloudAccounts.Rebuild();
-                var board = new CloudAccountBoard(accounts);
+                var board = new CloudAccountBoard(accounts, CloudAccounts.Coordinator);
                 _board = board;
-                var readGate = new SemaphoreSlim(1, 1);
 
                 for (var i = 0; i < accounts.Count; i++)
                 {
                     var account = accounts[i];
                     var stagger = TimeSpan.FromSeconds(3 * i);
-                    _ = Task.Run(() => RunAccountAsync(api, board, account, readGate, stagger, cts.Token),
+                    _ = Task.Run(() => RunAccountAsync(api, board, account, stagger, cts.Token),
                         cts.Token);
                 }
             }

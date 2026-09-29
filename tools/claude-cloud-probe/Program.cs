@@ -371,17 +371,17 @@ internal static class Program
     private static async Task<int> RosterAsync()
     {
         using var http = new HttpCloudApi();
-        var board = new CloudAccountBoard(Accounts);
-        var gate = new SemaphoreSlim(1, 1);
+        var coordinator = new CloudReadCoordinator();
+        var board = new CloudAccountBoard(Accounts, coordinator);
         var exit = 0;
 
         foreach (var account in Accounts)
         {
             var api = new CountingApi(http);
             var step = await ClaudeCloudSessions.StepAsync(
-                api, account.Source, ClaudeCloudSessions.ArmState.Initial, DateTime.UtcNow,
-                CancellationToken.None, UnmeasuredProbeReadBudget, gate);
-            board.Apply(account.Root, step, keychainSkipped: false, account.Source.Stamp, DateTime.UtcNow);
+                api, new CloudAccountSource(account, coordinator), ClaudeCloudSessions.ArmState.Initial,
+                DateTime.UtcNow, CancellationToken.None, UnmeasuredProbeReadBudget);
+            board.Apply(account.Root, step, DateTime.UtcNow);
 
             Console.WriteLine($"account   {account.Label}");
             Console.WriteLine($"pages     {api.Pages}");

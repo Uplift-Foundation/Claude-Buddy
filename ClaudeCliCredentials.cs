@@ -121,6 +121,18 @@ namespace ClaudeBuddy
     // a file in someone's home directory, and a surface that cannot be faked
     // cannot be tested. Every test in this repository talks to a fake; nothing in
     // the suites touches the real Keychain.
+    // A source that shares a read gate with others. See ReadWithinAsync.
+    internal interface IGatedCredentialSource : ICloudCredentialSource
+    {
+        SemaphoreSlim Gate { get; }
+
+        // What to read this time; called with the gate held.
+        ICloudCredentialSource Choose();
+
+        // What the read said; called with the gate still held.
+        void Report(CredentialRead read);
+    }
+
     internal interface ICloudCredentialSource
     {
         // A cheap value that changes when the stored credential changes, and
@@ -459,7 +471,37 @@ namespace ClaudeBuddy
         // is the second independent reason `NoAnswer` stops the arm rather than
         // backing off — the first being that retrying a call which may be waiting on
         // a human is how a pile of consent prompts gets queued up.
+        //
+        // **A gated source is read one at a time, process-wide.** Several accounts
+        // and their chat panels share one macOS consent surface, and two dialogs on
+        // screen at once are unanswerable. The gate is taken here — before the
+        // budget starts, so queueing is not charged to a read that has not begun —
+        // and the source *chooses what to read after it has the gate*, so a prompt
+        // declined while this one waited is honoured. The outcome is reported back
+        // before the gate is released, which is what makes a NoAnswer latch by the
+        // time the next reader gets in.
         internal static async Task<CredentialRead> ReadWithinAsync(
+            ICloudCredentialSource source, TimeSpan budget, CancellationToken ct)
+        {
+            if (source is not IGatedCredentialSource gated)
+            {
+                return await ReadBudgetedAsync(source, budget, ct).ConfigureAwait(false);
+            }
+
+            await gated.Gate.WaitAsync(ct).ConfigureAwait(false);
+            try
+            {
+                var read = await ReadBudgetedAsync(gated.Choose(), budget, ct).ConfigureAwait(false);
+                gated.Report(read);
+                return read;
+            }
+            finally
+            {
+                gated.Gate.Release();
+            }
+        }
+
+        private static async Task<CredentialRead> ReadBudgetedAsync(
             ICloudCredentialSource source, TimeSpan budget, CancellationToken ct)
         {
             // Not cancelled by ct: cancelling the wait is the point, and handing ct
@@ -542,10 +584,16 @@ namespace ClaudeBuddy
                         children.Add((service, new KeychainCredentialSource(service)));
                 }
 
+                var label = string.Equals(root, TrimRoot(defaultRoot), StringComparison.Ordinal)
+                    ? "default" : SafeLabel(root);
+                // Two folders can reduce to one label ("me@x.com", "me@y.com").
+                // Told apart with a number rather than left to read as one account.
+                var unique = label;
+                for (var n = 2; accounts.Any(a => a.Label == unique); n++) unique = $"{label}-{n}";
+
                 accounts.Add(new CloudAccount(
                     root,
-                    string.Equals(root, TrimRoot(defaultRoot), StringComparison.Ordinal)
-                        ? "default" : SafeLabel(root),
+                    unique,
                     new MultiCredentialSource(children),
                     new MultiCredentialSource(new[] { file })));
             }
@@ -591,15 +639,29 @@ namespace ClaudeBuddy
 
         internal IReadOnlyList<string> Names => _children.Select(c => c.Name).ToList();
 
+        // What one Read did, returned with it and never shared between reads: a
+        // parked read that finishes late must not scribble over a newer one's
+        // answer.
+        internal sealed record ReadTrace(
+            string? AnsweredBy,
+            IReadOnlyList<(string Name, CredentialOutcome Outcome, string Reason)> Attempts);
+
+        private ReadTrace _last = new(null, Array.Empty<(string, CredentialOutcome, string)>());
+
+        // The most recently *finished* read's trace, published whole. A diagnostic
+        // convenience for single-threaded callers (the probe, the tests); anything
+        // concurrent uses ReadTraced.
+        private ReadTrace Last => Volatile.Read(ref _last);
+
         // Name of the store that produced the last Found read; null otherwise.
-        internal string? AnsweredBy { get; private set; }
+        internal string? AnsweredBy => Last.AnsweredBy;
 
         // Each store the last Read consulted, what it said and why. Names and
         // reason wording only, never values. A store that does not exist is
         // listed too (outcome NotLoggedIn, reason "no such item or file"), so a
         // diagnostic can tell "absent" from "present but blank".
-        internal IReadOnlyList<(string Name, CredentialOutcome Outcome, string Reason)> Attempts { get; private set; } =
-            Array.Empty<(string, CredentialOutcome, string)>();
+        internal IReadOnlyList<(string Name, CredentialOutcome Outcome, string Reason)> Attempts =>
+            Last.Attempts;
 
         // The stamps of every store that has one, keyed by name so a login moving
         // from one store to another still changes the value. Null when none exist.
@@ -614,9 +676,10 @@ namespace ClaudeBuddy
             return parts.Count == 0 ? null : string.Join(";", parts);
         }
 
-        public CredentialRead Read()
+        public CredentialRead Read() => ReadTraced().Read;
+
+        internal (CredentialRead Read, ReadTrace Trace) ReadTraced()
         {
-            AnsweredBy = null;
             var attempts = new List<(string, CredentialOutcome, string)>();
             CredentialRead? best = null;
 
@@ -642,15 +705,12 @@ namespace ClaudeBuddy
 
                 if (read.Outcome == CredentialOutcome.Found)
                 {
-                    AnsweredBy = name;
-                    Attempts = attempts;
-                    return read;
+                    return Done(read, name, attempts);
                 }
 
                 if (read.Outcome is CredentialOutcome.Denied or CredentialOutcome.NoAnswer)
                 {
-                    Attempts = attempts;
-                    return read;
+                    return Done(read, null, attempts);
                 }
 
                 if (best is null || (best.Outcome == CredentialOutcome.NotLoggedIn
@@ -658,9 +718,16 @@ namespace ClaudeBuddy
                     best = read;
             }
 
-            Attempts = attempts;
-            return best ?? new CredentialRead(CredentialOutcome.NotLoggedIn, null, null,
-                "no credential stored");
+            return Done(best ?? new CredentialRead(CredentialOutcome.NotLoggedIn, null, null,
+                "no credential stored"), null, attempts);
+        }
+
+        private (CredentialRead, ReadTrace) Done(CredentialRead read, string? answeredBy,
+            List<(string, CredentialOutcome, string)> attempts)
+        {
+            var trace = new ReadTrace(answeredBy, attempts);
+            Volatile.Write(ref _last, trace);
+            return (read, trace);
         }
     }
 

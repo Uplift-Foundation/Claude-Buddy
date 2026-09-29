@@ -80,9 +80,9 @@ public class CloudAccountBoardTests : IDisposable
             "https://claude.ai/code/" + id, "idle", false, null, null, null, null, owner);
 
     private static async Task<ClaudeCloudSessions.StepResult> Step(
-        Api api, Creds creds, DateTime? now = null, SemaphoreSlim? gate = null) =>
+        Api api, ICloudCredentialSource creds, DateTime? now = null, TimeSpan? budget = null) =>
         await ClaudeCloudSessions.StepAsync(api, creds, ClaudeCloudSessions.ArmState.Initial,
-            now ?? Now, CancellationToken.None, readGate: gate);
+            now ?? Now, CancellationToken.None, budget);
 
     // --- dedup ---------------------------------------------------------------
 
@@ -195,8 +195,8 @@ public class CloudAccountBoardTests : IDisposable
 
         var stepA = await Step(api, a);
         var stepB = await Step(api, b);
-        board.Apply(RootA, stepA, false, a.Stamp, Now);
-        var merged = board.Apply(RootB, stepB, false, b.Stamp, Now);
+        board.Apply(RootA, stepA, Now);
+        var merged = board.Apply(RootB, stepB, Now);
 
         Assert.True(stepA.Next.Halted);
         Assert.Equal("session_b1", Assert.Single(merged).Id);
@@ -212,18 +212,18 @@ public class CloudAccountBoardTests : IDisposable
     {
         var (board, a, b) = TwoAccounts();
         var ok = new Api((_, _) => Ok(Roster("session_1")));
-        board.Apply(RootA, await Step(ok, a), false, a.Stamp, Now);
-        board.Apply(RootB, await Step(new Api((t, _) => Ok(Roster("session_2"))), b), false, b.Stamp, Now);
+        board.Apply(RootA, await Step(ok, a), Now);
+        board.Apply(RootB, await Step(new Api((t, _) => Ok(Roster("session_2"))), b), Now);
 
         // A retryable failure: no snapshot, so A's orbs stay.
         var failed = await Step(new Api((_, _) => Fail(503)), a);
         Assert.Null(failed.Snapshot);
-        var kept = board.Apply(RootA, failed, false, a.Stamp, Now);
+        var kept = board.Apply(RootA, failed, Now);
         Assert.Equal(2, kept.Count);
 
         // A refusal: A's slot empties, B's does not.
         var refused = await Step(new Api((_, _) => Fail(401)), a);
-        var after = board.Apply(RootA, refused, false, a.Stamp, Now);
+        var after = board.Apply(RootA, refused, Now);
         Assert.Equal("session_2", Assert.Single(after).Id);
     }
 
@@ -233,51 +233,12 @@ public class CloudAccountBoardTests : IDisposable
         var (board, a, b) = TwoAccounts();
         var api = new Api((_, _) => Ok(Roster("session_shared")));
 
-        board.Apply(RootB, await Step(api, b), false, b.Stamp, Now);
-        var first = board.Apply(RootA, await Step(api, a), false, a.Stamp, Now);
+        board.Apply(RootB, await Step(api, b), Now);
+        var first = board.Apply(RootA, await Step(api, a), Now);
 
         var only = Assert.Single(first);
         // B reported it first; A joining later must not take it over.
         Assert.Equal(RootB, only.OwnerRoot);
-    }
-
-    [Fact]
-    public async Task ADeclinedPromptLatchesOtherRootsKeychainUntilThatAccountsStampMoves()
-    {
-        var (board, a, b) = TwoAccounts();
-        a.Reading = new CredentialRead(CredentialOutcome.Denied, null, null, "declined");
-        var stepA = await Step(new Api((_, _) => Ok(Roster())), a);
-        Assert.True(stepA.PromptDeclined);
-
-        board.Apply(RootA, stepA, false, a.Stamp, Now);
-
-        Assert.True(board.KeychainSkippedFor(RootB));
-        Assert.False(board.KeychainSkippedFor(RootA));
-
-        a.StampValue = "s2"; // the user signed in again
-        Assert.False(board.KeychainSkippedFor(RootB));
-    }
-
-    [Fact]
-    public async Task ASkippedAccountThatFindsNothingSaysItWasNotAsked()
-    {
-        var (board, _, b) = TwoAccounts();
-        b.Reading = new CredentialRead(CredentialOutcome.NotLoggedIn, null, null, "no credential stored");
-        var stepB = await Step(new Api((_, _) => Ok(Roster())), b);
-        Assert.True(stepB.Next.Halted);
-
-        board.Apply(RootB, stepB, keychainSkipped: true, b.Stamp, Now);
-
-        Assert.Contains(CloudAccountBoard.NotAsked, board.StatusText);
-    }
-
-    [Fact]
-    public async Task NoAnswerAlsoCountsAsDeclined()
-    {
-        var (_, a, _) = TwoAccounts();
-        a.Reading = new CredentialRead(CredentialOutcome.NoAnswer, null, null, "no answer");
-
-        Assert.True((await Step(new Api((_, _) => Ok(Roster())), a)).PromptDeclined);
     }
 
     [Fact]
@@ -287,7 +248,7 @@ public class CloudAccountBoardTests : IDisposable
         var step = await Step(new Api((_, _) => Fail(429)), a);
         Assert.True(step.RateLimited);
 
-        board.Apply(RootA, step, false, a.Stamp, Now);
+        board.Apply(RootA, step, Now);
 
         Assert.True(board.HoldRemaining(Now) >= Backoff.RateLimitFloor);
         Assert.Equal(TimeSpan.Zero, board.HoldRemaining(Now + TimeSpan.FromMinutes(10)));
@@ -307,48 +268,6 @@ public class CloudAccountBoardTests : IDisposable
         Assert.Empty(board.Merged);
     }
 
-    // --- serialised reads ---------------------------------------------------------
-
-    private sealed class Hanging : ICloudCredentialSource, IDisposable
-    {
-        private readonly ManualResetEventSlim _gate = new(false);
-        internal int Reads;
-        public string? Stamp() => "s";
-
-        public CredentialRead Read()
-        {
-            Interlocked.Increment(ref Reads);
-            _gate.Wait();
-            return new CredentialRead(CredentialOutcome.Found, "late", null, "late");
-        }
-
-        public void Dispose() { _gate.Set(); _gate.Dispose(); }
-    }
-
-    [Fact]
-    public async Task TheSecondAccountsReadIsNotEnteredUntilTheFirstTimesOut()
-    {
-        using var first = new Hanging();
-        using var second = new Hanging();
-        using var gate = new SemaphoreSlim(1, 1);
-        var api = new Api((_, _) => Ok(Roster()));
-        var budget = TimeSpan.FromMilliseconds(400);
-
-        var t1 = ClaudeCloudSessions.StepAsync(api, first, ClaudeCloudSessions.ArmState.Initial, Now,
-            CancellationToken.None, budget, gate);
-        var t2 = ClaudeCloudSessions.StepAsync(api, second, ClaudeCloudSessions.ArmState.Initial, Now,
-            CancellationToken.None, budget, gate);
-
-        await Task.Delay(150);
-        Assert.Equal(1, first.Reads);
-        Assert.Equal(0, second.Reads);
-
-        var r1 = await t1;
-        var r2 = await t2;
-        Assert.Equal(1, second.Reads);
-        Assert.Contains("did not answer", r1.Status + r2.Status, StringComparison.OrdinalIgnoreCase);
-    }
-
     // --- the owner's login, end to end -------------------------------------------
 
     [Fact]
@@ -361,8 +280,8 @@ public class CloudAccountBoardTests : IDisposable
         // The poll: each account lists with its own token.
         var pollApi = new Api((token, _) => Ok(Roster(token == TokenA ? "session_a1" : "session_b1")));
         var board = new CloudAccountBoard(CloudAccounts.Current);
-        board.Apply(RootA, await Step(pollApi, a), false, a.Stamp, Now);
-        var merged = board.Apply(RootB, await Step(pollApi, b), false, b.Stamp, Now);
+        board.Apply(RootA, await Step(pollApi, a), Now);
+        var merged = board.Apply(RootB, await Step(pollApi, b), Now);
         var bSession = merged.Single(s => s.Id == "session_b1");
         Assert.Equal(RootB, bSession.OwnerRoot);
 
@@ -401,21 +320,9 @@ public class CloudAccountBoardTests : IDisposable
         var b = new Creds(TokenB);
         CloudAccounts.SetForTests(new[] { Account(RootA, a), Account(RootB, b) });
 
-        Assert.Same(a, CloudAccounts.SourceFor(null));
-        Assert.Same(a, CloudAccounts.SourceFor("/somewhere/else"));
-        Assert.Same(b, CloudAccounts.SourceFor(RootB));
-    }
-
-    [Fact]
-    public async Task ASkippedAccountThatIsNotHaltedKeepsItsOwnStatus()
-    {
-        var (board, a, _) = TwoAccounts();
-        var step = await Step(new Api((_, _) => Ok(Roster("session_1"))), a);
-        Assert.False(step.Next.Halted);
-
-        board.Apply(RootA, step, keychainSkipped: true, a.Stamp, Now);
-
-        Assert.DoesNotContain(CloudAccountBoard.NotAsked, board.StatusText);
+        Assert.Same(CloudAccounts.GatedFor(CloudAccounts.Current[0]), CloudAccounts.SourceFor(null));
+        Assert.Same(CloudAccounts.GatedFor(CloudAccounts.Current[0]), CloudAccounts.SourceFor("/somewhere/else"));
+        Assert.Same(CloudAccounts.GatedFor(CloudAccounts.Current[1]), CloudAccounts.SourceFor(RootB));
     }
 
     // Both build the real stores without querying any of them; the registry is
@@ -429,5 +336,225 @@ public class CloudAccountBoardTests : IDisposable
         Assert.NotEmpty(first);
         Assert.Same(first, CloudAccounts.Current);
         Assert.NotSame(first, CloudAccounts.Rebuild());
+    }
+
+    // --- the gate and the latch ---------------------------------------------------
+
+    private sealed class Hanging : ICloudCredentialSource, IDisposable
+    {
+        private readonly ManualResetEventSlim _gate = new(false);
+        internal int Reads;
+        public string? Stamp() => "s";
+
+        public CredentialRead Read()
+        {
+            Interlocked.Increment(ref Reads);
+            _gate.Wait();
+            return new CredentialRead(CredentialOutcome.Found, "late", null, "late");
+        }
+
+        public void Dispose() { _gate.Set(); _gate.Dispose(); }
+    }
+
+    private static (CloudReadCoordinator Coord, CloudAccountSource GA, CloudAccountSource GB,
+        Creds BKeychain, Creds BFile) Gated(ICloudCredentialSource aKeychain)
+    {
+        var coord = new CloudReadCoordinator();
+        var bKeychain = new Creds(TokenB);
+        var bFile = new Creds(TokenB);
+        var accountA = new CloudAccount(RootA, "default", aKeychain, aKeychain);
+        var accountB = new CloudAccount(RootB, "board", bKeychain, bFile);
+        return (coord, new CloudAccountSource(accountA, coord), new CloudAccountSource(accountB, coord),
+            bKeychain, bFile);
+    }
+
+    // The race QA found: B queues behind A's dialog having decided nothing, A
+    // says no, and B must then read files only rather than raise a second dialog
+    // right after the refusal. The choice is made once B holds the gate.
+    [Theory]
+    [InlineData("declined")]
+    [InlineData("unanswered")]
+    public async Task AQueuedAccountSkipsItsKeychainWhenTheOneAheadOfItDeclined(string how)
+    {
+        using var hanging = new Hanging();
+        ICloudCredentialSource aKeychain = how == "unanswered"
+            ? hanging
+            : new Creds(TokenA) { Reading = new CredentialRead(CredentialOutcome.Denied, null, null, "declined") };
+        var (coord, ga, gb, bKeychain, bFile) = Gated(aKeychain);
+        var api = new Api((_, _) => Ok(Roster()));
+        var budget = TimeSpan.FromMilliseconds(400);
+
+        var stepA = Step(api, ga, budget: budget);
+        await Task.Delay(100); // A now holds the gate (parked, or about to say no)
+        var stepB = Step(api, gb, budget: budget);
+
+        await stepA;
+        var b = await stepB;
+
+        Assert.Equal(0, bKeychain.Reads);
+        Assert.Equal(1, bFile.Reads);
+        Assert.NotNull(b.Snapshot);
+        Assert.True(coord.KeychainSkippedFor(RootB));
+        Assert.False(coord.KeychainSkippedFor(RootA));
+    }
+
+    [Fact]
+    public async Task TheSecondReadIsNotEnteredUntilTheFirstTimesOut()
+    {
+        using var first = new Hanging();
+        using var second = new Hanging();
+        var coord = new CloudReadCoordinator();
+        var ga = new CloudAccountSource(new CloudAccount(RootA, "default", first, first), coord);
+        var gb = new CloudAccountSource(new CloudAccount(RootB, "board", second, second), coord);
+        var api = new Api((_, _) => Ok(Roster()));
+        var budget = TimeSpan.FromMilliseconds(400);
+
+        var t1 = Step(api, ga, budget: budget);
+        await Task.Delay(100);
+        var t2 = Step(api, gb, budget: budget);
+        await Task.Delay(150);
+
+        Assert.Equal(1, first.Reads);
+        Assert.Equal(0, second.Reads);
+
+        var r1 = await t1;
+        var r2 = await t2;
+        Assert.Contains("did not answer", r1.Status, StringComparison.OrdinalIgnoreCase);
+        // B was skipped to files only after A's NoAnswer, and its file is the
+        // same hanging fake here, so it too reads exactly once.
+        Assert.Equal(1, second.Reads);
+        Assert.NotNull(r2.Status);
+    }
+
+    [Fact]
+    public async Task ASkippedAccountThatFindsNothingSaysItWasNotAsked()
+    {
+        var aKeychain = new Creds(TokenA) { Reading = new CredentialRead(CredentialOutcome.Denied, null, null, "declined") };
+        var (coord, ga, gb, bKeychain, bFile) = Gated(aKeychain);
+        bFile.Reading = new CredentialRead(CredentialOutcome.NotLoggedIn, null, null, "no credential stored");
+        var board = new CloudAccountBoard(new[] { ga.Account, gb.Account }, coord);
+        var api = new Api((_, _) => Ok(Roster()));
+
+        await Step(api, ga);
+        var stepB = await Step(api, gb);
+        board.Apply(RootB, stepB, Now);
+
+        Assert.True(stepB.Next.Halted);
+        Assert.Contains(CloudAccountBoard.NotAsked, board.StatusText);
+        Assert.Equal(0, bKeychain.Reads);
+    }
+
+    [Fact]
+    public async Task ASkippedAccountThatIsNotHaltedKeepsItsOwnStatus()
+    {
+        var aKeychain = new Creds(TokenA) { Reading = new CredentialRead(CredentialOutcome.Denied, null, null, "declined") };
+        var (coord, ga, gb, _, _) = Gated(aKeychain);
+        var board = new CloudAccountBoard(new[] { ga.Account, gb.Account }, coord);
+        var api = new Api((_, _) => Ok(Roster("session_1")));
+
+        await Step(api, ga);
+        var stepB = await Step(api, gb);
+        board.Apply(RootB, stepB, Now);
+
+        Assert.False(stepB.Next.Halted);
+        Assert.DoesNotContain(CloudAccountBoard.NotAsked, board.StatusText);
+    }
+
+    // The latch clears for the declining account when its own stamp moves, and
+    // the parked account's stamp changes with it — which is what opens the arm's
+    // Halted gate so "not asked" un-parks by itself.
+    [Fact]
+    public async Task TheLatchClearsWhenTheDecliningAccountsStampMovesAndTheStampSaysSo()
+    {
+        var aKeychain = new Creds(TokenA) { Reading = new CredentialRead(CredentialOutcome.Denied, null, null, "declined") };
+        var (coord, ga, gb, _, _) = Gated(aKeychain);
+        await Step(new Api((_, _) => Ok(Roster())), ga);
+
+        var parked = gb.Stamp();
+        Assert.EndsWith("|files-only", parked);
+
+        aKeychain.StampValue = "s2"; // the user signed in again
+        Assert.False(coord.KeychainSkippedFor(RootB));
+        Assert.DoesNotContain("|files-only", gb.Stamp());
+        Assert.NotEqual(parked, gb.Stamp());
+    }
+
+    [Fact]
+    public void ADirectReadOfAGatedSourceChoosesAndReads()
+    {
+        var (_, ga, _, _, _) = Gated(new Creds(TokenA));
+
+        Assert.Equal(CredentialOutcome.Found, ga.Read().Outcome);
+    }
+
+    // Chat panels read through the same gate: an open panel cannot stack a dialog
+    // on one the poll is showing, and it honours the latch.
+    [Fact]
+    public async Task AChatReadWaitsForTheGateAndHonoursTheLatch()
+    {
+        var aKeychain = new Creds(TokenA) { Reading = new CredentialRead(CredentialOutcome.Denied, null, null, "declined") };
+        var (coord, ga, gb, bKeychain, bFile) = Gated(aKeychain);
+        CloudAccounts.SetForTests(new[] { ga.Account, gb.Account });
+        var api = new Api((_, _) => Ok("{\"data\":[],\"has_more\":false,\"last_id\":null}"));
+        var chat = new ClaudeCloudChatSession(S("session_1", RootB), api,
+            CloudAccounts.SourceFor(RootB), a => a());
+
+        // Someone else holds the gate: the panel's read must wait, not race.
+        var held = CloudAccounts.Coordinator.Gate;
+        await held.WaitAsync();
+        var load = chat.LoadAsync(CancellationToken.None);
+        await Task.Delay(100);
+        Assert.False(load.IsCompleted);
+        held.Release();
+        Assert.True(await load);
+
+        // And after A declined, B's panel reads its file only.
+        var keychainReadsBefore = bKeychain.Reads;
+        CloudAccounts.Coordinator.Record(RootA, false,
+            new CredentialRead(CredentialOutcome.Denied, null, null, "declined"), aKeychain.Stamp);
+        var reads = CloudAccounts.SourceFor(RootB);
+        var read = await ClaudeCliCredentials.ReadWithinAsync(reads, TimeSpan.FromSeconds(5), CancellationToken.None);
+        Assert.Equal(CredentialOutcome.Found, read.Outcome);
+        Assert.Equal(keychainReadsBefore, bKeychain.Reads);
+        Assert.True(bFile.Reads >= 1);
+    }
+
+    // --- concurrent reads of one MultiCredentialSource ----------------------------
+
+    [Fact]
+    public void EachReadReturnsItsOwnTraceRatherThanSharingOne()
+    {
+        var child = new Creds(TokenA);
+        var multi = new MultiCredentialSource(new (string, ICloudCredentialSource)[] { ("a", child) });
+
+        var (_, first) = multi.ReadTraced();
+        child.Reading = new CredentialRead(CredentialOutcome.NotLoggedIn, null, null, "signed out");
+        var (_, second) = multi.ReadTraced();
+
+        Assert.Equal("a", first.AnsweredBy);
+        Assert.Null(second.AnsweredBy);
+        Assert.Equal("Found", first.Attempts[0].Outcome.ToString());
+        Assert.Equal("signed out", second.Attempts[0].Reason);
+        Assert.Null(multi.AnsweredBy);
+    }
+
+    [Fact]
+    public void CollidingLabelsAreToldApartWithANumber()
+    {
+        var accounts = ClaudeCliCredentials.SourcesFor(isMacOS: false, "/Users/x", "/Users/x/.claude-me@x.com");
+        var more = ClaudeCliCredentials.SourcesFor(isMacOS: false, "/Users/x", "/Users/x/.claude-me@x.com");
+        Assert.Equal("me", accounts[1].Label);
+        Assert.Equal("me", more[1].Label);
+
+        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-me@y.com");
+        try
+        {
+            var both = ClaudeCliCredentials.SourcesFor(isMacOS: false, "/Users/x", "/Users/x/.claude-me@x.com");
+            Assert.Equal(new[] { "default", "me", "me-2" }, both.Select(a => a.Label).OrderBy(l => l == "default" ? "" : l));
+        }
+        finally
+        {
+            ClaudeBuddySettings.RemoveClaudeCodeProfileDir(".claude-me@y.com");
+        }
     }
 }
