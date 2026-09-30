@@ -315,6 +315,29 @@ public class SpeechSummaryOutcomeTests : IDisposable
         Assert.Equal(SpeechSummary.Unavailable, await SpeechSummary.SummarizeOrSayWhyAsync("reply"));
     }
 
+    // The CLI's own words for an account over its spend limit, as captured
+    // from a real run, alongside a failure that names nothing — the negative
+    // control, without which a FailureSentence that always matched would pass.
+    [Theory]
+    [InlineData("You've hit your org's monthly spend limit · run /usage-credits to raise it, or visit claude.ai/admin-settings/usage · your weekly limit resets 10pm (America/Los_Angeles)", SpeechSummary.SpendLimitReached)]
+    [InlineData("\nSPEND LIMIT exceeded", SpeechSummary.SpendLimitReached)]
+    [InlineData("Error: connection refused", null)]
+    [InlineData(null, null)]
+    public void AFailedRunIsNamedOnlyWhenItSaysWhy(string? output, string? expected)
+    {
+        Assert.Equal(expected, SpeechSummary.FailureSentence(output));
+    }
+
+    // A failure that already knows its sentence is spoken as that sentence,
+    // not collapsed into Unavailable with every other failure.
+    [Fact]
+    public async Task ASpendLimitIsSaidAsSuch()
+    {
+        Answer(_ => throw new SpeechSummary.SpokenFailureException(SpeechSummary.SpendLimitReached));
+
+        Assert.Equal(SpeechSummary.SpendLimitReached, await SpeechSummary.SummarizeOrSayWhyAsync("reply"));
+    }
+
     // A summariser that threw. Same answer as any other failure, and critically
     // it does not propagate: this is awaited from a UI thread, and an exception
     // escaping would take the panel with it.

@@ -217,6 +217,27 @@ namespace ClaudeBuddy
         // indistinguishable from a broken one.
         internal const string Unavailable = "Summary unavailable.";
 
+        // The one failure worth naming out loud. An account over its spend
+        // limit fails every summary until the limit resets, and "unavailable"
+        // on every turn reads exactly like a bug in this app — it was chased as
+        // one before anyone ran the CLI by hand and saw the reason it had been
+        // printing all along. The CLI says so on stdout with exit 1:
+        // "You've hit your org's monthly spend limit · run /usage-credits ...".
+        internal const string SpendLimitReached = "Spend limit reached.";
+
+        // What a failed CLI run should be spoken as, from what it printed.
+        // Pure, so the matching is pinned without spawning anything; null means
+        // the output named nothing more specific than Unavailable already says.
+        internal static string? FailureSentence(string? output) =>
+            output is not null && output.Contains("spend limit", StringComparison.OrdinalIgnoreCase)
+                ? SpendLimitReached
+                : null;
+
+        // A failure that already knows what to say. Thrown rather than returned
+        // so the seam keeps its string-or-null shape; SummarizeOrSayWhyAsync
+        // speaks its message instead of Unavailable.
+        internal sealed class SpokenFailureException(string sentence) : Exception(sentence);
+
         // The seam. UI and unit tests drive the whole path through this without
         // ever spawning a CLI; null means the real one.
         internal static Func<string, Task<string?>>? SummarizerForTests;
@@ -250,6 +271,11 @@ namespace ClaudeBuddy
             {
                 var summary = await SummarizeAsync(reply, kind).ConfigureAwait(true);
                 return string.IsNullOrWhiteSpace(summary) ? Unavailable : summary;
+            }
+            catch (SpokenFailureException ex)
+            {
+                Console.Error.WriteLine($"Claude Buddy: couldn't summarise for speech: {ex.Message}");
+                return ex.Message;
             }
             catch (Exception ex)
             {
@@ -344,6 +370,10 @@ namespace ClaudeBuddy
                     proc.StandardInput.Close();
 
                     var stdout = proc.StandardOutput.ReadToEndAsync();
+                    // Drained as well, and concurrently: a redirected stream
+                    // nobody reads can fill its pipe and stall the child, and
+                    // it is half of where a failure explains itself.
+                    var stderr = proc.StandardError.ReadToEndAsync();
 
                     using var cts = new CancellationTokenSource(TimeoutMs);
                     try
@@ -356,7 +386,13 @@ namespace ClaudeBuddy
                         return null;
                     }
 
-                    if (proc.ExitCode != 0) return null;
+                    if (proc.ExitCode != 0)
+                    {
+                        var said = await stdout.ConfigureAwait(false) + "\n" + await stderr.ConfigureAwait(false);
+                        var sentence = FailureSentence(said);
+                        if (sentence is not null) throw new SpokenFailureException(sentence);
+                        return null;
+                    }
 
                     return Clean(await stdout.ConfigureAwait(false));
                 }
