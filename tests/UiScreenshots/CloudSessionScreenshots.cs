@@ -217,6 +217,37 @@ public class CloudSessionScreenshots : IDisposable
         ScreenshotHelper.CaptureAlreadyShown(panel, "chat-panel-cloud-ended.png");
     }
 
+    // The link back (CB-199 follow-up): a live cloud session keeps its composer
+    // and now also its way to the session in the browser. The thing to look at
+    // is that exactly one link is on screen, sitting right above the composer
+    // rather than crowding Send/Stop, and that it reads as a link.
+    [AvaloniaFact]
+    public void ALiveCloudSessionShowsTheBrowserLinkAboveTheComposer()
+    {
+        var id = "screenshot-cloud-live-link-" + Guid.NewGuid();
+        _panelsToClean.Add(id);
+
+        var fake = new FakeChatSession(CloudTranscript())
+        {
+            SessionId = id,
+            DisplayName = "Refactor the parser",
+            IsReadOnly = false,
+            ReplyUrl = "https://claude.ai/code/session_01abc",
+            MachineName = "Anthropic's cloud",
+        };
+
+        ChatPanel.OpenFor(new OrbWindow(Guid.NewGuid().ToString()), fake);
+        ScreenshotHelper.Flush();
+
+        var panel = ChatPanelTestAccess.Instance!;
+
+        Assert.True(panel.FindControl<Grid>("ComposerRow")!.IsVisible);
+        Assert.True(panel.FindControl<TextBlock>("SessionLink")!.IsVisible);
+        Assert.False(panel.FindControl<TextBlock>("ReadOnlyLink")!.IsVisible);
+
+        ScreenshotHelper.CaptureAlreadyShown(panel, "chat-panel-cloud-live-link.png");
+    }
+
     private static ChatTurn[] CloudTranscript() => new[]
     {
         new ChatTurn { Role = ChatRole.User, Text = "refactor the transcript parser" },

@@ -384,9 +384,11 @@ namespace ClaudeBuddy
         // decision.
         bool IsReadOnly { get; }
 
-        // Where this conversation *can* be replied to, as something a browser
-        // will open. Null when there is nowhere, and the panel then says only
-        // that it cannot be replied to here.
+        // Where this conversation lives in a browser, as something a browser
+        // will open — read whether or not the session is read-only (CB-226): a
+        // live session offers it above its composer, a read-only one in the
+        // box that replaces it. Null when there is nowhere, and a read-only
+        // panel then says only that it cannot be replied to here.
         //
         // A link rather than an address printed into the hint. Telling somebody
         // the reply lives at claude.ai/code and leaving them to find the session

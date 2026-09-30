@@ -65,6 +65,9 @@ public class CloudChatPanelTests : IDisposable
     private static TextBlock ReadOnlyLink(ChatPanel panel) =>
         panel.FindControl<TextBlock>("ReadOnlyLink")!;
 
+    private static TextBlock SessionLink(ChatPanel panel) =>
+        panel.FindControl<TextBlock>("SessionLink")!;
+
     private static Control StopButton(ChatPanel panel) =>
         panel.FindControl<Grid>("StopButton")!;
 
@@ -909,5 +912,130 @@ public class CloudChatPanelTests : IDisposable
         ChatPanel.HideFor(id);
         FlushRender();
         await chat.StreamTask!;
+    }
+
+    // The bug this block is for: CB-199 made a live cloud session keep its
+    // composer, and the only "Open in your browser" link lived in the read-only
+    // box, so the link vanished for exactly the sessions people have open.
+    [AvaloniaFact]
+    public void ALiveCloudSessionOffersALinkToTheSessionAboveItsComposer()
+    {
+        var fake = SendableCloud("cloud-live-link");
+
+        ChatPanel.OpenFor(NewOrb(), fake);
+        FlushRender();
+
+        var panel = ChatPanelTestAccess.Instance!;
+        var link = SessionLink(panel);
+
+        Assert.True(ComposerRow(panel).IsVisible);
+        Assert.True(link.IsVisible);
+        Assert.Equal("Open in your browser", link.Text);
+        Assert.DoesNotContain("https://", link.Text!);
+
+        // One link at a time: the read-only box's own stays away while this one
+        // is up.
+        Assert.False(ReadOnlyLink(panel).IsVisible);
+    }
+
+    [AvaloniaFact]
+    public void AReadOnlyCloudSessionShowsExactlyOneLinkAndItIsTheReadOnlyBoxs()
+    {
+        var fake = new FakeChatSession(null)
+        {
+            SessionId = "cloud-one-link-" + Guid.NewGuid(),
+            IsReadOnly = true,
+            ComposerHint = "This session has ended.",
+            ReplyUrl = "https://claude.ai/code/session_01abc",
+        };
+        _toClean.Add(fake.SessionId);
+
+        ChatPanel.OpenFor(NewOrb(), fake);
+        FlushRender();
+
+        var panel = ChatPanelTestAccess.Instance!;
+
+        Assert.True(ReadOnlyLink(panel).IsVisible);
+        Assert.False(SessionLink(panel).IsVisible);
+    }
+
+    // Negative controls for the two above: a link drawn unconditionally would
+    // pass both of them.
+    [AvaloniaFact]
+    public void ASessionWithNoAddressShowsNoLinkWhetherOrNotItCanBeTypedInto()
+    {
+        var live = SendableCloud("cloud-live-nourl");
+        live.ReplyUrl = null;
+
+        ChatPanel.OpenFor(NewOrb(), live);
+        FlushRender();
+
+        var panel = ChatPanelTestAccess.Instance!;
+        Assert.True(ComposerRow(panel).IsVisible);
+        Assert.False(SessionLink(panel).IsVisible);
+        Assert.False(ReadOnlyLink(panel).IsVisible);
+    }
+
+    [AvaloniaFact]
+    public void AnOrdinarySessionShowsNoSessionLink()
+    {
+        var fake = new FakeChatSession(null)
+        {
+            SessionId = "cloud-ordinary-nolink-" + Guid.NewGuid(),
+            IsReadOnly = false,
+        };
+        _toClean.Add(fake.SessionId);
+
+        ChatPanel.OpenFor(NewOrb(), fake);
+        FlushRender();
+
+        Assert.False(SessionLink(ChatPanelTestAccess.Instance!).IsVisible);
+    }
+
+    // The flip hands the link from one place to the other and back, never two
+    // and never none — the session ending must not leave a live-session link
+    // over a box that has gone.
+    [AvaloniaFact]
+    public void TheLinkFollowsTheReadOnlyFlipWithExactlyOneVisibleAtATime()
+    {
+        var fake = SendableCloud("cloud-link-flip");
+
+        ChatPanel.OpenFor(NewOrb(), fake);
+        FlushRender();
+
+        var panel = ChatPanelTestAccess.Instance!;
+        Assert.True(SessionLink(panel).IsVisible);
+        Assert.False(ReadOnlyLink(panel).IsVisible);
+
+        fake.RaiseReadOnlyChanged(true);
+        Flush();
+
+        Assert.False(SessionLink(panel).IsVisible);
+        Assert.True(ReadOnlyLink(panel).IsVisible);
+
+        fake.RaiseReadOnlyChanged(false);
+        Flush();
+
+        Assert.True(SessionLink(panel).IsVisible);
+        Assert.False(ReadOnlyLink(panel).IsVisible);
+    }
+
+    [AvaloniaFact]
+    public void TheSessionLinkUnderlinesUnderThePointerAndClearsWhenItLeaves()
+    {
+        var fake = SendableCloud("cloud-link-hover");
+
+        ChatPanel.OpenFor(NewOrb(), fake);
+        FlushRender();
+
+        var link = SessionLink(ChatPanelTestAccess.Instance!);
+
+        Assert.Null(link.TextDecorations);
+
+        Hover(link, InputElement.PointerEnteredEvent);
+        Assert.Equal(TextDecorations.Underline, link.TextDecorations);
+
+        Hover(link, InputElement.PointerExitedEvent);
+        Assert.Null(link.TextDecorations);
     }
 }
