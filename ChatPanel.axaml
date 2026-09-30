@@ -557,6 +557,23 @@
                                VerticalAlignment="Center"/>
                 </Grid>
 
+                <!-- The same way to the session for one that is *live*, which
+                     is the case ReadOnlyLink above cannot cover: it lives in
+                     the read-only box, and CB-199 made a live cloud session
+                     keep its composer, so the box (and the link with it) is
+                     hidden exactly while the conversation is happening. Shown
+                     only while the composer is, so there is one link on screen
+                     at a time — this one over a box that takes a reply, the
+                     read-only box's own over one that does not. Same blue and
+                     same hover underline as ReadOnlyLink. -->
+                <TextBlock x:Name="SessionLink"
+                           IsVisible="False"
+                           HorizontalAlignment="Right"
+                           FontSize="11"
+                           Foreground="#4A90D9"
+                           Cursor="Hand"
+                           Margin="2,0,2,2"/>
+
                 <Grid x:Name="ComposerRow" ColumnDefinitions="*,Auto,Auto,Auto,Auto" ColumnSpacing="5">
                     <!-- AcceptsReturn so the TextBox owns newline insertion,
                          caret placement and undo; Enter-to-send is

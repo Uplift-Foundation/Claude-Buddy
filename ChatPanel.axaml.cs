@@ -222,6 +222,14 @@ namespace ClaudeBuddy
             ReadOnlyLink.PointerExited += (_, _) =>
                 ReadOnlyLink.TextDecorations = null;
 
+            // SessionLink is the live-session twin of ReadOnlyLink and opens the
+            // same address, so it shares the handler and the one link look.
+            SessionLink.PointerPressed += OnReadOnlyLinkPressed;
+            SessionLink.PointerEntered += (_, _) =>
+                SessionLink.TextDecorations = TextDecorations.Underline;
+            SessionLink.PointerExited += (_, _) =>
+                SessionLink.TextDecorations = null;
+
             // Bubbles size themselves off Scroll's actual width (see
             // TurnView.MaxBubbleWidth) rather than a fixed pixel cap, since
             // the panel is user-resizable now. Two hooks cover the two ways a
@@ -946,6 +954,13 @@ namespace ClaudeBuddy
             ReadOnlyLink.IsVisible = _readOnlyUrl is not null;
             ReadOnlyLink.Text = _readOnlyUrl is null ? "" : "Open in your browser";
 
+            // A live session has the same address and needs the same way to it
+            // (CB-199 hid the link along with the box). One link at a time: this
+            // one while the composer is up, ReadOnlyLink's while it is not.
+            _sessionUrl = SessionLinkUrl(session);
+            SessionLink.IsVisible = _sessionUrl is not null;
+            SessionLink.Text = _sessionUrl is null ? "" : "Open in your browser";
+
             ApplyStop(session);
         }
 
@@ -976,6 +991,14 @@ namespace ClaudeBuddy
         // address, and putting a URL on screen to have somewhere to keep it is
         // how the two come to disagree.
         private string? _readOnlyUrl;
+        private string? _sessionUrl;
+
+        // The address for the live-session link: the session's own, whenever it
+        // has one and is not read-only. Pure so each arm is a unit case. A
+        // session that is not IRemoteChatReadOnly has no address to offer, and a
+        // read-only one gets its link from the read-only box instead.
+        internal static string? SessionLinkUrl(IRemoteChatSession? session) =>
+            session is IRemoteChatReadOnly { IsReadOnly: false, ReplyUrl: { Length: > 0 } url } ? url : null;
 
         // Excluded from coverage: the guard is reachable and asserted through
         // ReadOnlyLink's visibility, and the half behind it launches a real
@@ -984,9 +1007,12 @@ namespace ClaudeBuddy
         [ExcludeFromCodeCoverage]
         private void OnReadOnlyLinkPressed(object? sender, PointerPressedEventArgs e)
         {
-            if (_readOnlyUrl is null) return;
+            // At most one of the two is set: SessionLinkUrl is null for a
+            // read-only session and _readOnlyUrl is null for a live one.
+            var url = _readOnlyUrl ?? _sessionUrl;
+            if (url is null) return;
 
-            CloudSessionLink.Open(_readOnlyUrl);
+            CloudSessionLink.Open(url);
         }
 
         // The same decoded frames the orb draws, at a size worth looking at.

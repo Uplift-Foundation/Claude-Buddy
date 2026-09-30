@@ -35,7 +35,7 @@ public class ChatPanelStopTests
     private sealed class InterruptibleReadOnly : Interruptible, IRemoteChatReadOnly
     {
         public bool IsReadOnly { get; init; }
-        public string? ReplyUrl => null;
+        public string? ReplyUrl { get; init; }
         public event Action? ReadOnlyChanged { add { } remove { } }
     }
 
@@ -63,4 +63,33 @@ public class ChatPanelStopTests
     [Fact]
     public void AReadOnlySessionOffersNoStopWhateverItSays() =>
         Assert.False(ChatPanel.StopOffered(new InterruptibleReadOnly { CanInterrupt = true, IsReadOnly = true }));
+
+    // ChatPanel.SessionLinkUrl, the rule for the live-session link (CB-199
+    // follow-up). One case per arm.
+    [Fact]
+    public void NothingBoundHasNoSessionLink() => Assert.Null(ChatPanel.SessionLinkUrl(null));
+
+    [Fact]
+    public void ATransportWithoutAReadOnlyAnswerHasNoSessionLink() =>
+        Assert.Null(ChatPanel.SessionLinkUrl(new Plain()));
+
+    [Fact]
+    public void ALiveSessionWithAnAddressOffersIt() =>
+        Assert.Equal("https://claude.ai/code/s",
+            ChatPanel.SessionLinkUrl(new InterruptibleReadOnly { ReplyUrl = "https://claude.ai/code/s" }));
+
+    [Fact]
+    public void ALiveSessionWithoutAnAddressOffersNone() =>
+        Assert.Null(ChatPanel.SessionLinkUrl(new InterruptibleReadOnly { ReplyUrl = null }));
+
+    [Fact]
+    public void AnEmptyAddressOffersNone() =>
+        Assert.Null(ChatPanel.SessionLinkUrl(new InterruptibleReadOnly { ReplyUrl = "" }));
+
+    // A read-only session gets its link from the read-only box, so this one
+    // stays out of the way rather than making two.
+    [Fact]
+    public void AReadOnlySessionLeavesTheLinkToTheReadOnlyBox() =>
+        Assert.Null(ChatPanel.SessionLinkUrl(
+            new InterruptibleReadOnly { IsReadOnly = true, ReplyUrl = "https://claude.ai/code/s" }));
 }
