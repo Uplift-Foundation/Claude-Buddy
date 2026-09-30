@@ -3599,14 +3599,7 @@ namespace ClaudeBuddy
 
             if (help is not null)
             {
-                var hint = new TextBlock
-                {
-                    Text = help,
-                    FontSize = 11,
-                    Opacity = 0.55,
-                    TextWrapping = TextWrapping.Wrap,
-                    Margin = new Thickness(0, 6, 0, 0)
-                };
+                var hint = HelpText(help);
                 Grid.SetRow(hint, 1);
                 Grid.SetColumnSpan(hint, 2);
                 grid.Children.Add(hint);
@@ -3614,6 +3607,43 @@ namespace ClaudeBuddy
 
             return grid;
         }
+
+        // A row's help, one wrapped TextBlock per paragraph rather than one
+        // TextBlock holding a blank line.
+        //
+        // Not cosmetic. Avalonia 12.1.1's TextFormatter never advances past an
+        // empty line in wrapped text laid out with the headless platform's
+        // stub font (BareMinimum.ttf): "a\n\nb" under TextWrapping.Wrap
+        // produces zero-length lines until memory runs out, while NoWrap, a
+        // single "\n", and the same text under real Skia all terminate. Under
+        // tests/UiTests that hung any test that showed this window after
+        // something had left Grok usage switched on, because the Grok
+        // auto-refresh help was the one help text with a paragraph break in
+        // it. Installed builds lay out with Skia and never hit it, so this
+        // keeps a wrapped TextBlock from ever being handed that input.
+        // SettingsHelpTextTests pins both halves.
+        //
+        // A help text with no paragraph break is the single TextBlock it
+        // always was, so every other row's tree is exactly what it was before.
+        internal static Control HelpText(string help)
+        {
+            var paragraphs = help.Split("\n\n");
+            var margin = new Thickness(0, 6, 0, 0);
+            if (paragraphs.Length == 1) return HintBlock(help, margin);
+
+            var panel = new StackPanel { Spacing = 6, Margin = margin };
+            foreach (var paragraph in paragraphs) panel.Children.Add(HintBlock(paragraph, default));
+            return panel;
+        }
+
+        private static TextBlock HintBlock(string text, Thickness margin) => new()
+        {
+            Text = text,
+            FontSize = 11,
+            Opacity = 0.55,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = margin
+        };
 
         // One row per state, seeded from the stored colour and written on change
         // with no commit step — the same read-seed-then-write shape as

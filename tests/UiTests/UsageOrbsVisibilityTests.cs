@@ -25,26 +25,20 @@ public class UsageOrbsVisibilityTests : IDisposable
 {
     private static readonly DateTimeOffset Now = new(2026, 9, 29, 12, 0, 0, TimeSpan.Zero);
 
-    private readonly string _settingsDir =
-        Path.Combine(Path.GetTempPath(), "cb-usage-orbs-settings-" + Guid.NewGuid());
+    private readonly ScopedSettingsDir _settings = new("usage-orbs");
 
     private readonly string _statusDir =
         Path.Combine(Path.GetTempPath(), "cb-usage-orbs-status-" + Guid.NewGuid());
 
     private readonly List<SessionManager> _managers = new();
 
-    public UsageOrbsVisibilityTests()
-    {
-        Directory.CreateDirectory(_settingsDir);
-        Directory.CreateDirectory(_statusDir);
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", _settingsDir);
-        ClaudeBuddySettings.ReloadForTests();
-    }
+    public UsageOrbsVisibilityTests() => Directory.CreateDirectory(_statusDir);
 
     public void Dispose()
     {
         foreach (var manager in _managers) manager.AccountOrbsForTests.CloseAll();
         try { Directory.Delete(_statusDir, recursive: true); } catch { }
+        _settings.Dispose();
     }
 
     private SessionManager NewManager()
