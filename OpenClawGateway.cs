@@ -155,7 +155,17 @@ namespace ClaudeBuddy
 
         private readonly Connector _connect;
         private readonly TimeSpan _challengeTimeout;
-        private readonly TimeSpan _requestTimeout;
+        private TimeSpan _requestTimeout;
+
+        // The same limit, changed after construction. Only tests need it: the
+        // handshake is itself a request, so a gateway built with a 50ms request
+        // timeout also has 50ms to finish connecting, and a test of "a request
+        // nobody answers is cancelled" would then fail on a slow runner at the
+        // handshake, before the request it is about had even been sent.
+        internal TimeSpan RequestTimeout
+        {
+            set => _requestTimeout = value;
+        }
 
         public OpenClawGateway(string host, int port, string gatewayToken)
             : this(host, port, gatewayToken, OpenClawSocket.ConnectAsync)
