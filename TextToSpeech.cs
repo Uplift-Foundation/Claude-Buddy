@@ -289,9 +289,12 @@ namespace ClaudeBuddy
             get { lock (Gate) return _cachedOptions; }
         }
 
-        // A test seam for CachedVoiceOptions: the only thing that fills the
-        // cache in production is AllVoiceOptions, which is two process
-        // launches. InvalidateVoiceCache empties it again.
+        // A test seam for CachedVoiceOptions, and for the option cache
+        // AllVoiceOptions() returns from: the only thing that fills it in
+        // production is AllVoiceOptions, which is two process launches (and on
+        // macOS `say -v ?`). Seeding it lets a UI test open the real settings
+        // dropdown and drive its real FillVoiceList without that scan.
+        // InvalidateVoiceCache empties it again.
         internal static void SetVoiceOptionsForTests(List<VoiceOption> options)
         {
             lock (Gate) _cachedOptions = options;
