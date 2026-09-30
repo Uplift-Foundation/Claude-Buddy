@@ -359,6 +359,21 @@ namespace ClaudeBuddy
                 _ = PeerSessions.Host?.RequestOpenClawProfileVoicesAsync(pin!, ids);
         }
 
+        // Every voice a gateway agent's identity or a peer's cached profile
+        // names, for SessionIdentity.PersonaVoiceRequests. Both sources rather
+        // than only the one VoiceForSession would pick, because this answers
+        // "could an orb speak on another engine", not "which voice does this
+        // one use".
+        internal static List<string> PersonaVoices()
+        {
+            lock (Gate)
+            {
+                return Identities.Values.Select(identity => identity.Voice).OfType<string>()
+                    .Concat(PeerVoices.Values.SelectMany(cache => cache.Voices.Values.Select(v => v.Voice)))
+                    .ToList();
+            }
+        }
+
         private static (string? Voice, double? Rate) PeerVoiceFor(string? agentId)
         {
             if (agentId is null) return (null, null);

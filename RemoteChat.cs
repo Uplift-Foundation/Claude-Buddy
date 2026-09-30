@@ -352,23 +352,30 @@ namespace ClaudeBuddy
         string ComposerHint { get; }
     }
 
-    // A session that can be read and not written to *at all*.
+    // A session that can be read and, right now, not written to *at all*.
     //
-    // **The panel hides the composer entirely for one of these**, rather than
-    // showing a disabled box or the discouraging watermark IRemoteChatComposer
-    // above argues for. That reads as a contradiction of the paragraph directly
-    // overhead and is not one: that reasoning turns on typing being *pointless*,
-    // where SendAsync can still explain itself in the transcript afterwards.
-    // This is the case where there is nowhere for the text to go on any address
-    // — a cloud session's `/input`, `/messages`, `/turns` and `/conversation`
-    // are all 404, measured, not assumed. A box that accepts a paragraph and
-    // only then admits the transport never had a delivery route has already lost
-    // the paragraph, and the person who typed it has no copy.
+    // **The panel hides the composer entirely while IsReadOnly is true**,
+    // rather than showing a disabled box or the discouraging watermark
+    // IRemoteChatComposer above argues for. That reads as a contradiction of the
+    // paragraph directly overhead and is not one: that reasoning turns on typing
+    // being *pointless*, where SendAsync can still explain itself in the
+    // transcript afterwards. This is the case where the server has already said
+    // the text has nowhere to go — a cloud session that has ended, been deleted,
+    // or refused this login a write. A box that accepts a paragraph and only then
+    // admits the session will not take it has already lost the paragraph, and the
+    // person who typed it has no copy.
+    //
+    // This interface was written when a cloud session had no write path at all
+    // (CB-164 found `/input`, `/messages`, `/turns` and `/conversation` on the
+    // read host all 404). CB-199 found the one the Claude Code CLI uses —
+    // `POST /v1/code/sessions/{id}/events`, measured — so a cloud session is now
+    // writable until a refusal says otherwise, which is why IsReadOnly can change
+    // and ReadOnlyChanged exists.
     //
     // ComposerHint is still read for one of these, and shown where the box was.
     // Hiding the box and explaining nothing leaves a panel that looks truncated;
-    // the hint says where the session *can* be replied to, which is the useful
-    // half of the refusal.
+    // the hint says why, and ReplyUrl where the session can still be opened,
+    // which together are the useful half of the refusal.
     public interface IRemoteChatReadOnly
     {
         // A property rather than a bare marker interface, for the same reason
@@ -388,6 +395,53 @@ namespace ClaudeBuddy
         // also per-session and long, so as prose it is either truncated or it
         // swamps the sentence beside it.
         string? ReplyUrl { get; }
+
+        // IsReadOnly changed after the panel read it.
+        //
+        // CB-199: it used to be fixed for a session's lifetime, and a panel that
+        // read it once at bind was right. It no longer is — a cloud session is
+        // writable until the server says otherwise (a 409 once it has ended, a
+        // 404 once it has been deleted, a 403 for an account that may not write
+        // to it), and the only way to learn that is to try. So the panel has to
+        // hear about the flip rather than keep the box it drew at bind: a
+        // composer left up over a session that has just refused a message would
+        // take the next paragraph and lose it exactly the way the comment above
+        // says a hidden box exists to prevent.
+        //
+        // Carries nothing. The handler re-reads IsReadOnly, ComposerHint and
+        // ReplyUrl together, because a flip changes all three at once and an
+        // event carrying one of them would invite reading the other two stale.
+        // Raised on the UI thread, like every other event on these interfaces.
+        event Action? ReadOnlyChanged;
+    }
+
+    // A session whose reply in flight this app can actually stop.
+    //
+    // Optional, and separate from IRemoteChatSession.Cancel, which every
+    // transport has and which stays the verb: this interface says only whether
+    // pressing it right now would do anything. For CB-59's reason the panel
+    // hides a Stop control that would do nothing rather than drawing it
+    // disabled — a greyed button over a session that is not working reads as
+    // "stuck", and a Stop that silently does nothing reads as broken. A
+    // transport that does not implement this keeps whatever the panel already
+    // did for it.
+    //
+    // A property with a change event rather than something the panel infers
+    // from the turns it has, because the thing that knows whether a turn is
+    // running is the transport's own status (for a cloud session, the roster
+    // row's worker state), not the transcript — a reply can be running long
+    // before its first row arrives.
+    public interface IRemoteChatInterrupt
+    {
+        // True while there is a turn in flight that Cancel would stop. Goes
+        // false as soon as Cancel is called, optimistically, and stays false for
+        // a session that is read-only: there is nothing to stop on a session
+        // that can no longer be written to.
+        bool CanInterrupt { get; }
+
+        // CanInterrupt changed. Raised on the UI thread; carries nothing, and the
+        // handler re-reads the property.
+        event Action? InterruptChanged;
     }
 
     // A session that cannot be typed into where it is, but can be *opened*

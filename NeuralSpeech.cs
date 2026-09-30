@@ -146,6 +146,50 @@ namespace ClaudeBuddy
         internal static string? UsableEnginePath =>
             File.Exists(EnginePath) ? EnginePath : NewestOtherEngine();
 
+        // "Kokoro speaks, through an engine that cannot prove it honours the
+        // level." What the Speech volume row asks (CB-200).
+        //
+        // Asked of the engine's contract stamp, not of its path. This used to
+        // be UsableEnginePath != EnginePath, and that was wrong in exactly the
+        // case it was for: the directory is keyed by the app's version, so a
+        // rebuild that keeps the version finds an older engine at its own
+        // path. Measured on the MacBook with the branch build of 0.5.9-beta —
+        // the released 0.5.9-beta engine answered to EnginePath, the note
+        // never showed, and its afplay ran without -v while the app had set
+        // the variable. See SpeechEngineContract.ContractVersion.
+        //
+        // Available first, because when it is false nothing neural speaks at
+        // all — a system voice does, and that honours the level. Once it is
+        // true UsableEnginePath is non-null.
+        internal static bool EngineIgnoresVolume =>
+            Available && !HonoursVolume(ReadStamp(UsableEnginePath!));
+
+        // The stamp beside an engine executable, or null when there is none
+        // or it cannot be read — both of which mean "from before CB-200".
+        internal static string? ReadStamp(string enginePath)
+        {
+            try
+            {
+                var stamp = Path.Combine(Path.GetDirectoryName(enginePath)!, SpeechEngineContract.StampFileName);
+                return File.Exists(stamp) ? File.ReadAllText(stamp) : null;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return null;
+            }
+        }
+
+        // Whether a stamp's contents promise the volume variable: a whole
+        // number at least 1. Anything else — missing, empty, garbage, a
+        // future format this build cannot read — is an engine that has not
+        // proved it, and gets the note. Erring that way costs a sentence that
+        // might be unnecessary; the other way is a slider that silently does
+        // nothing, which is the one thing the ticket forbids.
+        internal static bool HonoursVolume(string? stamp) =>
+            int.TryParse(stamp?.Trim(), System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture, out var version)
+            && version >= 1;
+
         internal static string? NewestOtherEngine()
         {
             try
@@ -507,28 +551,17 @@ namespace ClaudeBuddy
             return voices;
         }
 
-        // Starts the engine on this text and hands the process back for
-        // TextToSpeech to own — it already knows how to treat a running child as
-        // "speaking" and a kill as "stop".
-        //
-        // Text goes in over stdin, not on the command line. An assistant turn runs
-        // to 1500 characters of quotes, apostrophes, newlines and code
-        // punctuation; the PowerShell path this replaces has to double every
-        // apostrophe to survive being spliced into a script and got it wrong once
-        // already. A pipe has no escaping rules to get wrong.
-        //
-        // onSpeaking fires when the engine reports that audio has actually begun.
-        // There is a real wait in front of the first sound — process start, then a
-        // model load, then the first segment's synthesis, measured at ~3.3s — so
-        // the caller needs to distinguish "preparing" from "speaking" rather than
-        // showing a stop button over silence.
-        // Excluded from coverage: starts the side-car engine process.
-        [ExcludeFromCodeCoverage]
-        public static Process? Start(string text, string? voice, double? rate, Action? onSpeaking)
-        {
-            var engine = UsableEnginePath;
-            if (engine is null || !File.Exists(ModelPath)) return null;
+        // Everything about launching the engine except the launch: its argv and
+        // environment. Split out of Start, which is excluded for starting a
+        // real process, because CB-200 QA removed the volume line from inside
+        // that exclusion and nothing noticed. The one-argument-shorter
+        // overload is the one Start calls, and it is where the Speech level
+        // is read — the other mutant QA planted was that read replaced with 1.
+        internal static ProcessStartInfo StartInfoFor(string engine, string? voice, double? rate) =>
+            StartInfoFor(engine, voice, rate, ClaudeBuddySettings.SpeechVolume);
 
+        internal static ProcessStartInfo StartInfoFor(string engine, string? voice, double? rate, double volume)
+        {
             var startInfo = new ProcessStartInfo(engine)
             {
                 ArgumentList =
@@ -553,6 +586,41 @@ namespace ClaudeBuddy
                 startInfo.ArgumentList.Add("--rate");
                 startInfo.ArgumentList.Add(spoken.ToString(System.Globalization.CultureInfo.InvariantCulture));
             }
+
+            // CB-200: the Speech level, through the environment rather than an
+            // argument — AudioVolume.SpeechVolumeEnvVar says why. Left unset
+            // at full volume, which is how the engine has always been run.
+            if (AudioVolume.EngineEnvironmentValue(volume) is { } level)
+            {
+                startInfo.Environment[AudioVolume.SpeechVolumeEnvVar] = level;
+            }
+
+            return startInfo;
+        }
+
+        // Starts the engine on this text and hands the process back for
+        // TextToSpeech to own — it already knows how to treat a running child as
+        // "speaking" and a kill as "stop".
+        //
+        // Text goes in over stdin, not on the command line. An assistant turn runs
+        // to 1500 characters of quotes, apostrophes, newlines and code
+        // punctuation; the PowerShell path this replaces has to double every
+        // apostrophe to survive being spliced into a script and got it wrong once
+        // already. A pipe has no escaping rules to get wrong.
+        //
+        // onSpeaking fires when the engine reports that audio has actually begun.
+        // There is a real wait in front of the first sound — process start, then a
+        // model load, then the first segment's synthesis, measured at ~3.3s — so
+        // the caller needs to distinguish "preparing" from "speaking" rather than
+        // showing a stop button over silence.
+        // Excluded from coverage: starts the side-car engine process.
+        [ExcludeFromCodeCoverage]
+        public static Process? Start(string text, string? voice, double? rate, Action? onSpeaking)
+        {
+            var engine = UsableEnginePath;
+            if (engine is null || !File.Exists(ModelPath)) return null;
+
+            var startInfo = StartInfoFor(engine, voice, rate);
 
             var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
 

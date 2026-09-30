@@ -100,8 +100,14 @@ public class CredentialStoreDisabledTests
     [Fact]
     public void DisablingTheStoreDoesNotChangeWhichSourceAPlatformGets()
     {
-        Assert.IsType<KeychainCredentialSource>(
-            ClaudeCliCredentials.SourceFor(isMacOS: true, home: "/tmp/does-not-matter"));
+        var multi = (MultiCredentialSource)Assert.Single(
+            ClaudeCliCredentials.SourcesFor(isMacOS: true, home: "/tmp/does-not-matter")).Source;
+
+        Assert.Contains(ClaudeCliCredentials.KeychainService, multi.Names);
+        // And the whole walk stays inert: every child's Stamp() is null while
+        // disabled, so nothing is read.
+        Assert.Null(multi.Stamp());
+        Assert.Equal(CredentialOutcome.NotLoggedIn, multi.Read().Outcome);
     }
 
     // The point of the whole change: with the store disabled, a read answers

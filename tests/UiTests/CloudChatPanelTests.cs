@@ -1,4 +1,6 @@
+using System.Runtime.CompilerServices;
 using System.Threading;
+using System.Threading.Channels;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
@@ -6,6 +8,7 @@ using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.Media;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using Xunit;
 
 namespace ClaudeBuddy.Tests;
@@ -54,13 +57,35 @@ public class CloudChatPanelTests : IDisposable
         panel.FindControl<Grid>("ComposerRow")!;
 
     private static Control ReadOnlyBox(ChatPanel panel) =>
-        panel.FindControl<StackPanel>("ReadOnlyBox")!;
+        panel.FindControl<Control>("ReadOnlyBox")!;
 
     private static TextBlock ReadOnlyNote(ChatPanel panel) =>
         panel.FindControl<TextBlock>("ReadOnlyNote")!;
 
     private static TextBlock ReadOnlyLink(ChatPanel panel) =>
         panel.FindControl<TextBlock>("ReadOnlyLink")!;
+
+    private static Control StopButton(ChatPanel panel) =>
+        panel.FindControl<Grid>("StopButton")!;
+
+    private static TextBox Input(ChatPanel panel) =>
+        panel.FindControl<TextBox>("Input")!;
+
+    // A real routed PointerPressed on the control, which is what the panel's own
+    // handler is attached to — the same helper shape ChatPanelInteractionTests
+    // uses, so the production click path runs rather than a method called round
+    // it.
+    private static void Click(Control control, Control root)
+    {
+        var pointer = new Pointer(Pointer.GetNextFreeId(), PointerType.Mouse, isPrimary: true);
+        control.RaiseEvent(new PointerPressedEventArgs(
+            control, pointer, root, new Avalonia.Point(1, 1), 0,
+            new PointerPointProperties(RawInputModifiers.LeftMouseButton, PointerUpdateKind.LeftButtonPressed),
+            KeyModifiers.None, 1));
+    }
+
+    private static void PressEnter(TextBox input) =>
+        input.RaiseEvent(new KeyEventArgs { RoutedEvent = InputElement.KeyDownEvent, Key = Key.Enter });
 
     // --- a fake API, shaped after the one in tests/UnitTests ---
 
@@ -72,8 +97,13 @@ public class CloudChatPanelTests : IDisposable
 
         internal FakeApi(Func<CloudApiResult> answer) => _answer = answer;
 
-        public Task<CloudApiResult> GetAsync(CloudRequestContext context, CancellationToken token) =>
-            Task.FromResult(_answer());
+        internal List<CloudRequestContext> Requests { get; } = new();
+
+        public Task<CloudApiResult> SendAsync(CloudRequestContext context, CancellationToken token)
+        {
+            Requests.Add(context);
+            return Task.FromResult(_answer());
+        }
     }
 
     private sealed class FakeCredentials : ICloudCredentialSource
@@ -318,6 +348,327 @@ public class CloudChatPanelTests : IDisposable
         Assert.False(ReadOnlyBox(panel).IsVisible);
     }
 
+    // --- sending (CB-199) ---
+
+    // A cloud session that may be written to looks like any other: the box, and
+    // no sentence in its place. Stop is not there either, because nothing is
+    // running — hidden rather than greyed, per CB-59.
+    private FakeChatSession SendableCloud(string prefix, bool canInterrupt = false)
+    {
+        var fake = new FakeChatSession(null)
+        {
+            SessionId = prefix + "-" + Guid.NewGuid(),
+            IsReadOnly = false,
+            CanInterrupt = canInterrupt,
+            ComposerHint = "Message\u2026",
+            ReplyUrl = "https://claude.ai/code/session_01abc",
+        };
+        _toClean.Add(fake.SessionId);
+        return fake;
+    }
+
+    [AvaloniaFact]
+    public void ASendableCloudSessionGetsTheComposerAndNoReadOnlyBox()
+    {
+        var fake = SendableCloud("cloud-sendable");
+
+        ChatPanel.OpenFor(NewOrb(), fake);
+        FlushRender();
+
+        var panel = ChatPanelTestAccess.Instance!;
+
+        Assert.True(ComposerRow(panel).IsVisible);
+        Assert.False(ReadOnlyBox(panel).IsVisible);
+        Assert.False(StopButton(panel).IsVisible);
+    }
+
+    // Enter sends what was typed, and the box is cleared once the session says
+    // it went. The session raises the user's own turn itself (the interface's
+    // rule 3), so the bubble comes from there rather than from the panel.
+    [AvaloniaFact]
+    public void TypingAndEnterSendsIntoACloudSessionAndClearsTheBox()
+    {
+        var fake = SendableCloud("cloud-send");
+
+        ChatPanel.OpenFor(NewOrb(), fake);
+        Flush();
+
+        var panel = ChatPanelTestAccess.Instance!;
+        var input = Input(panel);
+
+        input.Text = "run the tests again";
+        PressEnter(input);
+        Flush();
+
+        Assert.Equal(new[] { "run the tests again" }, fake.SentTexts);
+        Assert.Equal("", input.Text ?? "");
+        Assert.Single(fake.History);
+    }
+
+    // ...and a refused send keeps the text. The note explaining the refusal is
+    // the session's to write; what the panel owes is not losing the paragraph.
+    [AvaloniaFact]
+    public void ARefusedCloudSendKeepsTheTextInTheBox()
+    {
+        var fake = SendableCloud("cloud-refused");
+        fake.SendOutcome = ChatSendOutcome.Failed;
+
+        ChatPanel.OpenFor(NewOrb(), fake);
+        Flush();
+
+        var input = Input(ChatPanelTestAccess.Instance!);
+
+        input.Text = "this will be refused";
+        PressEnter(input);
+        Flush();
+
+        Assert.Equal(new[] { "this will be refused" }, fake.SentTexts);
+        Assert.Equal("this will be refused", input.Text);
+    }
+
+    // **The reason ReadOnlyChanged exists.** A session that turns read-only while
+    // the panel is open — the server has said it ended — must lose its box then,
+    // not at the next bind, or the next paragraph typed into it is lost. And it
+    // comes back if the session changes its mind, so the handler is a re-read
+    // rather than a one-way latch.
+    [AvaloniaFact]
+    public void TurningReadOnlyMidPanelSwapsTheComposerForTheNoteAndBack()
+    {
+        var fake = SendableCloud("cloud-flip");
+
+        ChatPanel.OpenFor(NewOrb(), fake);
+        FlushRender();
+
+        var panel = ChatPanelTestAccess.Instance!;
+        Assert.True(ComposerRow(panel).IsVisible);
+
+        fake.ComposerHint = "This session has ended, so it can\u2019t be replied to.";
+        fake.RaiseReadOnlyChanged(true);
+        Flush();
+
+        Assert.False(ComposerRow(panel).IsVisible);
+        Assert.True(ReadOnlyBox(panel).IsVisible);
+        Assert.Equal(fake.ComposerHint, ReadOnlyNote(panel).Text);
+
+        // The link comes with the flip, since it is re-read with the rest.
+        Assert.True(ReadOnlyLink(panel).IsVisible);
+
+        fake.ComposerHint = "Message\u2026";
+        fake.RaiseReadOnlyChanged(false);
+        Flush();
+
+        Assert.True(ComposerRow(panel).IsVisible);
+        Assert.False(ReadOnlyBox(panel).IsVisible);
+    }
+
+    // Stop is there exactly while the session says a turn can be interrupted, a
+    // click reaches the session once, and it goes away when the session says
+    // there is nothing left to stop.
+    [AvaloniaFact]
+    public void StopShowsWhileATurnCanBeInterruptedAndAClickCancelsIt()
+    {
+        var fake = SendableCloud("cloud-stop");
+
+        ChatPanel.OpenFor(NewOrb(), fake);
+        FlushRender();
+
+        var panel = ChatPanelTestAccess.Instance!;
+        var stop = StopButton(panel);
+        Assert.False(stop.IsVisible);
+
+        fake.RaiseInterruptChanged(true);
+        Flush();
+        Assert.True(stop.IsVisible);
+
+        Click(stop, panel);
+        Flush();
+        Assert.Equal(1, fake.CancelCalls);
+
+        fake.RaiseInterruptChanged(false);
+        Flush();
+        Assert.False(stop.IsVisible);
+    }
+
+    // A press that lands after the session said there is nothing to stop — the
+    // race between a turn ending and a click — reaches no Cancel. The button is
+    // hidden by then, so the press is synthesized directly.
+    [AvaloniaFact]
+    public void AStopPressWithNothingToStopReachesNoCancel()
+    {
+        var fake = SendableCloud("cloud-stop-late");
+
+        ChatPanel.OpenFor(NewOrb(), fake);
+        FlushRender();
+
+        var panel = ChatPanelTestAccess.Instance!;
+        Click(StopButton(panel), panel);
+        Flush();
+
+        Assert.Equal(0, fake.CancelCalls);
+    }
+
+    // Already interruptible when the panel opens — a reply was running before
+    // anybody clicked the orb — shows Stop from the first frame rather than
+    // waiting for a change that may never come.
+    [AvaloniaFact]
+    public void StopIsShownAtBindForASessionAlreadyMidTurn()
+    {
+        var fake = SendableCloud("cloud-stop-bind", canInterrupt: true);
+
+        ChatPanel.OpenFor(NewOrb(), fake);
+        FlushRender();
+
+        Assert.True(StopButton(ChatPanelTestAccess.Instance!).IsVisible);
+    }
+
+    // Never over a read-only session, even one that (wrongly) still claims an
+    // interruptible turn: there is no composer for it to belong to, and the
+    // button's own visibility says so rather than leaning on its parent row.
+    [AvaloniaFact]
+    public void StopIsHiddenForAReadOnlySession()
+    {
+        var fake = SendableCloud("cloud-stop-readonly", canInterrupt: true);
+        fake.IsReadOnly = true;
+
+        ChatPanel.OpenFor(NewOrb(), fake);
+        FlushRender();
+
+        var panel = ChatPanelTestAccess.Instance!;
+        Assert.False(StopButton(panel).IsVisible);
+
+        // ...and turning read-only mid-turn takes it away too.
+        fake.RaiseReadOnlyChanged(false);
+        Flush();
+        Assert.True(StopButton(panel).IsVisible);
+
+        fake.RaiseReadOnlyChanged(true);
+        Flush();
+        Assert.False(StopButton(panel).IsVisible);
+    }
+
+    // A long reason wraps, and the link stays on the panel. The box was a
+    // horizontal StackPanel, which measures with infinite width: the sentence
+    // never wrapped and pushed the link off the right edge, which only the
+    // ended-session capture showed. Asserted on layout bounds rather than
+    // pixels so it runs here, under the null renderer.
+    [AvaloniaFact]
+    public void ALongReadOnlyReasonWrapsAndKeepsTheLinkInsideThePanel()
+    {
+        var fake = new FakeChatSession(null)
+        {
+            SessionId = "cloud-long-reason-" + Guid.NewGuid(),
+            IsReadOnly = true,
+            ComposerHint = "This session has ended, so it can\u2019t be replied to here or "
+                           + "anywhere else, and this sentence is long enough to need two lines.",
+            ReplyUrl = "https://claude.ai/code/session_01abc",
+        };
+        _toClean.Add(fake.SessionId);
+
+        ChatPanel.OpenFor(NewOrb(), fake);
+        FlushRender();
+
+        var panel = ChatPanelTestAccess.Instance!;
+        var box = ReadOnlyBox(panel);
+        var link = ReadOnlyLink(panel);
+
+        Assert.True(box.Bounds.Width > 0);
+        Assert.True(link.Bounds.Right <= box.Bounds.Width,
+            $"link ends at {link.Bounds.Right}, box is {box.Bounds.Width} wide");
+        Assert.True(ReadOnlyNote(panel).Bounds.Right <= link.Bounds.Left);
+    }
+
+    // The panel is reused across orbs, so a session it has left must not reach
+    // it any more. Raised after the move, each event would otherwise redraw the
+    // *new* conversation's composer from the old one's answers — a refusal in
+    // one cloud session taking the box away from an unrelated one.
+    [AvaloniaFact]
+    public void ASessionThePanelHasLeftNoLongerChangesIt()
+    {
+        var first = SendableCloud("cloud-left");
+        var second = SendableCloud("cloud-next");
+
+        var orb = NewOrb();
+        ChatPanel.OpenFor(orb, first);
+        FlushRender();
+
+        ChatPanel.OpenFor(orb, second);
+        FlushRender();
+
+        var panel = ChatPanelTestAccess.Instance!;
+
+        // The handlers re-read the *bound* session, so a lingering subscription
+        // is only visible if the bound one would redraw differently. So each
+        // check first puts `second` in such a state, then has `first` announce.
+        second.CanInterrupt = true;
+        first.RaiseInterruptChanged(true);
+        Flush();
+        Assert.False(StopButton(panel).IsVisible);
+
+        second.IsReadOnly = true;
+        first.RaiseReadOnlyChanged(true);
+        Flush();
+        Assert.True(ComposerRow(panel).IsVisible);
+        Assert.False(ReadOnlyBox(panel).IsVisible);
+
+        // The negative control: the same mutation announced by the session that
+        // *is* bound does redraw, so the assertions above are about the
+        // subscription and not about a handler that never runs.
+        second.RaiseReadOnlyChanged(true);
+        Flush();
+        Assert.False(ComposerRow(panel).IsVisible);
+    }
+
+    // The panel tells a real cloud session when it is being looked at, and when
+    // it stops being looked at (PanelOpened / PanelClosed, by concrete type).
+    //
+    // The state is read off the session's PanelOpen, and that is deliberate.
+    // What the flag licenses — one transcript read when a turn finishes — goes
+    // through Task.Run and a single-flight guard, so a request count can show
+    // the open half (awaited below) but can never show the closed half: a read
+    // the closed panel wrongly started and a read started afterwards collapse
+    // into the same one request. The flag is the only thing that can tell those
+    // two apart.
+    private static bool PanelOpenFlag(ClaudeCloudChatSession chat) => chat.PanelOpen;
+
+    [AvaloniaFact]
+    public async Task BindAndUnbindTellACloudSessionWhetherAPanelIsOpen()
+    {
+        var id = "session_panel_" + Guid.NewGuid().ToString("N");
+        var firstRequest = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var api = new FakeApi(() =>
+        {
+            firstRequest.TrySetResult();
+            return new CloudApiResult(
+                CloudOutcomes.OutcomeFor(200, ""), Envelope(Row(UserTemplate, "u1", "hello")));
+        });
+        var chat = Chat(id, api);
+        _toClean.Add(chat.SessionId);
+
+        Assert.False(PanelOpenFlag(chat));
+
+        var orb = NewOrb();
+        ChatPanel.OpenFor(orb, chat);
+        FlushRender();
+
+        Assert.True(PanelOpenFlag(chat));
+
+        // ...and that open panel is what gets a finished turn read. Awaited on
+        // the request itself rather than a sleep, and bounded so a regression
+        // fails instead of hanging the suite.
+        chat.UpdateStatus(Session(id) with { State = "generating", StatusBucket = "working" });
+        chat.UpdateStatus(Session(id));
+        var reached = await Task.WhenAny(firstRequest.Task, Task.Delay(TimeSpan.FromSeconds(10)));
+        Assert.Same(firstRequest.Task, reached);
+
+        // Moving the panel to another session is the Unbind.
+        var other = new FakeChatSession(null) { SessionId = "cloud-after-" + Guid.NewGuid() };
+        _toClean.Add(other.SessionId);
+        ChatPanel.OpenFor(orb, other);
+        FlushRender();
+
+        Assert.False(PanelOpenFlag(chat));
+    }
+
     // --- a read that worked ---
 
     [AvaloniaFact]
@@ -340,7 +691,10 @@ public class CloudChatPanelTests : IDisposable
         var panel = ChatPanelTestAccess.Instance!;
 
         Assert.Equal(2, RenderedRows(panel).Count);
-        Assert.False(ComposerRow(panel).IsVisible);
+
+        // CB-199: a cloud session is writable until the server refuses it, so a
+        // transcript that read cleanly comes with a box under it.
+        Assert.True(ComposerRow(panel).IsVisible);
     }
 
     // --- a read that did not ---
@@ -455,5 +809,105 @@ public class CloudChatPanelTests : IDisposable
         Assert.False(await chat.LoadAsync(CancellationToken.None));
         Assert.Equal(RemoteChatState.Error, chat.State);
         Assert.Empty(chat.History);
+    }
+
+    // --- a streamed reply (CB-199) ---
+
+    // One connection, handed to the test as a channel to write the turn into.
+    private sealed class PanelStream : ICloudEventStream
+    {
+        private readonly Channel<Channel<CloudStreamEvent>> _opened = Channel.CreateUnbounded<Channel<CloudStreamEvent>>();
+
+        public async IAsyncEnumerable<CloudStreamEvent> OpenAsync(string accessToken, string sessionId,
+            long? fromSequenceNum, [EnumeratorCancellation] CancellationToken ct)
+        {
+            var events = Channel.CreateUnbounded<CloudStreamEvent>();
+            _opened.Writer.TryWrite(events);
+            await foreach (var e in events.Reader.ReadAllAsync(ct)) yield return e;
+        }
+
+        internal async Task<ChannelWriter<CloudStreamEvent>> NextOpenAsync()
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            return (await _opened.Reader.ReadAsync(timeout.Token)).Writer;
+        }
+    }
+
+    // Answers the stream's starting-point read with a sequence number, and
+    // everything else with an empty transcript.
+    private sealed class NewestApi : ICloudApi
+    {
+        public Task<CloudApiResult> SendAsync(CloudRequestContext context, CancellationToken token) =>
+            Task.FromResult(new CloudApiResult(CloudOutcomes.OutcomeFor(200, ""),
+                context.Path.EndsWith("?limit=1&sort_order=desc", StringComparison.Ordinal)
+                    ? "{\"data\":[{\"sequence_num\":\"7\"}]}"
+                    : Envelope()));
+    }
+
+    private static async Task PumpUntil(Func<bool> condition)
+    {
+        for (var i = 0; i < 1000 && !condition(); i++)
+        {
+            FlushRender();
+            await Task.Delay(5);
+        }
+
+        FlushRender();
+        Assert.True(condition(), "the panel did not reach the expected state within five seconds");
+    }
+
+    private static string ShownText(ChatPanel panel) =>
+        string.Concat(panel.FindControl<ItemsControl>("Turns")!.GetVisualDescendants().OfType<TextBlock>()
+            .Select(tb => !string.IsNullOrEmpty(tb.Text)
+                ? tb.Text
+                : string.Concat((tb.Inlines ?? new Avalonia.Controls.Documents.InlineCollection())
+                    .OfType<Avalonia.Controls.Documents.Run>().Select(r => r.Text))));
+
+    // What the real-machine report asked for: the reply builds up in one row
+    // while it is written, Stop is up the whole time, and both settle when the
+    // turn ends. Driven through the real session and the real panel, with the
+    // session posting to the real dispatcher.
+    [AvaloniaFact]
+    public async Task AStreamedReplyGrowsInOneRowWithStopShowing()
+    {
+        var id = "session_stream_" + Guid.NewGuid().ToString("N");
+        _toClean.Add(id);
+        var stream = new PanelStream();
+        var chat = new ClaudeCloudChatSession(Session(id), new NewestApi(), new FakeCredentials(),
+            action => Dispatcher.UIThread.Post(action))
+        {
+            Stream = stream,
+            Enabled = () => true,
+        };
+
+        ChatPanel.OpenFor(NewOrb(), chat);
+        FlushRender();
+        var panel = ChatPanelTestAccess.Instance!;
+        var events = await stream.NextOpenAsync();
+
+        events.TryWrite(new CloudStreamEvent(CloudStreamEventKind.Durable, "client_event", 8, "{}",
+            PayloadType: "system", Subtype: "init"));
+        events.TryWrite(new CloudStreamEvent(CloudStreamEventKind.Ephemeral, "ephemeral_event", null, "{}",
+            PayloadType: "stream_event", TextDelta: "Once upon ", InnerType: "content_block_delta"));
+        await PumpUntil(() => RenderedRows(panel).Count == 1 && ShownText(panel).Contains("Once upon"));
+        Assert.True(StopButton(panel).IsVisible);
+
+        events.TryWrite(new CloudStreamEvent(CloudStreamEventKind.Ephemeral, "ephemeral_event", null, "{}",
+            PayloadType: "stream_event", TextDelta: "a time", InnerType: "content_block_delta"));
+        await PumpUntil(() => ShownText(panel).Contains("Once upon a time"));
+        Assert.Single(RenderedRows(panel));
+        Assert.True(StopButton(panel).IsVisible);
+
+        events.TryWrite(new CloudStreamEvent(CloudStreamEventKind.Durable, "client_event", 9,
+            "{\"payload\":" + Row(AssistantTemplate, "a1", "Once upon a time, the end.") + "}",
+            PayloadType: "assistant"));
+        events.TryWrite(new CloudStreamEvent(CloudStreamEventKind.Durable, "client_event", 10, "{}",
+            PayloadType: "result", Subtype: "success"));
+        await PumpUntil(() => !StopButton(panel).IsVisible && ShownText(panel).Contains("the end."));
+        Assert.Single(RenderedRows(panel));
+
+        ChatPanel.HideFor(id);
+        FlushRender();
+        await chat.StreamTask!;
     }
 }

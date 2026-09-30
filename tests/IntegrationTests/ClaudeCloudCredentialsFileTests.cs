@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using Xunit;
 
@@ -283,5 +284,58 @@ public class ClaudeCloudCredentialsFileTests : IDisposable
         }
 
         Assert.Equal(CredentialOutcome.Found, Source().Read().Outcome);
+    }
+
+    // ## CB-221: a login under a custom config root
+
+    [Fact]
+    public void ABlankedDefaultRootFallsThroughToTheLoginUnderACustomRoot()
+    {
+        var defaultRoot = System.IO.Path.Combine(_dir, "default");
+        var boardRoot = System.IO.Path.Combine(_dir, "board");
+        Directory.CreateDirectory(defaultRoot);
+        Directory.CreateDirectory(boardRoot);
+        File.WriteAllText(System.IO.Path.Combine(defaultRoot, ".credentials.json"),
+            """{"claudeAiOauth":{"accessToken":"","refreshToken":"","expiresAt":0}}""");
+        File.WriteAllText(System.IO.Path.Combine(boardRoot, ".credentials.json"), Blob(InAnHour));
+        var multi = new MultiCredentialSource(new (string, ICloudCredentialSource)[]
+        {
+            ("default", new FileCredentialSource(ClaudeCliCredentials.CredentialsFilePath(defaultRoot))),
+            ("board", new FileCredentialSource(ClaudeCliCredentials.CredentialsFilePath(boardRoot))),
+        });
+
+        var read = multi.Read();
+
+        Assert.Equal(CredentialOutcome.Found, read.Outcome);
+        Assert.Equal(FakeAccess, read.AccessToken);
+        Assert.Equal("board", multi.AnsweredBy);
+        Assert.NotNull(multi.Stamp());
+    }
+
+    // Two accounts on disk: the default root holds a live login and another root
+    // holds one the CLI blanked. Each is its own account, read on its own, so the
+    // live one is not hidden behind the dead one and the dead one is not hidden
+    // behind the live one.
+    [Fact]
+    public void TwoRootsAreTwoAccountsOneFoundOneSignedOut()
+    {
+        var defaultRoot = System.IO.Path.Combine(_dir, ".claude");
+        var boardRoot = System.IO.Path.Combine(_dir, ".claude-board");
+        Directory.CreateDirectory(defaultRoot);
+        Directory.CreateDirectory(boardRoot);
+        File.WriteAllText(System.IO.Path.Combine(defaultRoot, ".credentials.json"), Blob(InAnHour));
+        File.WriteAllText(System.IO.Path.Combine(boardRoot, ".credentials.json"),
+            """{"claudeAiOauth":{"accessToken":"","refreshToken":"","expiresAt":0}}""");
+
+        var accounts = ClaudeCliCredentials.SourcesFor(isMacOS: false, _dir, boardRoot);
+
+        Assert.Equal(2, accounts.Count);
+        Assert.Equal(new[] { "default", "board" }, accounts.Select(a => a.Label));
+        var live = accounts[0].Source.Read();
+        var dead = accounts[1].Source.Read();
+        Assert.Equal(CredentialOutcome.Found, live.Outcome);
+        Assert.Equal(FakeAccess, live.AccessToken);
+        Assert.Equal(CredentialOutcome.NotLoggedIn, dead.Outcome);
+        Assert.Contains("signed this login out", dead.Detail);
     }
 }

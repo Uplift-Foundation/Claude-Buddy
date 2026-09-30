@@ -238,6 +238,122 @@ public class NeuralSpeechLayoutTests : IDisposable
         }
     }
 
+    // ---- EngineIgnoresVolume (CB-200) ------------------------------------
+
+    private void PlaceStamp(string version, string contents) =>
+        File.WriteAllText(Path.Combine(_root, version, SpeechEngineContract.StampFileName), contents);
+
+    private static void WithNeuralVoice(bool enabled, Action body)
+    {
+        var original = ClaudeBuddySettings.NeuralVoiceEnabled;
+        try
+        {
+            ClaudeBuddySettings.NeuralVoiceEnabled = enabled;
+            body();
+        }
+        finally
+        {
+            ClaudeBuddySettings.NeuralVoiceEnabled = original;
+        }
+    }
+
+    // The defect this replaced: an engine at this build's own path that has
+    // no stamp — the released engine of the same version number, which a
+    // branch build takes for its own. The path check called it current; the
+    // stamp check calls it what it is. Its negative control is the same path
+    // with a stamp, which must not be noted.
+    [Theory]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    public void AnEngineAtThisBuildsOwnPathIsJudgedByItsStamp(bool stamped, bool ignores)
+    {
+        PlaceEngine(NeuralSpeech.EngineVersion);
+        if (stamped) PlaceStamp(NeuralSpeech.EngineVersion, SpeechEngineContract.ContractVersion + "\n");
+        PlaceModel();
+
+        WithNeuralVoice(true, () =>
+        {
+            Assert.Equal(NeuralSpeech.EnginePath, NeuralSpeech.UsableEnginePath);
+            Assert.Equal(ignores, NeuralSpeech.EngineIgnoresVolume);
+        });
+    }
+
+    // And an older fallback engine by version, which has no stamp either.
+    [Fact]
+    public void AnOlderFallbackEngineWithNoStampIgnoresTheLevel()
+    {
+        PlaceEngine("0.1.0-beta");
+        PlaceModel();
+
+        WithNeuralVoice(true, () => Assert.True(NeuralSpeech.EngineIgnoresVolume));
+    }
+
+    // Nothing neural speaks — the voice is off, or nothing is on disk — so a
+    // system voice does, which honours the level: nothing to note.
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public void NoEngineIsReportedWhenNothingNeuralSpeaks(bool placeOlder, bool enabled)
+    {
+        if (placeOlder)
+        {
+            PlaceEngine("0.1.0-beta");
+            PlaceModel();
+        }
+
+        WithNeuralVoice(enabled, () => Assert.False(NeuralSpeech.EngineIgnoresVolume));
+    }
+
+    // The stamp's contents, one case per arm: a whole number of at least 1,
+    // surrounding whitespace allowed; anything else has not proved it.
+    [Theory]
+    [InlineData("1", true)]
+    [InlineData("1\n", true)]
+    [InlineData(" 2 ", true)]
+    [InlineData("0", false)]
+    [InlineData("-1", false)]
+    [InlineData("1.5", false)]
+    [InlineData("one", false)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    public void AStampPromisesVolumeOnlyAsAWholeNumberOfAtLeastOne(string? stamp, bool honours) =>
+        Assert.Equal(honours, NeuralSpeech.HonoursVolume(stamp));
+
+    [Fact]
+    public void ANamedEngineWithNoStampBesideItReadsAsNone()
+    {
+        PlaceEngine("0.1.0-beta");
+        Assert.Null(NeuralSpeech.ReadStamp(Path.Combine(_root, "0.1.0-beta", NeuralSpeech.EngineExeName)));
+    }
+
+    // A stamp that exists but cannot be read is the same as none. Reachable on
+    // Unix by taking the file's mode bits away; on Windows the ACL route is
+    // Windows-only API for a defensive catch, so there this asserts the
+    // ordinary readable case instead and the catch is covered on macOS.
+    [Fact]
+    public void AnUnreadableStampReadsAsNone()
+    {
+        PlaceEngine(NeuralSpeech.EngineVersion);
+        PlaceStamp(NeuralSpeech.EngineVersion, "1");
+        var stamp = Path.Combine(_root, NeuralSpeech.EngineVersion, SpeechEngineContract.StampFileName);
+
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.Equal("1", NeuralSpeech.ReadStamp(NeuralSpeech.EnginePath));
+            return;
+        }
+
+        File.SetUnixFileMode(stamp, UnixFileMode.None);
+        try
+        {
+            Assert.Null(NeuralSpeech.ReadStamp(NeuralSpeech.EnginePath));
+        }
+        finally
+        {
+            File.SetUnixFileMode(stamp, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+    }
+
     [Fact]
     public void TheDefaultVoiceIsAnAmericanFemaleKokoroVoice()
     {

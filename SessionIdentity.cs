@@ -223,6 +223,58 @@ namespace ClaudeBuddy
                 _ => null,
             };
 
+        // CB-200: which engines orbs' own voices run on, for the settings
+        // window's Speech volume note — so the row can say "a custom command
+        // only gets the level if it reads it" when an orb's persona speaks
+        // through one while the global engine does not.
+        //
+        // The same resolution VoiceFor does, with one deliberate difference: a
+        // blend is judged by VoiceBlend.Resolve rather than VoiceBlends.Option,
+        // because Option writes the blended voice file to disk and a settings
+        // row must not. A blend is always Kokoro, so resolving is enough to
+        // know the engine; if writing the file later failed, that orb would
+        // speak in the global voice instead, which the global line covers.
+        //
+        // Empty when no orb has a voice of its own. Null when some do but no
+        // voice list has been built yet (TextToSpeech.CachedVoiceOptions), so
+        // the engines are unknown — AudioVolume.SpeechVolumeNote states both
+        // rules then rather than guessing.
+        internal static IReadOnlyCollection<TextToSpeech.SpeakEngine>? OrbEngines(
+            IReadOnlyCollection<string> requestedVoices, IReadOnlyList<TextToSpeech.VoiceOption>? options)
+        {
+            if (requestedVoices.Count == 0) return Array.Empty<TextToSpeech.SpeakEngine>();
+            if (options is null) return null;
+
+            var engines = new HashSet<TextToSpeech.SpeakEngine>();
+            foreach (var requested in requestedVoices)
+            {
+                if (EngineOf(requested, options) is { } engine) engines.Add(engine);
+            }
+
+            return engines;
+        }
+
+        internal static TextToSpeech.SpeakEngine? EngineOf(
+            string requested, IEnumerable<TextToSpeech.VoiceOption> options)
+        {
+            var blend = VoiceBlend.Parse(requested);
+            if (blend is null) return TextToSpeech.MatchVoiceOption(requested, options)?.Engine;
+            return VoiceBlend.Resolve(blend, options) is null ? null : TextToSpeech.SpeakEngine.Neural;
+        }
+
+        // Every voice an orb's persona asks for, from all three places a
+        // persona can come from: this machine's markdown (LocalPersonas), a
+        // paired Buddy (PeerPersonas), and the OpenClaw gateway's agents. What
+        // is known right now, in memory — the settings window reads it when
+        // it builds the row.
+        internal static IReadOnlyCollection<string> PersonaVoiceRequests() =>
+            LocalPersonas.Voices()
+                .Concat(PeerPersonas.Voices())
+                .Concat(OpenClawSessions.PersonaVoices())
+                .Where(voice => !string.IsNullOrWhiteSpace(voice))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
         // Excluded from coverage: AllVoiceOptions is the two process launches
         // above. The decision it feeds is the overload above, which is tested.
         [ExcludeFromCodeCoverage]

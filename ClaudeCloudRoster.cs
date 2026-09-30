@@ -69,7 +69,8 @@ namespace ClaudeBuddy
             string? Model,
             int? ContextPercent,
             string? StatusDetail,
-            string? RecentAction);
+            string? RecentAction,
+            string? ConnectionStatus = null);
 
         // What was wrong with a payload, where something was.
         //
@@ -211,6 +212,16 @@ namespace ClaudeBuddy
             string? statusDetail = null;
             string? recentAction = null;
 
+            // Kept as the raw string: it has no documented vocabulary to map.
+            //
+            // `worker_status` is deliberately not read. **Measured on
+            // 2026-09-28 by CB-199's gate**, sampling a fresh cloud session's
+            // /v2 row every second or two through a running turn: the /v2 row
+            // does not carry it at all — only `/v1/code/sessions/{id}` does —
+            // so a field parsed from here would be null on every row, and one
+            // that is always null invites somebody to build on it.
+            var connectionStatus = Str(element, "connection_status");
+
             if (element.TryGetProperty("external_metadata", out var meta)
                 && meta.ValueKind == JsonValueKind.Object)
             {
@@ -231,7 +242,7 @@ namespace ClaudeBuddy
             }
 
             return new Row(id!, kind!, status!, bucket, title, updated, needsAction,
-                model, contextPercent, statusDetail, recentAction);
+                model, contextPercent, statusDetail, recentAction, connectionStatus);
         }
 
         // `context_usage` is `{ max_tokens, used_tokens }`. A zero or absent
@@ -334,6 +345,57 @@ namespace ClaudeBuddy
                 string.Equals(value, expected, StringComparison.OrdinalIgnoreCase);
         }
 
+        // The bucket a session is in while a turn is running.
+        internal const string WorkingBucket = "working";
+
+        // Is a turn running right now — the question a Stop button asks.
+        //
+        // **Measured on 2026-09-28 by CB-199's gate, on the /v2 row this Session
+        // is built from**, sampled every second or two for twenty seconds of a
+        // running turn on a fresh throwaway session: `session_status` "running"
+        // and `status_bucket` "working" throughout; idle, "idle" and "blocked".
+        // So StateFor's "running" already reads a live turn as generating, and
+        // the bucket agrees with it.
+        //
+        // Both halves are kept because they are two readings of one fact and
+        // the bucket is the one `/v1` shares: there, mid-turn, the bucket read
+        // "working" every time while `worker_status` read "running" once and
+        // `WORKER_STATUS_UNSPECIFIED` once. That is why the plan's first rule,
+        // `worker_status == "running"`, is not this one — and /v2 does not carry
+        // `worker_status` at all.
+        //
+        // One busy rule, not two: anything the orb pulses for is busy here too.
+        internal static bool IsBusy(string? state, string? statusBucket) =>
+            string.Equals(state, "generating", StringComparison.Ordinal)
+            || string.Equals(statusBucket, WorkingBucket, StringComparison.OrdinalIgnoreCase);
+
+        internal static bool IsBusy(ClaudeCloudSessions.Session session) =>
+            IsBusy(session.State, session.StatusBucket);
+
+        // Is this shaped like a session id: the prefix, then at least one
+        // character, every one of them from the allow-list.
+        //
+        // **The one copy of the rule**, used by UrlFor before an id reaches a
+        // link, by CloudRequest.CodeEventsPath before one reaches a write, and by
+        // the probe before one reaches either. It matches the Claude Code CLI's
+        // own `^session_[A-Za-z0-9_-]+$`. An allow-list rather than a deny-list
+        // for the reason UrlFor gives.
+        internal static bool IsWellFormedId(string? id)
+        {
+            if (string.IsNullOrWhiteSpace(id)) return false;
+            if (!id.StartsWith(IdPrefix, StringComparison.Ordinal)) return false;
+            if (id.Length <= IdPrefix.Length) return false;
+
+            foreach (var c in id)
+            {
+                var ok = c is >= 'a' and <= 'z' || c is >= 'A' and <= 'Z'
+                         || c is >= '0' and <= '9' || c == '_' || c == '-';
+                if (!ok) return false;
+            }
+
+            return true;
+        }
+
         // Where a click goes.
         //
         // `session_url` is empty on every one of the 578 rows measured, so the
@@ -346,21 +408,8 @@ namespace ClaudeBuddy
         //
         // Null means "no link", which the caller shows as a session with no click
         // rather than as an error.
-        internal static string? UrlFor(string? id)
-        {
-            if (string.IsNullOrWhiteSpace(id)) return null;
-            if (!id.StartsWith(IdPrefix, StringComparison.Ordinal)) return null;
-            if (id.Length <= IdPrefix.Length) return null;
-
-            foreach (var c in id)
-            {
-                var ok = c is >= 'a' and <= 'z' || c is >= 'A' and <= 'Z'
-                         || c is >= '0' and <= '9' || c == '_' || c == '-';
-                if (!ok) return null;
-            }
-
-            return "https://claude.ai/code/" + id;
-        }
+        internal static string? UrlFor(string? id) =>
+            IsWellFormedId(id) ? "https://claude.ai/code/" + id : null;
 
         // A kept row as the orb layer's own record. Sessions with no usable id are
         // already gone by here — UrlFor's refusal drops the row rather than
@@ -381,7 +430,8 @@ namespace ClaudeBuddy
                 row.Model,
                 row.ContextPercent,
                 row.StatusDetail,
-                row.RecentAction);
+                row.RecentAction,
+                row.ConnectionStatus);
         }
 
         // --- the walk's result ------------------------------------------------
@@ -509,6 +559,58 @@ namespace ClaudeBuddy
             return Order(merged);
         }
 
+        // --- several accounts, one list ----------------------------------------
+
+        // Fold each account's sessions into one list, one entry per session id.
+        //
+        // `accounts` is in root order and every session in it already carries its
+        // OwnerRoot. When two or more accounts see the same id:
+        //   * the owner is whichever account owned it in `previous`, provided it
+        //     still sees it — ownership is stable, so a send does not silently
+        //     change login between two polls;
+        //   * otherwise the first account in root order;
+        //   * the row data (title, state, activity) comes from the copy with the
+        //     newest LastActivity, whoever owns it.
+        internal static IReadOnlyList<ClaudeCloudSessions.Session> MergeAccounts(
+            IReadOnlyList<IReadOnlyList<ClaudeCloudSessions.Session>> accounts,
+            IReadOnlyList<ClaudeCloudSessions.Session> previous)
+        {
+            var owners = previous.ToDictionary(s => s.Id, s => s.OwnerRoot, StringComparer.Ordinal);
+            var byId = new Dictionary<string, List<ClaudeCloudSessions.Session>>(StringComparer.Ordinal);
+            var order = new List<string>();
+
+            foreach (var account in accounts)
+            {
+                foreach (var session in account)
+                {
+                    if (!byId.TryGetValue(session.Id, out var copies))
+                    {
+                        byId[session.Id] = copies = new List<ClaudeCloudSessions.Session>();
+                        order.Add(session.Id);
+                    }
+
+                    copies.Add(session);
+                }
+            }
+
+            var merged = new List<ClaudeCloudSessions.Session>();
+            foreach (var id in order)
+            {
+                var copies = byId[id];
+                var owner = copies[0].OwnerRoot;
+                if (owners.TryGetValue(id, out var prior)
+                    && copies.Any(c => string.Equals(c.OwnerRoot, prior, StringComparison.Ordinal)))
+                {
+                    owner = prior;
+                }
+
+                var newest = copies.OrderByDescending(c => c.LastActivity).First();
+                merged.Add(newest with { OwnerRoot = owner });
+            }
+
+            return Order(merged);
+        }
+
         // --- what to say ------------------------------------------------------
 
         // The status line, and the one place the "no cloud sessions" wording is
@@ -561,6 +663,22 @@ namespace ClaudeBuddy
             }
 
             return string.Join("; ", parts.Where(p => !string.IsNullOrWhiteSpace(p)));
+        }
+
+        // The settings line for every account together.
+        //
+        // One account reads exactly as it always did, so a single-account machine
+        // sees no change. Several get a header and one line each, by folder label
+        // — never by email, which Describe has no way to reach.
+        internal static string DescribeAccounts(
+            IReadOnlyList<(string Label, string Status)> accounts, int sessionCount)
+        {
+            if (accounts.Count == 1) return accounts[0].Status;
+
+            var header = $"{accounts.Count} accounts, "
+                         + (sessionCount == 1 ? "1 cloud session" : $"{sessionCount} cloud sessions");
+
+            return string.Join("\n", new[] { header }.Concat(accounts.Select(a => $"{a.Label}: {a.Status}")));
         }
     }
 }

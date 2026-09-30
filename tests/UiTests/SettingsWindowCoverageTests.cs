@@ -545,11 +545,11 @@ public class SettingsWindowCoverageTests
             var window = NewWindow();
             var rows = window.VoiceRows();
 
-            // High-quality voice switch, speak-voice picker, speak-scope
-            // picker, download-voices link, voice-input switch. No status rows,
-            // since neither model status field is set without a download having
-            // been kicked off.
-            Assert.Equal(5, rows.Length);
+            // High-quality voice switch, speak-voice picker, CB-200's speech
+            // volume, speak-scope picker, download-voices link, voice-input
+            // switch. No status rows, since neither model status field is set
+            // without a download having been kicked off.
+            Assert.Equal(6, rows.Length);
         }
         finally
         {

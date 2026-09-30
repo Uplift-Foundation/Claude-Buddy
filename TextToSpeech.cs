@@ -209,15 +209,6 @@ namespace ClaudeBuddy
             }
         }
 
-        // Seeds the option cache AllVoiceOptions() returns from, so a UI test can
-        // open the real settings dropdown — and drive its real FillVoiceList —
-        // without the scan that would run `say -v ?` or SAPI. InvalidateVoiceCache
-        // is the way back.
-        internal static void SetVoiceOptionsForTests(List<VoiceOption> options)
-        {
-            lock (Gate) _cachedOptions = options;
-        }
-
         // Which of the three ways of speaking a voice belongs to.
         //
         // These used to be decided by precedence — a configured command beat the
@@ -288,6 +279,27 @@ namespace ClaudeBuddy
             return options;
         }
 
+        // The voice list if it has already been built, or null — never a
+        // reason to build it. For the settings window's Speech row, which
+        // wants to know which engines orbs' own voices land on but must not
+        // launch the neural engine and the user's listing command just to draw
+        // a note. In practice it is built the first time anything speaks.
+        internal static IReadOnlyList<VoiceOption>? CachedVoiceOptions
+        {
+            get { lock (Gate) return _cachedOptions; }
+        }
+
+        // A test seam for CachedVoiceOptions, and for the option cache
+        // AllVoiceOptions() returns from: the only thing that fills it in
+        // production is AllVoiceOptions, which is two process launches (and on
+        // macOS `say -v ?`). Seeding it lets a UI test open the real settings
+        // dropdown and drive its real FillVoiceList without that scan.
+        // InvalidateVoiceCache empties it again.
+        internal static void SetVoiceOptionsForTests(List<VoiceOption> options)
+        {
+            lock (Gate) _cachedOptions = options;
+        }
+
         // The voice currently selected, resolved against what is actually
         // available. Falls back rather than failing: a saved selection can name an
         // engine that has since been uninstalled or a voice that no longer exists,
@@ -304,12 +316,7 @@ namespace ClaudeBuddy
         {
             if (options.Count == 0) return null;
 
-            var engine = ClaudeBuddySettings.SpeakEngine switch
-            {
-                "custom" => SpeakEngine.Custom,
-                "neural" => SpeakEngine.Neural,
-                _ => SpeakEngine.System
-            };
+            var engine = EngineNamed(ClaudeBuddySettings.SpeakEngine);
 
             var name = engine switch
             {
@@ -323,6 +330,34 @@ namespace ClaudeBuddy
                    ?? options.FirstOrDefault(o => o.Engine == engine)
                    ?? options[0];
         }
+
+        // The engine a stored "speakEngine" value names. Split out of
+        // SelectedFrom for CB-200: the settings window has to ask "is the
+        // selected engine one that can be told how loud to speak?" without
+        // enumerating a single voice to find out, and that question starts
+        // from exactly this mapping.
+        internal static SpeakEngine EngineNamed(string? setting) => setting switch
+        {
+            "custom" => SpeakEngine.Custom,
+            "neural" => SpeakEngine.Neural,
+            _ => SpeakEngine.System
+        };
+
+        // The engine that will actually speak, as far as the settings alone can
+        // say — what the Speech volume row greys and labels itself on.
+        //
+        // Differs from EngineNamed in one case (CB-200 QA): speakEngine still
+        // reads "custom" after the speakCommand behind it was cleared. No
+        // custom option exists then, so SelectedFrom falls off the engine to a
+        // system voice and Speak never reaches StartCustomCommand — and a
+        // system voice honours the level, so a greyed "not supported" slider
+        // would be describing an engine that is not going to run. Neural needs
+        // no such rule: it falls back to a system voice too, but both honour a
+        // level, and the fallback-engine note already asks NeuralSpeech.
+        internal static SpeakEngine EngineThatWillSpeak(string? setting, bool customCommandConfigured) =>
+            EngineNamed(setting) is SpeakEngine.Custom && !customCommandConfigured
+                ? SpeakEngine.System
+                : EngineNamed(setting);
 
         // Records a choice made in the settings window, writing both which engine
         // speaks and that engine's own voice key. The per-engine keys are kept
@@ -745,61 +780,14 @@ namespace ClaudeBuddy
                 ? selected.Name
                 : DefaultVoice;
 
-            Process proc;
-            if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
-            {
-                proc = new Process
-                {
-                    StartInfo = new ProcessStartInfo
-                    {
-                        FileName = "/usr/bin/say",
-                        ArgumentList = { "-v", voice, text },
-                        UseShellExecute = false,
-                        CreateNoWindow = true,
-                        RedirectStandardOutput = true,
-                        RedirectStandardError = true
-                    },
-                    EnableRaisingEvents = true
-                };
-            }
-            else if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-            {
-                var escaped = text.Replace("'", "''");
-                var voiceEscaped = voice.Replace("'", "''");
-                proc = new Process
-                {
-                    StartInfo = new ProcessStartInfo
-                    {
-                        FileName = "powershell",
-                        ArgumentList =
-                        {
-                            "-NoProfile", "-Command",
-                            // SelectVoice is guarded so an unusable voice name
-                            // costs the *choice* of voice, not the speech.
-                            // It throws rather than returning false when a name
-                            // doesn't match, and with stderr discarded the only
-                            // symptom was silence — which is how a bad default
-                            // ("David", never a real SAPI name) read as "the
-                            // speak button does nothing". A voice saved before
-                            // this fix, or one that has since been uninstalled,
-                            // lands in the same place and now still speaks.
-                            $"Add-Type -AssemblyName System.Speech; " +
-                            $"$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; " +
-                            $"try {{ $s.SelectVoice('{voiceEscaped}') }} catch {{ }}; " +
-                            $"$s.Speak('{escaped}')"
-                        },
-                        UseShellExecute = false,
-                        CreateNoWindow = true,
-                        RedirectStandardOutput = true,
-                        RedirectStandardError = true
-                    },
-                    EnableRaisingEvents = true
-                };
-            }
-            else
-            {
-                return;
-            }
+            // Linux and anything else: no system voice to start.
+            var startInfo = SystemSpeechStartInfo(text, voice,
+                RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ? OSPlatform.OSX
+                : RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? OSPlatform.Windows
+                : OSPlatform.Linux);
+            if (startInfo is null) return;
+
+            var proc = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
 
             proc.Exited += (_, _) => Finished(proc);
 
@@ -821,23 +809,102 @@ namespace ClaudeBuddy
             }
         }
 
-        // Whatever the user pointed ClaudeBuddySettings.SpeakCommand at. Returns
-        // false only when no command is configured — a configured command that
-        // fails to launch returns true, having reported why, because falling
-        // through to a system voice would disguise the problem.
+        // What starts one system-voice utterance on `platform`, or null where
+        // there is no system voice. Split out of Speak, which is excluded for
+        // launching a real engine, because this is where the Speech level is
+        // read and applied — and CB-200 QA mutated exactly those lines (the
+        // read replaced with 1.0, SayText replaced with the bare text) and the
+        // suites stayed green, since nothing outside the exclusion saw them.
         //
-        // The interface is the one this class already had for `say` and
-        // PowerShell, which is the point: text on stdin, exit when finished,
-        // killed to cancel. Nothing else is required of it — printing "speaking"
-        // on stdout when audio starts is optional and only sharpens the button's
-        // state, never a condition of working.
-        // Excluded from coverage: starts the user's command as a subprocess.
-        [ExcludeFromCodeCoverage]
-        private static bool StartCustomCommand(string text, string? voice = null)
-        {
-            var command = ClaudeBuddySettings.SpeakCommand;
-            if (string.IsNullOrWhiteSpace(command)) return false;
+        // The platform is a parameter rather than asked of the OS so both
+        // arms run on either CI leg; Speak passes the real one.
+        //
+        // Read once per utterance, so moving the slider mid-sentence takes
+        // effect from the next one rather than half-way through.
+        internal static ProcessStartInfo? SystemSpeechStartInfo(string text, string voice, OSPlatform platform) =>
+            SystemSpeechStartInfo(text, voice, platform, ClaudeBuddySettings.SpeechVolume);
 
+        internal static ProcessStartInfo? SystemSpeechStartInfo(string text, string voice, OSPlatform platform,
+            double volume)
+        {
+            ProcessStartInfo startInfo;
+            if (platform == OSPlatform.OSX)
+            {
+                // `say` has no volume flag; [[volm]] embedded in the text is
+                // how it is told. See AudioVolume.SayText.
+                startInfo = new ProcessStartInfo("/usr/bin/say")
+                {
+                    ArgumentList = { "-v", voice, AudioVolume.SayText(text, volume) }
+                };
+            }
+            else if (platform == OSPlatform.Windows)
+            {
+                startInfo = new ProcessStartInfo("powershell")
+                {
+                    ArgumentList = { "-NoProfile", "-Command", WindowsSpeakScript(text, voice, volume) }
+                };
+            }
+            else
+            {
+                return null;
+            }
+
+            startInfo.UseShellExecute = false;
+            startInfo.CreateNoWindow = true;
+            startInfo.RedirectStandardOutput = true;
+            startInfo.RedirectStandardError = true;
+            return startInfo;
+        }
+
+        // The Windows PowerShell script that speaks one utterance through SAPI.
+        // A value rather than built inline inside Speak, which is excluded for
+        // starting a real engine, so the CB-200 volume line — and the escaping
+        // it sits beside — can be asserted on without a Windows machine to run
+        // it on.
+        //
+        // SelectVoice is guarded so an unusable voice name costs the *choice*
+        // of voice, not the speech. It throws rather than returning false when
+        // a name doesn't match, and with stderr discarded the only symptom was
+        // silence — which is how a bad default ("David", never a real SAPI
+        // name) read as "the speak button does nothing". A voice saved before
+        // that fix, or one that has since been uninstalled, lands in the same
+        // place and still speaks.
+        //
+        // Volume is only set below full, so at the default this is exactly the
+        // script every earlier build ran; SAPI's own default is 100. The value
+        // is an integer SapiVolume has already clamped, because the property
+        // throws outside 0-100 — measured, not assumed (see AudioVolume).
+        internal static string WindowsSpeakScript(string text, string voice, double volume)
+        {
+            var escaped = text.Replace("'", "''");
+            var voiceEscaped = voice.Replace("'", "''");
+            var volumeLine = AudioVolume.IsFull(volume)
+                ? ""
+                : "$s.Volume = "
+                  + AudioVolume.SapiVolume(volume).ToString(System.Globalization.CultureInfo.InvariantCulture)
+                  + "; ";
+
+            return "Add-Type -AssemblyName System.Speech; " +
+                   "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; " +
+                   $"try {{ $s.SelectVoice('{voiceEscaped}') }} catch {{ }}; " +
+                   volumeLine +
+                   $"$s.Speak('{escaped}')";
+        }
+
+        // Everything about starting the user's speak command except the start:
+        // its argv and environment. Out of StartCustomCommand, which is
+        // excluded for launching someone else's program, for the reason
+        // SystemSpeechStartInfo and NeuralSpeech.StartInfoFor are — the Speech
+        // level is set here, and a line inside an exclusion is a line no
+        // mutant can be caught removing.
+        //
+        // The shorter overload is what StartCustomCommand calls, and it is
+        // where the level is read.
+        internal static ProcessStartInfo CustomCommandStartInfo(string command, string? voice) =>
+            CustomCommandStartInfo(command, voice, ClaudeBuddySettings.SpeechVolume);
+
+        internal static ProcessStartInfo CustomCommandStartInfo(string command, string? voice, double volume)
+        {
             var startInfo = new ProcessStartInfo(command)
             {
                 UseShellExecute = false,
@@ -860,6 +927,42 @@ namespace ClaudeBuddy
             // inherited from this process's own environment.
             startInfo.Environment["CLAUDEBUDDY_VOICE"] = voice ??
                 ClaudeBuddySettings.SpeakCommandVoice ?? "";
+
+            // CB-200: the Speech level, 0 to 1, invariant ("0.5", never "0,5"),
+            // under the same name the Kokoro engine reads. Optional for the
+            // command — one that ignores it speaks exactly as it always did —
+            // which is why it can be offered at all when this contract once
+            // had nowhere to put a level.
+            //
+            // Always set, including "1" at full volume, unlike the engine's
+            // copy: for the same reason CLAUDEBUDDY_VOICE is always set, a
+            // wrapper reading it must never see a stale value inherited from
+            // this process's own environment. The engine can leave it unset
+            // because unset has always meant full volume there; a user's
+            // wrapper has no such history to rely on.
+            startInfo.Environment[AudioVolume.SpeechVolumeEnvVar] = AudioVolume.Format(volume);
+
+            return startInfo;
+        }
+
+        // Whatever the user pointed ClaudeBuddySettings.SpeakCommand at. Returns
+        // false only when no command is configured — a configured command that
+        // fails to launch returns true, having reported why, because falling
+        // through to a system voice would disguise the problem.
+        //
+        // The interface is the one this class already had for `say` and
+        // PowerShell, which is the point: text on stdin, exit when finished,
+        // killed to cancel. Nothing else is required of it — printing "speaking"
+        // on stdout when audio starts is optional and only sharpens the button's
+        // state, never a condition of working.
+        // Excluded from coverage: starts the user's command as a subprocess.
+        [ExcludeFromCodeCoverage]
+        private static bool StartCustomCommand(string text, string? voice = null)
+        {
+            var command = ClaudeBuddySettings.SpeakCommand;
+            if (string.IsNullOrWhiteSpace(command)) return false;
+
+            var startInfo = CustomCommandStartInfo(command, voice);
 
             var proc = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
 

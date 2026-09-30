@@ -26,11 +26,15 @@ public class ClaudeCloudStepTests
 
         internal FakeApi(Func<string, CloudApiResult> answer) => _answer = answer;
 
-        internal List<string> Paths { get; } = new();
+        // The whole context, not just the path, so a test can see the method
+        // and body a call went out with as well as where it went.
+        internal List<CloudRequestContext> Requests { get; } = new();
 
-        public Task<CloudApiResult> GetAsync(CloudRequestContext context, CancellationToken token)
+        internal List<string> Paths => Requests.Select(r => r.Path).ToList();
+
+        public Task<CloudApiResult> SendAsync(CloudRequestContext context, CancellationToken token)
         {
-            Paths.Add(context.Path);
+            Requests.Add(context);
             return Task.FromResult(_answer(context.Path));
         }
     }
@@ -156,6 +160,14 @@ public class ClaudeCloudStepTests
             "/v2/ccr-sessions?limit=100&after_id=session_a",
             "/v2/ccr-sessions?limit=100&after_id=session_b",
         }, api.Paths);
+
+        // CB-199 gave the context a method and a body; the roster must still
+        // leave both unset, which Build reads as a bodiless GET.
+        Assert.All(api.Requests, r =>
+        {
+            Assert.Null(r.Method);
+            Assert.Null(r.Body);
+        });
 
         Assert.NotNull(step.Snapshot);
         Assert.Equal(new[] { "session_a", "session_b", "session_c" },
@@ -349,7 +361,7 @@ public class ClaudeCloudStepTests
         {
             Halted = true,
             CredentialStamp = "stamp-1",
-            Status = "access to the Claude Code login was denied",
+            Status = "access to the Claude Code login was declined",
         };
 
         var step = await ClaudeCloudSessions.StepAsync(api, credentials, halted, Now,
@@ -360,7 +372,7 @@ public class ClaudeCloudStepTests
         Assert.Equal(1, credentials.Stamps);
         Assert.Null(step.Snapshot);
         Assert.Equal(halted, step.Next);
-        Assert.Equal("access to the Claude Code login was denied", step.Status);
+        Assert.Equal("access to the Claude Code login was declined", step.Status);
     }
 
     // And it comes back on its own once the stamp moves — the user having signed
@@ -547,7 +559,7 @@ public class ClaudeCloudStepTests
     public async Task ARetryablePerSessionFailureLeavesThatOrbAlone()
     {
         var api = new FakeApi(path => path.EndsWith("session_known", StringComparison.Ordinal)
-            ? Fail(404)
+            ? Fail(503)
             : Ok(Envelope(Array.Empty<string>())));
 
         var step = await ClaudeCloudSessions.StepAsync(api, new FakeCredentials(),
@@ -559,6 +571,63 @@ public class ClaudeCloudStepTests
             Now, CancellationToken.None);
 
         Assert.Equal("session_known", Assert.Single(step.Snapshot!).Id);
+        Assert.False(step.Next.Halted);
+    }
+
+    // A 404 is not that. **Measured** against a deleted cloud session, it is a
+    // definite answer, so the orb goes on this short cycle rather than
+    // lingering until the next deep walk — and only that orb: the arm is not
+    // halted, and a session whose own read succeeded stays.
+    [Fact]
+    public async Task ADeletedSessionsOrbGoesAndNothingElseDoes()
+    {
+        var api = new FakeApi(path =>
+            path.EndsWith("session_deleted", StringComparison.Ordinal) ? Fail(404)
+            : path.EndsWith("session_alive", StringComparison.Ordinal) ? Ok(Row("session_alive"))
+            : Ok(Envelope(Array.Empty<string>())));
+
+        var step = await ClaudeCloudSessions.StepAsync(api, new FakeCredentials(),
+            ClaudeCloudSessions.ArmState.Initial with
+            {
+                LastWalkUtc = Now - TimeSpan.FromSeconds(1),
+                Sessions = new[] { Session("session_deleted"), Session("session_alive") },
+            },
+            Now, CancellationToken.None);
+
+        Assert.False(step.Next.Halted);
+        Assert.Equal("session_alive", Assert.Single(step.Snapshot!).Id);
+        Assert.Equal("session_alive", Assert.Single(step.Next.Sessions).Id);
+
+        // Page one, then both direct reads: the 404 did not end the cycle.
+        Assert.Equal(3, api.Paths.Count);
+    }
+
+    // A 404 on the *listing* is the collection moving, not a session going, so
+    // the roster reads it as it did before CB-199: retryable, no orbs dropped,
+    // and a status line that does not claim a session was deleted.
+    [Fact]
+    public async Task AFourOhFourOnTheListingBacksOffInsteadOfHalting()
+    {
+        var api = new FakeApi(_ => Fail(404));
+
+        var step = await ClaudeCloudSessions.StepAsync(api, new FakeCredentials(),
+            ClaudeCloudSessions.ArmState.Initial, Now, CancellationToken.None);
+
+        Assert.False(step.Next.Halted);
+        Assert.Null(step.Snapshot);
+        Assert.Equal(Backoff.UnavailableFloor, step.Next.Backoff);
+        Assert.Equal("the endpoint answered 404", step.Status);
+        Assert.DoesNotContain("no longer exists", step.Status, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TheRosterViewLeavesEveryOtherOutcomeAlone()
+    {
+        var refused = CloudOutcomes.OutcomeFor(401, null);
+
+        Assert.Same(refused, ClaudeCloudSessions.RosterView(refused));
+        Assert.Equal(CloudOutcomeKind.Unavailable,
+            ClaudeCloudSessions.RosterView(CloudOutcomes.OutcomeFor(404, null)).Kind);
     }
 
     // A per-session read refused for a reason that would stop the arm stops it

@@ -66,4 +66,26 @@
     <PackageReference Include="KokoroSharp.CPU" Version="0.8.4" />
   </ItemGroup>
 
+  <!-- CB-200: the contract stamp beside the executable - what this engine can
+       do, readable by the app without launching it. See SpeechEngineContract's
+       ContractVersion and StampFileName for why a path alone is not enough.
+       The number is read out of SpeechEngineContract.cs rather than repeated
+       here, so the stamp can never claim a different version from the code
+       it was built from. Written after both Build and Publish: the release
+       scripts zip the publish directory, and a local build is how an engine
+       gets hand-installed for testing. -->
+  <PropertyGroup>
+    <SpeechEngineContractVersion>$([System.Text.RegularExpressions.Regex]::Match($([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)SpeechEngineContract.cs')), 'ContractVersion = (\d+);').Groups[1].Value)</SpeechEngineContractVersion>
+    <SpeechEngineStampFile>engine-contract.txt</SpeechEngineStampFile>
+  </PropertyGroup>
+
+  <Target Name="WriteEngineContractStamp" AfterTargets="Build">
+    <Error Condition="'$(SpeechEngineContractVersion)' == ''" Text="Could not read ContractVersion from SpeechEngineContract.cs" />
+    <WriteLinesToFile File="$(OutDir)$(SpeechEngineStampFile)" Lines="$(SpeechEngineContractVersion)" Overwrite="true" />
+  </Target>
+
+  <Target Name="WriteEngineContractStampOnPublish" AfterTargets="Publish">
+    <WriteLinesToFile File="$(PublishDir)$(SpeechEngineStampFile)" Lines="$(SpeechEngineContractVersion)" Overwrite="true" />
+  </Target>
+
 </Project>

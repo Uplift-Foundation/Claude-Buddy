@@ -86,6 +86,7 @@ namespace ClaudeBuddy
             "collapsedSettingsSections",
             "chatPanelSizes", "pinnedChatPanels", "arrangeAnchor", "chatTextScale",
             "orbSize", "orbSizes",
+            "speechVolume", "alertVolume",
             "openclawEnabled", "openclawHost", "openclawPort", "openclawFingerprint",
             "openclawReplyEnabled", "openclawActiveWithinMinutes",
             "claudeCloudEnabled",
@@ -723,6 +724,15 @@ namespace ClaudeBuddy
             // shipped 56-DIP orb — see OrbSizing. An orb's own entry in
             // OrbSizes wins over this.
             public double OrbSize { get; set; } = OrbSizing.Default;
+
+            // CB-200's two volume levels, each a multiplier from 0 to 1 — see
+            // AudioVolume. Separate keys, not one, because they answer
+            // different questions: how loud a reply is read aloud, and how
+            // loud a turn-sound chime is. Someone who wants chimes as a quiet
+            // background cue still wants to hear the voice, and the other way
+            // round.
+            public double SpeechVolume { get; set; } = AudioVolume.Default;
+            public double AlertVolume { get; set; } = AudioVolume.Default;
 
             // Where the arranged shape is centred on screen — physical pixels,
             // same space as OrbPlacement above. Null means "never arranged
@@ -1416,6 +1426,23 @@ namespace ClaudeBuddy
             set { Load(); lock (Gate) _model.OrbSize = OrbSizing.Clamp(value); Save(); }
         }
 
+        // CB-200: how loud spoken replies are, 0 to 1. Clamped both ways,
+        // like OrbSize, so neither a hand edit nor a caller can hand a backend
+        // a level it would reject — SAPI throws on anything past 100.
+        public static double SpeechVolume
+        {
+            get { Load(); lock (Gate) return AudioVolume.Clamp(_model.SpeechVolume); }
+            set { Load(); lock (Gate) _model.SpeechVolume = AudioVolume.Clamp(value); Save(); }
+        }
+
+        // CB-200: how loud turn-sound chimes are, 0 to 1 — every chime,
+        // previews included, since they all go through ChimePlayer.
+        public static double AlertVolume
+        {
+            get { Load(); lock (Gate) return AudioVolume.Clamp(_model.AlertVolume); }
+            set { Load(); lock (Gate) _model.AlertVolume = AudioVolume.Clamp(value); Save(); }
+        }
+
         public static OrbPlacement? ArrangeAnchor
         {
             get { Load(); lock (Gate) return _model.ArrangeAnchor; }
@@ -1855,6 +1882,13 @@ namespace ClaudeBuddy
                         // size and nothing else. Clamped here too, for
                         // ChatTextScale's reason just above.
                         OrbSize = OrbSizing.Clamp(Number(root["orbSize"]) ?? OrbSizing.Default),
+
+                        // Number() and a clamp for orbSize's reasons: a
+                        // hand-edited "loud" costs this one level and nothing
+                        // else, and a 40 is full volume rather than a
+                        // multiplier nothing downstream expects.
+                        SpeechVolume = AudioVolume.Clamp(Number(root["speechVolume"]) ?? AudioVolume.Default),
+                        AlertVolume = AudioVolume.Clamp(Number(root["alertVolume"]) ?? AudioVolume.Default),
 
                         // speakVoice was declared on the model and written by its
                         // property from the start, but never read here and never
@@ -2405,6 +2439,8 @@ namespace ClaudeBuddy
                         ["arrangeSpacing"] = _model.ArrangeSpacing,
                         ["chatTextScale"] = _model.ChatTextScale,
                         ["orbSize"] = _model.OrbSize,
+                        ["speechVolume"] = _model.SpeechVolume,
+                        ["alertVolume"] = _model.AlertVolume,
                         // Null when never chosen, like the colours below rather
                         // than a copy of the current default — so changing which
                         // voice ships as the default still reaches everyone who
