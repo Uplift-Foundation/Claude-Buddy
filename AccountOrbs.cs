@@ -78,6 +78,9 @@ namespace ClaudeBuddy
 
         internal IReadOnlyDictionary<string, AccountOrbWindow> Orbs => _orbs;
 
+        // Whether orbs are shown as they are created — the last SetVisible.
+        internal bool Visible => _visible;
+
         internal IReadOnlyDictionary<string, UsageCard> Cards => _cards;
 
         // What the last Apply decided the cadence should be, exposed for the

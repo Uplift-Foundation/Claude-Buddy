@@ -224,18 +224,23 @@ public class HotkeyActionsTests : IDisposable
             HotkeyActions.HandlerFor(HotkeyAction.ToggleOrbsVisible).Method.Name);
         Assert.Equal(nameof(TrayController.OpenNewChat),
             HotkeyActions.HandlerFor(HotkeyAction.OpenNewChat).Method.Name);
+        Assert.Equal(nameof(TrayController.ToggleUsageOrbsVisible),
+            HotkeyActions.HandlerFor(HotkeyAction.ToggleUsageOrbsVisible).Method.Name);
     }
 
     [AvaloniaFact]
     public void OverrideFor_ReadsEachActionsOwnSetting()
     {
         Assert.Null(HotkeyActions.OverrideFor(HotkeyAction.OpenNewChat));
+        Assert.Null(HotkeyActions.OverrideFor(HotkeyAction.ToggleUsageOrbsVisible));
 
         ClaudeBuddySettings.ToggleOrbsHotkey = "Ctrl+Shift+H";
         ClaudeBuddySettings.NewChatHotkey = "Ctrl+Shift+N";
+        ClaudeBuddySettings.ToggleUsageOrbsHotkey = "Ctrl+Shift+U";
 
         Assert.Equal("Ctrl+Shift+H", HotkeyActions.OverrideFor(HotkeyAction.ToggleOrbsVisible));
         Assert.Equal("Ctrl+Shift+N", HotkeyActions.OverrideFor(HotkeyAction.OpenNewChat));
+        Assert.Equal("Ctrl+Shift+U", HotkeyActions.OverrideFor(HotkeyAction.ToggleUsageOrbsVisible));
 
         // What GlobalHotkeys.Start registers, end to end short of the OS.
         Assert.Equal("Ctrl+Shift+N", HotkeyRegistry.Format(
@@ -327,14 +332,14 @@ public class HotkeyActionsTests : IDisposable
     }
 
     [AvaloniaFact]
-    public void RegisterAll_AllAccepted_RegistersBothDefaultsAndLogsNothing()
+    public void RegisterAll_AllAccepted_RegistersEveryDefaultAndLogsNothing()
     {
         using var log = FreshLog();
         var hook = new FakeHook();
 
         HotkeyActions.RegisterAll(hook);
 
-        Assert.Equal(new[] { "Ctrl+Alt+H", "Ctrl+Alt+N" },
+        Assert.Equal(new[] { "Ctrl+Alt+H", "Ctrl+Alt+N", "Ctrl+Alt+U" },
             hook.Calls.Select(c => HotkeyRegistry.Format(c.Combo)).ToArray());
         Assert.Empty(LogLines());
     }
@@ -369,7 +374,7 @@ public class HotkeyActionsTests : IDisposable
     }
 
     [AvaloniaFact]
-    public void RegisterAll_BothRefused_LogsOneLineEach_AndASecondStartAddsNone()
+    public void RegisterAll_AllRefused_LogsOneLineEach_AndASecondStartAddsNone()
     {
         using var log = FreshLog();
 
@@ -377,9 +382,10 @@ public class HotkeyActionsTests : IDisposable
         HotkeyActions.RegisterAll(new FakeHook(accepts: _ => false));
 
         var lines = LogLines();
-        Assert.Equal(2, lines.Length);
-        Assert.Contains(lines, l => l.Contains("ToggleOrbsVisible") && l.Contains("Ctrl+Alt+H"));
+        Assert.Equal(3, lines.Length);
+        Assert.Contains(lines, l => l.Contains("ToggleOrbsVisible:") && l.Contains("Ctrl+Alt+H"));
         Assert.Contains(lines, l => l.Contains("OpenNewChat") && l.Contains("Ctrl+Alt+N"));
+        Assert.Contains(lines, l => l.Contains("ToggleUsageOrbsVisible") && l.Contains("Ctrl+Alt+U"));
     }
 
     [AvaloniaFact]
@@ -390,12 +396,12 @@ public class HotkeyActionsTests : IDisposable
 
         HotkeyActions.RegisterAll(hook);   // no exception escapes
 
-        Assert.Equal(2, hook.Calls.Count);
-        Assert.Equal(2, LogLines().Length);
+        Assert.Equal(3, hook.Calls.Count);
+        Assert.Equal(3, LogLines().Length);
     }
 
     [AvaloniaFact]
-    public void RegisterAll_ACollisionNoteAndARefusal_WriteExactlyTwoLines_AndTheUnplannedActionIsNeverRegistered()
+    public void RegisterAll_ACollisionNoteAndTwoRefusals_WriteOneLineEach_AndTheUnplannedActionIsNeverRegistered()
     {
         using var log = FreshLog();
         ClaudeBuddySettings.ToggleOrbsHotkey = "Ctrl+Alt+N";
@@ -404,8 +410,10 @@ public class HotkeyActionsTests : IDisposable
         HotkeyActions.RegisterAll(hook);
 
         Assert.DoesNotContain(hook.Calls, c => c.Action == HotkeyAction.OpenNewChat);
+        // Two refusals (the toggle and the usage toggle) plus the collision
+        // note for New chat, which never reaches the hook at all.
         var lines = LogLines();
-        Assert.Equal(2, lines.Length);
+        Assert.Equal(3, lines.Length);
         Assert.Contains(lines, l => l.Contains("OpenNewChat: no hotkey registered"));
         Assert.Contains(lines, l => l.Contains(HotkeyActions.RefusedNote(HotkeyAction.ToggleOrbsVisible,
             HotkeyRegistry.Default(HotkeyAction.OpenNewChat))));

@@ -349,7 +349,12 @@ can tell which is which. The menu is also the app's only permanent control
 surface, since with zero sessions there are no orbs to right-click:
 - **Show orbs** — hide the orbs and run status-bar-only. Sessions keep being
   tracked, so the icon and menu stay live. Remembered across relaunches, along
-  with everything else in the settings window.
+  with everything else in the settings window. This means every orb, the
+  account usage orbs included.
+- **Show usage orbs** — hide or show only the account usage orbs, leaving the
+  session orbs where they are. Also remembered across relaunches, as
+  `showUsageOrbs` in `settings.json`; until you flip it, it follows **Show
+  orbs**, so upgrading with your orbs hidden doesn't bring the usage orbs back.
 - **Reset all sessions to idle** — the bulk version of an orb's
   right-click reset, for an orb whose process is alive but whose colour is
   stuck. It used to be the tool for clearing up after Ctrl+C'd sessions as
@@ -1043,24 +1048,25 @@ OpenClaw shows up disabled, with a reason stated directly under the row rather t
 
 ## Global hotkeys
 
-Two system-wide hotkeys, both working whether or not Claude Buddy has focus:
+Three system-wide hotkeys, all working whether or not Claude Buddy has focus:
 
 | Default | Does | Override key |
 | --- | --- | --- |
-| **Ctrl+Alt+H** | hides or shows every orb — the tray menu's "Show orbs" checkbox | `toggleOrbsHotkey` |
+| **Ctrl+Alt+H** | hides or shows every orb, usage orbs included — the tray menu's "Show orbs" checkbox | `toggleOrbsHotkey` |
 | **Ctrl+Alt+N** | opens **New chat**, or brings the one already open to the front — the tray menu's "New chat…" | `newChatHotkey` |
+| **Ctrl+Alt+U** | hides or shows only the account usage orbs — the tray menu's "Show usage orbs" checkbox | `toggleUsageOrbsHotkey` |
 
 Each is reachable without finding the menu bar icon first. **Ctrl+Alt+N never opens a second New chat window** and never closes the one that's open: pressed again, it un-minimises the dialog if needed and brings it forward, wherever it was opened from.
 
 macOS registers them through Carbon's `RegisterEventHotKey`, which asks the window server for one exact key combination rather than a feed of every keystroke, so — unlike an `NSEvent` global monitor or a `CGEventTap` — it needs no Accessibility or Input Monitoring permission. Windows registers the same combinations with `RegisterHotKey` against a hidden window created for the purpose.
 
-Override either combination in `settings.json`:
+Override any of them in `settings.json`:
 
 ```json
-{ "toggleOrbsHotkey": "Ctrl+Shift+H", "newChatHotkey": "Ctrl+Shift+N" }
+{ "toggleOrbsHotkey": "Ctrl+Shift+H", "newChatHotkey": "Ctrl+Shift+N", "toggleUsageOrbsHotkey": "Ctrl+Shift+U" }
 ```
 
-Modifiers are `Ctrl`/`Control`, `Alt`/`Option`, `Shift`, and `Cmd`/`Command`/`Win`/`Windows`/`Super`/`Meta` (all four spellings mean the same physical key, whichever platform you're on), joined with `+` and ending in one letter or one digit (`Ctrl+Alt+5` is the 5 key). Other keys — `F5`, `Space`, punctuation, a modifier used as the key — are rejected, because neither platform's hook has a code for them yet, and a rejected value falls back like any other. An unparseable value falls back to that hotkey's built-in default rather than leaving it unregistered, so a typo costs you the override, not the feature. If `newChatHotkey` resolves to the orb toggle's combination, however it's spelled, the toggle keeps it and New chat falls back to Ctrl+Alt+N; if the toggle has itself been moved to Ctrl+Alt+N, New chat registers no hotkey at all rather than registering one combination twice. Either way a line saying so goes into `hotkeys.log`, beside `crash.log` in the app's log directory. So does a combination the operating system refuses — usually because another app already holds it — naming the hotkey and the combination it tried, so a hotkey that does nothing always leaves a reason behind. There is no settings-window control for either yet — `settings.json` is the only place to change them.
+Modifiers are `Ctrl`/`Control`, `Alt`/`Option`, `Shift`, and `Cmd`/`Command`/`Win`/`Windows`/`Super`/`Meta` (all four spellings mean the same physical key, whichever platform you're on), joined with `+` and ending in one letter or one digit (`Ctrl+Alt+5` is the 5 key). Other keys — `F5`, `Space`, punctuation, a modifier used as the key — are rejected, because neither platform's hook has a code for them yet, and a rejected value falls back like any other. An unparseable value falls back to that hotkey's built-in default rather than leaving it unregistered, so a typo costs you the override, not the feature. If two overrides resolve to the same combination, however they're spelled, the hotkey listed first in the table above keeps it and the later one falls back to its own default — so if `newChatHotkey` names the orb toggle's combination, New chat falls back to Ctrl+Alt+N, and a `toggleUsageOrbsHotkey` that clashes with either of the other two falls back to Ctrl+Alt+U. If that default is taken too — the toggle moved to Ctrl+Alt+N, say — the later hotkey registers nothing at all rather than registering one combination twice. Either way a line saying so goes into `hotkeys.log`, beside `crash.log` in the app's log directory. So does a combination the operating system refuses — usually because another app already holds it — naming the hotkey and the combination it tried, so a hotkey that does nothing always leaves a reason behind. There is no settings-window control for any of them yet — `settings.json` is the only place to change them.
 
 ## Personas from CLAUDE.md
 

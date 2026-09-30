@@ -57,6 +57,7 @@ namespace ClaudeBuddy
         {
             HotkeyAction.ToggleOrbsVisible => TrayController.ToggleOrbsVisible,
             HotkeyAction.OpenNewChat => TrayController.OpenNewChat,
+            HotkeyAction.ToggleUsageOrbsVisible => TrayController.ToggleUsageOrbsVisible,
             _ => throw new ArgumentOutOfRangeException(nameof(action), action, null)
         };
 
@@ -64,6 +65,7 @@ namespace ClaudeBuddy
         {
             HotkeyAction.ToggleOrbsVisible => ClaudeBuddySettings.ToggleOrbsHotkey,
             HotkeyAction.OpenNewChat => ClaudeBuddySettings.NewChatHotkey,
+            HotkeyAction.ToggleUsageOrbsVisible => ClaudeBuddySettings.ToggleUsageOrbsHotkey,
             _ => throw new ArgumentOutOfRangeException(nameof(action), action, null)
         };
 
