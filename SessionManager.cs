@@ -2624,6 +2624,11 @@ namespace ClaudeBuddy
                 // that state arrives.
                 if (_chats.TryGetValue(sessionId, out var chat)) chat.UpdateStatus(status);
 
+                // The same push for an open cloud panel, from the roster row the
+                // orb was drawn from — so Stop and the composer follow the
+                // session's real state without the panel spending a request.
+                if (_cloudChats.TryGetValue(sessionId, out var cloudChat)) PushCloudStatus(cloudChat, sessionId);
+
                 // After UpdateFrom, so the window is already showing something
                 // if the position turns out to be unusable. Before the reflow
                 // below, which steps over whatever this pins.
@@ -2649,6 +2654,11 @@ namespace ClaudeBuddy
                 // transcript that will never grow again, and a FileSystemWatcher
                 // per dead session is a handle leak measured in days.
                 if (_chats.Remove(id, out var chat)) chat.Dispose();
+
+                // A cloud panel is kept (see _cloudChats), but it hears that its
+                // row has gone — the orb can go for reasons of its own, so the
+                // roster is asked directly rather than the orb's absence trusted.
+                if (_cloudChats.TryGetValue(id, out var goneCloud)) PushCloudStatus(goneCloud, id);
 
                 // Same argument for the persona, one size up: a decoded portrait
                 // is a Bitmap per frame, held by a process-wide cache that has
@@ -2988,11 +2998,23 @@ namespace ClaudeBuddy
                     // a rate-limited events endpoint at it would spend the
                     // account's budget on a window nobody is looking at.
                     //
+                    // CB-199 narrowed that gap without closing it: while a turn
+                    // runs in an open panel — one sent from it, or one the roster
+                    // reports — the session watches it live for a bounded time,
+                    // and the scan's push below (PushCloudStatus) triggers one
+                    // read when a turn ends. An idle panel still reads only on
+                    // open.
+                    //
                     // And re-pointed at the login that owns the session *now*:
                     // ownership can move between polls (see MergeAccounts), and
                     // a panel cached under the old owner would otherwise keep
                     // reading, and later sending, with the wrong account.
                     if (row is not null) existingCloud.UseCredentials(CloudChatCredentialsFor(row.OwnerRoot));
+
+                    // The row is re-read too, so a session that was archived or
+                    // deleted while its panel was shut opens read-only rather than
+                    // offering a box the server will refuse.
+                    PushCloudStatus(existingCloud, sessionId);
                     StartCloudLoad(existingCloud);
                     return existingCloud;
                 }
@@ -3001,7 +3023,10 @@ namespace ClaudeBuddy
                 // the orb is on its way out, and there is nothing to read.
                 if (row is null) return null;
 
-                var cloud = new ClaudeCloudChatSession(row, CloudChatApi, CloudChatCredentialsFor(row.OwnerRoot));
+                var cloud = new ClaudeCloudChatSession(row, CloudChatApi, CloudChatCredentialsFor(row.OwnerRoot))
+                {
+                    Stream = CloudChatStream,
+                };
                 _cloudChats[sessionId] = cloud;
                 StartCloudLoad(cloud);
                 return cloud;
@@ -3059,6 +3084,29 @@ namespace ClaudeBuddy
         [ExcludeFromCodeCoverage]
         private ICloudApi CloudChatApi => _cloudChatApi ??= new HttpCloudApi();
 
+        // One live-event stream client for every cloud panel, for CloudChatApi's
+        // reason: it owns an HttpClient. Each open panel holds one connection on
+        // it, and only while it is open (CB-199). A test that goes through the
+        // seam below has chosen its stream, a null one included, so no test can
+        // reach this real one by forgetting to.
+        [ExcludeFromCodeCoverage]
+        private ICloudEventStream? CloudChatStream
+        {
+            get
+            {
+                if (!_cloudChatStreamChosen)
+                {
+                    _cloudChatStream = new HttpCloudEventStream();
+                    _cloudChatStreamChosen = true;
+                }
+
+                return _cloudChatStream;
+            }
+        }
+
+        private ICloudEventStream? _cloudChatStream;
+        private bool _cloudChatStreamChosen;
+
         // The credential for a session's *owner*. Several accounts can be
         // listed, and a cloud session belongs to whichever one created it: sending
         // with another's login is at best refused and at worst reads a
@@ -3072,26 +3120,41 @@ namespace ClaudeBuddy
 
         // The only way into RemoteChatFor's ClaudeCloud arm from a test.
         //
-        // Both properties above build the real thing on first use: an HttpClient
-        // pointed at claude.ai, and — on this platform — a Keychain query that
-        // puts a consent dialog in front of whoever is running the suite. Neither
-        // is something a headless run may do, so the arm that constructs a cloud
-        // session was unreachable and therefore uncovered, which is what this
-        // seam is for. It sets the same two fields the properties memoise into,
+        // The properties above build the real thing on first use: HttpClients
+        // pointed at api.anthropic.com — one of them holding a live event stream
+        // open — and, on this platform, a Keychain query that puts a consent
+        // dialog in front of whoever is running the suite. None is something a
+        // headless run may do, so the arm that constructs a cloud session was
+        // unreachable and therefore uncovered, which is what this seam is for.
+        // It sets the same fields the properties memoise into,
         // so production still builds each of them exactly once and nothing about
         // the app's behaviour changes when nobody calls this.
         internal void UseCloudChatDependenciesForTests(
-            ICloudApi api, ICloudCredentialSource credentials)
+            ICloudApi api, ICloudCredentialSource credentials, ICloudEventStream? stream = null)
         {
-            _cloudChatApi = api;
-            _cloudChatCredentialsFor = _ => credentials;
+            UseCloudChatDependenciesForTests(api, _ => credentials, stream);
         }
 
         internal void UseCloudChatDependenciesForTests(
-            ICloudApi api, Func<string?, ICloudCredentialSource> credentialsFor)
+            ICloudApi api, Func<string?, ICloudCredentialSource> credentialsFor, ICloudEventStream? stream = null)
         {
             _cloudChatApi = api;
             _cloudChatCredentialsFor = credentialsFor;
+            _cloudChatStream = stream;
+            _cloudChatStreamChosen = true;
+        }
+
+        // Hand an open cloud panel what the roster says about its session now.
+        //
+        // Skipped while the feature is off, because the snapshot is then empty
+        // by construction and a missing row would read as a deleted session —
+        // a false sentence in the one place that explains why the box went.
+        private static void PushCloudStatus(ClaudeCloudChatSession chat, string sessionId)
+        {
+            if (!ClaudeBuddySettings.ClaudeCloudEnabled) return;
+
+            chat.UpdateStatus(ClaudeCloudSessions.Snapshot()
+                .FirstOrDefault(s => "cloud:" + s.Id == sessionId));
         }
 
         // Kick off the read and walk away.

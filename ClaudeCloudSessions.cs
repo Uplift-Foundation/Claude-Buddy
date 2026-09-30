@@ -64,6 +64,11 @@ namespace ClaudeBuddy
         // Url is carried rather than built at the click, because the payload's
         // own `session_url` is empty on every row measured and the id is what
         // the address is actually made of.
+        //
+        // ConnectionStatus is the payload's raw string, added by CB-199 as an
+        // optional trailing field so the many places that build a Session
+        // positionally did not all have to change. Busy is decided by
+        // ClaudeCloudRoster.IsBusy from State and StatusBucket.
         internal sealed record Session(
             string Id,
             string Title,
@@ -76,6 +81,7 @@ namespace ClaudeBuddy
             int? ContextPercent,
             string? StatusDetail,
             string? RecentAction,
+            string? ConnectionStatus = null,
             string? OwnerRoot = null);
 
         // The settings gate lives here rather than in SessionManager.EnabledFor,
@@ -236,7 +242,7 @@ namespace ClaudeBuddy
 
             for (var i = 0; i < CloudRequest.MaxPagesPerWalk; i++)
             {
-                var result = await api.GetAsync(
+                var result = await api.SendAsync(
                     new CloudRequestContext(token, CloudRequest.ListPath(CloudRequest.MaxPageSize, after)),
                     ct).ConfigureAwait(false);
 
@@ -283,7 +289,7 @@ namespace ClaudeBuddy
         private static async Task<StepResult> RefreshAsync(ICloudApi api, ArmState state,
             string? stamp, string token, ClaudeCloudRoster.Plan plan, CancellationToken ct)
         {
-            var first = await api.GetAsync(
+            var first = await api.SendAsync(
                 new CloudRequestContext(token, CloudRequest.ListPath(CloudRequest.MaxPageSize, null)),
                 ct).ConfigureAwait(false);
 
@@ -307,12 +313,26 @@ namespace ClaudeBuddy
             {
                 if (resolved.Contains(id)) continue;
 
-                var one = await api.GetAsync(
+                var one = await api.SendAsync(
                     new CloudRequestContext(token, CloudRequest.SessionPath(id)), ct)
                     .ConfigureAwait(false);
 
                 if (one.Outcome.Kind != CloudOutcomeKind.Ok)
                 {
+                    // A 404 on one session is about that session and nothing
+                    // else, and it is a definite answer: the session has been
+                    // deleted. So it is *resolved* — Merge drops its orb now,
+                    // rather than at the next deep walk up to five minutes on —
+                    // and the cycle carries on. It must not reach the check
+                    // below: Backoff stops on SessionGone, and that would halt
+                    // the whole arm, every cloud orb gone until the credential
+                    // changed, because one session was deleted.
+                    if (one.Outcome.Kind == CloudOutcomeKind.SessionGone)
+                    {
+                        resolved.Add(id);
+                        continue;
+                    }
+
                     // A refusal that would stop the arm stops it here too — there
                     // is no point walking the rest of the list to be refused eight
                     // more times. Anything retryable is treated as **no news about
@@ -373,6 +393,8 @@ namespace ClaudeBuddy
         // retryable leaves the orbs exactly where they are and publishes nothing.
         private static StepResult Failed(ArmState state, string? stamp, CloudOutcome outcome)
         {
+            outcome = RosterView(outcome);
+
             var wait = Backoff.Next(outcome, state.Backoff);
             var status = outcome.Detail ?? $"the endpoint answered {outcome.Status}";
 
@@ -391,6 +413,25 @@ namespace ClaudeBuddy
                 wait.Value,
                 RateLimited: outcome.Kind == CloudOutcomeKind.RateLimited);
         }
+
+        // What a failure on a *roster* request means.
+        //
+        // Every request Failed sees is the listing, page one of it, or a single
+        // session read whose refusal would stop the arm — and a 404 on the
+        // listing is the collection having moved, not a session having gone.
+        // OutcomeFor cannot see the path and calls every 404 SessionGone, which
+        // Backoff stops on; left alone, that would halt the arm and put "this
+        // cloud session no longer exists" on the status line for a problem with
+        // the endpoint. So on this path a 404 is what it was before CB-199:
+        // retryable, and described by its status.
+        internal static CloudOutcome RosterView(CloudOutcome outcome) =>
+            outcome.Kind == CloudOutcomeKind.SessionGone
+                ? outcome with
+                {
+                    Kind = CloudOutcomeKind.Unavailable,
+                    Detail = $"the endpoint answered {outcome.Status}",
+                }
+                : outcome;
 
         // A stop, or a retryable credential problem, in one shape.
         private static StepResult Stop(ArmState state, string? stamp, string status, TimeSpan? wait)

@@ -66,6 +66,31 @@ namespace ClaudeBuddy
         // 5xx, a timeout, a DNS failure, no network. Retryable, and the only kind
         // that is.
         Unavailable,
+
+        // 409, on a write. **Not measured**: CB-199's gate never had an ended
+        // session to aim at, so this is the Claude Code CLI's own reading of the
+        // status — its binary maps a 409 from `/v1/code/sessions/{id}/events` to
+        // `session_inactive` — rather than an answer anybody here has seen. The
+        // detail string says whose reading it is for that reason.
+        SessionInactive,
+
+        // 413. Plain HTTP: the body was bigger than the endpoint takes. The CLI
+        // handles it on the same route; the limit itself is not known here.
+        TooLarge,
+
+        // 404 on a session: it no longer exists. **Measured** against a deleted
+        // cloud session: `GET /v1/code/sessions/{id}` answered 404
+        // `not_found_error` "Session <id> not found", and
+        // `GET /v2/ccr-sessions/{id}/events` answered 404 as well. Distinct from
+        // SessionInactive, which is an ended session and is not measured. A
+        // POST to a deleted session is not measured either; it is assumed to be
+        // 404 like the reads, and lands here if so.
+        //
+        // OutcomeFor cannot see the path, so a 404 anywhere reads as this. The
+        // one caller where that would be wrong — the roster listing, where a
+        // 404 means the collection moved rather than a session went — undoes it
+        // itself; see ClaudeCloudSessions.RosterView.
+        SessionGone,
     }
 
     // One attempt's verdict. Status is the HTTP status where there was one and 0
@@ -89,15 +114,24 @@ namespace ClaudeBuddy
     // apply to it in full: nothing holds one of these across a request, and
     // nothing puts one in a field.
     //
-    // Two fields, not three. `OrganizationUuid` was here because
+    // No organisation field. `OrganizationUuid` was here because
     // `x-organization-uuid` was believed mandatory; it is claude.ai's header and
     // api.anthropic.com ignores it. Removing the field rather than leaving it
     // unused is deliberate — an unused credential-adjacent field is an invitation
     // to start sending it again, and a compile error is a better argument than a
-    // comment.
+    // comment. CB-199's gate re-measured it for writes and it is still not
+    // needed, for a send or for an interrupt.
+    //
+    // Method and Body arrived with CB-199's writes, as optional trailing fields
+    // so every read in the app still constructs this with two arguments and
+    // still means a bodiless GET. The body is a payload the user typed, never a
+    // credential: the token travels in AccessToken and only ever reaches the
+    // Authorization header.
     internal readonly record struct CloudRequestContext(
         string AccessToken,
-        string Path);
+        string Path,
+        HttpMethod? Method = null,
+        string? Body = null);
 
     // Where the cloud arm asks, and the exact shape it must ask in.
     internal static class CloudRequest
@@ -106,6 +140,16 @@ namespace ClaudeBuddy
 
         // The collection every path below hangs off.
         internal const string SessionsPath = "/v2/ccr-sessions";
+
+        // **Where a write goes, and it is not under SessionsPath.** Read out of
+        // the Claude Code CLI binary and then measured by CB-199's gate: user
+        // turns and interrupts are `POST /v1/code/sessions/{id}/events`, while
+        // every write tried under `/v2/ccr-sessions` 404s — that prefix turns out
+        // to be in-container ingress authenticated by a session JWT, which is why
+        // CB-164 found no input route there. Same host, same two headers: the
+        // gate measured that `anthropic-beta` and `x-organization-uuid` change
+        // nothing on this route either, for a send or for an interrupt.
+        internal const string CodeSessionsPath = "/v1/code/sessions";
 
         // **Measured: 101 is refused.** `limit=200` comes back 400 with "must be
         // greater than or equal to 0 and less than 101", so this is the real
@@ -203,10 +247,42 @@ namespace ClaudeBuddy
                 : path + "&after_id=" + Uri.EscapeDataString(afterId);
         }
 
+        // A session's write endpoint: one POST per batch of events.
+        //
+        // **Null for an id that is not well formed, and that is a refusal rather
+        // than an escape.** The read paths above escape an id and send it anyway,
+        // because a malformed id there costs a 404. Here the request *writes*, so
+        // an id that is not shaped like one is refused before it can become a
+        // request at all — the CLI applies the same rule to the same route. The
+        // escape stays too, as the second of two locks; for a well-formed id it
+        // changes nothing.
+        internal static string? CodeEventsPath(string? id) =>
+            ClaudeCloudRoster.IsWellFormedId(id)
+                ? CodeSessionsPath + "/" + Uri.EscapeDataString(id!) + "/events"
+                : null;
+
+        // A session's own record on the write host, which is where its live turn
+        // state is read while a panel is watching a reply (CB-199). **Measured**:
+        // 200 with the same two headers as a read, and `status_bucket` "working"
+        // mid-turn. Refused locally for a malformed id, for the reason
+        // CodeEventsPath gives, even though this one is a read.
+        internal static string? CodeSessionPath(string? id) =>
+            ClaudeCloudRoster.IsWellFormedId(id)
+                ? CodeSessionsPath + "/" + Uri.EscapeDataString(id!)
+                : null;
+
+        // The media type a body goes out as. The only one the gate sent.
+        internal const string JsonMediaType = "application/json";
+
         // Build the request. Pure, so the header set is testable without a socket.
-        internal static HttpRequestMessage Build(string token, string path)
+        //
+        // Method defaults to GET and body to none, so a read built through here
+        // is exactly the request it was before writes existed — the read tests
+        // pin that rather than trusting it.
+        internal static HttpRequestMessage Build(string token, string path,
+            HttpMethod? method = null, string? body = null)
         {
-            var request = new HttpRequestMessage(HttpMethod.Get, Host + path);
+            var request = new HttpRequestMessage(method ?? HttpMethod.Get, Host + path);
 
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
             request.Headers.TryAddWithoutValidation(VersionHeader, VersionValue);
@@ -221,6 +297,16 @@ namespace ClaudeBuddy
             // exactly; api.anthropic.com neither needs nor notices it, and a GET
             // with a body is the sort of thing an intermediary is entitled to
             // object to.
+            //
+            // A write carries JSON, and Content-Type rides with the body and only
+            // with it. **It is not optional there:** the gate's POSTs all carried
+            // it, and nothing was measured without it, so a write that dropped it
+            // would be a request nobody has seen succeed.
+            if (body is not null)
+            {
+                request.Content = new StringContent(body, System.Text.Encoding.UTF8, JsonMediaType);
+            }
+
             return request;
         }
     }
@@ -257,6 +343,21 @@ namespace ClaudeBuddy
 
         internal const string AccountBlockedDetail =
             "the API refused this request for this account";
+
+        // The two write refusals, worded for what is actually known.
+        //
+        // The 409 sentence names the CLI as the source of its meaning because
+        // that is the evidence: nobody here has had a 409 back, and the CB-164
+        // lesson above is exactly what happens when a detail string states as a
+        // fact something that was only a reading. It is worded so it stays true
+        // if the CLI's reading turns out to be wrong.
+        internal const string SessionInactiveDetail =
+            "the endpoint answered 409, which Claude Code reads as the session no longer taking input";
+
+        internal const string SessionGoneDetail = "this cloud session no longer exists";
+
+        internal const string TooLargeDetail =
+            "the endpoint answered 413: the message was larger than it accepts";
 
         // Was this 403 an edge block rather than an API decision?
         //
@@ -324,6 +425,18 @@ namespace ClaudeBuddy
                             ? EdgeBlockedDetail
                             : AccountBlockedDetail);
 
+                case 404:
+                    return new CloudOutcome(CloudOutcomeKind.SessionGone, status, null,
+                        SessionGoneDetail);
+
+                case 409:
+                    return new CloudOutcome(CloudOutcomeKind.SessionInactive, status, null,
+                        SessionInactiveDetail);
+
+                case 413:
+                    return new CloudOutcome(CloudOutcomeKind.TooLarge, status, null,
+                        TooLargeDetail);
+
                 case 429:
                     return new CloudOutcome(CloudOutcomeKind.RateLimited, status, retryAfter,
                         "the endpoint is rate limiting us");
@@ -368,9 +481,27 @@ namespace ClaudeBuddy
                 case CloudOutcomeKind.Blocked:
                     return null;
 
+                // A session that has been deleted is not coming back, and
+                // asking again on a schedule would be a retry loop against a
+                // measured answer. Before CB-199 a 404 fell to Unavailable and
+                // was retried with exponential backoff, which was wrong for this.
+                case CloudOutcomeKind.SessionGone:
+                    return null;
+
                 case CloudOutcomeKind.RateLimited:
                     var asked = outcome.RetryAfter ?? RateLimitFloor;
                     return asked < RateLimitFloor ? RateLimitFloor : asked;
+
+                // SessionInactive and TooLarge are about one request, not about
+                // the arm. The roster's direct session reads treat any outcome
+                // this returns null for as a reason to halt the whole arm (see
+                // ClaudeCloudSessions.RefreshAsync), and before CB-199 a 409 or a
+                // 413 on a read fell through to Unavailable — so they stay in the
+                // retryable group, and a read keeps behaving exactly as it did.
+                // A write does not come through here at all: its single retry is
+                // decided by the send path, on Unavailable only.
+                case CloudOutcomeKind.SessionInactive:
+                case CloudOutcomeKind.TooLarge:
 
                 // ShapeChanged joins Unavailable rather than stopping: a 400 after
                 // shipping most likely means the contract moved, and a deploy in
@@ -437,14 +568,15 @@ namespace ClaudeBuddy
     // The call, as an interface, so everything above it can be driven without a
     // network. Same argument as IUsageSource and ICloudCredentialSource.
     //
-    // **One method, not one per endpoint.** There are three paths now — the
-    // listing, a single session, a session's events — and they differ only in the
-    // string. A method each would be three identical bodies and three fakes to
-    // keep in step; the context already carries the path, which is the only thing
-    // that varies.
+    // **One method, not one per endpoint.** There are four paths now — the
+    // listing, a single session, a session's events, and the write endpoint —
+    // and they differ only in what the context carries. A method each would be
+    // four identical bodies and five fakes to keep in step. It was `GetAsync`
+    // until CB-199 gave the context a method and a body; the rename is so a
+    // POST does not go out through a method whose name says it cannot.
     internal interface ICloudApi
     {
-        Task<CloudApiResult> GetAsync(CloudRequestContext context, CancellationToken token);
+        Task<CloudApiResult> SendAsync(CloudRequestContext context, CancellationToken token);
     }
 
     // The real one.
@@ -462,12 +594,13 @@ namespace ClaudeBuddy
         // still outstanding after half a minute is not going to help the user.
         private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(30) };
 
-        public async Task<CloudApiResult> GetAsync(CloudRequestContext context,
+        public async Task<CloudApiResult> SendAsync(CloudRequestContext context,
             CancellationToken token)
         {
             try
             {
-                using var request = CloudRequest.Build(context.AccessToken, context.Path);
+                using var request = CloudRequest.Build(context.AccessToken, context.Path,
+                    context.Method, context.Body);
                 using var response = await _http.SendAsync(request, token).ConfigureAwait(false);
 
                 var body = await response.Content.ReadAsStringAsync(token).ConfigureAwait(false);

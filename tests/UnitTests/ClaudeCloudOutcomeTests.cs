@@ -195,6 +195,9 @@ public class ClaudeCloudOutcomeTests
     [InlineData(400)]
     [InlineData(401)]
     [InlineData(403)]
+    [InlineData(404)]
+    [InlineData(409)]
+    [InlineData(413)]
     [InlineData(429)]
     [InlineData(500)]
     public void EveryFailureCarriesWording(int status)
@@ -237,10 +240,99 @@ public class ClaudeCloudOutcomeTests
     {
         const string canary = "sk-ant-oat01-CANARY-ACCESS-abcdef0123456789";
 
-        foreach (var status in new[] { 200, 400, 401, 403, 429, 500 })
+        foreach (var status in new[] { 200, 400, 401, 403, 404, 409, 413, 429, 500 })
         {
             var outcome = CloudOutcomes.OutcomeFor(status, $"leaked {canary} here");
             Assert.DoesNotContain(canary, outcome.Detail ?? "", StringComparison.Ordinal);
         }
+    }
+
+    // --- the write refusals (CB-199) -------------------------------------------
+
+    // **Not measured.** The gate had no ended session to aim at; 409 meaning
+    // `session_inactive` is the CLI binary's reading of this route. So the
+    // detail names whose reading it is rather than stating it as a fact.
+    [Fact]
+    public void AFourOhNineIsASessionNoLongerTakingInput()
+    {
+        var outcome = CloudOutcomes.OutcomeFor(409,
+            """{"type":"error","error":{"type":"session_inactive"},"request_id":"req_1"}""");
+
+        Assert.Equal(CloudOutcomeKind.SessionInactive, outcome.Kind);
+        Assert.Equal(409, outcome.Status);
+        Assert.Equal(CloudOutcomes.SessionInactiveDetail, outcome.Detail);
+        Assert.Contains("Claude Code reads", outcome.Detail!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AFourOhThirteenIsAMessageTooLarge()
+    {
+        var outcome = CloudOutcomes.OutcomeFor(413, null);
+
+        Assert.Equal(CloudOutcomeKind.TooLarge, outcome.Kind);
+        Assert.Equal(413, outcome.Status);
+        Assert.Equal(CloudOutcomes.TooLargeDetail, outcome.Detail);
+    }
+
+    // The 403 split stays two-way on the write route: no device-bound body was
+    // ever observed, so there is no third arm to assert and none is invented.
+    [Fact]
+    public void AFourOhThreeOnAWriteStillSplitsEdgeFromAccount()
+    {
+        Assert.Equal(CloudOutcomes.EdgeBlockedDetail,
+            CloudOutcomes.OutcomeFor(403, "<html>challenge</html>").Detail);
+        Assert.Equal(CloudOutcomes.AccountBlockedDetail,
+            CloudOutcomes.OutcomeFor(403,
+                """{"type":"error","error":{"type":"permission_error","message":"x"},"request_id":"req_2"}""").Detail);
+    }
+
+    // Both are about one request, so on a *read* they keep the retryable
+    // behaviour a 409 or 413 had before CB-199 — the roster arm halts on any
+    // outcome Backoff says to stop for, and a stray 409 on a direct session
+    // read must not start doing that.
+    [Theory]
+    [InlineData(409)]
+    [InlineData(413)]
+    public void TheWriteRefusalsDoNotHaltTheRosterArm(int status)
+    {
+        var wait = Backoff.Next(CloudOutcomes.OutcomeFor(status, null), null);
+
+        Assert.Equal(Backoff.UnavailableFloor, wait);
+    }
+
+    // --- a deleted session (CB-199) --------------------------------------------
+
+    // **Measured** against a deleted cloud session: this body, 404, on
+    // `GET /v1/code/sessions/{id}`. Ids invented.
+    private const string GoneBody =
+        """{"type":"error","error":{"type":"not_found_error","message":"Session session_01Invented not found"},"request_id":"req_invented"}""";
+
+    [Fact]
+    public void AFourOhFourIsASessionThatNoLongerExists()
+    {
+        var outcome = CloudOutcomes.OutcomeFor(404, GoneBody);
+
+        Assert.Equal(CloudOutcomeKind.SessionGone, outcome.Kind);
+        Assert.Equal(404, outcome.Status);
+        Assert.Equal("this cloud session no longer exists", outcome.Detail);
+        Assert.Equal(CloudOutcomes.SessionGoneDetail, outcome.Detail);
+    }
+
+    // Gone and ended are different answers: one measured, one the CLI's
+    // reading. Keeping them apart is what lets the panel say which.
+    [Fact]
+    public void GoneIsNotInactive()
+    {
+        Assert.NotEqual(CloudOutcomes.OutcomeFor(404, GoneBody).Kind,
+            CloudOutcomes.OutcomeFor(409, null).Kind);
+    }
+
+    // It used to be Unavailable and backed off forever. A deleted session is
+    // not coming back, so waiting is a stop, like a refused token.
+    [Fact]
+    public void BackoffStopsForAGoneSession()
+    {
+        Assert.Null(Backoff.Next(CloudOutcomes.OutcomeFor(404, GoneBody), null));
+        Assert.Null(Backoff.Next(CloudOutcomes.OutcomeFor(404, GoneBody), TimeSpan.FromSeconds(8)));
     }
 }

@@ -55,11 +55,16 @@ public class CloudAccountBoardTests : IDisposable
 
         internal Api(Func<string, string, CloudApiResult> answer) => _answer = answer;
 
-        public Task<CloudApiResult> GetAsync(CloudRequestContext context, CancellationToken token)
+        public Task<CloudApiResult> SendAsync(CloudRequestContext context, CancellationToken token)
         {
             lock (Calls) Calls.Add((context.AccessToken, context.Path));
             return Task.FromResult(_answer(context.AccessToken, context.Path));
         }
+    }
+
+    private static List<(string Token, string Path)> Snapshot(Api api)
+    {
+        lock (api.Calls) return api.Calls.ToList();
     }
 
     private static CloudApiResult Ok(string body) => new(CloudOutcomes.OutcomeFor(200, body), body);
@@ -77,7 +82,7 @@ public class CloudAccountBoardTests : IDisposable
 
     private static ClaudeCloudSessions.Session S(string id, string? owner, int minute = 0, string title = "t") =>
         new(id, title, "idle", new DateTime(2026, 9, 19, 10, minute, 0, DateTimeKind.Utc),
-            "https://claude.ai/code/" + id, "idle", false, null, null, null, null, owner);
+            "https://claude.ai/code/" + id, "idle", false, null, null, null, null, OwnerRoot: owner);
 
     private static async Task<ClaudeCloudSessions.StepResult> Step(
         Api api, ICloudCredentialSource creds, DateTime? now = null, TimeSpan? budget = null) =>
@@ -286,13 +291,49 @@ public class CloudAccountBoardTests : IDisposable
         Assert.Equal(RootB, bSession.OwnerRoot);
 
         // The chat: resolved through the same registry, by the session's owner.
-        var chatApi = new Api((_, _) => Ok("{\"data\":[],\"has_more\":false,\"last_id\":null}"));
+        // Reads, a send (CB-199) and a Stop all go out on it — the write path is
+        // the one where the wrong account would do the most harm.
+        // The live loop's status reads (CB-199) answer "working", so the loop runs
+        // to its cap on B's login and Stop is still there to press afterwards.
+        var ticks = 0;
+        var chatApi = new Api((_, path) =>
+            path == CloudRequest.CodeEventsPath("session_b1")
+                ? Ok("{\"results\":[{\"duplicate\":false,\"sequence_num\":\"1\",\"event_id\":\"e\"}]}")
+                : path == CloudRequest.CodeSessionPath("session_b1")
+                    ? Ok("{\"status_bucket\":\"working\"}")
+                    : Ok("{\"data\":[],\"has_more\":false,\"last_id\":null}"));
         var chat = new ClaudeCloudChatSession(
-            bSession, chatApi, CloudAccounts.SourceFor(bSession.OwnerRoot), action => action());
+            bSession, chatApi, CloudAccounts.SourceFor(bSession.OwnerRoot), action => action())
+        {
+            Enabled = () => true,
+
+            // One live tick, then park until the panel closes: enough for one
+            // status read on B's login, and short, since a loop left to run to
+            // its cap made this test slow enough to be at the mercy of whatever
+            // else shares the account registry in a parallel run.
+            Delay = (_, ct) => Interlocked.Increment(ref ticks) == 1
+                ? Task.CompletedTask
+                : Task.Delay(Timeout.Infinite, ct),
+        };
         Assert.True(await chat.LoadAsync(CancellationToken.None));
 
-        Assert.All(chatApi.Calls, c => Assert.Equal(TokenB, c.Token));
-        Assert.DoesNotContain(chatApi.Calls, c => c.Token == TokenA);
+        Assert.Equal(ChatSendOutcome.Sent, await chat.SendAsync("hello from b"));
+        var statusPath = CloudRequest.CodeSessionPath("session_b1");
+        for (var i = 0; i < 500 && !Snapshot(chatApi).Any(c => c.Path == statusPath); i++) await Task.Delay(10);
+
+        Assert.True(chat.CanInterrupt);
+        chat.Cancel();
+        await chat.InterruptTask!;
+        chat.PanelClosed();
+        await chat.LiveTask!;
+
+        var calls = Snapshot(chatApi);
+        var writes = calls.Where(c => c.Path == CloudRequest.CodeEventsPath("session_b1")).ToList();
+        Assert.Equal(2, writes.Count);
+        Assert.Contains(calls, c => c.Path == statusPath);
+
+        Assert.All(calls, c => Assert.Equal(TokenB, c.Token));
+        Assert.DoesNotContain(calls, c => c.Token == TokenA);
         Assert.All(pollApi.Calls.Where(c => c.Token == TokenA), c => Assert.NotEqual(TokenB, c.Token));
     }
 

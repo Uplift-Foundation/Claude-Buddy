@@ -290,6 +290,17 @@ namespace ClaudeBuddy
             };
             SendButton.PointerPressed += (_, e) => { e.Handled = true; Send(); };
 
+            // The click asks the same question the button's visibility does
+            // (StopOffered), so a press that races a state change — or one that
+            // arrives with nothing bound — reaches no Cancel. What an interrupt
+            // means, and CanInterrupt going false on the click itself, stay the
+            // session's job.
+            StopButton.PointerPressed += (_, e) =>
+            {
+                e.Handled = true;
+                if (StopOffered(_session)) _session!.Cancel();
+            };
+
             // Fire and forget, like the click on the orb it shares its
             // implementation with. Nothing is awaited and nothing about the panel
             // changes: what the attach produces arrives through the ordinary
@@ -640,6 +651,19 @@ namespace ClaudeBuddy
             if (_session is IRemoteChatFetchWait waited) waited.WaitChanged -= OnWaitChanged;
             HideWait();
 
+            // CB-199. The panel is reused across orbs, so a session left
+            // subscribed would go on redrawing the composer of whichever
+            // conversation is open next — a refusal from one cloud session
+            // taking the box away from an unrelated one.
+            if (_session is IRemoteChatReadOnly wasReadOnly) wasReadOnly.ReadOnlyChanged -= OnReadOnlyChanged;
+            if (_session is IRemoteChatInterrupt wasInterruptible) wasInterruptible.InterruptChanged -= OnInterruptChanged;
+
+            // Nobody is looking any more, so its live loop stops.
+            // It does not stop a turn: closing a window should not cancel work
+            // somebody asked for. Concrete type, following the RemoteControl
+            // precedent below — one caller does not earn an interface.
+            if (_session is ClaudeCloudChatSession previousCloud) previousCloud.PanelClosed();
+
             if (_session is IRemoteChatMachine wasNamed) wasNamed.MachineChanged -= OnMachineChanged;
 
             // A remote session can take a turn back — its "working…" line comes
@@ -773,6 +797,18 @@ namespace ClaudeBuddy
             // does.
             if (session is IRemoteChatMachine named) named.MachineChanged += OnMachineChanged;
 
+            // CB-199: whether the box is there, and whether Stop is, can both
+            // change while the panel is open — a cloud session turns read-only
+            // the moment the server refuses it, and a reply starts and ends on
+            // the roster's schedule rather than the panel's. Both are re-read by
+            // ApplyComposerAffordances below for the initial state.
+            if (session is IRemoteChatReadOnly readOnlyNow) readOnlyNow.ReadOnlyChanged += OnReadOnlyChanged;
+            if (session is IRemoteChatInterrupt interruptible) interruptible.InterruptChanged += OnInterruptChanged;
+
+            // Somebody is looking, which is what licenses the one transcript read
+            // the session makes when a turn finishes (busy to idle on the roster).
+            if (session is ClaudeCloudChatSession cloud) cloud.PanelOpened();
+
             // "Nova — wtvamp" is built as name plus place, so it splits back
             // into the two lines the header now has. A name with no place (an
             // agent's own main session) simply leaves the second line empty.
@@ -881,13 +917,16 @@ namespace ClaudeBuddy
             // entirely, and gets a sentence where it was.
             //
             // **Hidden, not disabled** — the opposite of what the watermark
-            // above does for a session that merely cannot be typed into *yet*,
-            // and the difference is measured rather than aesthetic. A cloud
-            // session has no input route at any address: `/input`, `/messages`,
-            // `/turns` and `/conversation` are all 404. A box that accepts a
-            // paragraph and only then admits the transport never had anywhere to
-            // put it has already lost the paragraph, which is CB-59's rule at
-            // its sharpest.
+            // above does for a session that merely cannot be typed into *yet*.
+            // A cloud session is written to through
+            // POST /v1/code/sessions/{id}/events (measured 2026-09-28), so a
+            // live one keeps its box; it turns read-only only once it has ended,
+            // been deleted, or refused this login, and none of those will take
+            // a reply later. A box that accepts a paragraph and only then admits
+            // there is nowhere for it to go has already lost the paragraph,
+            // which is CB-59's rule at its sharpest. That can now happen *while
+            // the panel is open*, which is why this also runs on
+            // ReadOnlyChanged rather than only at bind.
             //
             // The hint is kept rather than dropped with the box, because it says
             // where the session *can* be replied to. Hiding the box and
@@ -906,7 +945,31 @@ namespace ClaudeBuddy
             _readOnlyUrl = readOnly ? (session as IRemoteChatReadOnly)?.ReplyUrl : null;
             ReadOnlyLink.IsVisible = _readOnlyUrl is not null;
             ReadOnlyLink.Text = _readOnlyUrl is null ? "" : "Open in your browser";
+
+            ApplyStop(session);
         }
+
+        // Stop is shown only while the session says pressing it would stop
+        // something, and never over a read-only one. Hidden rather than
+        // disabled, for CB-59's reason: a greyed Stop over an idle session reads
+        // as "stuck". The read-only half is already true of the row it sits in;
+        // it is stated here too so the button's own visibility says the true
+        // thing rather than relying on its parent to hide a lie.
+        private void ApplyStop(IRemoteChatSession? session) => StopButton.IsVisible = StopOffered(session);
+
+        // The one rule for both the button and its click. Static and pure, so
+        // each arm is a unit case rather than a panel to build — including the
+        // ones no real transport produces today, like an interruptible session
+        // that is not read-only-capable at all.
+        internal static bool StopOffered(IRemoteChatSession? session) =>
+            session is IRemoteChatInterrupt { CanInterrupt: true }
+            && session is not IRemoteChatReadOnly { IsReadOnly: true };
+
+        // Raised on the UI thread by contract (see IRemoteChatReadOnly), and only
+        // by the session currently bound: Unbind takes both subscriptions off.
+        private void OnReadOnlyChanged() => ApplyComposerAffordances(_session);
+
+        private void OnInterruptChanged() => ApplyStop(_session);
 
         // Where the read-only link goes. Held rather than read back off the
         // TextBlock, because what is *shown* is a label and what is opened is an

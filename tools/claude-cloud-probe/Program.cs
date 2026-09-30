@@ -70,11 +70,14 @@ internal static class Program
             "read" => await ReadAsync(flags),
             "list" => await ListAsync(flags),
             "roster" => await RosterAsync(),
+            "v1-session" or "v1-events" or "v2-events" or "send" or "interrupt" =>
+                await WriteProbe.RunAsync(args[0], flags, ReadFirstFoundAsync, OrganizationUuid),
             _ => UnknownCommand(args[0]),
         };
     }
 
-    private static void Usage() =>
+    private static void Usage()
+    {
         Console.Error.WriteLine(
             "usage: claude-cloud-probe <command>\n" +
             "\n" +
@@ -86,6 +89,8 @@ internal static class Program
             "\n" +
             "On macOS, `read` and `list` raise a Keychain consent prompt naming this\n" +
             "binary. That prompt is the point: answer it yourself.");
+        WriteProbe.Usage();
+    }
 
     private static int UnknownCommand(string command)
     {
@@ -102,8 +107,10 @@ internal static class Program
     // from a shell that has it; the app itself cannot see the CLI's environment.
     //
     // One source per account (config root), because the app now reads every
-    // account with a live login. `list` and `roster` use the first account that
-    // reads Found; `read` and `stamp` report every account.
+    // account with a live login. `list`, `roster` and the write verbs use the
+    // first account that reads Found; `read` and `stamp` report every account.
+    // The write verbs target one throwaway session, so "the first login that
+    // works" is the account the write verbs aim with.
     private static readonly IReadOnlyList<CloudAccount> Accounts = ClaudeCliCredentials.SourcesFor(
         OperatingSystem.IsMacOS(), Home, Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR"));
 
@@ -291,7 +298,7 @@ internal static class Program
         // value nothing sends is a diagnostic that reports its own assumption as
         // the machine's problem.
         using var api = new HttpCloudApi();
-        var result = await api.GetAsync(
+        var result = await api.SendAsync(
             new CloudRequestContext(read.AccessToken,
                 CloudRequest.ListPath(CloudRequest.MaxPageSize, null)),
             CancellationToken.None);
@@ -343,9 +350,9 @@ internal static class Program
 
         internal CountingApi(ICloudApi inner) => _inner = inner;
 
-        public async Task<CloudApiResult> GetAsync(CloudRequestContext context, CancellationToken token)
+        public async Task<CloudApiResult> SendAsync(CloudRequestContext context, CancellationToken token)
         {
-            var result = await _inner.GetAsync(context, token);
+            var result = await _inner.SendAsync(context, token);
             if (result.Outcome.Kind == CloudOutcomeKind.Ok
                 && context.Path.StartsWith(CloudRequest.ListPath(CloudRequest.MaxPageSize, null).Split('?')[0],
                     StringComparison.Ordinal)
