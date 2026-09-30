@@ -13,6 +13,10 @@ namespace ClaudeBuddy
     // without finding the menu bar icon first. It proved the claim above —
     // neither native hook changed to add it.
     //
+    // ToggleUsageOrbsVisible is the third (CB-220): hide only the account
+    // (usage) orbs, leaving the session orbs where they are. The orb toggle
+    // above still means every orb, usage ones included.
+    //
     // Declaration order is also priority: HotkeyRegistry.Plan gives a chord
     // two actions both resolve to to whichever is declared first, so a new
     // action goes at the end, where it can never take a chord from one that
@@ -20,7 +24,8 @@ namespace ClaudeBuddy
     public enum HotkeyAction
     {
         ToggleOrbsVisible,
-        OpenNewChat
+        OpenNewChat,
+        ToggleUsageOrbsVisible
     }
 
     // One action's registration, as HotkeyRegistry.Plan decided it: the combo
@@ -71,10 +76,17 @@ namespace ClaudeBuddy
         private static readonly HotkeyCombo OpenNewChatDefault =
             new(KeyModifiers.Control | KeyModifiers.Alt, Key.N);
 
+        // Ctrl+Alt again, with U for "usage". Nothing else this app registers
+        // uses U, and neither platform has a standing system claim on
+        // Ctrl+Alt+U.
+        private static readonly HotkeyCombo ToggleUsageOrbsDefault =
+            new(KeyModifiers.Control | KeyModifiers.Alt, Key.U);
+
         public static HotkeyCombo Default(HotkeyAction action) => action switch
         {
             HotkeyAction.ToggleOrbsVisible => ToggleOrbsDefault,
             HotkeyAction.OpenNewChat => OpenNewChatDefault,
+            HotkeyAction.ToggleUsageOrbsVisible => ToggleUsageOrbsDefault,
             _ => throw new ArgumentOutOfRangeException(nameof(action), action, null)
         };
 

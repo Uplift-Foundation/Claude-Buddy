@@ -134,6 +134,42 @@ public class HotkeyRegistryTests
         Assert.Equal(HotkeyRegistry.Default(HotkeyAction.OpenNewChat), combo);
     }
 
+    // CB-220's usage-orb toggle: Ctrl+Alt+U by default, overridable and
+    // falling back on the same terms as the other two.
+    [Fact]
+    public void Default_ToggleUsageOrbsVisible_IsControlAltU()
+    {
+        var combo = HotkeyRegistry.Default(HotkeyAction.ToggleUsageOrbsVisible);
+
+        Assert.Equal(KeyModifiers.Control | KeyModifiers.Alt, combo.Modifiers);
+        Assert.Equal(Key.U, combo.Key);
+        Assert.Equal("Ctrl+Alt+U", HotkeyRegistry.Format(combo));
+    }
+
+    [Fact]
+    public void Resolve_ToggleUsageOrbsVisible_UsesTheOverrideWhenItParses()
+    {
+        var combo = HotkeyRegistry.Resolve(HotkeyAction.ToggleUsageOrbsVisible, "Ctrl+Shift+U");
+
+        Assert.Equal(KeyModifiers.Control | KeyModifiers.Shift, combo.Modifiers);
+        Assert.Equal(Key.U, combo.Key);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("U")]              // a bare key is not a global hotkey
+    [InlineData("Ctrl+Alt+F5")]    // a key neither hook has a code for
+    [InlineData("Ctrl+Alt+U+I")]   // two keys
+    public void Resolve_ToggleUsageOrbsVisible_FallsBackToItsOwnDefault(string? overrideSpec)
+    {
+        var combo = HotkeyRegistry.Resolve(HotkeyAction.ToggleUsageOrbsVisible, overrideSpec);
+
+        Assert.Equal(HotkeyRegistry.Default(HotkeyAction.ToggleUsageOrbsVisible), combo);
+        Assert.NotEqual(HotkeyRegistry.Default(HotkeyAction.ToggleOrbsVisible), combo);
+        Assert.NotEqual(HotkeyRegistry.Default(HotkeyAction.OpenNewChat), combo);
+    }
+
     // Two actions on one chord would register twice with the OS: macOS keeps
     // the first and ignores the second, Windows' RegisterHotKey refuses it
     // outright, and on both the second action silently never fires. Every
@@ -266,11 +302,13 @@ public class HotkeyRegistryTests
 
     // CB-196 AC6: the collision rule, one case per arm. Plan takes the
     // overrides as a function so none of this reads settings.
-    private static Func<HotkeyAction, string?> Overrides(string? toggle = null, string? newChat = null) =>
+    private static Func<HotkeyAction, string?> Overrides(
+        string? toggle = null, string? newChat = null, string? usage = null) =>
         action => action switch
         {
             HotkeyAction.ToggleOrbsVisible => toggle,
             HotkeyAction.OpenNewChat => newChat,
+            HotkeyAction.ToggleUsageOrbsVisible => usage,
             _ => null
         };
 
@@ -279,6 +317,7 @@ public class HotkeyRegistryTests
 
     private static readonly HotkeyCombo CtrlAltH = new(KeyModifiers.Control | KeyModifiers.Alt, Key.H);
     private static readonly HotkeyCombo CtrlAltN = new(KeyModifiers.Control | KeyModifiers.Alt, Key.N);
+    private static readonly HotkeyCombo CtrlAltU = new(KeyModifiers.Control | KeyModifiers.Alt, Key.U);
 
     [Fact]
     public void Plan_NoOverrides_EveryActionGetsItsDefaultAndNoNote()
@@ -288,6 +327,36 @@ public class HotkeyRegistryTests
         Assert.Equal(Enum.GetValues<HotkeyAction>().Length, plan.Count);
         Assert.Equal(new HotkeyBinding(HotkeyAction.ToggleOrbsVisible, CtrlAltH, null), For(plan, HotkeyAction.ToggleOrbsVisible));
         Assert.Equal(new HotkeyBinding(HotkeyAction.OpenNewChat, CtrlAltN, null), For(plan, HotkeyAction.OpenNewChat));
+        Assert.Equal(new HotkeyBinding(HotkeyAction.ToggleUsageOrbsVisible, CtrlAltU, null), For(plan, HotkeyAction.ToggleUsageOrbsVisible));
+    }
+
+    // The usage toggle is declared last, so it is the one that gives way on
+    // a contested chord — to either of the two that shipped before it.
+    [Theory]
+    [InlineData("Alt+Ctrl+H", "ToggleOrbsVisible")]
+    [InlineData("Ctrl+Alt+N", "OpenNewChat")]
+    public void Plan_UsageToggleOnAnEarlierActionsChord_FallsBackToCtrlAltUAndSaysSo(string usage, string holder)
+    {
+        var plan = HotkeyRegistry.Plan(Overrides(usage: usage));
+
+        var binding = For(plan, HotkeyAction.ToggleUsageOrbsVisible);
+        Assert.Equal(CtrlAltU, binding.Combo);
+        Assert.Contains($"is already {holder}'s hotkey", binding.Note);
+        Assert.Contains("Ctrl+Alt+U", binding.Note);
+        Assert.Equal(CtrlAltH, For(plan, HotkeyAction.ToggleOrbsVisible).Combo);
+        Assert.Equal(CtrlAltN, For(plan, HotkeyAction.OpenNewChat).Combo);
+    }
+
+    [Fact]
+    public void Plan_ToggleBoundToCtrlAltU_UsageToggleRegistersNothingAndSaysWhy()
+    {
+        var plan = HotkeyRegistry.Plan(Overrides(toggle: "Ctrl+Alt+U"));
+
+        Assert.Equal(CtrlAltU, For(plan, HotkeyAction.ToggleOrbsVisible).Combo);
+        var usage = For(plan, HotkeyAction.ToggleUsageOrbsVisible);
+        Assert.Null(usage.Combo);
+        Assert.Contains("no hotkey registered", usage.Note);
+        Assert.Contains("ToggleOrbsVisible's", usage.Note);
     }
 
     [Fact]
@@ -352,17 +421,17 @@ public class HotkeyRegistryTests
     {
         // Every pairing of a handful of chords, including each other's
         // defaults, respellings and garbage.
-        var specs = new string?[] { null, "garbage", "Ctrl+Alt+H", "Alt+Ctrl+H", "Ctrl+Alt+N", "Ctrl+Shift+N", "Ctrl+Alt+5" };
+        var specs = new string?[] { null, "garbage", "Ctrl+Alt+H", "Alt+Ctrl+H", "Ctrl+Alt+N", "Ctrl+Shift+N", "Ctrl+Alt+U", "Ctrl+Alt+5" };
         foreach (var toggle in specs)
         foreach (var newChat in specs)
+        foreach (var usage in specs)
         {
-            var combos = HotkeyRegistry.Plan(Overrides(toggle, newChat))
-                .Where(b => b.Combo is not null).Select(b => b.Combo!.Value).ToList();
+            var plan = HotkeyRegistry.Plan(Overrides(toggle, newChat, usage));
+            var combos = plan.Where(b => b.Combo is not null).Select(b => b.Combo!.Value).ToList();
             Assert.Equal(combos.Count, combos.Distinct().Count());
 
             // The toggle is never the one that loses.
-            Assert.NotNull(HotkeyRegistry.Plan(Overrides(toggle, newChat))
-                .Single(b => b.Action == HotkeyAction.ToggleOrbsVisible).Combo);
+            Assert.NotNull(plan.Single(b => b.Action == HotkeyAction.ToggleOrbsVisible).Combo);
         }
     }
 

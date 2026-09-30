@@ -586,13 +586,19 @@ public class OpenClawGatewayTests
 
     // ---- requests, once connected -------------------------------------------
 
+    // Connected under the default timeout, and only then given the one asked
+    // for. The handshake is a request too, so building the gateway with a 50ms
+    // timeout gave the handshake 50ms as well — and on a loaded CI runner that
+    // failed ARequestThatIsNeverAnsweredIsCancelled at the connect, with
+    // "did not answer connect within 0.05s", before its own request existed.
     private static async Task<(FakeGatewaySocket Socket, OpenClawGateway Gateway)> ConnectedAsync(
         TimeSpan? requestTimeout = null)
     {
         var socket = Accepting();
-        var gateway = Gateway(socket, requestTimeout: requestTimeout);
+        var gateway = Gateway(socket);
 
         await ConnectOrExplainAsync(gateway);
+        if (requestTimeout is { } timeout) gateway.RequestTimeout = timeout;
 
         return (socket, gateway);
     }

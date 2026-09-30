@@ -11,6 +11,7 @@ using Avalonia.Interactivity;
 using Avalonia.LogicalTree;
 using Avalonia.Media;
 using Avalonia.Threading;
+using ClaudeBuddy.Tests;
 using Xunit;
 using ShapesPath = Avalonia.Controls.Shapes.Path;
 using Speak = ClaudeBuddy.TextToSpeech.SpeakState;
@@ -41,9 +42,13 @@ public class SettingsVoicePreviewTests : IDisposable
     private readonly List<bool> _resolvesOnUiThread = new();
     private readonly List<SettingsWindow> _windows = new();
 
+    // Its own settings, not whatever the class before it left: the window it
+    // shows is built from them, and one inherited switch (Grok usage) was
+    // enough to put a row on it that hung the whole suite.
+    private readonly ScopedSettingsDir _settings = new("voice-preview");
+
     public SettingsVoicePreviewTests()
     {
-        ClaudeBuddySettings.ReloadForTests();
         Reset();
 
         VoicePreview.SpeakForTests = (_, voice) =>
@@ -72,7 +77,7 @@ public class SettingsVoicePreviewTests : IDisposable
         foreach (var window in _windows) window.Content = null;
         Reset();
         TextToSpeech.InvalidateVoiceCache();
-        ClaudeBuddySettings.ReloadForTests();
+        _settings.Dispose();
     }
 
     private static void Reset()

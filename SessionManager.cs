@@ -416,6 +416,11 @@ namespace ClaudeBuddy
             _onWindows = onWindows ?? OperatingSystem.IsWindows();
             _paneOwners = paneOwners ?? TerminalFocuser.TmuxPaneOwners;
             _agentViewer = agentViewer ?? AgentTeamViewer.For;
+
+            // AccountOrbs starts out visible, and nothing used to tell it
+            // otherwise until a switch was flipped — so launching with every
+            // orb hidden still put the usage orbs up on the first poll.
+            _accountOrbs.SetVisible(UsageOrbsVisible);
         }
 
         // Who is running in each claimed tmux pane, and which `claude agents`
@@ -529,6 +534,15 @@ namespace ClaudeBuddy
         // Orbs can be hidden from the tray menu; sessions keep being tracked
         // either way, so the tray icon and its menu stay accurate.
         public bool OrbsVisible { get; private set; } = ClaudeBuddySettings.ShowOrbs;
+
+        // The account orbs' own switch (CB-220), independent of OrbsVisible:
+        // they can be hidden while the session orbs stay, and shown while the
+        // session orbs are hidden. SetOrbsVisible still moves both.
+        public bool UsageOrbsVisible { get; private set; } = ClaudeBuddySettings.ShowUsageOrbs;
+
+        // For tests that need to put account orbs on screen without a real
+        // usage poll behind them.
+        internal AccountOrbs AccountOrbsForTests => _accountOrbs;
 
         private FileSystemWatcher? _watcher;
         private readonly DispatcherTimer _pollTimer = new() { Interval = TimeSpan.FromSeconds(2) };
@@ -3343,6 +3357,12 @@ namespace ClaudeBuddy
 
         public void SetOrbsVisible(bool visible)
         {
+            // "Show orbs" means all of them, usage orbs included — and it says
+            // so even when the session orbs are already where they were asked
+            // to be, since the usage orbs may not be. Hence before the early
+            // return rather than after it.
+            SetUsageOrbsVisible(visible);
+
             if (OrbsVisible == visible) return;
             OrbsVisible = visible;
             ClaudeBuddySettings.ShowOrbs = visible;
@@ -3357,12 +3377,21 @@ namespace ClaudeBuddy
             // visible arrow is a line from nowhere to nowhere.
             TeamLinks.SetVisible(visible);
 
-            // "Show orbs" means all of them. An account orb left floating over a
-            // cleared desktop would be the one thing the switch failed to turn
-            // off, which is worse than it never having been covered.
-            _accountOrbs.SetVisible(visible);
-
             if (visible) ReflowPositions();
+            UpdateTray();
+        }
+
+        // The account orbs alone. An account orb left floating over a desktop
+        // somebody cleared with "Show orbs" would be the one thing that switch
+        // failed to turn off, which is why SetOrbsVisible still calls this —
+        // but hiding only these is its own switch, so the session orbs are
+        // left exactly as they are.
+        public void SetUsageOrbsVisible(bool visible)
+        {
+            if (UsageOrbsVisible == visible) return;
+            UsageOrbsVisible = visible;
+            ClaudeBuddySettings.ShowUsageOrbs = visible;
+            _accountOrbs.SetVisible(visible);
             UpdateTray();
         }
 
@@ -3390,7 +3419,7 @@ namespace ClaudeBuddy
         // change. The decision about which CLI's orbs stay lives in
         // AccountOrbs.SyncToSettings; this used to look only at the Claude Code
         // flag, which is how turning Grok usage on could close the orbs instead.
-        public void ReapplyAccountOrbs() => _accountOrbs.SyncToSettings(OrbsVisible);
+        public void ReapplyAccountOrbs() => _accountOrbs.SyncToSettings(UsageOrbsVisible);
 
         // Same shape as ReapplyStateColors, for the "Two-letter initials"
         // toggle: a cosmetic setting change isn't a session change, so

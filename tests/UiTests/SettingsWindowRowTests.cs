@@ -27,8 +27,15 @@ namespace ClaudeBuddy.Tests;
 // setting in force, which is the only way the rows that only appear when
 // something is switched on get built at all.
 [Collection("Settings")]
-public class SettingsWindowRowTests
+public class SettingsWindowRowTests : IDisposable
 {
+    // Every Toggles() drive ends with its switch on, so without a directory of
+    // its own this class leaves each of those settings on for whichever class
+    // runs next — Grok usage among them, which is what hung the suite.
+    private readonly ScopedSettingsDir _settings = new("settings-rows");
+
+    public void Dispose() => _settings.Dispose();
+
     private static SettingsWindow NewWindow()
     {
         var ctor = typeof(SettingsWindow).GetConstructor(

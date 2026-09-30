@@ -768,7 +768,82 @@ public class SettingsRoundTripTests
         Assert.Null(ClaudeBuddySettings.NewChatHotkey);
     }
 
-    // Both overrides survive a relaunch followed by a save that touches
+    // CB-220's usage-orb hotkey, on the same terms as the other two.
+    [Fact]
+    public void ToggleUsageOrbsHotkey_DefaultsToNullAndRoundTripsAnOverride()
+    {
+        var dir = NewSettingsDir();
+        PointSettingsAt(dir);
+
+        Assert.Null(ClaudeBuddySettings.ToggleUsageOrbsHotkey);
+
+        ClaudeBuddySettings.ToggleUsageOrbsHotkey = "Ctrl+Shift+U";
+
+        var settingsPath = Path.Combine(dir, "settings.json");
+        var root = JsonNode.Parse(File.ReadAllText(settingsPath)) as JsonObject;
+        Assert.Equal("Ctrl+Shift+U", root!["toggleUsageOrbsHotkey"]!.GetValue<string>());
+
+        PointSettingsAt(dir);
+        Assert.Equal("Ctrl+Shift+U", ClaudeBuddySettings.ToggleUsageOrbsHotkey);
+    }
+
+    // showUsageOrbs inherits showOrbs until someone sets it, and is written
+    // back as null rather than as a copy — so a file from before CB-220 with
+    // orbs hidden keeps its usage orbs hidden through any number of saves,
+    // and turning orbs back on brings the usage orbs with them.
+    [Fact]
+    public void ShowUsageOrbs_UnsetInheritsShowOrbsAndStaysUnsetAcrossASave()
+    {
+        var dir = NewSettingsDir();
+        var settingsPath = Path.Combine(dir, "settings.json");
+        File.WriteAllText(settingsPath, """{ "showOrbs": false }""");
+
+        PointSettingsAt(dir);
+        Assert.False(ClaudeBuddySettings.ShowUsageOrbs);
+        Assert.Null(ClaudeBuddySettings.ShowUsageOrbsStored);
+
+        ClaudeBuddySettings.TwoLetterGlyphs = true;   // any Save at all
+        ClaudeBuddySettings.FlushPendingSave();
+
+        var root = JsonNode.Parse(File.ReadAllText(settingsPath)) as JsonObject;
+        Assert.True(root!.ContainsKey("showUsageOrbs"));
+        Assert.Null(root["showUsageOrbs"]);
+
+        PointSettingsAt(dir);
+        Assert.Null(ClaudeBuddySettings.ShowUsageOrbsStored);
+        ClaudeBuddySettings.ShowOrbs = true;
+        Assert.True(ClaudeBuddySettings.ShowUsageOrbs);
+    }
+
+    [Fact]
+    public void ShowUsageOrbs_AnExplicitValueRoundTripsAndOverridesShowOrbs()
+    {
+        var dir = NewSettingsDir();
+        PointSettingsAt(dir);
+
+        ClaudeBuddySettings.ShowUsageOrbs = false;
+
+        var settingsPath = Path.Combine(dir, "settings.json");
+        var root = JsonNode.Parse(File.ReadAllText(settingsPath)) as JsonObject;
+        Assert.False(root!["showUsageOrbs"]!.GetValue<bool>());
+        Assert.True(root["showOrbs"]!.GetValue<bool>());
+
+        PointSettingsAt(dir);
+        Assert.False(ClaudeBuddySettings.ShowUsageOrbs);
+        Assert.True(ClaudeBuddySettings.ShowOrbs);
+
+        // And the other way round: shown while every session orb is hidden.
+        File.WriteAllText(settingsPath, """{ "showOrbs": false, "showUsageOrbs": true }""");
+        PointSettingsAt(dir);
+        Assert.True(ClaudeBuddySettings.ShowUsageOrbs);
+        Assert.Equal(true, ClaudeBuddySettings.ShowUsageOrbsStored);
+
+        ClaudeBuddySettings.ShowUsageOrbsStored = null;
+        PointSettingsAt(dir);
+        Assert.False(ClaudeBuddySettings.ShowUsageOrbs);
+    }
+
+    // Every override survives a relaunch followed by a save that touches
     // neither, each is written exactly once, and a key this build has never
     // heard of rides along untouched beside them.
     //
@@ -784,7 +859,7 @@ public class SettingsRoundTripTests
         var dir = NewSettingsDir();
         var settingsPath = Path.Combine(dir, "settings.json");
         File.WriteAllText(settingsPath,
-            """{ "toggleOrbsHotkey": "Ctrl+Shift+H", "newChatHotkey": "Ctrl+Shift+N", "someFutureSetting": 7 }""");
+            """{ "toggleOrbsHotkey": "Ctrl+Shift+H", "newChatHotkey": "Ctrl+Shift+N", "toggleUsageOrbsHotkey": "Ctrl+Shift+U", "showUsageOrbs": false, "someFutureSetting": 7 }""");
 
         PointSettingsAt(dir);
         ClaudeBuddySettings.TwoLetterGlyphs = true;   // any Save at all
@@ -794,8 +869,10 @@ public class SettingsRoundTripTests
         var root = JsonNode.Parse(text) as JsonObject;
         Assert.Equal("Ctrl+Shift+H", root!["toggleOrbsHotkey"]!.GetValue<string>());
         Assert.Equal("Ctrl+Shift+N", root["newChatHotkey"]!.GetValue<string>());
+        Assert.Equal("Ctrl+Shift+U", root["toggleUsageOrbsHotkey"]!.GetValue<string>());
+        Assert.False(root["showUsageOrbs"]!.GetValue<bool>());
         Assert.Equal(7, root["someFutureSetting"]!.GetValue<int>());
-        foreach (var key in new[] { "toggleOrbsHotkey", "newChatHotkey" })
+        foreach (var key in new[] { "toggleOrbsHotkey", "newChatHotkey", "toggleUsageOrbsHotkey", "showUsageOrbs" })
         {
             Assert.Equal(1, text.Split($"\"{key}\"").Length - 1);
         }
@@ -806,5 +883,7 @@ public class SettingsRoundTripTests
         PointSettingsAt(dir);
         Assert.Equal("Ctrl+Shift+H", ClaudeBuddySettings.ToggleOrbsHotkey);
         Assert.Equal("Ctrl+Shift+N", ClaudeBuddySettings.NewChatHotkey);
+        Assert.Equal("Ctrl+Shift+U", ClaudeBuddySettings.ToggleUsageOrbsHotkey);
+        Assert.False(ClaudeBuddySettings.ShowUsageOrbs);
     }
 }

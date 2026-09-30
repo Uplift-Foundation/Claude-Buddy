@@ -74,7 +74,7 @@ namespace ClaudeBuddy
         // being written properly, which JsonObject rejects as a duplicate.
         private static readonly HashSet<string> KnownKeys = new(StringComparer.Ordinal)
         {
-            "version", "showOrbs", "tintActiveWindow", "orbLifetimeMinutes",
+            "version", "showOrbs", "showUsageOrbs", "tintActiveWindow", "orbLifetimeMinutes",
             "voiceInputEnabled", "twoLetterGlyphs", "accountUsageEnabled",
             "arrangeShape", "arrangeSpacing",
             "speakVoice", "neuralVoiceEnabled", "neuralVoice",
@@ -106,11 +106,11 @@ namespace ClaudeBuddy
             "remoteControlIdleMinutes", "remoteControlServeOnLaunch",
             "peerLinkEnabled", "peerLinkPort",
             "newChatRecentFolders", "newChatLastCli", "newChatLastProfile",
-            // Both hotkey overrides. toggleOrbsHotkey was missing from this
+            // Every hotkey override. toggleOrbsHotkey was missing from this
             // list from CB-155 until the new-chat hotkey was added beside it;
             // Save's ContainsKey guard kept that from throwing, but it meant
             // the value was carried in _unknownKeys as well as the model.
-            "toggleOrbsHotkey", "newChatHotkey"
+            "toggleOrbsHotkey", "newChatHotkey", "toggleUsageOrbsHotkey"
         };
 
         // JsonNode.ToJsonString(options) needs a TypeInfoResolver on the
@@ -227,6 +227,15 @@ namespace ClaudeBuddy
         private sealed class Model
         {
             public bool ShowOrbs { get; set; } = true;
+
+            // Whether the account (usage) orbs are shown, apart from the
+            // session orbs (CB-220). Null until someone has set it, and null
+            // means "whatever ShowOrbs says": a user upgrading with every orb
+            // hidden must not have the usage orbs reappear just because they
+            // grew a switch of their own. Written back as null, not as a copy,
+            // so that stays true until one of the two switches is flipped.
+            public bool? ShowUsageOrbs { get; set; }
+
             public bool TintActiveWindow { get; set; } = true;
 
             // On by default, because with more than one profile the alternative
@@ -455,6 +464,10 @@ namespace ClaudeBuddy
             // set it, because the toggle's override has no settings-window
             // control either.
             public string? NewChatHotkey { get; set; }
+
+            // Overrides HotkeyRegistry.Default(ToggleUsageOrbsVisible), on the
+            // same terms again: null or unparseable means Ctrl+Alt+U.
+            public string? ToggleUsageOrbsHotkey { get; set; }
 
             // Which port to listen on. Zero means "let the operating system
             // choose", which is the sensible default because discovery
@@ -748,6 +761,23 @@ namespace ClaudeBuddy
         {
             get { Load(); lock (Gate) return _model.ShowOrbs; }
             set { Load(); lock (Gate) _model.ShowOrbs = value; Save(); }
+        }
+
+        // The effective answer — the stored flag, or ShowOrbs while nobody has
+        // set one. See Model.ShowUsageOrbs for why it inherits.
+        public static bool ShowUsageOrbs
+        {
+            get { Load(); lock (Gate) return _model.ShowUsageOrbs ?? _model.ShowOrbs; }
+            set { Load(); lock (Gate) _model.ShowUsageOrbs = value; Save(); }
+        }
+
+        // The stored flag itself, null included. Only tests need it: saving
+        // and restoring ShowUsageOrbs through the getter above would turn an
+        // inherited value into an explicit one and leak it into the next test.
+        internal static bool? ShowUsageOrbsStored
+        {
+            get { Load(); lock (Gate) return _model.ShowUsageOrbs; }
+            set { Load(); lock (Gate) _model.ShowUsageOrbs = value; Save(); }
         }
 
         public static bool TintActiveWindow
@@ -1217,6 +1247,12 @@ namespace ClaudeBuddy
         {
             get { Load(); lock (Gate) return _model.NewChatHotkey; }
             set { Load(); lock (Gate) _model.NewChatHotkey = value; Save(); }
+        }
+
+        public static string? ToggleUsageOrbsHotkey
+        {
+            get { Load(); lock (Gate) return _model.ToggleUsageOrbsHotkey; }
+            set { Load(); lock (Gate) _model.ToggleUsageOrbsHotkey = value; Save(); }
         }
 
         // The port to listen on, with 0 meaning "the one everybody expects".
@@ -1817,6 +1853,7 @@ namespace ClaudeBuddy
                     var model = new Model
                     {
                         ShowOrbs = root["showOrbs"]?.GetValue<bool>() ?? true,
+                        ShowUsageOrbs = root["showUsageOrbs"]?.GetValue<bool>(),
                         TintActiveWindow = root["tintActiveWindow"]?.GetValue<bool>() ?? true,
                         RouteClaudeUrls = root["routeClaudeUrls"]?.GetValue<bool>() ?? true,
                         PreviousClaudeUrlHandler = Text(root["previousClaudeUrlHandler"]) ?? "",
@@ -1848,6 +1885,7 @@ namespace ClaudeBuddy
                         PeerLinkPort = root["peerLinkPort"]?.GetValue<int>() ?? 0,
                         ToggleOrbsHotkey = Text(root["toggleOrbsHotkey"]),
                         NewChatHotkey = Text(root["newChatHotkey"]),
+                        ToggleUsageOrbsHotkey = Text(root["toggleUsageOrbsHotkey"]),
                         ClaudeCodeChatEnabled = root["claudeCodeChatEnabled"]?.GetValue<bool>() ?? true,
                         ClaudeCodeReplyEnabled = root["claudeCodeReplyEnabled"]?.GetValue<bool>() ?? false,
                         CodexChatEnabled = root["codexChatEnabled"]?.GetValue<bool>() ?? true,
@@ -2378,6 +2416,7 @@ namespace ClaudeBuddy
                     {
                         ["version"] = CurrentVersion,
                         ["showOrbs"] = _model.ShowOrbs,
+                        ["showUsageOrbs"] = _model.ShowUsageOrbs,
                         ["tintActiveWindow"] = _model.TintActiveWindow,
                         ["routeClaudeUrls"] = _model.RouteClaudeUrls,
                         ["previousClaudeUrlHandler"] = _model.PreviousClaudeUrlHandler,
@@ -2409,6 +2448,7 @@ namespace ClaudeBuddy
                         ["peerLinkPort"] = _model.PeerLinkPort,
                         ["toggleOrbsHotkey"] = _model.ToggleOrbsHotkey,
                         ["newChatHotkey"] = _model.NewChatHotkey,
+                        ["toggleUsageOrbsHotkey"] = _model.ToggleUsageOrbsHotkey,
                         // Null when never chosen rather than a copy of the
                         // current default, the same as speakVoice below — so
                         // changing which profile ships as the default still
