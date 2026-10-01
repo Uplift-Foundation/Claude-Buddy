@@ -161,30 +161,50 @@ public class AudioVolumeTests
     // --- the Windows SAPI script --------------------------------------------
 
     [Fact]
-    public void TheSapiScriptIsUnchangedAtFullVolume()
+    public void TheSapiScriptReadsTextAndVoiceFromTheEnvironmentAtFullVolume()
     {
-        var script = WindowsSpeakScript("Hello", "Microsoft Zira Desktop", 1.0);
+        var script = WindowsSpeakScript(1.0);
 
         Assert.DoesNotContain("Volume", script);
         Assert.Equal(
             "Add-Type -AssemblyName System.Speech; " +
             "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; " +
-            "try { $s.SelectVoice('Microsoft Zira Desktop') } catch { }; " +
-            "$s.Speak('Hello')",
+            "try { $s.SelectVoice($env:CLAUDEBUDDY_SPEAK_VOICE) } catch { }; " +
+            "$s.Speak($env:CLAUDEBUDDY_SPEAK_TEXT)",
             script);
     }
 
     [Fact]
     public void TheSapiScriptSetsVolumeBeforeSpeaking()
     {
-        var script = WindowsSpeakScript("it's", "O'Brien", 0.4);
+        var script = WindowsSpeakScript(0.4);
 
         Assert.Contains("$s.Volume = 40; ", script);
         Assert.True(script.IndexOf("$s.Volume", StringComparison.Ordinal)
                     < script.IndexOf("$s.Speak", StringComparison.Ordinal));
-        // The escaping it sits beside still doubles apostrophes.
-        Assert.Contains("$s.Speak('it''s')", script);
-        Assert.Contains("SelectVoice('O''Brien')", script);
+    }
+
+    // CB-184: whatever the text or voice contains, it travels in the
+    // environment and never appears in the script.
+    public static IEnumerable<object[]> HostileValues() => new[]
+    {
+        "plain", "it's", "O'Brien", "x’); Write-Output INJECTED; (’",
+        "‘a’ ‚b‛", "$(Write-Output INJECTED)", "`n `` `\"", "line1\r\nline2", "",
+    }.Select(v => new object[] { v });
+
+    [Theory]
+    [MemberData(nameof(HostileValues))]
+    public void TheSapiLaunchCarriesTextAndVoiceInTheEnvironmentOnly(string value)
+    {
+        var startInfo = SystemSpeechStartInfo("T:" + value, "V:" + value,
+            System.Runtime.InteropServices.OSPlatform.Windows, 0.4)!;
+
+        var script = startInfo.ArgumentList[2];
+        Assert.Equal(WindowsSpeakScript(0.4), script);
+        Assert.DoesNotContain("T:", script);
+        Assert.DoesNotContain("V:", script);
+        Assert.Equal("T:" + value, startInfo.EnvironmentVariables[SpeakTextEnvVar]);
+        Assert.Equal("V:" + value, startInfo.EnvironmentVariables[SpeakVoiceEnvVar]);
     }
 
     // --- ScaleWav -----------------------------------------------------------
