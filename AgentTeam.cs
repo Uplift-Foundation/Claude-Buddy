@@ -72,40 +72,92 @@ namespace ClaudeBuddy
         // An empty Lead means "not a team member", which is the answer for
         // almost every session and is cached just as firmly as a real one — the
         // point is to ask the kernel once per session, not once per scan.
-        public static Membership Of(int pid)
-        {
-            if (pid <= 0) return None;
+        public static Membership Of(int pid) =>
+            pid <= 0 ? None : OfAll(new[] { pid }, ReadMany)[pid];
 
+        // The common question, for callers that don't care about the colour.
+        public static string LeadOf(int pid) => Of(pid).Lead;
+
+        // Every pid's answer at once, which is how the scan asks (CB-212).
+        //
+        // At once because of what one answer costs on Windows. Measured on the
+        // Windows PC this was written on, 384 processes: a single
+        // `Win32_Process WHERE ProcessId = N` query took 199 ms median, 356 ms
+        // p95, 480 ms max warm (400 samples), and 257/521/712 ms for a
+        // process's first one, which pays for COM and WMI setup too (20 fresh
+        // processes). The cost is WMI walking the process table, not returning
+        // the row: one query naming ten pids with OR measured the same as one
+        // naming a single pid, 345 ms against 338 ms median over 20 rounds. So
+        // a scan with eight sessions spent two to three seconds of its
+        // background half re-reading them, one after another, each time their
+        // entries aged out — and ScheduleScan skips every tick that lands
+        // while a pass is in flight, so orbs stopped updating for that long
+        // once a minute. Asked together, that is one query.
+        //
+        // pids that are not pids are left out of the answer rather than mapped
+        // to None, for the reason Of never caches them.
+        internal static IReadOnlyDictionary<int, Membership> OfAll(IEnumerable<int> pids) =>
+            OfAll(pids, ReadMany);
+
+        // The same, with the OS read handed over so the cache and batching
+        // rules can be tested without an OS call — and without the WMI one in
+        // particular, which the macOS runner cannot make.
+        internal static IReadOnlyDictionary<int, Membership> OfAll(
+            IEnumerable<int> pids,
+            Func<IReadOnlyList<int>, IReadOnlyDictionary<int, Dictionary<string, string>>> readMany)
+        {
+            var answers = new Dictionary<int, Membership>();
+            var misses = new List<int>();
             var now = Environment.TickCount64;
 
             lock (Gate)
             {
-                if (Cache.TryGetValue(pid, out var cached) && now - cached.Stamp < CacheMs)
+                foreach (var pid in pids)
                 {
-                    return cached.Value;
+                    if (pid <= 0 || answers.ContainsKey(pid) || misses.Contains(pid)) continue;
+
+                    if (Cache.TryGetValue(pid, out var cached) && now - cached.Stamp < CacheMs)
+                    {
+                        answers[pid] = cached.Value;
+                    }
+                    else
+                    {
+                        misses.Add(pid);
+                    }
                 }
             }
 
-            var args = Read(pid);
-            var membership = new Membership(
-                Sanitize(args.GetValueOrDefault(ParentSessionFlag)),
-                Sanitize(args.GetValueOrDefault(ColorFlag)),
-                SanitizeName(args.GetValueOrDefault(NameFlag)));
+            if (misses.Count == 0) return answers;
+
+            // Outside the lock: this is the slow part, and holding the gate
+            // across it would make a second caller wait on a query that is not
+            // about its pids.
+            var read = readMany(misses);
 
             lock (Gate)
             {
-                Cache[pid] = (membership, now);
+                foreach (var pid in misses)
+                {
+                    // A pid the read has nothing for — gone, or not ours to
+                    // query — is "no team known", cached as firmly as any other
+                    // answer, exactly as a per-pid read with no row was.
+                    var membership = read.TryGetValue(pid, out var args) ? MembershipFrom(args) : None;
+                    answers[pid] = membership;
+                    Cache[pid] = (membership, now);
+                }
 
                 // Sessions come and go all day; without this the map grows for
                 // as long as the app runs.
                 if (Cache.Count > 256) Prune(now);
             }
 
-            return membership;
+            return answers;
         }
 
-        // The common question, for callers that don't care about the colour.
-        public static string LeadOf(int pid) => Of(pid).Lead;
+        internal static Membership MembershipFrom(IReadOnlyDictionary<string, string> args) => new(
+            Sanitize(args.GetValueOrDefault(ParentSessionFlag)),
+            Sanitize(args.GetValueOrDefault(ColorFlag)),
+            SanitizeName(args.GetValueOrDefault(NameFlag)));
 
         private static void Prune(long now)
         {
@@ -116,26 +168,65 @@ namespace ClaudeBuddy
         }
 
         // Excluded from coverage: platform dispatch over two OS calls and nothing
-        // else. On macOS this runs `ps` as a real subprocess through
-        // MacOSProcessScan; on Windows it queries WMI for the command line. The
-        // third arm exists only so a platform that is neither returns an empty
-        // map rather than throwing, and it is unreachable from either CI runner
-        // by construction.
+        // else. On macOS this asks the kernel for each pid's arguments through
+        // MacOSProcessScan (sysctl KERN_PROCARGS2, in-process and cheap, so it
+        // stays one call per pid exactly as it was); on Windows it queries WMI
+        // for every pid at once. A platform that is neither gets an empty map
+        // rather than an exception, and that arm is unreachable from either CI
+        // runner by construction.
         //
         // Everything this hands back is decided elsewhere and covered there —
-        // Sanitize below, and the cache above it. What is left here is "which of
-        // the two OS calls do I make", which cannot be asked without making one.
+        // ArgumentsIn, WindowsQueries and Sanitize below, and the cache above.
+        // What is left here is "which OS call do I make", which cannot be asked
+        // without making one.
         [ExcludeFromCodeCoverage]
-        private static Dictionary<string, string> Read(int pid)
+        private static IReadOnlyDictionary<int, Dictionary<string, string>> ReadMany(IReadOnlyList<int> pids)
         {
-            if (OperatingSystem.IsMacOS())
+            if (OperatingSystem.IsWindows()) return WindowsArguments(pids);
+
+            var found = new Dictionary<int, Dictionary<string, string>>();
+            if (!OperatingSystem.IsMacOS()) return found;
+
+            foreach (var pid in pids)
             {
-                return MacOSProcessScan.ArgumentValues(pid, ParentSessionFlag, ColorFlag, NameFlag);
+                found[pid] = MacOSProcessScan.ArgumentValues(pid, ParentSessionFlag, ColorFlag, NameFlag);
             }
 
-            if (OperatingSystem.IsWindows()) return WindowsArguments(pid);
+            return found;
+        }
 
-            return new Dictionary<string, string>(StringComparer.Ordinal);
+        // The flags this class reads, out of one Windows command line. Windows
+        // hands a process's arguments back as the single string it was started
+        // with, so they are found by pattern rather than by position: the flag,
+        // a space or `=`, and the value, quoted or not.
+        internal static Dictionary<string, string> ArgumentsIn(string? command)
+        {
+            var found = new Dictionary<string, string>(StringComparer.Ordinal);
+            if (string.IsNullOrEmpty(command)) return found;
+
+            foreach (var flag in new[] { ParentSessionFlag, ColorFlag, NameFlag })
+            {
+                var match = Regex.Match(command, Regex.Escape(flag) + @"[= ]""?([^""\s]+)");
+                if (match.Success) found[flag] = match.Groups[1].Value;
+            }
+
+            return found;
+        }
+
+        // The WQL that asks for these pids' command lines, a bounded number of
+        // pids per query. Bounded because a query's text has a length limit and
+        // a machine with a few hundred sessions should not find it; 32 is far
+        // above any real team and far below that limit. The pids are ints, so
+        // nothing a process controls is spliced into the text.
+        internal const int PidsPerQuery = 32;
+
+        internal static IEnumerable<string> WindowsQueries(IReadOnlyList<int> pids)
+        {
+            for (var i = 0; i < pids.Count; i += PidsPerQuery)
+            {
+                yield return "SELECT ProcessId, CommandLine FROM Win32_Process WHERE "
+                    + string.Join(" OR ", pids.Skip(i).Take(PidsPerQuery).Select(pid => $"ProcessId = {pid}"));
+            }
         }
 
         // A session id or a colour name and nothing else. Neither is spliced
@@ -172,37 +263,38 @@ namespace ClaudeBuddy
         }
 
         // Excluded from coverage: a WMI query. System.Management reaches COM to
-        // ask Win32_Process for another process's command line, which has no
-        // equivalent on the macOS runner and no seam on the Windows one.
+        // ask Win32_Process for other processes' command lines, which has no
+        // equivalent on the macOS runner and no seam on the Windows one. The
+        // query text and the parsing are WindowsQueries and ArgumentsIn, both
+        // covered; this is the round trip between them.
+        //
+        // Since CB-212 this is only ever reached from the scan's background
+        // half (and from Of, which nothing on the scan's UI half calls), so it
+        // can be as slow as WMI is without anybody waiting on it.
         [ExcludeFromCodeCoverage]
         [SupportedOSPlatform("windows")]
-        private static Dictionary<string, string> WindowsArguments(int pid)
+        private static Dictionary<int, Dictionary<string, string>> WindowsArguments(IReadOnlyList<int> pids)
         {
-            var found = new Dictionary<string, string>(StringComparer.Ordinal);
+            var found = new Dictionary<int, Dictionary<string, string>>();
 
-            try
+            foreach (var query in WindowsQueries(pids))
             {
-                using var searcher = new System.Management.ManagementObjectSearcher(
-                    $"SELECT CommandLine FROM Win32_Process WHERE ProcessId = {pid}");
-
-                foreach (var row in searcher.Get())
+                try
                 {
-                    using var process = (System.Management.ManagementObject)row;
-                    var command = process["CommandLine"] as string;
-                    if (string.IsNullOrEmpty(command)) continue;
+                    using var searcher = new System.Management.ManagementObjectSearcher(query);
 
-                    foreach (var flag in new[] { ParentSessionFlag, ColorFlag, NameFlag })
+                    foreach (var row in searcher.Get())
                     {
-                        var match = Regex.Match(command,
-                            Regex.Escape(flag) + @"[= ]""?([^""\s]+)");
-                        if (match.Success) found[flag] = match.Groups[1].Value;
+                        using var process = (System.Management.ManagementObject)row;
+                        var pid = Convert.ToInt32(process["ProcessId"]);
+                        found[pid] = ArgumentsIn(process["CommandLine"] as string);
                     }
                 }
-            }
-            catch
-            {
-                // No WMI, or a process this app can't query. Both mean "no team
-                // known", which is the same as not being in one.
+                catch
+                {
+                    // No WMI, or processes this app can't query. Both mean "no
+                    // team known", which is the same as not being in one.
+                }
             }
 
             return found;

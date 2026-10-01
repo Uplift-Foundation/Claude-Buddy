@@ -394,7 +394,8 @@ namespace ClaudeBuddy
             Func<int, SessionDependents.Verdict>? dependents = null,
             bool? onWindows = null,
             Func<IReadOnlyList<SessionStatus>, IReadOnlyDictionary<TmuxPaneKey, string?>>? paneOwners = null,
-            Func<string, AgentViewer?>? agentViewer = null)
+            Func<string, AgentViewer?>? agentViewer = null,
+            Func<IReadOnlyList<int>, IReadOnlyDictionary<int, AgentTeam.Membership>>? teams = null)
         {
             _statusDir = statusDir;
             _jobListing = jobListing ?? BackgroundJobs.SnapshotForScan;
@@ -416,6 +417,7 @@ namespace ClaudeBuddy
             _onWindows = onWindows ?? OperatingSystem.IsWindows();
             _paneOwners = paneOwners ?? TerminalFocuser.TmuxPaneOwners;
             _agentViewer = agentViewer ?? AgentTeamViewer.For;
+            _teams = teams ?? AgentTeam.OfAll;
 
             // AccountOrbs starts out visible, and nothing used to tell it
             // otherwise until a switch was flipped — so launching with every
@@ -432,6 +434,12 @@ namespace ClaudeBuddy
         private readonly Func<IReadOnlyList<SessionStatus>, IReadOnlyDictionary<TmuxPaneKey, string?>> _paneOwners;
         private readonly Func<string, AgentViewer?> _agentViewer;
 
+        // Which agent team each pid is in, read off its command line — a WMI
+        // query on Windows (CB-212). A seam for the same reason as the two
+        // above, and so the scan suites can prove it is asked on the background
+        // half only: the UI half reads the answer out of ScanProbes.TeamOf.
+        private readonly Func<IReadOnlyList<int>, IReadOnlyDictionary<int, AgentTeam.Membership>> _teams;
+
         // Every subprocess question this pass needs, asked. Runs on
         // ScheduleScan's background thread in production, and inline for
         // ScanAndUpdate's callers; ScanProbePlan has the argument for why its
@@ -444,9 +452,13 @@ namespace ClaudeBuddy
         {
             BackgroundJobs.NoteLiveTranscripts(ClaudeTranscripts(found));
 
+            // CB-212: every pid's team first, in one read, because the plan's
+            // gates need the leads and the UI half needs the rest.
+            var teams = _teams(ScanProbePlan.TeamPids(found));
+
             return ScanProbes.Gather(
-                ScanProbePlan.For(found, AgentTeam.LeadOf),
-                _paneOwners, _jobListing, _attachClients, _agentViewer);
+                ScanProbePlan.For(found, pid => teams.TryGetValue(pid, out var m) ? m.Lead : ""),
+                teams, _paneOwners, _jobListing, _attachClients, _agentViewer);
         }
 
         internal static IEnumerable<string?> ClaudeTranscripts(IEnumerable<ScanEntry> found) =>
@@ -2390,7 +2402,9 @@ namespace ClaudeBuddy
 
                 presentIds.Add(entry.SessionId);
 
-                var agentLead = AgentTeam.LeadOf(entry.Status.SessionPid);
+                // From the background half's read, never AgentTeam itself: on
+                // Windows that is a WMI query (CB-212, see ScanProbes.TeamOf).
+                var agentLead = probes.LeadOf(entry.Status.SessionPid);
                 if (!string.IsNullOrEmpty(agentLead) && agentLead != entry.SessionId)
                 {
                     leadsWithLiveAgents.Add(agentLead);
@@ -2525,11 +2539,11 @@ namespace ClaudeBuddy
                 seen.Add(sessionId);
 
                 // Whether this session is an agent-team member, and whose. Read
-                // from its process rather than its status file — see AgentTeam.
-                // Asked after the liveness rules above so a dead session never
-                // costs a lookup.
+                // from its process rather than its status file — see AgentTeam
+                // — by the background half, which asked about every pid in the
+                // pass in one read (CB-212). This only looks the answer up.
                 var membership = status.Source == SessionSource.ClaudeCode
-                    ? AgentTeam.Of(status.SessionPid)
+                    ? probes.TeamOf(status.SessionPid)
                     : AgentTeam.None;
 
                 // Guarded, where it used to run for everything. A gateway

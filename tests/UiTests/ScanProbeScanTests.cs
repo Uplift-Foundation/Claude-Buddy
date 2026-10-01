@@ -61,7 +61,8 @@ public class ScanProbeScanTests
         Func<IReadOnlyList<SessionStatus>, IReadOnlyDictionary<TmuxPaneKey, string?>> paneOwners,
         Func<Dictionary<string, string>?>? jobListing = null,
         Func<HashSet<string>?>? attachClients = null,
-        Func<string, AgentViewer?>? agentViewer = null)
+        Func<string, AgentViewer?>? agentViewer = null,
+        Func<IReadOnlyList<int>, IReadOnlyDictionary<int, AgentTeam.Membership>>? teams = null)
     {
         ClaudeBuddySettings.ClaudeCodeEnabled = true;
         ClaudeBuddySettings.CodexEnabled = true;
@@ -72,7 +73,8 @@ public class ScanProbeScanTests
             attachClients ?? (() => new HashSet<string>(StringComparer.Ordinal)),
             dependents: _ => SessionDependents.Nothing,
             paneOwners: paneOwners,
-            agentViewer: agentViewer ?? (_ => null));
+            agentViewer: agentViewer ?? (_ => null),
+            teams: teams ?? (pids => pids.ToDictionary(p => p, _ => AgentTeam.None)));
     }
 
     private static IReadOnlyDictionary<TmuxPaneKey, string?> Owners(
@@ -101,12 +103,13 @@ public class ScanProbeScanTests
             paneOwners: claims => { Record("panes"); return Owners(claims, null); },
             jobListing: () => { Record("daemon"); return new Dictionary<string, string>(); },
             attachClients: () => { Record("attached"); return new HashSet<string>(); },
-            agentViewer: _ => { Record("viewer"); return null; });
+            agentViewer: _ => { Record("viewer"); return null; },
+            teams: pids => { Record("teams"); return new Dictionary<int, AgentTeam.Membership>(); });
 
         Assert.True(Dispatcher.UIThread.CheckAccess());
         await manager.ScheduleScan();
 
-        Assert.Equal(new[] { "attached", "daemon", "panes", "viewer" },
+        Assert.Equal(new[] { "attached", "daemon", "panes", "teams", "viewer" },
             asked.Select(a => a.Question).OrderBy(q => q, StringComparer.Ordinal));
         Assert.All(asked, a => Assert.False(a.OnUIThread, a.Question + " was asked on the UI thread"));
 
@@ -218,6 +221,135 @@ public class ScanProbeScanTests
         Assert.Equal("/tmp/viewer", status.TmuxSocket);
         Assert.Equal("ttys009", status.Tty);
         Assert.Equal("", status.TmuxBin);
+    }
+
+    // --- agent-team membership (CB-212) ----------------------------------------
+    //
+    // AgentTeam reads a process's command line, which on Windows is a WMI query
+    // measured at about 200 ms warm and up to 700 ms cold. CB-210 had the
+    // background half ask it first, so the UI half's own AgentTeam.Of was
+    // nearly always a cache hit — nearly, because an entry that aged out between
+    // the two halves was re-read on the UI thread. These pin that the UI half
+    // now reads only what the background half gathered.
+
+    private static readonly AgentTeam.Membership Member = new("lead-id", "blue", "MenuUX");
+
+    [AvaloniaFact]
+    public async Task TheUIHalfDrawsTheTeamTheBackgroundHalfRead()
+    {
+        // The membership handed over is one this test process cannot carry on
+        // its own command line, so it reaching the status proves where it came
+        // from. Negative control: put AgentTeam.Of back in the membership block
+        // and this reads "" — this process is in no team.
+        using var scratch = new Scratch();
+        scratch.Write("member", LivePid, termProgram: "iTerm.app");
+
+        var asked = new List<(IReadOnlyList<int> Pids, bool OnUIThread)>();
+        var manager = Manager(
+            scratch,
+            paneOwners: claims => Owners(claims, null),
+            teams: pids =>
+            {
+                lock (asked) asked.Add((pids, Dispatcher.UIThread.CheckAccess()));
+                return pids.ToDictionary(p => p, _ => Member);
+            });
+
+        await manager.ScheduleScan();
+
+        var (pids, onUIThread) = Assert.Single(asked);
+        Assert.Equal(new[] { LivePid }, pids);
+        Assert.False(onUIThread, "team membership was read on the UI thread");
+
+        var status = manager.StatusFor("member");
+        Assert.NotNull(status);
+        Assert.Equal("lead-id", status!.Lead);
+        Assert.Equal("MenuUX", status.Agent);
+    }
+
+    [AvaloniaFact]
+    public void ALeadIsKeptForALiveAgentTheBackgroundHalfFound()
+    {
+        // The other place the UI half asks: a lead naming no terminal is kept
+        // because a live member names it. A Codex entry and a Claude Code one
+        // share this process's pid without superseding each other, the trick
+        // SessionScanTests uses, so the one answer serves both: the member's
+        // "my lead is lead-id", and the lead's "that is me". Negative control:
+        // put AgentTeam.LeadOf back in the live-agent pass and the lead is
+        // dropped for having no terminal.
+        using var scratch = new Scratch();
+        File.WriteAllText(Path.Combine(scratch.Dir, "codex-member.txt"),
+            System.Text.Json.JsonSerializer.Serialize(new SessionStatus
+            {
+                State = "idle", Cli = "codex", SessionPid = LivePid,
+                TermProgram = "iTerm.app", Tty = "/dev/ttys004", Cwd = "/Users/user/project",
+            }));
+        File.WriteAllText(Path.Combine(scratch.Dir, "lead-id.txt"),
+            System.Text.Json.JsonSerializer.Serialize(new SessionStatus
+            {
+                State = "idle", SessionPid = LivePid,
+            }));
+
+        var manager = Manager(
+            scratch,
+            paneOwners: claims => Owners(claims, null),
+            teams: pids => pids.ToDictionary(p => p, _ => Member));
+        manager.ScanAndUpdate();
+
+        Assert.NotNull(manager.StatusFor("codex-member"));
+        Assert.NotNull(manager.StatusFor("lead-id"));
+    }
+
+    [AvaloniaFact]
+    public async Task AnAnswerThatAgesOutBetweenTheTwoHalvesIsNotReadAgainOnTheUIThread()
+    {
+        // The race itself, through the real AgentTeam and its real cache. An
+        // invented membership is seeded for this process's pid, fresh, so the
+        // background half answers from it; then, still on the background thread
+        // and after the team read, the pane question ages that entry past the
+        // minute. Before CB-212 the UI half asked AgentTeam.Of again, found the
+        // entry expired, and re-read this process for real on the UI thread —
+        // reproduced on the Windows PC as one 332 ms WMI query, and here it
+        // would read "", since this process is in no team. Now the UI half reads
+        // what the background half gathered, so the seeded lead is what it sees.
+        //
+        // Deterministic: the ageing is done by the scan's own background step,
+        // not by a clock, so there is nothing to race.
+        var cache = (Dictionary<int, (AgentTeam.Membership Value, long Stamp)>)typeof(AgentTeam)
+            .GetField("Cache", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!
+            .GetValue(null)!;
+
+        lock (cache) cache.Clear();
+        try
+        {
+            lock (cache) cache[LivePid] = (Member, Environment.TickCount64);
+
+            using var scratch = new Scratch();
+            scratch.Write("member", LivePid, termProgram: "iTerm.app", tmuxPane: "%1");
+
+            var aged = false;
+            ClaudeBuddySettings.ClaudeCodeEnabled = true;
+            var manager = new SessionManager(
+                scratch.Dir,
+                () => new Dictionary<string, string>(StringComparer.Ordinal),
+                () => new HashSet<string>(StringComparer.Ordinal),
+                dependents: _ => SessionDependents.Nothing,
+                paneOwners: claims =>
+                {
+                    lock (cache) cache[LivePid] = (Member, Environment.TickCount64 - 61_000);
+                    aged = true;
+                    return Owners(claims, null);
+                },
+                agentViewer: _ => null);
+
+            await manager.ScheduleScan();
+
+            Assert.True(aged, "the pane question never ran, so nothing was aged");
+            Assert.Equal("lead-id", manager.StatusFor("member")!.Lead);
+        }
+        finally
+        {
+            lock (cache) cache.Clear();
+        }
     }
 
     [AvaloniaFact]
