@@ -7,7 +7,7 @@ The Windows twin of tools/install-codex-hooks.sh, and the sibling of
 install-windows-hooks.ps1, which does this job for Claude Code.
 
 Three things differ from the Claude Code installer, all of them measured on
-macOS against a real Codex — see docs/codex-findings.md:
+macOS against a real Codex -- see docs/codex-findings.md:
 
  1. The target is its own file. $CODEX_HOME\hooks.json is discovered
     automatically; nothing needs adding to config.toml.
@@ -125,8 +125,8 @@ $wanted = @(
 )
 
 # Strip our own entries wherever they appear. Matched on the filename rather
-# than the full path, so a config written by an older version — or carried over
-# by the /import command in Codex, which points at a .claude path — is still
+# than the full path, so a config written by an older version -- or carried over
+# by the /import command in Codex, which points at a .claude path -- is still
 # recognised as ours and replaced instead of left to fire twice.
 #
 # $event is an automatic variable in PowerShell; using it as a loop variable
@@ -153,7 +153,7 @@ if (-not $Uninstall) {
     # TEMP is baked in at wiring time for the reason ClaudeBuddyHook.ps1's own
     # comment gives: a hook invoked through an interop shell cannot be trusted
     # to have TEMP set, and without it the script writes its status file
-    # somewhere the app never looks — with no visible error.
+    # somewhere the app never looks -- with no visible error.
     $temp = [System.IO.Path]::GetTempPath()
 
     foreach ($entry in $wanted) {

@@ -14,7 +14,7 @@ param(
     [string]$Agent = 'claude',
 
     # Baked in as a literal by install-windows-hooks.ps1 at wiring time,
-    # computed there in a normal, full environment — not re-derived here,
+    # computed there in a normal, full environment -- not re-derived here,
     # where a WSL-interop-launched invocation's environment can't be trusted
     # to have TEMP/TMP set at all (already known to omit PATH; found to omit
     # TEMP too on a real machine, which silently pointed this script at an
@@ -60,7 +60,7 @@ if ($env:GROK_SESSION_ID -or $env:GROK_HOOK_EVENT) {
 # written last; a session with neither falls back to the directory name.
 #
 # WSL sessions land here with a Linux transcript path this script can't read,
-# so they keep the folder-name fallback — see the platform notes in README.
+# so they keep the folder-name fallback -- see the platform notes in README.
 $title = ''
 $color = ''
 if ($Agent -eq 'claude' -and $State -ne 'ended' -and $transcript -and (Test-Path $transcript)) {
@@ -70,7 +70,7 @@ if ($Agent -eq 'claude' -and $State -ne 'ended' -and $transcript -and (Test-Path
         # output has pushed all three records out of that window.
         # -Encoding UTF8 is load-bearing on Windows PowerShell 5.1, which
         # otherwise reads these UTF-8 transcripts as the ANSI codepage and
-        # turns a name like "café" into "cafÃ©". PowerShell 7 already defaults
+        # turns an accented letter (an e-acute, say) into two garbage characters. PowerShell 7 already defaults
         # to UTF-8; being explicit is correct on both.
         $pattern = '^\{"type":"(custom-title|ai-title|agent-color)"'
         $meta = Get-Content -Path $transcript -Tail 400 -Encoding UTF8 |
@@ -114,13 +114,13 @@ if ($State -eq 'ended') {
 # to it. Windows Terminal advertises itself via WT_SESSION (which flows
 # through WSL too, via WSLENV); VS Code's integrated terminal sets
 # TERM_PROGRAM. For native sessions, walk up the parent process chain to
-# the first process that owns a top-level window — that's the terminal
+# the first process that owns a top-level window -- that's the terminal
 # (WindowsTerminal.exe, Code.exe, the conhost shell, ...). The walk finds
 # nothing for WSL sessions (the Windows-side parent is an interop bridge,
 # not the terminal), which is what the term_program fallback is for.
 #
 # term_id is "the handle this terminal understands", and on Windows only
-# WezTerm has one — the console route needs nothing but the session's own pid,
+# WezTerm has one -- the console route needs nothing but the session's own pid,
 # which is why Windows Terminal, conhost and VS Code all work without a line
 # here. WEZTERM_PANE is recorded because `wezterm cli send-text --pane-id`
 # reaches the exact pane, where the console route reaches the exact process:
@@ -143,7 +143,7 @@ if ($env:WEZTERM_PANE) {
 # nothing displays one either, so a derived colour disagrees with nothing.
 #
 # Keyed on the working directory so a project keeps one colour across sessions
-# and across both CLIs. Windows has no cksum, so the hash is computed here — the
+# and across both CLIs. Windows has no cksum, so the hash is computed here -- the
 # same arithmetic, over the same bytes, giving the same answer as the bash side.
 # The marker the app writes beside the status files, for the reason the bash
 # twin gives: a flag in the hook command would rewrite Codex's hooks.json and
@@ -189,7 +189,7 @@ if ($autoColor -and -not $color -and $cwd) {
         }
         elseif ($Agent -eq 'codex' -or $Agent -eq 'grok') {
             # Codex and Grok have no per-session colour to write. Derive into
-            # the status file only — never append a Claude Code agent-color
+            # the status file only -- never append a Claude Code agent-color
             # record into their transcripts.
             $color = $picked
         }
@@ -202,11 +202,11 @@ $termPid = 0
 # SessionEnd). See SessionManager.SessionGone.
 #
 # Found by walking up for the first ancestor belonging to the CLI this hook
-# speaks for, NOT by taking this script's immediate parent — which is what
+# speaks for, NOT by taking this script's immediate parent -- which is what
 # this did, on the assumption that "Claude Code spawns the hook directly".
 # It does not, on Windows: the hook command runs through a short-lived shell,
 # so the immediate parent is that shell, and it exits the moment the hook
-# does. Measured on a real machine — successive hook writes for one live
+# does. Measured on a real machine -- successive hook writes for one live
 # session recorded 54076, then 83076, both already dead, while the session's
 # actual claude.exe sat at 36804 the whole time. The app reads a dead
 # session_pid as "Ctrl+C'd without a SessionEnd" and suppresses the orb, so
@@ -246,7 +246,7 @@ try {
         # where the session is node running the CLI rather than a claude.exe.
         # `claude.exe*` rather than an exact match: Claude Code self-updates by
         # renaming the running binary aside, leaving names like
-        # claude.exe.old.1786153043553 on disk. Observed on this machine — CIM's
+        # claude.exe.old.1786153043553 on disk. Observed on this machine -- CIM's
         # Name still reported the stable "claude.exe" for the live process while
         # Get-Process reported the renamed image, so an exact match happens to
         # work today, but which API reports which name is not worth depending on
@@ -256,13 +256,13 @@ try {
         # for, not claude unconditionally. Hard-coding claude here made every
         # Codex orb on Windows impossible: the walk found no claude ancestor,
         # left session_pid at 0, and SessionManager drops a Codex file naming
-        # no process on sight — deliberately, because for Codex that means a
+        # no process on sight -- deliberately, because for Codex that means a
         # session that ended without clearing up. Two rules each right on their
         # own, combining into a session that could never be shown. Observed on
         # a real chain: powershell -> pwsh -> codex.exe -> node.exe -> sh.exe.
         #
         # The node.exe arm matches on $Agent for the same reason it exists at
-        # all — an npm-style install puts the CLI's name on node's command line
+        # all -- an npm-style install puts the CLI's name on node's command line
         # rather than in the image name, and both CLIs ship that way.
         if ($sessionPid -eq 0 -and $cur) {
             $name = "$($cur.Name)"
@@ -291,8 +291,8 @@ try {
 #
 # On macOS the hook reads this out of Codex's own state database, where
 # /rename's name and Codex's generated title both live. Windows has no sqlite
-# client to read it with — Windows 11 ships winsqlite3.dll but no sqlite3.exe,
-# and PowerShell has no built-in provider — so this takes the same first
+# client to read it with -- Windows 11 ships winsqlite3.dll but no sqlite3.exe,
+# and PowerShell has no built-in provider -- so this takes the same first
 # message that Codex builds its own title from, out of the rollout.
 #
 # The practical difference is that /rename does not reach a Windows orb. That
@@ -317,7 +317,7 @@ if ($Agent -eq 'codex' -and $State -ne 'ended') {
 
         if ($transcript -and (Test-Path $transcript)) {
             # A UserMessage is within the first handful of rows, so this reads
-            # the head of the file rather than the file — which matters, since
+            # the head of the file rather than the file -- which matters, since
             # a rollout row carrying command output can reach a megabyte on its
             # own.
             $head = Get-Content -Path $transcript -TotalCount 40 -Encoding UTF8
@@ -387,7 +387,7 @@ $status = @{
 
     # Which CLI wrote this, so the app can tell a Codex session from a Claude
     # Code one. A file from a hook older than this key has none, which reads as
-    # Claude Code — which is what it was.
+    # Claude Code -- which is what it was.
     cli             = $Agent
     cwd             = $cwd
     title           = $title
@@ -401,7 +401,7 @@ $status = @{
 
 # Not Set-Content: on Windows PowerShell 5.1 it writes the ANSI codepage and
 # replaces anything outside it with "?", so a chat name with an em dash or an
-# accent would reach the app corrupted. UTF-8 *without* a BOM specifically —
+# accent would reach the app corrupted. UTF-8 *without* a BOM specifically --
 # System.Text.Json treats a leading BOM as an invalid start of value, which
 # would make the app skip the file and drop the orb entirely.
 [System.IO.File]::WriteAllText($file, $status, (New-Object System.Text.UTF8Encoding($false)))

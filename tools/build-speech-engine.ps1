@@ -29,8 +29,8 @@ $project = Join-Path $PSScriptRoot 'ClaudeBuddySpeech\ClaudeBuddySpeech.csproj'
 Push-Location $repoRoot
 try {
     # Read from the *app's* csproj, not the engine's. ClaudeBuddy.csproj's
-    # <Version> is the single source of truth for the shipped version — the
-    # installer script and the release workflow both parse that same element — and
+    # <Version> is the single source of truth for the shipped version -- the
+    # installer script and the release workflow both parse that same element -- and
     # the engine ships in the app's own release under the same tag. NeuralSpeech
     # derives the version it asks for from the app assembly, so taking it from
     # anywhere else here is how the filename and the URL drift apart.
@@ -56,7 +56,7 @@ try {
     # what ships is what was tested.
     $voicesSource = Join-Path $PSScriptRoot "ClaudeBuddySpeech\bin\Release\net10.0\$Rid\voices"
     if (-not (Test-Path -LiteralPath $voicesSource)) {
-        throw "No voices at $voicesSource — the KokoroSharp copy target did not run"
+        throw "No voices at $voicesSource -- the KokoroSharp copy target did not run"
     }
 
     $voicesTarget = Join-Path $publish 'voices'
