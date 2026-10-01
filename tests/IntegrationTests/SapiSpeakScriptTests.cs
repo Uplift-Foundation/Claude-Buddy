@@ -17,7 +17,8 @@ namespace ClaudeBuddy.Tests;
 // The negative control reproduces the old construction and shows it does
 // run the injected command, which is what makes a clean result for the new
 // one a measurement rather than a hope. A shell that is not installed (no
-// Windows PowerShell on the macOS runner) is skipped by returning.
+// Windows PowerShell on the macOS runner) is reported as Skipped, never as
+// Passed; on Windows both shells must run and a missing one fails.
 public class SapiSpeakScriptTests
 {
     private const string Engine =
@@ -41,7 +42,7 @@ public class SapiSpeakScriptTests
         $"try {{ $s.SelectVoice('{voice.Replace("'", "''")}') }} catch {{ }}; " +
         $"$s.Speak('{text.Replace("'", "''")}')";
 
-    private static (bool Ran, string Out) Run(string exe, string script, string? text, string? voice)
+    private static string Run(string exe, string script, string? text, string? voice)
     {
         var psi = new ProcessStartInfo(exe)
         {
@@ -54,16 +55,14 @@ public class SapiSpeakScriptTests
         if (text is not null) psi.Environment[TextToSpeech.SpeakTextEnvVar] = text;
         if (voice is not null) psi.Environment[TextToSpeech.SpeakVoiceEnvVar] = voice;
 
-        Process? p;
-        try { p = Process.Start(psi); }
-        catch (System.ComponentModel.Win32Exception) { return (false, ""); }
-        if (p is null) return (false, "");
-        using (p)
+        // A shell that was meant to be here but is not throws and fails the
+        // test; the skip attributes below are the only place one is excused.
+        using (var p = Process.Start(psi) ?? throw new InvalidOperationException("could not start " + exe))
         {
             var o = p.StandardOutput.ReadToEnd();
             var e = p.StandardError.ReadToEnd();
             p.WaitForExit();
-            return (true, o + "\n" + e);
+            return o + "\n" + e;
         }
     }
 
@@ -77,24 +76,17 @@ public class SapiSpeakScriptTests
 
     public static IEnumerable<object[]> Cases()
     {
-        foreach (var exe in new[] { "powershell", "pwsh" })
-        {
-            yield return new object[] { exe, "hello", "x’); Write-Output INJECTED; (’" };
-            yield return new object[] { exe, "he said ‘hi’); Write-Output INJECTED; (‛", "O'Brien" };
-            yield return new object[] { exe, "$(Write-Output INJECTED) `n `` \"q\" 'a' é中", "Microsoft Zira Desktop" };
-            yield return new object[] { exe, "line1\nline2", "v" };
-        }
+        yield return new object[] { "hello", "x\u2019); Write-Output INJECTED; (\u2019" };
+        yield return new object[] { "he said \u2018hi\u2019); Write-Output INJECTED; (\u201b", "O'Brien" };
+        yield return new object[] { "$(Write-Output INJECTED) `n `` \"q\" 'a' \u00e9\u4e2d", "Microsoft Zira Desktop" };
+        yield return new object[] { "line1\nline2", "v" };
     }
 
-    [Theory]
-    [MemberData(nameof(Cases))]
-    public void TheGeneratedScriptRoundTripsHostileTextAndVoiceWithoutRunningThem(
-        string exe, string text, string voice)
+    private static void RoundTrips(string exe, string text, string voice)
     {
         // Full volume: the Volume line is a property set on the stub-less
         // real synthesizer and is not what is under test here.
-        var (ran, output) = Run(exe, Stubbed(TextToSpeech.WindowsSpeakScript(1.0)), text, voice);
-        if (!ran) return;
+        var output = Run(exe, Stubbed(TextToSpeech.WindowsSpeakScript(1.0)), text, voice);
 
         // Only the base64 echoes may appear in the output; a command that
         // ran would print the bare word.
@@ -106,14 +98,65 @@ public class SapiSpeakScriptTests
         Assert.Equal(text, Decode(output, "TEXT"));
     }
 
-    [Theory]
-    [InlineData("powershell")]
-    [InlineData("pwsh")]
-    public void NegativeControl_TheOldInterpolationRanTheInjectedCommand(string exe)
-    {
-        var (ran, output) = Run(exe, Old("hi", "x’); Write-Output INJECTED; (’"), null, null);
-        if (!ran) return;
+    private static void OldConstructionInjects(string exe) =>
+        Assert.Contains("INJECTED",
+            Run(exe, Old("hi", "x\u2019); Write-Output INJECTED; (\u2019"), null, null));
 
-        Assert.Contains("INJECTED", output);
+    [WindowsPowerShellTheory]
+    [MemberData(nameof(Cases))]
+    public void Powershell51_RoundTripsHostileTextAndVoiceWithoutRunningThem(string text, string voice) =>
+        RoundTrips("powershell", text, voice);
+
+    [PwshTheory]
+    [MemberData(nameof(Cases))]
+    public void Pwsh_RoundTripsHostileTextAndVoiceWithoutRunningThem(string text, string voice) =>
+        RoundTrips("pwsh", text, voice);
+
+    [WindowsPowerShellFact]
+    public void NegativeControl_Powershell51_TheOldInterpolationRanTheInjectedCommand() =>
+        OldConstructionInjects("powershell");
+
+    [PwshFact]
+    public void NegativeControl_Pwsh_TheOldInterpolationRanTheInjectedCommand() =>
+        OldConstructionInjects("pwsh");
+}
+
+// Windows PowerShell 5.1 ships with Windows and exists nowhere else, so off
+// Windows it is skipped (reported as such, not passed); on Windows it is
+// never skipped, and a missing one fails in Run.
+internal static class Shells
+{
+    internal static string? SkipWindowsPowerShell() =>
+        OperatingSystem.IsWindows() ? null : "Windows PowerShell 5.1 only exists on Windows";
+
+    // pwsh is not guaranteed on a dev machine. Off Windows a missing one is a
+    // skip; on Windows this box is expected to have it and a miss should fail.
+    internal static string? SkipPwsh()
+    {
+        if (OperatingSystem.IsWindows()) return null;
+        var sep = Path.PathSeparator;
+        foreach (var dir in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(sep, StringSplitOptions.RemoveEmptyEntries))
+            if (File.Exists(Path.Combine(dir, "pwsh"))) return null;
+        return "pwsh is not installed";
     }
+}
+
+public sealed class WindowsPowerShellTheoryAttribute : TheoryAttribute
+{
+    public WindowsPowerShellTheoryAttribute() { Skip = Shells.SkipWindowsPowerShell(); }
+}
+
+public sealed class WindowsPowerShellFactAttribute : FactAttribute
+{
+    public WindowsPowerShellFactAttribute() { Skip = Shells.SkipWindowsPowerShell(); }
+}
+
+public sealed class PwshTheoryAttribute : TheoryAttribute
+{
+    public PwshTheoryAttribute() { Skip = Shells.SkipPwsh(); }
+}
+
+public sealed class PwshFactAttribute : FactAttribute
+{
+    public PwshFactAttribute() { Skip = Shells.SkipPwsh(); }
 }
