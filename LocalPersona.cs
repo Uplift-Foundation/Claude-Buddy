@@ -153,8 +153,18 @@ namespace ClaudeBuddy
             string? cwd, IEnumerable<string> userConfigDirs, SessionSource source, string agentName = "") =>
             Candidates(cwd, userConfigDirs, source, agentName).Select(candidate => candidate.Path).ToArray();
 
+        // The walk as the app runs it: the ceiling, if any, comes from the
+        // environment (see WalkCeilingVariable).
         internal static IReadOnlyList<Candidate> Candidates(
-            string? cwd, IEnumerable<string> userConfigDirs, SessionSource source, string agentName = "")
+            string? cwd, IEnumerable<string> userConfigDirs, SessionSource source, string agentName = "") =>
+            CandidatesBelow(cwd, userConfigDirs, source, agentName, WalkCeiling());
+
+        // The same walk with the ceiling given outright, so the rule itself
+        // can be tested without the process-wide variable: null climbs to the
+        // filesystem root.
+        internal static IReadOnlyList<Candidate> CandidatesBelow(
+            string? cwd, IEnumerable<string> userConfigDirs, SessionSource source, string agentName,
+            string? ceiling)
         {
             var files = new List<Candidate>();
             // ClaudeCloud joins these two for the same reason, and the reason is
@@ -193,6 +203,7 @@ namespace ClaudeBuddy
                 Add(Path.Combine(directory, "CLAUDE.local.md"), directory);
                 Add(Path.Combine(directory, ".claude", "CLAUDE.md"), directory);
                 Add(Path.Combine(directory, "AGENTS.md"), directory);
+                if (ceiling is not null && PathsEqual(directory, ceiling)) break;
                 directory = Path.GetDirectoryName(directory);
             }
 
@@ -206,6 +217,26 @@ namespace ClaudeBuddy
 
             return files;
         }
+
+        // Where the walk stops climbing, when something says so: the last
+        // directory it visits, not the first one it skips. Unset in the app,
+        // which wants the whole way up — a persona in ~ is meant to reach a
+        // project below it. Set by the test suites to the temp directory their
+        // scratch projects live in, because on Windows that directory is under
+        // the developer's home, and an unbounded walk from a scratch project
+        // reaches the home CLAUDE.md and every persona it imports: one Windows
+        // machine measured 7 + 33 + 9 failures from it, each a test that
+        // expected "no persona" or its own fixture and was handed the
+        // developer's. macOS never showed it because $TMPDIR is /var/folders,
+        // which no home directory is an ancestor of. A ceiling that the cwd is
+        // not below changes nothing — the walk simply never meets it.
+        internal const string WalkCeilingVariable = "CLAUDE_BUDDY_PERSONA_WALK_CEILING";
+
+        private static string? WalkCeiling() =>
+            FullPathOrNull(Environment.GetEnvironmentVariable(WalkCeilingVariable));
+
+        private static bool PathsEqual(string a, string b) =>
+            string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
 
         private static string? FullPathOrNull(string? path)
         {
