@@ -223,6 +223,65 @@ public class HeadlessSnapshotTests
     // TranscriptHandoffTests, which is where the full fixtures and the reasoning
     // about each field live; what matters here is only that the tail reads as
     // handed off, not why.
+    // CB-223: the snapshot a peer is served from now knows each session's
+    // team, read in one batch for every Claude Code pid it kept.
+    [Fact]
+    public void TheSnapshotReadsTeamsInOneBatchForTheClaudeSessionsItKept()
+    {
+        var dir = NewStatusDir();
+        try
+        {
+            WriteStatus(dir, "lead-1", new SessionStatus { State = "idle", Title = "backlog", Cwd = "/tmp/t", SessionPid = 501 });
+            WriteStatus(dir, "member-1", new SessionStatus { State = "idle", Title = "backlog", Cwd = "/tmp/t", SessionPid = 502 });
+
+            var asked = new List<IReadOnlyList<int>>();
+            var kept = SessionManager.HeadlessSnapshot(dir, NoJobs, isRunning: _ => true, nowUtc: DateTime.UtcNow,
+                teams: pids =>
+                {
+                    asked.Add(pids);
+                    return new Dictionary<int, AgentTeam.Membership>
+                    {
+                        [501] = new("lead-1", "red", "lead"),
+                        [502] = new("lead-1", "blue", "wren"),
+                    };
+                });
+
+            var batch = Assert.Single(asked);
+            Assert.Equal(new[] { 501, 502 }, batch.OrderBy(p => p));
+
+            var member = kept.Single(k => k.SessionId == "member-1").Status;
+            Assert.Equal("lead-1", member.Lead);
+            Assert.Equal("wren", member.Agent);
+            Assert.Equal("blue", member.AgentColor);
+            Assert.Equal("", kept.Single(k => k.SessionId == "lead-1").Status.Lead);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
+    // Nothing kept is Claude Code, so nothing is asked — on Windows the team
+    // read is a WMI query, and a snapshot of no sessions should cost none.
+    [Fact]
+    public void WithNoClaudeSessionsKeptTheTeamReadIsNotMade()
+    {
+        var dir = NewStatusDir();
+        try
+        {
+            var asked = 0;
+            var kept = SessionManager.HeadlessSnapshot(dir, NoJobs, isRunning: _ => true, nowUtc: DateTime.UtcNow,
+                teams: _ => { asked++; return new Dictionary<int, AgentTeam.Membership>(); });
+
+            Assert.Empty(kept);
+            Assert.Equal(0, asked);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
     private static string BackgroundingRow(string sessionId) =>
         @"{""type"":""system"",""subtype"":""informational"","
       + @"""content"":""Backgrounding after the current tool finishes…"","

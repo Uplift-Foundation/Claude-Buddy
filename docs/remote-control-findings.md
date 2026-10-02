@@ -695,3 +695,23 @@ by a model is in the path, the hash still proves the turns arrive exactly as
 that Buddy produced them, and what is displayed is still what a local panel
 would display — the parse simply happens on the side that has the file, which is
 the side that had to be trusted anyway.
+
+## Teams (CB-223)
+
+A team of agents running on another machine used to draw, at most, its lead here. The cause is in two places, and two different sources describe it, both measured on 2026-10-02 on the MacBook, from inside a live 15-member agent team:
+
+| source | what it lists for a team |
+| --- | --- |
+| `claude agents --json` (the agent registry, same `CLAUDE_CONFIG_DIR`) | **no members at all** — one row, a background daemon, while `ps` showed fifteen `claude` processes carrying `--agent-name`, `--team-name` and `--parent-session-id` |
+| the relay's `ListAgents` peer list (Wren Asare's read) | one `Remote Control` row **per member**, every one named with the lead's session title, told apart only by the bracketed ref |
+
+They are not in tension; they answer different questions. The registry is what a far Buddy's direct link builds its roster from (`RemoteMirrorServer.HelloAsync` walks it, then joins each name to a status file), so a far Buddy never offered a member at all. The peer list is what the relay path reads, and there fourteen identically named rows collapsed onto one orb key. The relay half is CB-223's other branch; this section is the direct link.
+
+### Direct link (mirror half)
+
+- **The far Buddy knew all along.** Each member is a Claude Code process with its own status file, and `AgentTeam` reads its lead and team name off the process's command line. The live scan has always done this. `SessionManager.HeadlessSnapshot`, which is what a peer is served from, now does too: one batched `AgentTeam.OfAll` for the Claude Code pids it kept, and none when it kept none (on Windows that read is a WMI query; the snapshot runs on the link's read loop, not the UI thread, and is memoised for two seconds).
+- **Members are offered from status files, on the complete roster only, and only when their lead is offered.** Not every team is meant to be visible: `HelloAsync` deliberately does not make visible a session the far machine's own Remote Control setting hides, and a member whose lead is hidden stays hidden. A member that leads its own team makes *its* members eligible, so the rule runs to a fixpoint; a lead cycle adds nothing neither half already had.
+- **Three trailing optional fields on `MirrorRosterEntry`:** `lead` (the lead's **route**, never its title — every member inherits the title, and a route is what the near side keys the lead's orb by), `agent` (the member's name in its team) and `agentColor` (the colour Claude Code assigned it). `lead` is set only when that route is in the same roster. Absent fields serialise as absent, so a roster with no team in it is the same bytes and keeps the same CB-216 hash; an older Buddy reads a new roster as having no teams.
+- **The near side pairs on its own keys.** A member's `Lead` becomes `rc:<account>:<lead route>`, which is exactly the lead orb's key, so `TeamLinks` pairs them through the same rule it uses for a local team and `SetTeamRole` draws the member smaller. Colour follows the local precedence: the session's own `/color`, then the team's assignment, then a hash of the name.
+
+**Measured:** the two sources in the table. **Covered by tests, not run across two machines yet:** the exchange through a real `RemoteMirrorServer` and `RemoteMirrorClient` (members offered with lead routes; a member of a hidden lead not offered; a team-free roster carrying none of the fields), and the near-side scan drawing linked member orbs with an unlinked control.

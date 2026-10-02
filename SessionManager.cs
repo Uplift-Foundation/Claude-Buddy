@@ -53,6 +53,14 @@ namespace ClaudeBuddy
         [JsonIgnore]
         public string Agent { get; set; } = "";
 
+        // The colour Claude Code assigned this team member, kept beside Color
+        // rather than folded into it so a peer can be told both (CB-223): the
+        // session's own /color and the team's assignment are different facts,
+        // and the near machine applies the same precedence the local scan
+        // does. Empty for everything that isn't a team member.
+        [JsonIgnore]
+        public string AgentColor { get; set; } = "";
+
         // Which CLI wrote this file, in its own words: "codex", or absent for
         // Claude Code.
         //
@@ -1243,7 +1251,8 @@ namespace ClaudeBuddy
             Func<int, bool>? isRunning = null,
             DateTime? nowUtc = null,
             bool honourOrbLifetime = true,
-            bool? onWindows = null)
+            bool? onWindows = null,
+            Func<IReadOnlyList<int>, IReadOnlyDictionary<int, AgentTeam.Membership>>? teams = null)
         {
             statusDir ??= StatusDirectory.Path();
             var windows = onWindows ?? OperatingSystem.IsWindows();
@@ -1435,7 +1444,43 @@ namespace ClaudeBuddy
 
             MirrorLog.SayOnce("headless-kept", $"found={found.Count} kept={kept.Count}");
 
+            // CB-223: which of these are agent-team members, and whose. The
+            // live scan has always known (ScanProbes.TeamOf, read off each
+            // process's command line); this snapshot is what a peer is served
+            // from, and without it a member's team was unknowable over the
+            // link. One batched read for every Claude Code pid kept, the same
+            // read the live scan's background half makes — and none at all
+            // when nothing kept is Claude Code.
+            var claudePids = kept
+                .Where(k => k.Item2.Source == SessionSource.ClaudeCode && k.Item2.SessionPid > 0)
+                .Select(k => k.Item2.SessionPid)
+                .Distinct()
+                .ToList();
+
+            if (claudePids.Count > 0)
+                ApplyTeams(kept, (teams ?? AgentTeam.OfAll)(claudePids));
+
             return kept;
+        }
+
+        // Team membership onto snapshot statuses, by the live scan's own rule
+        // (see the block that sets Lead and Agent in the scan): a process whose
+        // lead is itself is the lead, not a member, and a member's name is
+        // kept only while it has a lead. Claude Code only — a gateway session
+        // has no process to ask and uses Lead for its room.
+        internal static void ApplyTeams(IEnumerable<(string SessionId, SessionStatus Status)> sessions,
+            IReadOnlyDictionary<int, AgentTeam.Membership> teams)
+        {
+            foreach (var (sessionId, status) in sessions)
+            {
+                if (status.Source != SessionSource.ClaudeCode) continue;
+
+                var membership = teams.TryGetValue(status.SessionPid, out var m) ? m : AgentTeam.None;
+                status.Lead = membership.Lead == sessionId ? "" : membership.Lead;
+                var member = !string.IsNullOrEmpty(status.Lead);
+                status.Agent = member ? membership.Name : "";
+                status.AgentColor = member ? membership.Color : "";
+            }
         }
 
         // Whether this session is one of the shapes that is watched through a
@@ -2175,10 +2220,14 @@ namespace ClaudeBuddy
             // asked for the bridge — see RemoteControlSessions.EnsureStarted for
             // why merely enabling it isn't enough.
             //
-            // Much simpler than the gateway branch above, and for a reason worth
-            // stating: there are no rooms, no leads and no colour pool here. A
-            // remote session is one Claude Code session on one machine, so the
-            // only thing being invented is the namespaced id.
+            // Simpler than the gateway branch above: there are no rooms and no
+            // colour pool here. There are leads, since CB-223 — a far Buddy
+            // says which of its sessions are agent-team members and whose, and
+            // offers a member only alongside its lead, so the lead's key here
+            // is the namespaced key of an orb this scan is drawing too. That is
+            // what lets TeamLinks pair them on the dictionary key, exactly as
+            // it pairs a local team, with nothing translated. A relay-only far
+            // machine sends no team shape, and its rows stay flat.
             foreach (var remote in RemoteControlSessions.Snapshot())
             {
                 // Received data only. A remote cwd is intentionally absent
@@ -2216,7 +2265,19 @@ namespace ClaudeBuddy
                         // at home — better than every remote orb being identical
                         // while the answer is still in flight, or if it never
                         // comes.
-                        Color = remote.Color ?? OpenClawSessions.ColourForAgent(remote.Name),
+                        //
+                        // A team member with no colour of its own wears the one
+                        // Claude Code assigned it, the precedence the local scan
+                        // uses (a /color inside the agent outranks the team's).
+                        Color = remote.Color ?? remote.AgentColor ?? OpenClawSessions.ColourForAgent(remote.Name),
+
+                        // CB-223. Lead is the lead's own orb key, Agent the
+                        // member's name in its team — which everything
+                        // user-facing prefers over the title every member
+                        // inherits from its lead.
+                        Lead = remote.LeadKey ?? "",
+                        Agent = remote.LeadKey is null ? "" : remote.Agent ?? "",
+                        AgentColor = remote.LeadKey is null ? "" : remote.AgentColor ?? "",
 
                         Kind = SessionKind.Remote,
                     },

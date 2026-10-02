@@ -1857,6 +1857,88 @@ public class MirrorRoundTripTests : IDisposable
             .SelectMany(frame => frame!.Payload!)
             .ToArray();
 
+    // --- CB-223: agent-team members over the direct link -----------------------
+
+    // A team running on the far machine: the lead is registered, its two
+    // members are not (the registry does not list them). The full roster now
+    // offers all three, and each member says whose team it is in by the
+    // lead's route — what the near side keys the lead's own orb by.
+    [Fact]
+    public async Task ATeamsMembersAreOfferedBesideTheirLeadAndSayWhoseTheyAre()
+    {
+        var harness = new Harness(_dir);
+        harness.AddSession("backlog status check", WriteTranscript("lead.jsonl", Conversation(2)));
+        var lead = harness.SessionIdOf("backlog status check");
+        var a = harness.AddTeamMember("backlog status check", lead, "wren-asare", "blue",
+            WriteTranscript("a.jsonl", Conversation(2)));
+        var b = harness.AddTeamMember("backlog status check", lead, "hana-moriyama", "purple",
+            WriteTranscript("b.jsonl", Conversation(2)));
+
+        await harness.Client.AskWhatTheyHaveAsync(harness.Peers);
+
+        var known = harness.Client.Known().Select(k => k.Entry).ToList();
+        Assert.Equal(3, known.Count);
+
+        var leadEntry = known.Single(e => e.Route == RemoteMirrorServer.RouteFor(lead));
+        Assert.Null(leadEntry.Lead);
+        Assert.Null(leadEntry.Agent);
+
+        var memberA = known.Single(e => e.Route == RemoteMirrorServer.RouteFor(a));
+        Assert.Equal(RemoteMirrorServer.RouteFor(lead), memberA.Lead);
+        Assert.Equal("wren-asare", memberA.Agent);
+        Assert.Equal("blue", memberA.AgentColor);
+
+        var memberB = known.Single(e => e.Route == RemoteMirrorServer.RouteFor(b));
+        Assert.Equal(RemoteMirrorServer.RouteFor(lead), memberB.Lead);
+        Assert.Equal("hana-moriyama", memberB.Agent);
+
+        // And the near side pairs them on its own keys, with nothing
+        // translated: each member's lead key is exactly the lead orb's key.
+        var remotes = RemoteControlSessions.RemotesFromRoster("acct", harness.Client.Known(), DateTime.UtcNow);
+        var leadRemote = remotes.Single(r => r.Route == RemoteMirrorServer.RouteFor(lead));
+        Assert.Null(leadRemote.LeadKey);
+        Assert.All(remotes.Where(r => r.Route != leadRemote.Route),
+            member => Assert.Equal(leadRemote.Key, member.LeadKey));
+    }
+
+    // The visibility rule, pinned: a member whose lead this machine does not
+    // offer — its lead has Remote Control off, so no registry row — is not
+    // offered either. The lead row is the control: it is a live session on the
+    // same disk and is not offered for the same reason.
+    [Fact]
+    public async Task AMemberWhoseLeadIsNotOfferedIsNotOfferedEither()
+    {
+        var harness = new Harness(_dir);
+        harness.AddSession("someone else", WriteTranscript("other.jsonl", Conversation(2)));
+        var hiddenLead = harness.AddUnregisteredSession("private team", WriteTranscript("hidden.jsonl", Conversation(2)));
+        harness.AddTeamMember("private team", hiddenLead, "bryn-kowalczyk", "yellow",
+            WriteTranscript("m.jsonl", Conversation(2)));
+
+        await harness.Client.AskWhatTheyHaveAsync(harness.Peers);
+
+        var entry = Assert.Single(harness.Client.Known()).Entry;
+        Assert.Equal("someone else", entry.Name);
+        Assert.Null(entry.Lead);
+    }
+
+    // A roster with no team in it is the same bytes it always was — the new
+    // fields are absent, not null-valued — so CB-216's "unchanged" answer
+    // still holds for every machine not running a team.
+    [Fact]
+    public async Task ARosterWithNoTeamCarriesNoTeamFieldsOnTheWire()
+    {
+        var harness = new Harness(_dir);
+        harness.AddSession("solo", WriteTranscript("solo.jsonl", Conversation(2)));
+
+        await harness.Client.AskWhatTheyHaveAsync(harness.Peers);
+
+        var bytes = MirrorProtocol.RosterBytes(harness.Client.Known().Select(k => k.Entry).ToList());
+        var json = System.Text.Encoding.UTF8.GetString(bytes);
+        Assert.DoesNotContain("\"lead\"", json);
+        Assert.DoesNotContain("\"agent\"", json);
+        Assert.DoesNotContain("\"agentColor\"", json);
+    }
+
     private static MirrorProtocol.MirrorFrame OldHello(string id) =>
         MirrorProtocol.TryParseFrame(MirrorProtocol.BuildFrame(
             MirrorProtocol.Hello, id, new Dictionary<string, string> { ["pv"] = "1" }))!;
@@ -2053,6 +2135,49 @@ public class MirrorRoundTripTests : IDisposable
                 TmuxPane = "%2",
                 SessionPid = 2000 + _sessions.Count,
             }));
+
+        // CB-223: an agent-team member, as it really is on disk — a Claude
+        // Code status file with no agent-registry row (the registry does not
+        // list members; measured), whose Lead is its lead's session id, as the
+        // snapshot's team read leaves it.
+        public string AddTeamMember(string title, string leadSessionId, string agent, string agentColor,
+            string transcriptPath)
+        {
+            var sessionId = Guid.NewGuid().ToString();
+            _sessions.Add((sessionId, new SessionStatus
+            {
+                Title = title,
+                Cwd = _dir,
+                Source = SessionSource.ClaudeCode,
+                TranscriptPath = transcriptPath,
+                TmuxPane = "%3",
+                SessionPid = 3000 + _sessions.Count,
+                Lead = leadSessionId,
+                Agent = agent,
+                AgentColor = agentColor,
+            }));
+            return sessionId;
+        }
+
+        // A Claude Code session with no registry row and no team: the shape of
+        // a lead whose own Remote Control is off, which the full roster must
+        // not start offering because a member points at it.
+        public string AddUnregisteredSession(string title, string transcriptPath)
+        {
+            var sessionId = Guid.NewGuid().ToString();
+            _sessions.Add((sessionId, new SessionStatus
+            {
+                Title = title,
+                Cwd = _dir,
+                Source = SessionSource.ClaudeCode,
+                TranscriptPath = transcriptPath,
+                TmuxPane = "%4",
+                SessionPid = 4000 + _sessions.Count,
+            }));
+            return sessionId;
+        }
+
+        public string SessionIdOf(string title) => _sessions.First(s => s.Status.Title == title).SessionId;
 
         public void AddSession(string name, string transcriptPath)
         {

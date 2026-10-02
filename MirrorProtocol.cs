@@ -518,7 +518,31 @@ namespace ClaudeBuddy
             //
             // Optional keeps an older peer useful: it still gets an orb, just
             // its ordinary title and glyph rather than a persona it never sent.
-            [property: JsonPropertyName("persona")] PeerPersona? Persona = null);
+            [property: JsonPropertyName("persona")] PeerPersona? Persona = null,
+
+            // CB-223: agent-team shape. A team's members are separate Claude
+            // Code processes on the far machine, each with its own status file
+            // and route, and the far Buddy knows which lead each belongs to —
+            // it reads it off the process (AgentTeam), as the local scan does.
+            // Before this nothing carried it, so a member either was not
+            // offered at all or arrived as a flat orb wearing the lead's title.
+            //
+            // Lead is the lead's **route**, never its title: titles collide
+            // (every member inherits the lead's) and a route is what the near
+            // side keys the lead's own orb by. Set only when the lead is itself
+            // in this roster, so a near machine is never pointed at an orb it
+            // was not offered. Agent is the member's name inside its team,
+            // which is what tells fourteen identically-titled orbs apart.
+            // AgentColor is the colour Claude Code assigned the member, the
+            // fallback the local scan uses when the session set none itself.
+            //
+            // Trailing and optional, like Status, Route and Persona: an older
+            // Buddy's roster reads as "no team" rather than failing to parse,
+            // and an entry with none of them serialises exactly as before, so a
+            // roster with no teams in it keeps the same CB-216 hash.
+            [property: JsonPropertyName("lead")] string? Lead = null,
+            [property: JsonPropertyName("agent")] string? Agent = null,
+            [property: JsonPropertyName("agentColor")] string? AgentColor = null);
 
         // The portable part of LocalPersona.Persona. Avatar is the already
         // bounded image bytes, never AvatarPath: the latter has meaning only

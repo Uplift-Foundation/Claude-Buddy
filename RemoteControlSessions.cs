@@ -223,8 +223,15 @@ namespace ClaudeBuddy
         // the peer list has an opinion about.
         internal sealed record Remote(
             string Name, string Ref, string Status, DateTime Seen, string Account, string? Color = null,
-            string? Cli = null, string? Route = null, MirrorProtocol.PeerPersona? Persona = null)
+            string? Cli = null, string? Route = null, MirrorProtocol.PeerPersona? Persona = null,
+            string? LeadRoute = null, string? Agent = null, string? AgentColor = null)
         {
+            // CB-223: the key of this session's lead's own orb, when the far
+            // machine said it is a team member and offered the lead too. Built
+            // the same way as Key, from the same account, so the near side's
+            // team links pair on the dictionary key with nothing translated.
+            public string? LeadKey => string.IsNullOrEmpty(LeadRoute) ? null : "rc:" + Account + ":" + LeadRoute;
+
             // The account is in the key, not just the record.
             //
             // Two accounts can hold identically-named sessions — the same person
@@ -925,7 +932,10 @@ namespace ClaudeBuddy
                     now,
                     account,
                     string.IsNullOrWhiteSpace(k.Entry.Color) ? null : k.Entry.Color,
-                    k.Entry.Cli, k.Entry.Route, k.Entry.Persona))
+                    k.Entry.Cli, k.Entry.Route, k.Entry.Persona,
+                    string.IsNullOrWhiteSpace(k.Entry.Lead) ? null : k.Entry.Lead,
+                    string.IsNullOrWhiteSpace(k.Entry.Agent) ? null : k.Entry.Agent,
+                    string.IsNullOrWhiteSpace(k.Entry.AgentColor) ? null : k.Entry.AgentColor))
                 .ToList();
 
         // Excluded from coverage: reads the live link. What it decides is

@@ -68,6 +68,97 @@ public class RemoteScanTests
     // which is still a real question and may acquire a new answer.
     private static bool Supported => true;
 
+    // --- CB-223: a team on the far machine, over the direct link --------------
+
+    private static bool IsTeamMember(OrbWindow orb) =>
+        (bool)typeof(OrbWindow).GetField("_isTeamMember", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .GetValue(orb)!;
+
+    private static List<(OrbWindow Member, OrbWindow Lead)> LinkPairs() =>
+        (List<(OrbWindow Member, OrbWindow Lead)>)typeof(SessionManager).Assembly.GetType("ClaudeBuddy.TeamLinks")!
+            .GetField("Pairs", BindingFlags.NonPublic | BindingFlags.Static)!.GetValue(null)!;
+
+    private static SessionStatus StatusOf(SessionManager manager, string key) =>
+        ((Dictionary<string, SessionStatus>)typeof(SessionManager)
+            .GetField("_statuses", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(manager)!)[key];
+
+    // The near half of the round trip: rows a far Buddy sent with team shape
+    // become a lead orb and member orbs — members drawn as members, wearing
+    // their own agent names and team colours, and linked to their lead by
+    // the same TeamLinks pairing a local team gets, with nothing translated.
+    [AvaloniaFact]
+    public void AFarTeamDrawsMembersLinkedToTheirLead()
+    {
+        using var scratch = new Scratch();
+        try
+        {
+            Publish(
+                new RemoteControlSessions.Remote("backlog status check", "far-mac", "running", DateTime.UtcNow,
+                    ".claude", Route: "sid:lead"),
+                new RemoteControlSessions.Remote("backlog status check", "far-mac", "idle", DateTime.UtcNow,
+                    ".claude", Route: "sid:a", LeadRoute: "sid:lead", Agent: "wren-asare", AgentColor: "blue"),
+                new RemoteControlSessions.Remote("backlog status check", "far-mac", "idle", DateTime.UtcNow,
+                    ".claude", Color: "green", Route: "sid:b", LeadRoute: "sid:lead", Agent: "hana-moriyama",
+                    AgentColor: "purple"));
+
+            var manager = Manager(scratch.Dir);
+            manager.ScanAndUpdate();
+
+            var orbs = Orbs(manager);
+            const string lead = "rc:.claude:sid:lead", a = "rc:.claude:sid:a", b = "rc:.claude:sid:b";
+            Assert.Contains(lead, orbs.Keys);
+
+            Assert.False(IsTeamMember(orbs[lead]));
+            Assert.True(IsTeamMember(orbs[a]));
+            Assert.True(IsTeamMember(orbs[b]));
+
+            Assert.Equal(lead, StatusOf(manager, a).Lead);
+            Assert.Equal("wren-asare", StatusOf(manager, a).Agent);
+
+            // The team colour fills in where the session has none of its own;
+            // a session's own colour outranks it, as it does locally.
+            Assert.Equal("blue", StatusOf(manager, a).Color);
+            Assert.Equal("green", StatusOf(manager, b).Color);
+
+            var pairs = LinkPairs();
+            Assert.Contains(pairs, p => p.Member == orbs[a] && p.Lead == orbs[lead]);
+            Assert.Contains(pairs, p => p.Member == orbs[b] && p.Lead == orbs[lead]);
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
+    // The control: the same rows with no team shape — an older far Buddy, or
+    // a relay-only far machine — are flat orbs with no links between them.
+    [AvaloniaFact]
+    public void TheSameRowsWithoutTeamShapeAreFlatAndUnlinked()
+    {
+        using var scratch = new Scratch();
+        try
+        {
+            Publish(
+                new RemoteControlSessions.Remote("backlog status check", "far-mac", "running", DateTime.UtcNow,
+                    ".claude", Route: "sid:lead"),
+                new RemoteControlSessions.Remote("backlog status check", "far-mac", "idle", DateTime.UtcNow,
+                    ".claude", Route: "sid:a", Agent: "wren-asare", AgentColor: "blue"));
+
+            var manager = Manager(scratch.Dir);
+            manager.ScanAndUpdate();
+
+            var orbs = Orbs(manager);
+            Assert.False(IsTeamMember(orbs["rc:.claude:sid:a"]));
+            Assert.Equal("", StatusOf(manager, "rc:.claude:sid:a").Lead);
+            Assert.Equal("", StatusOf(manager, "rc:.claude:sid:a").Agent);
+            Assert.DoesNotContain(LinkPairs(), p => p.Member == orbs["rc:.claude:sid:a"]);
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
     [AvaloniaFact]
     public void ARemoteSessionGetsAnOrb()
     {
