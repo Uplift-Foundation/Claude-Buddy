@@ -4,7 +4,7 @@
 # The hook is what makes orbs appear: Claude Code runs it on session start,
 # prompt submit, tool use, stop and session end, and it writes a small status
 # file per session that the app watches. Without it wired into settings.json
-# nothing happens at all — no error, just no orbs, which is a confusing way to
+# nothing happens at all -- no error, just no orbs, which is a confusing way to
 # fail and the reason this script exists rather than a README instruction to
 # hand-edit JSON.
 #
@@ -21,16 +21,16 @@
 # Safe to re-run: it strips any existing Claude Buddy entries before adding
 # fresh ones, so it converges rather than accumulating duplicates.
 #
-# WSL is opt-in via -Wsl/-UninstallWsl so a bare invocation — which is what the
+# WSL is opt-in via -Wsl/-UninstallWsl so a bare invocation -- which is what the
 # installer's [Run]/[Icons] entries and the plain "wire up hooks" shortcut all
-# do — keeps behaving exactly as before. -Uninstall is the exception: it always
+# do -- keeps behaving exactly as before. -Uninstall is the exception: it always
 # sweeps every WSL distro too, since leaving a dangling hook that points at a
 # script this same run just deleted would make Claude Code log an error on
 # every event in every affected WSL session.
 #
 # -ProfileDir/-WslProfileDir cover a second (or third...) Claude Code account
 # managed via CLAUDE_CONFIG_DIR (e.g. an alias like
-# `alias kwork="CLAUDE_CONFIG_DIR=~/.claude-work claude"`) — each is a config
+# `alias kwork="CLAUDE_CONFIG_DIR=~/.claude-work claude"`) -- each is a config
 # directory name wired in *addition* to the default ~/.claude, never a
 # replacement for it, and never auto-discovered: only names explicitly passed
 # here or already saved via the app's Settings window are ever touched.
@@ -49,7 +49,7 @@ param(
     # covers WSL regardless of this switch).
     [switch] $Wsl,
 
-    # Remove WSL hook entries only, leaving native Windows hooks untouched —
+    # Remove WSL hook entries only, leaving native Windows hooks untouched --
     # the "turn WSL support off for this one distro" case, as opposed to
     # -Uninstall which is the full teardown used by the app's uninstaller.
     [switch] $UninstallWsl,
@@ -59,7 +59,7 @@ param(
     [string[]] $WslDistro,
 
     # Touch only the -WslProfileDir entries, leaving each distro's own
-    # default ~/.claude untouched — the "clean up just this one extra
+    # default ~/.claude untouched -- the "clean up just this one extra
     # profile" case. Without this, -UninstallWsl -WslProfileDir X always
     # unwired the distro's default profile too, on the way to unwiring X,
     # which is surprising and was found to actually happen: a one-off
@@ -72,9 +72,9 @@ param(
     # skipped rather than gaining a dead ~/.claude/settings.json.
     [switch] $Force,
 
-    # Extra Claude Code CLI config directory names — e.g. ".claude-work" for
+    # Extra Claude Code CLI config directory names -- e.g. ".claude-work" for
     # a `CLAUDE_CONFIG_DIR=~/.claude-work claude` alias managing a second
-    # account — to also wire on native Windows, beyond the default
+    # account -- to also wire on native Windows, beyond the default
     # -SettingsPath. $null (not passed at all) defaults to whatever the app's
     # own Settings window has saved; pass an explicit @() to wire only the
     # default profile even if the app has some saved. Never auto-discovered:
@@ -88,7 +88,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-# Same source of truth the Settings window itself writes to — not a separate
+# Same source of truth the Settings window itself writes to -- not a separate
 # config format, and not IPC, so the installer, a Start Menu re-run, and the
 # running app can never disagree about which extra profiles are configured.
 # Works with no app installed or ever run yet: that's just an absent file,
@@ -115,11 +115,11 @@ $installed = Join-Path $InstallDir 'ClaudeBuddyHook.ps1'
 
 # -UninstallWsl on its own is documented above as touching only WSL, leaving
 # native Windows hooks exactly as they were. Every other combination still
-# (re)wires native, matching a bare invocation's existing behavior — that's
+# (re)wires native, matching a bare invocation's existing behavior -- that's
 # what WslIntegration.ReapplyProfiles and the Settings window's per-distro
 # checkbox (SetWired, which passes bare -Wsl) rely on. Without this guard,
 # -UninstallWsl alone fell through to the "not $Uninstall" branch below and
-# silently re-copied the hook script and re-wired native hooks — invisible
+# silently re-copied the hook script and re-wired native hooks -- invisible
 # whenever native was already wired (the re-wire is idempotent), but
 # confirmed to reactivate native hooks that had just been fully removed by
 # -Uninstall, when later cleaning up a WSL-only profile by hand.
@@ -170,7 +170,7 @@ function ConvertTo-HashtableDeep($value) {
 # Which Claude Code events drive which orb state. Notification carries a matcher
 # because only some notifications mean "Claude needs you"; the rest would make
 # every orb amber, which would make amber meaningless. Shared between native and
-# every WSL distro — only the command line differs.
+# every WSL distro -- only the command line differs.
 $script:Wanted = @(
     @{ Event = 'SessionStart';     Matcher = $null;                  State = 'idle' },
     @{ Event = 'UserPromptSubmit'; Matcher = $null;                  State = 'generating' },
@@ -255,8 +255,8 @@ function Set-ClaudeBuddyHooks {
 
     $settings['hooks'] = $hooks
 
-    # UTF-8 *without* a BOM. System.Text.Json — which Claude Code and this app
-    # both use — treats a leading BOM as an invalid start of value, and
+    # UTF-8 *without* a BOM. System.Text.Json -- which Claude Code and this app
+    # both use -- treats a leading BOM as an invalid start of value, and
     # PowerShell 5.1's Set-Content adds one by default. This exact mistake has
     # bitten this project before, in the hook itself.
     $out = $settings | ConvertTo-Json -Depth 20
@@ -271,19 +271,19 @@ function Set-ClaudeBuddyHooks {
 }
 
 # Computed once, here, in this script's own normal full environment, and
-# baked into every wired command as a literal — rather than letting
+# baked into every wired command as a literal -- rather than letting
 # ClaudeBuddyHook.ps1 re-derive it via $env:TEMP at hook-run time, where a
 # WSL-interop-launched invocation's environment can't be trusted to have
 # TEMP/TMP set at all (see ClaudeBuddyHook.ps1's own comment on this; found
 # on a real machine to silently point the hook at an unrelated folder with no
-# visible error — the hook reported success, but the app never saw a status
+# visible error -- the hook reported success, but the app never saw a status
 # file). This keeps every hook, on both native Windows and WSL, resolving to
 # the exact same folder Path.GetTempPath() gives the app itself, with no
 # environment-dependent guessing at the point the hook actually runs.
 #
 # TrimEnd('\') matters: GetTempPath() always returns a trailing backslash,
 # and embedding that directly inside "..." quotes produces a command-line
-# argument ending in \" — which Windows' argument parser reads as an escaped
+# argument ending in \" -- which Windows' argument parser reads as an escaped
 # literal quote, not a closing delimiter, so the quoted region never actually
 # closes and swallows the rest of the command line. Caught by tracing through
 # the exact argument this would have produced before shipping it, not by
@@ -316,7 +316,7 @@ if ($touchNative) {
 # WSL: each distro is a completely separate Claude Code install with its own
 # ~/.claude/settings.json, invisible to the native wiring above. Both WSL and
 # native Windows hooks ultimately shell out to powershell.exe as a normal
-# Windows process, so $env:TEMP resolves to the same real folder either way —
+# Windows process, so $env:TEMP resolves to the same real folder either way --
 # a WSL session and a native session show up as two independent orbs in one
 # running ClaudeBuddy.exe, which is the whole point of doing this.
 # ---------------------------------------------------------------------------
@@ -327,10 +327,10 @@ $wslExe = Join-Path $env:SystemRoot 'System32\wsl.exe'
 # has a real, still-open Microsoft bug (microsoft/WSL#4607) where it writes
 # UTF-16LE to stdout even when redirected, which a plain PowerShell 5.1 `&`
 # capture decodes as one character per line ("Ubuntu" arrives as six one-letter
-# lines) — confirmed against a real WSL install. An earlier version of this
+# lines) -- confirmed against a real WSL install. An earlier version of this
 # script "fixed" that by toggling [Console]::OutputEncoding around the call,
 # which in turn was found to corrupt *later*, unrelated `wsl.exe -d ...`
-# invocations in the same process — a second bug introduced while chasing the
+# invocations in the same process -- a second bug introduced while chasing the
 # first. Reading the registry instead sidesteps both: it's the same place
 # `wsl.exe -l` gets its answer from, needs no subprocess, and can't be hit by
 # either encoding bug. Confirmed working correctly against a real machine.
@@ -343,8 +343,8 @@ function Get-WslDistros {
         Where-Object { $_ }
 
     # @()-wrapped deliberately: a Where-Object pipeline that resolves to
-    # exactly one item — the common case, one real distro once docker-desktop
-    # is filtered out — is *not* auto-wrapped in an array by PowerShell, and
+    # exactly one item -- the common case, one real distro once docker-desktop
+    # is filtered out -- is *not* auto-wrapped in an array by PowerShell, and
     # indexing or iterating a bare string doesn't do what you'd expect (e.g.
     # `("Ubuntu")[0]` is the character 'U', not the string "Ubuntu"). Confirmed
     # by hitting this exact bug during testing. Every call site that consumes
@@ -356,7 +356,7 @@ function Get-WslDistros {
 # Runs one wsl.exe invocation with a hard timeout, mirroring the safe-
 # subprocess idiom already used on the C# side of this app (TerminalFocuser.
 # TryRun, ClaudeDesktopManager.Run): redirect both streams, start async reads
-# *before* waiting (reading first would make the timeout unreachable — it only
+# *before* waiting (reading first would make the timeout unreachable -- it only
 # returns once the pipe closes, which a wedged child never does), kill on
 # timeout, never throw. Without this, a wedged distro would hang this script
 # forever, and by extension the installer's blocking post-install step or a
@@ -364,16 +364,16 @@ function Get-WslDistros {
 #
 # PowerShell 5.1 has no `Start-Process -Wait -Timeout` that also captures
 # output cleanly, and `Start-Job` has its own overhead/reliability problems on
-# 5.1, so this is done by hand against System.Diagnostics.Process directly —
+# 5.1, so this is done by hand against System.Diagnostics.Process directly --
 # same shape as the C# idiom, translated to PS 5.1-compatible syntax.
 #
 # Quotes and joins arguments into the single command-line string
 # ProcessStartInfo.Arguments expects. Deliberately not ArgumentList (a plain
-# collection you'd .Add() each argument to) — that property only exists on
+# collection you'd .Add() each argument to) -- that property only exists on
 # .NET Core 2.1+/.NET 5+, and Windows PowerShell 5.1 always runs on the older
 # .NET Framework, which never got it. There, $psi.ArgumentList silently
 # evaluates to $null, and .Add($a) on it throws "You cannot call a method on
-# a null-valued expression" — caught by hitting this exact error on a real
+# a null-valued expression" -- caught by hitting this exact error on a real
 # Windows box. This mirrors the quoting .NET's own ArgumentList-to-string
 # conversion does internally, so it stays correct if an argument ever needs
 # an embedded quote or backslash, not just the plain words used today.
@@ -408,9 +408,9 @@ function Invoke-WslTimeout {
         [Parameter(Mandatory)] [string[]] $Arguments,
         # Deliberately short: this is meant to answer "is this specific
         # command actually stuck," which only means something once the shared
-        # WSL2 VM is already up. The VM's own cold-boot cost — common, not an
+        # WSL2 VM is already up. The VM's own cold-boot cost -- common, not an
         # edge case, since it shuts down after a period of inactivity and
-        # every fresh install starts from exactly that state — is paid once,
+        # every fresh install starts from exactly that state -- is paid once,
         # up front, by the explicit warm-up call below, specifically so this
         # number doesn't also have to absorb it. A login shell (-lc) sourcing
         # nvm/asdf-style .bashrc setup still adds some latency on every call
@@ -435,14 +435,14 @@ function Invoke-WslTimeout {
     try {
         [void]$process.Start()
 
-        # Start both async reads *before* waiting — same idiom the C# side of
+        # Start both async reads *before* waiting -- same idiom the C# side of
         # this app already uses (TerminalFocuser.TryRun): a blocking
         # ReadToEnd() first would make the timeout unreachable, and
         # undrained stderr can deadlock a chatty child once its pipe buffer
         # fills. Reading each Task's result via .GetAwaiter().GetResult()
         # after WaitForExit, rather than Register-ObjectEvent +
         # BeginOutputReadLine, on purpose: the event-based version was tried
-        # first and found unreliable on a real machine — the child exits
+        # first and found unreliable on a real machine -- the child exits
         # cleanly and WaitForExit returns true, but the queued
         # OutputDataReceived action doesn't reliably get *processed* by
         # PowerShell's own eventing subsystem while the engine is sitting
@@ -454,7 +454,7 @@ function Invoke-WslTimeout {
 
         if (-not $process.WaitForExit($TimeoutMs)) {
             # .NET Framework (what PS 5.1 runs on) has no Kill(entireTree:
-            # true) overload — that's .NET Core 3+/net8.0 only, which is what
+            # true) overload -- that's .NET Core 3+/net8.0 only, which is what
             # the C# app itself targets, but not this script. taskkill /T is
             # the best available substitute here. This guarantees the *script*
             # doesn't hang forever; it does not guarantee whatever's wedged
@@ -464,7 +464,7 @@ function Invoke-WslTimeout {
             try { & "$env:SystemRoot\System32\taskkill.exe" /PID $process.Id /T /F 2>$null } catch { }
             # A timeout and an exception both end up looking identical to
             # callers (both just get an empty array back) unless something
-            # says which one happened — worth knowing for anyone debugging a
+            # says which one happened -- worth knowing for anyone debugging a
             # distro that unexpectedly got skipped, not just this run.
             Write-Host "  (wsl.exe $($Arguments -join ' ') timed out after ${TimeoutMs}ms)"
             return @()
@@ -481,7 +481,7 @@ function Invoke-WslTimeout {
     }
 }
 
-# One combined call per distro instead of two — halves the wsl.exe invocation
+# One combined call per distro instead of two -- halves the wsl.exe invocation
 # count (and therefore the hang/stress exposure) versus separate `printenv
 # HOME` and `command -v claude` calls.
 #
@@ -489,22 +489,22 @@ function Invoke-WslTimeout {
 # because there's no single dotfile convention: nvm/pyenv/rustup/asdf-style
 # installers put their PATH-modifying line in ~/.bashrc *or* ~/.zshrc
 # depending on the user's shell, both of which are conventionally read only
-# by an *interactive* shell — a login shell (-l) reads /etc/profile +
+# by an *interactive* shell -- a login shell (-l) reads /etc/profile +
 # ~/.profile instead, and never those, regardless of which other flags are
 # also given. Hardcoding one shell is a real gap, not a hypothetical one:
-# tested against a real machine where 'claude' is installed via nvm — bash
+# tested against a real machine where 'claude' is installed via nvm -- bash
 # -lc reported it missing, and separately, the user's actual interactive
 # shell is zsh, so a bash-only fix would have kept failing for exactly the
 # case this whole feature targets. A plain "does this work in an interactive
 # terminal" spot check can also be misleading here, since a shell spawned
 # *from* an already-interactive session inherits its parent's already-correct
-# PATH regardless of its own startup-file choice — the gap only shows up on
+# PATH regardless of its own startup-file choice -- the gap only shows up on
 # a genuinely fresh invocation, which is exactly what `wsl.exe -d <distro>
 # --` is.
 #
 # So: try the current (non-interactive) PATH first, then bash's interactive
 # startup (~/.bashrc), then zsh's if zsh is even installed (~/.zshrc), then
-# bash's login startup (~/.profile) as a last resort — first one to find it
+# bash's login startup (~/.profile) as a last resort -- first one to find it
 # wins. Still one wsl.exe call: the fallback chain runs as a single compound
 # command inside it, not as separate invocations.
 function Get-WslDistroInfo([string] $Distro) {
@@ -524,7 +524,7 @@ function Get-WslDistroInfo([string] $Distro) {
 
     $splitAt = [array]::IndexOf($lines, $marker)
     if ($splitAt -lt 0) {
-        # No marker came back at all — treat the whole thing as unusable
+        # No marker came back at all -- treat the whole thing as unusable
         # rather than guess which line was which.
         return $null
     }
@@ -539,7 +539,7 @@ function Get-WslDistroInfo([string] $Distro) {
 # \\wsl.localhost\..., the current form; \\wsl$\... is the older alias, kept as
 # a fallback for builds where .localhost isn't registered. $ProfileDirName
 # defaults to the standard '.claude', but any CLAUDE_CONFIG_DIR-style name
-# works the same way — it's just the directory settings.json lives in.
+# works the same way -- it's just the directory settings.json lives in.
 function Get-WslSettingsPath([string] $Distro, [string] $LinuxHome, [string] $ProfileDirName = '.claude') {
     $rel = ($LinuxHome.TrimStart('/') -replace '/', '\') + '\' + $ProfileDirName + '\settings.json'
     $viaLocalhost = "\\wsl.localhost\$Distro\$rel"
@@ -550,7 +550,7 @@ function Get-WslSettingsPath([string] $Distro, [string] $LinuxHome, [string] $Pr
 }
 
 if ($Uninstall -or $Wsl -or $UninstallWsl) {
-    # @()-wrapped at every step per the scalar-collapse note above — the
+    # @()-wrapped at every step per the scalar-collapse note above -- the
     # single-distro case is the common one, not an edge case.
     $distros = @(Get-WslDistros)
     if ($WslDistro) {
@@ -560,7 +560,7 @@ if ($Uninstall -or $Wsl -or $UninstallWsl) {
     $removeWsl = $Uninstall -or $UninstallWsl
 
     # Pay the shared WSL2 VM's cold-boot cost exactly once, up front, with a
-    # generous timeout — not per distro, and not folded into
+    # generous timeout -- not per distro, and not folded into
     # Invoke-WslTimeout's own default (see the comment there for why). This
     # is a real, common cost (the VM shuts down after a period of inactivity,
     # so a fresh install or "haven't touched WSL in a while" both start from
@@ -571,7 +571,7 @@ if ($Uninstall -or $Wsl -or $UninstallWsl) {
     if ($distros.Count -gt 0) {
         $warmup = Invoke-WslTimeout -Arguments @('-d', $distros[0], '--', 'echo', 'ready') -TimeoutMs 20000
         if ($warmup.Count -eq 0) {
-            Write-Host 'WSL did not respond within 20s — skipping WSL entirely this run.'
+            Write-Host 'WSL did not respond within 20s -- skipping WSL entirely this run.'
             Write-Host "If this persists, check that 'wsl.exe' works normally from an ordinary terminal."
             $warmupFailed = $true
             $distros = @()
@@ -580,7 +580,7 @@ if ($Uninstall -or $Wsl -or $UninstallWsl) {
 
     foreach ($distro in $distros) {
         # Both branches need a home directory to compute the settings.json
-        # path (Get-WslSettingsPath), and -Force/uninstall don't change that —
+        # path (Get-WslSettingsPath), and -Force/uninstall don't change that --
         # only whether HasClaudeCode gets consulted below.
         $info = Get-WslDistroInfo $distro
 
@@ -601,7 +601,7 @@ if ($Uninstall -or $Wsl -or $UninstallWsl) {
         # for the *executable* it launches, not for arguments handed to that
         # executable afterward. A /mnt/c/... argument reaches powershell.exe
         # completely unrewritten, which fails immediately with "the argument
-        # ... does not exist" — silently as far as Claude Code's hook
+        # ... does not exist" -- silently as far as Claude Code's hook
         # success/failure detection is concerned, since powershell.exe still
         # exits 0 in this case. This is the actual reason orbs never worked
         # for WSL sessions at all, predating every other change made today.
@@ -638,6 +638,6 @@ if ($Uninstall) {
 }
 else {
     Write-Host ''
-    Write-Host 'Restart any running Claude Code sessions — hooks are read at session start,'
+    Write-Host 'Restart any running Claude Code sessions -- hooks are read at session start,'
     Write-Host 'so existing sessions will not produce orbs until they are restarted.'
 }
