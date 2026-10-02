@@ -261,6 +261,39 @@ public class HeadlessSnapshotTests
         }
     }
 
+    // A team the size of the one this was measured inside — a lead and
+    // fourteen members — is still one read, not fifteen.
+    [Fact]
+    public void AFifteenSessionTeamIsReadInOneBatch()
+    {
+        var dir = NewStatusDir();
+        try
+        {
+            WriteStatus(dir, "lead", new SessionStatus { State = "idle", Title = "backlog", Cwd = "/tmp/t", SessionPid = 600 });
+            for (var i = 1; i <= 14; i++)
+                WriteStatus(dir, "member-" + i, new SessionStatus { State = "idle", Title = "backlog", Cwd = "/tmp/t", SessionPid = 600 + i });
+
+            var calls = 0;
+            var kept = SessionManager.HeadlessSnapshot(dir, NoJobs, isRunning: _ => true, nowUtc: DateTime.UtcNow,
+                teams: pids =>
+                {
+                    calls++;
+                    Assert.Equal(15, pids.Count);
+                    return pids.ToDictionary(p => p, p => p == 600
+                        ? new AgentTeam.Membership("lead", "red", "lead")
+                        : new AgentTeam.Membership("lead", "blue", "agent-" + (p - 600)));
+                });
+
+            Assert.Equal(1, calls);
+            Assert.Equal(14, kept.Count(k => k.Status.Lead == "lead"));
+            Assert.Equal("", kept.Single(k => k.SessionId == "lead").Status.Lead);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
     // Nothing kept is Claude Code, so nothing is asked — on Windows the team
     // read is a WMI query, and a snapshot of no sessions should cost none.
     [Fact]
