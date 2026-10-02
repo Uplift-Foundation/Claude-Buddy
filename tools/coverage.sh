@@ -46,7 +46,11 @@ cd "$(dirname "$0")/.."
 # The path is hashed rather than used directly: it can be long, contains
 # slashes, and none of that belongs in a directory name. Sixteen hex characters
 # of it is plenty to keep concurrent checkouts apart.
-CHECKOUT_KEY="$(printf '%s' "$PWD" | shasum | cut -c1-16)"
+# shasum is Perl's and ships with macOS; Git Bash on Windows has sha1sum instead
+# and no shasum at all, so `set -e` killed the script here with exit 127 before
+# it measured anything (CB-229, found on the Windows box). Same digest either way.
+if command -v shasum >/dev/null 2>&1; then HASHER=shasum; else HASHER=sha1sum; fi
+CHECKOUT_KEY="$(printf '%s' "$PWD" | $HASHER | cut -c1-16)"
 OUT="${TMPDIR:-/tmp}/claude-buddy-coverage/$CHECKOUT_KEY"
 rm -rf "$OUT"
 mkdir -p "$OUT"
