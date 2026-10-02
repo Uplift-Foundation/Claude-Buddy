@@ -272,6 +272,14 @@ namespace ClaudeBuddy
                 ? CodeSessionsPath + "/" + Uri.EscapeDataString(id!)
                 : null;
 
+        // A session's archive endpoint (CB-225). **Measured**: `POST` with `{}`
+        // answers 200 and the session back as archived. Refused locally for a
+        // malformed id, for the reason CodeEventsPath gives — this is a write.
+        internal static string? ArchivePath(string? id) =>
+            ClaudeCloudRoster.IsWellFormedId(id)
+                ? CodeSessionsPath + "/" + Uri.EscapeDataString(id!) + "/archive"
+                : null;
+
         // The media type a body goes out as. The only one the gate sent.
         internal const string JsonMediaType = "application/json";
 
