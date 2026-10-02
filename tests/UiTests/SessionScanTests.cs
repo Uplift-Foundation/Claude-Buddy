@@ -2744,6 +2744,52 @@ public class SessionScanTests
             SessionDependents.Explain(await manager.DependentsOfAsync("ordinary")));
     }
 
+    // CB-228, end to end from the orb: the End row's click goes through the
+    // current manager and its guard runs off the UI thread. Made current by the
+    // private setter, as UsageOrbsVisibilityTests does, rather than by Start() —
+    // which would bring the watcher, the scan timer and a tray icon with it. The
+    // pid is one nothing can be behind, for the reason
+    // EndingASessionSignalsThePidTheStatusNames gives.
+    [AvaloniaFact]
+    public async Task TheEndClickReachesTheGuardOffTheUiThread()
+    {
+        using var scratch = new Scratch();
+
+        var uiThread = Environment.CurrentManagedThreadId;
+        var askedOn = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var manager = Manager(scratch, () => Listing(), dependents: _ =>
+        {
+            askedOn.TrySetResult(Environment.CurrentManagedThreadId);
+            return new SessionDependents.Verdict(DaemonBelow: true, JobsBelow: 1);
+        });
+
+        var statuses = (Dictionary<string, SessionStatus>)typeof(SessionManager)
+            .GetField("_statuses", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .GetValue(manager)!;
+
+        var orb = new OrbWindow("clicked");
+        statuses["clicked"] = new SessionStatus
+        {
+            Source = SessionSource.ClaudeCode,
+            SessionPid = NeverAllocatedPid,
+        };
+
+        var instance = typeof(SessionManager).GetProperty(nameof(SessionManager.Instance))!
+            .GetSetMethod(nonPublic: true)!;
+        instance.Invoke(null, new object?[] { manager });
+        try
+        {
+            orb.EndSession_Click(null, new Avalonia.Interactivity.RoutedEventArgs());
+
+            var thread = await askedOn.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.NotEqual(uiThread, thread);
+        }
+        finally
+        {
+            instance.Invoke(null, new object?[] { null });
+        }
+    }
+
     // A session the menu would never offer the row for is not asked about at
     // all. Cheap to get wrong in the direction that costs a `ps` of the whole
     // process table every time a gateway orb's menu opens, for a row that is
