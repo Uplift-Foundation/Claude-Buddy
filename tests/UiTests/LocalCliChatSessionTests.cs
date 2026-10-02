@@ -725,6 +725,18 @@ public class LocalCliChatSessionTests : IDisposable
         Assert.Throws<ObjectDisposedException>(() => made!.EnableRaisingEvents = true);
     }
 
+    // Read before Start() has run there is no watcher and no thread to join: the
+    // accessors are null-safe rather than assuming Watch() got there first.
+    [AvaloniaFact]
+    public void ASessionThatHasNotStartedHasNoWatcherAndNoStarter()
+    {
+        var session = Session(Transcript(User("u1", "hello")));
+
+        Assert.Null(session.WatcherStarter);
+        Assert.Null(session.Watcher);
+        session.Dispose();
+    }
+
     // The half of the real start that is safe to call from a test. Turning the
     // watcher on is deliberately not called here: on macOS that runs the
     // kernel's global sync(2) and can take minutes on a loaded machine, which
