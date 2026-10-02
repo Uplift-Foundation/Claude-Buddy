@@ -1928,6 +1928,65 @@ public class MirrorRoundTripTests : IDisposable
         Assert.Null(entry.Lead);
     }
 
+    // The real liveness rule on members, not an injected one: a member nobody
+    // has spoken to since yesterday is not offered, exactly as a registered
+    // session in that state is not. Its lead's transcript path names no file,
+    // which is what keeps the lead itself out of the liveness question, and
+    // the members that do get offered cover the other two transcript shapes —
+    // a path to nothing, and no path at all — both offered without a
+    // transcript to show.
+    [Fact]
+    public async Task AMemberNobodyHasSpokenToSinceYesterdayIsNotOffered()
+    {
+        var harness = new Harness(_dir);
+        harness.AddSession("backlog status check", Path.Combine(_dir, "no-such-lead.jsonl"));
+        var lead = harness.SessionIdOf("backlog status check");
+        var stale = harness.AddTeamMember("backlog status check", lead, "stale", "grey",
+            WriteTranscript("stale-member.jsonl", Conversation(2)));
+        var pathToNothing = harness.AddTeamMember("backlog status check", lead, "ghost", "blue",
+            Path.Combine(_dir, "no-such-member.jsonl"));
+        var noPath = harness.AddTeamMember("backlog status check", lead, "fresh", "green", "");
+
+        harness.Server.Now = () => LiveAt.AddHours(23);
+
+        // Read off what the server sent rather than what the client kept: the
+        // client keeps only rows with a transcript to show, and two of these
+        // deliberately have none.
+        await harness.Server.HandleAsync(Harness.NearRelay, OldHello("stale1"));
+        var known = MirrorProtocol.DecodeRoster(ReassembledPayload(harness.ToClient, "stale1"))!.ToList();
+        Assert.DoesNotContain(known, e => e.Route == RemoteMirrorServer.RouteFor(stale));
+
+        var ghost = known.Single(e => e.Route == RemoteMirrorServer.RouteFor(pathToNothing));
+        Assert.False(ghost.HasTranscript);
+        Assert.Equal(RemoteMirrorServer.RouteFor(lead), ghost.Lead);
+
+        var fresh = known.Single(e => e.Route == RemoteMirrorServer.RouteFor(noPath));
+        Assert.False(fresh.HasTranscript);
+        Assert.Equal(3, known.Count);
+    }
+
+    // A member's display name when it has no title: its folder, and with no
+    // folder either, the name of its CLI — the same fallback Codex and Grok
+    // rows get. The near side prefers the agent name anyway; this is what an
+    // older Buddy, which knows nothing of agents, would show.
+    [Fact]
+    public async Task AnUntitledMemberIsNamedForItsFolderOrElseItsCli()
+    {
+        var harness = new Harness(_dir);
+        harness.AddSession("lead", WriteTranscript("lead2.jsonl", Conversation(2)));
+        var lead = harness.SessionIdOf("lead");
+        var inFolder = harness.AddTeamMember("", lead, "a", "blue",
+            WriteTranscript("folder.jsonl", Conversation(2)), cwd: Path.Combine(_dir, "menu-ux"));
+        var nowhere = harness.AddTeamMember("", lead, "b", "blue",
+            WriteTranscript("nowhere.jsonl", Conversation(2)), cwd: "");
+
+        await harness.Client.AskWhatTheyHaveAsync(harness.Peers);
+
+        var known = harness.Client.Known().Select(k => k.Entry).ToList();
+        Assert.Equal("menu-ux", known.Single(e => e.Route == RemoteMirrorServer.RouteFor(inFolder)).Name);
+        Assert.Equal(MirrorProtocol.CliClaudeCode, known.Single(e => e.Route == RemoteMirrorServer.RouteFor(nowhere)).Name);
+    }
+
     // A roster with no team in it is the same bytes it always was — the new
     // fields are absent, not null-valued — so CB-216's "unchanged" answer
     // still holds for every machine not running a team.
@@ -2148,13 +2207,13 @@ public class MirrorRoundTripTests : IDisposable
         // list members; measured), whose Lead is its lead's session id, as the
         // snapshot's team read leaves it.
         public string AddTeamMember(string title, string leadSessionId, string agent, string agentColor,
-            string transcriptPath)
+            string transcriptPath, string? cwd = null)
         {
             var sessionId = Guid.NewGuid().ToString();
             _sessions.Add((sessionId, new SessionStatus
             {
                 Title = title,
-                Cwd = _dir,
+                Cwd = cwd ?? _dir,
                 Source = SessionSource.ClaudeCode,
                 TranscriptPath = transcriptPath,
                 TmuxPane = "%3",

@@ -294,6 +294,43 @@ public class HeadlessSnapshotTests
         }
     }
 
+    // A Claude Code session with no pid has no process to ask: it stays out
+    // of the batch, and it is in no team. The pid-less session is a
+    // background job the daemon still names — the one shape in which the
+    // snapshot keeps a pid-less Claude status at all (see the case above that
+    // pins it, and why its platform is pinned too).
+    [Fact]
+    public void AClaudeSessionWithNoPidIsLeftOutOfTheTeamRead()
+    {
+        var dir = NewStatusDir();
+        try
+        {
+            WriteStatus(dir, "member", new SessionStatus
+                { State = "idle", Title = "backlog", Cwd = "/tmp/t", Source = SessionSource.ClaudeCode, SessionPid = 701 });
+            WriteStatus(dir, "pidless", new SessionStatus
+                { State = "idle", Title = "backlog", Cwd = "/tmp/t", Source = SessionSource.ClaudeCode, SessionPid = 0 });
+            var jobs = new Dictionary<string, string> { ["pidless"] = "blocked" };
+
+            var asked = new List<IReadOnlyList<int>>();
+            var kept = SessionManager.HeadlessSnapshot(dir, () => jobs, isRunning: _ => true, nowUtc: DateTime.UtcNow,
+                honourOrbLifetime: false, onWindows: false,
+                teams: pids =>
+                {
+                    asked.Add(pids);
+                    return new Dictionary<int, AgentTeam.Membership> { [701] = new("lead-x", "blue", "wren") };
+                });
+
+            Assert.Equal(new[] { 701 }, Assert.Single(asked));
+            Assert.Contains(kept, k => k.SessionId == "pidless");
+            Assert.Equal("", kept.Single(k => k.SessionId == "pidless").Status.Lead);
+            Assert.Equal("lead-x", kept.Single(k => k.SessionId == "member").Status.Lead);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
     // Nothing kept is Claude Code, so nothing is asked — on Windows the team
     // read is a WMI query, and a snapshot of no sessions should cost none.
     [Fact]
