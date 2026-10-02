@@ -197,6 +197,7 @@ namespace ClaudeBuddy
 
             // Centred, so the beat grows the heart in place rather than pushing
             // it towards the orb's rim.
+            HeartGlyph.Data = StreamGeometry.Parse(SymbolMarks.Heart);
             HeartGlyph.RenderTransform = _heartScale;
             HeartGlyph.RenderTransformOrigin = RelativePoint.Center;
 
@@ -743,6 +744,12 @@ namespace ClaudeBuddy
 
         private const double BadgeGlyphSize = 13;
 
+        // The drawn heart's square, a little under the badge glyph size: the
+        // outline fills its box edge to edge where a font's heart sits inside
+        // an em with room around it, and 11 is what matches the macOS glyph
+        // the heart was designed against, measured off the osx-arm64 capture.
+        private const double HeartMarkSize = 11;
+
         // What the CLI mark shows, so a test can assert on the disc a person
         // would have seen without reading a brush back off the control.
         internal string? CliMarkName { get; private set; }
@@ -1047,7 +1054,7 @@ namespace ClaudeBuddy
             // same reason the kind badge does.
             HeartBadge.Width = HeartBadge.Height = BadgeSize * scale;
             HeartBadge.CornerRadius = new CornerRadius(BadgeSize * scale / 2);
-            HeartGlyph.FontSize = BadgeGlyphSize * scale;
+            HeartGlyph.Width = HeartGlyph.Height = HeartMarkSize * scale;
             HeartBadge.Margin = new Thickness(0, Math.Max(0, inset), Math.Max(0, inset), 0);
 
             // And mirrored once more into the corner this one lives in. Same sum

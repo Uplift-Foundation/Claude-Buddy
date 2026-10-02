@@ -116,6 +116,22 @@ namespace ClaudeBuddy
         internal const string Stop =
             "M2.5,2.5 L13.5,2.5 L13.5,13.5 L2.5,13.5 Z";
 
+        // The heartbeat heart, on the orb's badge and in the chat panel's chip.
+        // U+2665 is no colour emoji on Windows — it resolves to plain Segoe UI
+        // and takes the pink it is given — but Segoe UI's heart is a much
+        // smaller glyph than the Hiragino Sans one macOS draws at the same
+        // point size, so the win-x64 capture showed a heart about two thirds
+        // the size of the osx-arm64 one in an identical badge. "The colour and
+        // the size the badge specifies" is the bar, so it is drawn too.
+        //
+        // Two lobes and a point, with a shallow notch: a deep notch closes up
+        // at 11px and the heart reads as a blob, which is the failure the
+        // cloud's lumps were designed against too.
+        internal const string Heart =
+            "M8,14.5 C8,14.5 0.8,10.1 0.8,5.4 C0.8,3.1 2.6,1.4 4.8,1.4 "
+            + "C6.2,1.4 7.4,2.2 8,3.3 C8.6,2.2 9.8,1.4 11.2,1.4 "
+            + "C13.4,1.4 15.2,3.1 15.2,5.4 C15.2,10.1 8,14.5 8,14.5 Z";
+
         // What the speak button wears in each state: a character, or a drawn
         // mark, never both. Shared by OrbFlyout and ChatPanel, which used to
         // carry the same switch twice.

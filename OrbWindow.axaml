@@ -329,12 +329,15 @@
                 HorizontalAlignment="Right" VerticalAlignment="Top"
                 Margin="0,4,4,0"
                 IsHitTestVisible="False">
-            <TextBlock x:Name="HeartGlyph"
-                       Text="&#x2665;"
-                       FontSize="13"
-                       Foreground="#FFFF6B81"
-                       HorizontalAlignment="Center" VerticalAlignment="Center"
-                       IsHitTestVisible="False"/>
+            <!-- Drawn, not typed (SymbolMarks.Heart, set in the constructor):
+                 Segoe UI's U+2665 is a third smaller than the macOS one at the
+                 same point size, so the same badge wore two hearts (CB-173). -->
+            <Path x:Name="HeartGlyph"
+                  Width="11" Height="11"
+                  Stretch="Uniform"
+                  Fill="#FFFF6B81"
+                  HorizontalAlignment="Center" VerticalAlignment="Center"
+                  IsHitTestVisible="False"/>
         </Border>
 
         <!-- Presence: what this session wants from you, when the answer is

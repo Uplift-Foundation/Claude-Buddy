@@ -133,10 +133,22 @@
                                 CornerRadius="4" Padding="4,1"
                                 VerticalAlignment="Center"
                                 Background="#26FFFFFF">
-                            <TextBlock x:Name="HeartChipText"
-                                       FontSize="9.5"
-                                       Foreground="#FFFF8797"
-                                       Text="&#x2665;  heartbeat"/>
+                            <!-- The heart is drawn (SymbolMarks.Heart, set
+                                 in the constructor) for the same size reason as
+                                 the orb's. The pair beats together, which is
+                                 why the transform sits on this panel. -->
+                            <StackPanel x:Name="HeartChipText"
+                                        Orientation="Horizontal" Spacing="4">
+                                <Path x:Name="HeartChipMark"
+                                      Width="9" Height="9"
+                                      Stretch="Uniform"
+                                      Fill="#FFFF8797"
+                                      VerticalAlignment="Center"/>
+                                <TextBlock FontSize="9.5"
+                                           Foreground="#FFFF8797"
+                                           VerticalAlignment="Center"
+                                           Text="heartbeat"/>
+                            </StackPanel>
                         </Border>
                         <TextBlock x:Name="SubtitleText"
                                    FontSize="11"

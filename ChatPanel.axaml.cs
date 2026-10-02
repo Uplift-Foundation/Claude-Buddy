@@ -208,6 +208,7 @@ namespace ClaudeBuddy
             // background-job badge wears, which is the whole point of this
             // button's mark.
             AttachMark.Data = StreamGeometry.Parse(SymbolMarks.Gear);
+            HeartChipMark.Data = StreamGeometry.Parse(SymbolMarks.Heart);
 
             _defaultWidth = Width;
             _defaultHeight = Height;

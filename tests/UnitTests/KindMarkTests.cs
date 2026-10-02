@@ -114,3 +114,35 @@ public class SpeakLookTests
         Assert.Null(mark);
     }
 }
+
+// CB-173. The heartbeat heart, drawn because Segoe UI's U+2665 came out a
+// third smaller than macOS's in the same badge. Pure string arithmetic, so it
+// runs without a render interface: the outline has to be mirror-symmetric
+// about the box's centre line, because a heart one lobe fatter than the other
+// reads as a mistake at any size, and a hand-edited control point is exactly
+// how that happens without anything failing.
+public class HeartMarkTests
+{
+    [Fact]
+    public void TheHeartIsSymmetricAboutTheCentreLine()
+    {
+        var points = System.Text.RegularExpressions.Regex
+            .Matches(SymbolMarks.Heart, @"(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)")
+            .Select(m => (X: double.Parse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture),
+                          Y: double.Parse(m.Groups[2].Value, System.Globalization.CultureInfo.InvariantCulture)))
+            .ToList();
+
+        Assert.NotEmpty(points);
+
+        foreach (var (x, y) in points)
+        {
+            Assert.Contains(points, p => Math.Abs(p.X - (16 - x)) < 1e-9 && Math.Abs(p.Y - y) < 1e-9);
+        }
+    }
+
+    [Fact]
+    public void TheHeartComesToAPointOnTheCentreLineAtTheBottom()
+    {
+        Assert.StartsWith("M8,14.5 ", SymbolMarks.Heart);
+    }
+}

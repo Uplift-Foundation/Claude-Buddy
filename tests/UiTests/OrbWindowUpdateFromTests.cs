@@ -298,6 +298,23 @@ public class OrbWindowUpdateFromTests
         Assert.Equal(OrbWindow.KindMarkFor(kind), orb.KindMarkData);
     }
 
+    // CB-173: the heartbeat heart is drawn too. Segoe UI's U+2665 took its
+    // pink correctly but came out a third smaller than macOS's, so the same
+    // badge wore two different hearts.
+    [AvaloniaFact]
+    public void TheHeartbeatHeartIsDrawn()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        var status = PlainStatus();
+        status.Heartbeat = true;
+
+        orb.UpdateFrom(status);
+
+        var heart = orb.FindControl<Avalonia.Controls.Shapes.Path>("HeartGlyph")!;
+        Assert.True(orb.FindControl<Border>("HeartBadge")!.IsVisible);
+        Assert.Equal(Avalonia.Media.StreamGeometry.Parse(SymbolMarks.Heart).Bounds, heart.Data!.Bounds);
+    }
+
     // Typed kinds have no mark data to hand the chat panel, so the chip types
     // their character instead.
     [AvaloniaFact]
