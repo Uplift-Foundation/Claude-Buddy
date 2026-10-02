@@ -4,14 +4,16 @@ using Xunit;
 
 namespace ClaudeBuddy.Tests;
 
-// Exercises ClaudeBuddyHook.ps1 — the PowerShell twin of ClaudeBuddyHook.sh —
-// as a real subprocess. Written by reading the script closely (there is no
-// pwsh on the machine this was authored on, confirmed via `which pwsh`), so
-// unlike HookScriptShTests this class could not be run locally while it was
-// written; it is gated to skip everywhere except a real Windows runner,
-// where it will run for the first time. Get the argv/JSON shape agreeing
-// with the script exactly, because nothing here has been proven against a
-// live pwsh.
+// Exercises ClaudeBuddyHook.ps1 -- the PowerShell twin of ClaudeBuddyHook.sh --
+// as a real subprocess, under BOTH interpreters (CB-227). Every Windows
+// install registers the hook as `powershell.exe -NoProfile -ExecutionPolicy
+// Bypass -File ...` (Windows PowerShell 5.1), so 5.1 is the interpreter that
+// matters; pwsh 7 is what developers happen to have, and a construct that
+// only 7 understands (`??`, `?.`, ternary) passes there and breaks the hook
+// for every real user. Each case body takes the executable and is wrapped
+// twice, one wrapper per shell, with the skip attributes from
+// SapiSpeakScriptTests: on Windows both must run (a missing one fails), off
+// Windows 5.1 is reported Skipped and pwsh skips only if absent.
 //
 // Argv shape, from the script's param() block: -State <idle|generating|
 // waiting|ended> (mandatory), -Agent <claude|codex|grok> (default claude),
@@ -39,6 +41,7 @@ public class HookScriptPs1Tests
     private sealed record HookResult(int ExitCode, string Stdout, string Stderr);
 
     private static HookResult RunHook(
+        string exe,
         string agent,
         string state,
         string payloadJson,
@@ -47,7 +50,7 @@ public class HookScriptPs1Tests
     {
         var psi = new ProcessStartInfo
         {
-            FileName = "pwsh",
+            FileName = exe,
             RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
@@ -55,6 +58,10 @@ public class HookScriptPs1Tests
         };
         psi.ArgumentList.Add("-NoProfile");
         psi.ArgumentList.Add("-NonInteractive");
+        // Exactly what the installers register (install-windows-hooks.ps1 and
+        // friends): -NoProfile -ExecutionPolicy Bypass -File.
+        psi.ArgumentList.Add("-ExecutionPolicy");
+        psi.ArgumentList.Add("Bypass");
         psi.ArgumentList.Add("-File");
         psi.ArgumentList.Add(HookScript);
         psi.ArgumentList.Add("-State");
@@ -81,7 +88,7 @@ public class HookScriptPs1Tests
         }
 
         using var process = Process.Start(psi)
-            ?? throw new InvalidOperationException("Failed to start pwsh");
+            ?? throw new InvalidOperationException("Failed to start " + exe);
 
         process.StandardInput.Write(payloadJson);
         process.StandardInput.Close();
@@ -172,8 +179,7 @@ public class HookScriptPs1Tests
         return palette[index];
     }
 
-    [WindowsFact]
-    public void HookAlwaysExitsZeroWithNoOutput_ForEveryLiveStateAndAgent()
+    private static void HookAlwaysExitsZeroWithNoOutput_ForEveryLiveStateAndAgentCase(string exe)
     {
         foreach (var agent in new[] { "claude", "codex", "grok" })
         foreach (var state in new[] { "idle", "generating", "waiting" })
@@ -190,14 +196,13 @@ public class HookScriptPs1Tests
                 ["GROK_HOME"] = grokHome,
             };
 
-            var result = RunHook(agent, state, payload, tempDir, env);
+            var result = RunHook(exe, agent, state, payload, tempDir, env);
 
             AssertSilentSuccess(result);
         }
     }
 
-    [WindowsFact]
-    public void EndedStateDeletesTheStatusFileAndExitsSilently()
+    private static void EndedStateDeletesTheStatusFileAndExitsSilentlyCase(string exe)
     {
         var tempDir = Directory.CreateTempSubdirectory("cb-hook-ps1-").FullName;
         Directory.CreateDirectory(StatusDir(tempDir));
@@ -205,32 +210,30 @@ public class HookScriptPs1Tests
         File.WriteAllText(file, "stale status");
 
         var payload = Payload(new { session_id = "s1", cwd = "C:\\proj", transcript_path = "" });
-        var result = RunHook("claude", "ended", payload, tempDir);
+        var result = RunHook(exe, "claude", "ended", payload, tempDir);
 
         AssertSilentSuccess(result);
         Assert.False(File.Exists(file), "ended must delete the session's status file");
     }
 
-    [WindowsFact]
-    public void MissingSessionId_WritesTheStatusFileNamedUnknown()
+    private static void MissingSessionId_WritesTheStatusFileNamedUnknownCase(string exe)
     {
         var tempDir = Directory.CreateTempSubdirectory("cb-hook-ps1-").FullName;
         var payloadJson = "{\"cwd\":\"C:\\\\proj\",\"transcript_path\":\"\"}";
 
-        var result = RunHook("claude", "idle", payloadJson, tempDir);
+        var result = RunHook(exe, "claude", "idle", payloadJson, tempDir);
         AssertSilentSuccess(result);
 
         Assert.True(File.Exists(StatusFile(tempDir, "unknown")));
     }
 
-    [WindowsFact]
-    public void CustomTitleWinsOverAiTitle_RegardlessOfWhichWasWrittenLast()
+    private static void CustomTitleWinsOverAiTitle_RegardlessOfWhichWasWrittenLastCase(string exe)
     {
-        AssertCustomTitleWins(writeCustomFirst: true);
-        AssertCustomTitleWins(writeCustomFirst: false);
+        AssertCustomTitleWins(exe, writeCustomFirst: true);
+        AssertCustomTitleWins(exe, writeCustomFirst: false);
     }
 
-    private static void AssertCustomTitleWins(bool writeCustomFirst)
+    private static void AssertCustomTitleWins(string exe, bool writeCustomFirst)
     {
         var tempDir = Directory.CreateTempSubdirectory("cb-hook-ps1-").FullName;
         var projectDir = Directory.CreateTempSubdirectory("cb-hook-ps1-proj-").FullName;
@@ -244,7 +247,7 @@ public class HookScriptPs1Tests
         File.WriteAllLines(transcript, lines);
 
         var payload = Payload(new { session_id = "s1", cwd = "C:\\proj", transcript_path = transcript });
-        var result = RunHook("claude", "idle", payload, tempDir);
+        var result = RunHook(exe, "claude", "idle", payload, tempDir);
         AssertSilentSuccess(result);
 
         var status = File.ReadAllText(StatusFile(tempDir, "s1"));
@@ -254,8 +257,7 @@ public class HookScriptPs1Tests
             (writeCustomFirst ? "first" : "last") + ". Status file was: " + status);
     }
 
-    [WindowsFact]
-    public void AutoColorMarker_AppendsAgentColorRecordMatchingThePortedCksumHash()
+    private static void AutoColorMarker_AppendsAgentColorRecordMatchingThePortedCksumHashCase(string exe)
     {
         var tempDir = Directory.CreateTempSubdirectory("cb-hook-ps1-").FullName;
         Directory.CreateDirectory(StatusDir(tempDir));
@@ -268,7 +270,7 @@ public class HookScriptPs1Tests
         const string cwd = "C:\\some\\fixed\\project\\path";
         var payload = Payload(new { session_id = "s1", cwd, transcript_path = transcript });
 
-        var result = RunHook("claude", "idle", payload, tempDir);
+        var result = RunHook(exe, "claude", "idle", payload, tempDir);
         AssertSilentSuccess(result);
 
         var expectedColor = ExpectedAutoColor(cwd);
@@ -282,8 +284,7 @@ public class HookScriptPs1Tests
             transcriptContents);
     }
 
-    [WindowsFact]
-    public void GrokEnvOverridesAClaudeArgvAndWritesCliGrok()
+    private static void GrokEnvOverridesAClaudeArgvAndWritesCliGrokCase(string exe)
     {
         var tempDir = Directory.CreateTempSubdirectory("cb-hook-ps1-").FullName;
         Directory.CreateDirectory(Path.Combine(tempDir, "grok-home"));
@@ -295,15 +296,14 @@ public class HookScriptPs1Tests
             ["GROK_HOME"] = Path.Combine(tempDir, "grok-home")
         };
 
-        var result = RunHook("claude", "idle", payload, tempDir, env);
+        var result = RunHook(exe, "claude", "idle", payload, tempDir, env);
         AssertSilentSuccess(result);
 
         var status = File.ReadAllText(StatusFile(tempDir, "g1"));
         Assert.Contains("\"cli\":\"grok\"", status);
     }
 
-    [WindowsFact]
-    public void GrokCamelCasePayloadFieldsAreRead()
+    private static void GrokCamelCasePayloadFieldsAreReadCase(string exe)
     {
         var tempDir = Directory.CreateTempSubdirectory("cb-hook-ps1-").FullName;
         var grokHome = Path.Combine(tempDir, "grok-home");
@@ -311,7 +311,7 @@ public class HookScriptPs1Tests
         var payload = Payload(new { sessionId = "camel-1", cwd = "C:\\proj", transcriptPath = "" });
         var env = new Dictionary<string, string> { ["GROK_HOME"] = grokHome };
 
-        var result = RunHook("grok", "idle", payload, tempDir, env);
+        var result = RunHook(exe, "grok", "idle", payload, tempDir, env);
         AssertSilentSuccess(result);
 
         Assert.True(File.Exists(StatusFile(tempDir, "camel-1")));
@@ -319,8 +319,7 @@ public class HookScriptPs1Tests
         Assert.Contains("\"cli\":\"grok\"", status);
     }
 
-    [WindowsFact]
-    public void GrokAutoColorDoesNotAppendToTheTranscript()
+    private static void GrokAutoColorDoesNotAppendToTheTranscriptCase(string exe)
     {
         var tempDir = Directory.CreateTempSubdirectory("cb-hook-ps1-").FullName;
         Directory.CreateDirectory(StatusDir(tempDir));
@@ -340,7 +339,7 @@ public class HookScriptPs1Tests
             ["GROK_HOME"] = Path.Combine(tempDir, "grok-home")
         };
 
-        var result = RunHook("grok", "idle", payload, tempDir, env);
+        var result = RunHook(exe, "grok", "idle", payload, tempDir, env);
         AssertSilentSuccess(result);
 
         Assert.Equal("{\"method\":\"session/update\"}\n", File.ReadAllText(transcript));
@@ -350,8 +349,7 @@ public class HookScriptPs1Tests
         Assert.Contains($"\"color\":\"{ExpectedAutoColor(cwd)}\"", status);
     }
 
-    [WindowsFact]
-    public void CodexRolloutFallback_FindsTheRolloutFile_WithoutCrashingOrPrinting()
+    private static void CodexRolloutFallback_FindsTheRolloutFile_WithoutCrashingOrPrintingCase(string exe)
     {
         var tempDir = Directory.CreateTempSubdirectory("cb-hook-ps1-").FullName;
         var codexHome = Directory.CreateTempSubdirectory("cb-hook-ps1-codexhome-").FullName;
@@ -364,11 +362,65 @@ public class HookScriptPs1Tests
         var payload = Payload(new { session_id = sessionId, cwd = "C:\\proj", transcript_path = "" });
         var env = new Dictionary<string, string> { ["CODEX_HOME"] = codexHome };
 
-        var result = RunHook("codex", "idle", payload, tempDir, env);
+        var result = RunHook(exe, "codex", "idle", payload, tempDir, env);
 
         AssertSilentSuccess(result);
 
         var status = File.ReadAllText(StatusFile(tempDir, sessionId));
         Assert.Contains(rolloutFile.Replace("\\", "\\\\"), status);
     }
+
+    [WindowsPowerShellFact]
+    public void HookAlwaysExitsZeroWithNoOutput_ForEveryLiveStateAndAgent_Powershell51() => HookAlwaysExitsZeroWithNoOutput_ForEveryLiveStateAndAgentCase("powershell");
+
+    [PwshFact]
+    public void HookAlwaysExitsZeroWithNoOutput_ForEveryLiveStateAndAgent_Pwsh() => HookAlwaysExitsZeroWithNoOutput_ForEveryLiveStateAndAgentCase("pwsh");
+
+    [WindowsPowerShellFact]
+    public void EndedStateDeletesTheStatusFileAndExitsSilently_Powershell51() => EndedStateDeletesTheStatusFileAndExitsSilentlyCase("powershell");
+
+    [PwshFact]
+    public void EndedStateDeletesTheStatusFileAndExitsSilently_Pwsh() => EndedStateDeletesTheStatusFileAndExitsSilentlyCase("pwsh");
+
+    [WindowsPowerShellFact]
+    public void MissingSessionId_WritesTheStatusFileNamedUnknown_Powershell51() => MissingSessionId_WritesTheStatusFileNamedUnknownCase("powershell");
+
+    [PwshFact]
+    public void MissingSessionId_WritesTheStatusFileNamedUnknown_Pwsh() => MissingSessionId_WritesTheStatusFileNamedUnknownCase("pwsh");
+
+    [WindowsPowerShellFact]
+    public void CustomTitleWinsOverAiTitle_RegardlessOfWhichWasWrittenLast_Powershell51() => CustomTitleWinsOverAiTitle_RegardlessOfWhichWasWrittenLastCase("powershell");
+
+    [PwshFact]
+    public void CustomTitleWinsOverAiTitle_RegardlessOfWhichWasWrittenLast_Pwsh() => CustomTitleWinsOverAiTitle_RegardlessOfWhichWasWrittenLastCase("pwsh");
+
+    [WindowsPowerShellFact]
+    public void AutoColorMarker_AppendsAgentColorRecordMatchingThePortedCksumHash_Powershell51() => AutoColorMarker_AppendsAgentColorRecordMatchingThePortedCksumHashCase("powershell");
+
+    [PwshFact]
+    public void AutoColorMarker_AppendsAgentColorRecordMatchingThePortedCksumHash_Pwsh() => AutoColorMarker_AppendsAgentColorRecordMatchingThePortedCksumHashCase("pwsh");
+
+    [WindowsPowerShellFact]
+    public void GrokEnvOverridesAClaudeArgvAndWritesCliGrok_Powershell51() => GrokEnvOverridesAClaudeArgvAndWritesCliGrokCase("powershell");
+
+    [PwshFact]
+    public void GrokEnvOverridesAClaudeArgvAndWritesCliGrok_Pwsh() => GrokEnvOverridesAClaudeArgvAndWritesCliGrokCase("pwsh");
+
+    [WindowsPowerShellFact]
+    public void GrokCamelCasePayloadFieldsAreRead_Powershell51() => GrokCamelCasePayloadFieldsAreReadCase("powershell");
+
+    [PwshFact]
+    public void GrokCamelCasePayloadFieldsAreRead_Pwsh() => GrokCamelCasePayloadFieldsAreReadCase("pwsh");
+
+    [WindowsPowerShellFact]
+    public void GrokAutoColorDoesNotAppendToTheTranscript_Powershell51() => GrokAutoColorDoesNotAppendToTheTranscriptCase("powershell");
+
+    [PwshFact]
+    public void GrokAutoColorDoesNotAppendToTheTranscript_Pwsh() => GrokAutoColorDoesNotAppendToTheTranscriptCase("pwsh");
+
+    [WindowsPowerShellFact]
+    public void CodexRolloutFallback_FindsTheRolloutFile_WithoutCrashingOrPrinting_Powershell51() => CodexRolloutFallback_FindsTheRolloutFile_WithoutCrashingOrPrintingCase("powershell");
+
+    [PwshFact]
+    public void CodexRolloutFallback_FindsTheRolloutFile_WithoutCrashingOrPrinting_Pwsh() => CodexRolloutFallback_FindsTheRolloutFile_WithoutCrashingOrPrintingCase("pwsh");
 }
