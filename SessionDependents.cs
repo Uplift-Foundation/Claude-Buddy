@@ -298,6 +298,26 @@ namespace ClaudeBuddy
         internal const string CheckingTip =
             "Looking at what is running under this session before offering to end it.";
 
+        // And when the read failed or did not come back (CB-228). Disabled,
+        // and saying so: the read exists to find the one shape where ending
+        // the session must be refused, so not knowing is not permission. This
+        // is a different case from the one Nothing's comment argues for — that
+        // is SessionDependents.Of finding the table unreadable, which it
+        // answers as Nothing deliberately and which stays as it is. This is the
+        // read itself throwing or hanging past ReadTimeout, which Of's own
+        // catch should make impossible and which, if it happens anyway, means
+        // something is wrong that the row should not paper over.
+        internal const string UnknownHeader = "Couldn't check for background jobs";
+
+        internal const string UnknownTip =
+            "Claude Buddy could not read what is running under this session, so it is not "
+            + "offering to end it. Close this menu and open it again to retry.";
+
+        // How long the row waits for an answer before saying it has none. Twice
+        // `ps`'s own five-second timeout in TryRun, and forty times the slowest
+        // WMI read measured on the Windows PC.
+        internal static readonly TimeSpan ReadTimeout = TimeSpan.FromSeconds(10);
+
         // Which of several overlapping reads may still write to the row.
         //
         // A menu can be closed and reopened inside one read's quarter-second,

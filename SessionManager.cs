@@ -395,7 +395,8 @@ namespace ClaudeBuddy
             bool? onWindows = null,
             Func<IReadOnlyList<SessionStatus>, IReadOnlyDictionary<TmuxPaneKey, string?>>? paneOwners = null,
             Func<string, AgentViewer?>? agentViewer = null,
-            Func<IReadOnlyList<int>, IReadOnlyDictionary<int, AgentTeam.Membership>>? teams = null)
+            Func<IReadOnlyList<int>, IReadOnlyDictionary<int, AgentTeam.Membership>>? teams = null,
+            Action<int, SessionDependents.Verdict>? terminate = null)
         {
             _statusDir = statusDir;
             _jobListing = jobListing ?? BackgroundJobs.SnapshotForScan;
@@ -418,6 +419,7 @@ namespace ClaudeBuddy
             _paneOwners = paneOwners ?? TerminalFocuser.TmuxPaneOwners;
             _agentViewer = agentViewer ?? AgentTeamViewer.For;
             _teams = teams ?? AgentTeam.OfAll;
+            _terminate = terminate ?? SessionTerminator.Terminate;
 
             // AccountOrbs starts out visible, and nothing used to tell it
             // otherwise until a switch was flipped — so launching with every
@@ -439,6 +441,12 @@ namespace ClaudeBuddy
         // above, and so the scan suites can prove it is asked on the background
         // half only: the UI half reads the answer out of ScanProbes.TeamOf.
         private readonly Func<IReadOnlyList<int>, IReadOnlyDictionary<int, AgentTeam.Membership>> _teams;
+
+        // What ends a session's process once EndSession has decided it may
+        // (CB-228). A seam so the scan suites can prove the kill runs off the
+        // UI thread and that a refused session is never handed to it, without
+        // a test signalling anything real.
+        private readonly Action<int, SessionDependents.Verdict> _terminate;
 
         // Every subprocess question this pass needs, asked. Runs on
         // ScheduleScan's background thread in production, and inline for
@@ -4189,25 +4197,42 @@ namespace ClaudeBuddy
         // than staying behind on the UI thread, because the order is the whole
         // point of it: ask, then refuse or act, on one reading.
         //
+        // Three hops rather than one: read on a pool thread, back to the UI
+        // thread to check the session is still the one that was clicked, then
+        // the kill on a pool thread. The middle check is new with the move.
+        // While the read runs — a quarter of a second on Windows — a scan can
+        // drop the session or hand its id a new pid, and a kill aimed at the
+        // pid the click saw would then land on whatever holds it now.
+        //
+        // A read that throws ends the task with nothing signalled: the
+        // exception escapes before the kill is reached, which is the direction
+        // an irreversible action should fail in.
+        //
         // Returned so a test can wait for the outcome; the click handler
         // discards it, since the orb going away on the next scan is the only
         // feedback this gesture has ever had.
-        public Task EndSession(string sessionId)
+        public async Task EndSession(string sessionId)
         {
-            if (!_statuses.TryGetValue(sessionId, out var status)) return Task.CompletedTask;
-            if (!SessionPresence.CanEndSession(status)) return Task.CompletedTask;
+            if (!_statuses.TryGetValue(sessionId, out var status)) return;
+            if (!SessionPresence.CanEndSession(status)) return;
 
             var pid = status.SessionPid;
             var read = _dependents;
 
-            return Task.Run(() =>
-            {
-                var dependents = read(pid);
-                if (SessionDependents.BlocksTermination(dependents)) return;
+            var dependents = await Task.Run(() => read(pid));
+            if (SessionDependents.BlocksTermination(dependents)) return;
+            if (!StillEndable(sessionId, pid)) return;
 
-                SessionTerminator.Terminate(pid, dependents);
-            });
+            var terminate = _terminate;
+            await Task.Run(() => terminate(pid, dependents));
         }
+
+        // Whether the session a click named is still there, still on the pid
+        // the read was about, and still endable.
+        private bool StillEndable(string sessionId, int pid) =>
+            _statuses.TryGetValue(sessionId, out var now)
+            && now.SessionPid == pid
+            && SessionPresence.CanEndSession(now);
 
         // What the orb's menu asks before it draws "End this session", so the
         // row and EndSession's refusal apply one rule to the same machine. See

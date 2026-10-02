@@ -620,16 +620,52 @@ public class OrbWindowPresenceTests
         Assert.Equal("End this session", EndRow(orb).Header);
     }
 
-    // A read that fails answers Nothing — fail open, as SessionDependents.Nothing
-    // argues — rather than leaving the row stuck on "Checking" for good.
+    // A read that fails leaves the row disabled and saying it could not check
+    // — never enabled, because the read exists to find the one shape where the
+    // row must refuse, and not knowing is not permission.
     [AvaloniaFact]
-    public async Task AReadThatFailsLeavesTheRowUsable()
+    public async Task AReadThatFailsSaysSoAndStaysDisabled()
     {
         var orb = new OrbWindow(Guid.NewGuid().ToString());
         orb.UpdateFrom(Status());
 
         await orb.RefreshEndSessionGuardAsync(
             _ => Task.FromException<SessionDependents.Verdict>(new InvalidOperationException("no WMI")));
+
+        Assert.False(EndRow(orb).IsEnabled);
+        Assert.Equal(SessionDependents.UnknownHeader, EndRow(orb).Header);
+        Assert.Equal(SessionDependents.UnknownTip, ToolTip.GetTip(EndRow(orb)));
+    }
+
+    // And one that never answers is treated the same once the timeout passes,
+    // rather than leaving the row on "Checking" for as long as the menu is open.
+    [AvaloniaFact]
+    public async Task AReadThatHangsSaysSoAfterTheTimeout()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        orb.UpdateFrom(Status());
+
+        var never = new TaskCompletionSource<SessionDependents.Verdict>();
+        await orb.RefreshEndSessionGuardAsync(_ => never.Task, TimeSpan.FromMilliseconds(50));
+
+        Assert.False(EndRow(orb).IsEnabled);
+        Assert.Equal(SessionDependents.UnknownHeader, EndRow(orb).Header);
+    }
+
+    // A failure from an older open is as stale as an answer from one: it must
+    // not overwrite the newer open's answer.
+    [AvaloniaFact]
+    public async Task AnOlderReadFailingLastDoesNotOverwriteTheNewerAnswer()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        orb.UpdateFrom(Status());
+
+        var older = new TaskCompletionSource<SessionDependents.Verdict>();
+        var first = orb.RefreshEndSessionGuardAsync(_ => older.Task);
+        await orb.RefreshEndSessionGuardAsync(_ => Task.FromResult(SessionDependents.Nothing));
+
+        older.SetException(new InvalidOperationException("late"));
+        await first;
 
         Assert.True(EndRow(orb).IsEnabled);
         Assert.Equal("End this session", EndRow(orb).Header);

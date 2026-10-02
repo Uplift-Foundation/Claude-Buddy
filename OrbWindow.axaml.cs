@@ -2842,7 +2842,7 @@ namespace ClaudeBuddy
 
         internal void EndSession_Click(object? sender, RoutedEventArgs e)
         {
-            _ = SessionManager.Instance?.EndSession(SessionId);
+            _ = CurrentManager()?.EndSession(SessionId);
         }
 
         // --- CB-170: an OpenClaw conversation's Interrupt and End rows -------
@@ -3048,11 +3048,8 @@ namespace ClaudeBuddy
         // is cached for two seconds either side of it, so the click that follows
         // shares this read rather than paying for a second one.
         //
-        // Excluded from coverage: reads the live process table by way of
-        // SessionManager.Instance, which this suite never sets — the same reason
-        // TryOpenRemoteChat below carries the attribute. What it decides is
-        // RefreshEndSessionGuardAsync, which is internal and driven directly.
-        [ExcludeFromCodeCoverage]
+        // The manager comes through CurrentManager, so a test can open the menu
+        // against a manager it built without making it the process-wide one.
         internal void SessionMenu_Opening(object? sender, System.ComponentModel.CancelEventArgs e)
         {
             // Ahead of the manager-null guard below, and unconditionally —
@@ -3062,7 +3059,7 @@ namespace ClaudeBuddy
             RebuildSoundSubmenus();
             RebuildSizeSubmenu();
 
-            var manager = SessionManager.Instance;
+            var manager = CurrentManager();
             if (manager is null) return;
 
             _ = RefreshEndSessionGuardAsync(manager.DependentsOfAsync);
@@ -3083,10 +3080,10 @@ namespace ClaudeBuddy
         // (gateway, remote, pid-less) has nothing to check, and the manager
         // would answer Nothing without reading anyway.
         //
-        // A read that throws answers Nothing, the same fail-open direction
-        // SessionDependents.Nothing documents for a read that could not be
-        // made: losing "End this session" from a menu because one read failed
-        // breaks a working feature, and EndSession asks again before acting.
+        // A read that throws, or has not answered by ReadTimeout, leaves the
+        // row disabled and saying it could not check — never enabled.
+        // SessionDependents.UnknownHeader has why that is not the fail-open
+        // direction Nothing takes.
         //
         // Held while the menu is open, so UpdateFrom's reset to the plain
         // wording — which runs for this orb every scan — cannot overwrite the
@@ -3095,7 +3092,7 @@ namespace ClaudeBuddy
         // under the cursor; the click was still refused, but the row had stopped
         // telling the truth about it.
         internal async Task RefreshEndSessionGuardAsync(
-            Func<string, Task<SessionDependents.Verdict>> read)
+            Func<string, Task<SessionDependents.Verdict>> read, TimeSpan? timeout = null)
         {
             if (!EndSessionItem.IsVisible) return;
 
@@ -3109,17 +3106,28 @@ namespace ClaudeBuddy
             SessionDependents.Verdict verdict;
             try
             {
-                verdict = await read(SessionId);
+                verdict = await read(SessionId).WaitAsync(timeout ?? SessionDependents.ReadTimeout);
             }
             catch
             {
-                verdict = SessionDependents.Nothing;
+                if (!_endGuardRequests.IsCurrent(ticket)) return;
+
+                EndSessionItem.IsEnabled = false;
+                EndSessionItem.Header = SessionDependents.UnknownHeader;
+                ToolTip.SetTip(EndSessionItem, SessionDependents.UnknownTip);
+                return;
             }
 
             if (!_endGuardRequests.IsCurrent(ticket)) return;
 
             ApplyEndSessionGuard(verdict);
         }
+
+        // Which manager this orb's menu asks (CB-228). The process-wide one in
+        // the app; a test sets its own, so the Opening and End-click paths can
+        // be driven without SessionManager.Start() and its watcher, timer and
+        // tray icon.
+        internal Func<SessionManager?> CurrentManager { get; set; } = () => SessionManager.Instance;
 
         private readonly SessionDependents.GuardRequests _endGuardRequests = new();
         private bool _endGuardHeld;

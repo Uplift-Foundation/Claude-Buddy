@@ -473,4 +473,23 @@ public class SessionDependentsTests
         Assert.StartsWith("Checking", SessionDependents.CheckingHeader);
         Assert.False(string.IsNullOrWhiteSpace(SessionDependents.CheckingTip));
     }
+
+    // A read that failed says so in words of its own — neither the plain row,
+    // which would offer the action, nor "Checking", which would promise an
+    // answer that is not coming.
+    [Fact]
+    public void AFailedReadSaysItCouldNotCheck()
+    {
+        Assert.NotEqual(SessionDependents.Explain(SessionDependents.Nothing), SessionDependents.UnknownHeader);
+        Assert.NotEqual(SessionDependents.CheckingHeader, SessionDependents.UnknownHeader);
+        Assert.False(string.IsNullOrWhiteSpace(SessionDependents.UnknownTip));
+    }
+
+    // Long enough that `ps`'s own five-second timeout in TryRun answers first,
+    // so a slow macOS read reaches the row as an answer rather than a failure.
+    [Fact]
+    public void TheRowOutwaitsThePsTimeout()
+    {
+        Assert.True(SessionDependents.ReadTimeout > TimeSpan.FromSeconds(5));
+    }
 }
