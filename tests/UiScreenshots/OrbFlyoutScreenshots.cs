@@ -119,6 +119,19 @@ public class OrbFlyoutScreenshots
         ScreenshotHelper.CaptureAlreadyShown(flyout, "orb-flyout-speaking-stop-square.png");
     }
 
+    // And the preparing look, which CB-173 left as text: U+23F3 is meant to
+    // be a colour emoji on both platforms. This capture is the evidence for
+    // that, rather than the font manager's word for it.
+    [AvaloniaFact]
+    public void TheSpeakButtonWhilePreparingShowsTheHourglass()
+    {
+        var flyout = new OrbFlyout();
+        flyout.SetSpeakState(TextToSpeech.SpeakState.Preparing);
+        flyout.Show();
+        ScreenshotHelper.Flush();
+        ScreenshotHelper.CaptureAlreadyShown(flyout, "orb-flyout-preparing-hourglass.png");
+    }
+
     [AvaloniaFact]
     public void ClickingMicButtonRaisesMicClickedExactlyOnce()
     {

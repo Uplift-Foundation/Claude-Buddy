@@ -99,6 +99,47 @@ internal static class ScreenshotHelper
         Save(window, fileName);
     }
 
+    // Several windows rendered left to right onto one bitmap, for a
+    // comparison that is only meaningful with every case in the same image —
+    // CB-173's six kind badges. Each window goes through Render and Check like
+    // any other capture, so the composite cannot be the one picture drawn
+    // with LCD text or skipped by the legibility check.
+    public static void SideBySide(IReadOnlyList<Window> windows, string fileName)
+    {
+        const int Gap = 8;
+
+        var shots = windows.Select(w => new RenderTargetBitmap(new PixelSize(
+            Math.Max(1, (int)Math.Ceiling(w.Bounds.Width)),
+            Math.Max(1, (int)Math.Ceiling(w.Bounds.Height))))).ToList();
+
+        try
+        {
+            foreach (var (window, shot) in windows.Zip(shots)) Render(window, shot);
+
+            var width = shots.Sum(s => s.PixelSize.Width) + Gap * (shots.Count + 1);
+            var height = shots.Max(s => s.PixelSize.Height) + Gap * 2;
+
+            using var target = new RenderTargetBitmap(new PixelSize(width, height));
+            using (var ctx = target.CreateDrawingContext())
+            {
+                var x = Gap;
+                foreach (var shot in shots)
+                {
+                    ctx.DrawImage(shot, new Rect(x, Gap, shot.PixelSize.Width, shot.PixelSize.Height));
+                    x += shot.PixelSize.Width + Gap;
+                }
+            }
+
+            target.Save(Path.Combine(OutputDir, fileName));
+
+            foreach (var (window, shot) in windows.Zip(shots)) Check(window, shot, fileName);
+        }
+        finally
+        {
+            foreach (var shot in shots) shot.Dispose();
+        }
+    }
+
     // One render, written to disk and checked, rather than two paths that
     // could drift apart.
     private static void Save(Visual visual, string fileName)

@@ -89,6 +89,88 @@ public class ChatPanelScreenshots : IDisposable
         ScreenshotHelper.CaptureControl(chip, $"chat-panel-kind-chip-{name}.png");
     }
 
+    // Every kind's chip on one sheet, for the same one-image comparison the
+    // orb badges get. The chip is re-rendered per kind rather than collected,
+    // because there is one panel and so one chip: each is captured into its
+    // own bitmap before the next kind rebinds it.
+    [AvaloniaFact]
+    public void EveryKindsChipStacked()
+    {
+        var kinds = new[]
+        {
+            SessionKind.Cron, SessionKind.Direct, SessionKind.Channel,
+            SessionKind.Remote, SessionKind.Background, SessionKind.Cloud,
+        };
+
+        var shots = new List<RenderTargetBitmap>();
+
+        try
+        {
+            foreach (var kind in kinds)
+            {
+                ChatPanel.OpenFor(KindOrb(kind), NewFake());
+                ScreenshotHelper.Flush();
+
+                var chip = ChatPanelTestAccess.Instance!.FindControl<Border>("KindChip")!;
+                var shot = new RenderTargetBitmap(new PixelSize(
+                    (int)Math.Ceiling(chip.Bounds.Width), (int)Math.Ceiling(chip.Bounds.Height)));
+                shots.Add(shot);
+                ScreenshotHelper.Render(chip, shot);
+                ScreenshotHelper.Check(chip, shot, "chat-panel-all-kind-chips.png");
+            }
+
+            const int Margin = 6;
+            var width = shots.Max(s => s.PixelSize.Width) + Margin * 2;
+            var height = shots.Sum(s => s.PixelSize.Height + Margin) + Margin;
+
+            using var target = new RenderTargetBitmap(new PixelSize(width, height));
+            using (var ctx = target.CreateDrawingContext())
+            {
+                // The panel's own header ground, so the chip's translucent fill
+                // reads as it does in place rather than against transparency.
+                ctx.FillRectangle(
+                    new SolidColorBrush(Color.FromRgb(0x2d, 0x2d, 0x30)),
+                    new Rect(0, 0, width, height));
+
+                var y = Margin;
+                foreach (var shot in shots)
+                {
+                    ctx.DrawImage(shot, new Rect(Margin, y, shot.PixelSize.Width, shot.PixelSize.Height));
+                    y += shot.PixelSize.Height + Margin;
+                }
+            }
+
+            target.Save(Path.Combine(ScreenshotHelper.OutputDir, "chat-panel-all-kind-chips.png"));
+        }
+        finally
+        {
+            foreach (var shot in shots) shot.Dispose();
+        }
+    }
+
+    // CB-173. The panel's speak button while speech plays, which is the one
+    // look of it whose glyph changed — the stop square is drawn now.
+    [AvaloniaFact]
+    public void ThePanelsSpeakButtonWhileSpeakingShowsTheStopSquare()
+    {
+        ChatPanel.OpenFor(KindOrb(SessionKind.Channel), NewFake(new[]
+        {
+            new ChatTurn { Role = ChatRole.Assistant, Text = "Reading this aloud." },
+        }));
+
+        try
+        {
+            ChatPanel.SetSpeakState(TextToSpeech.SpeakState.Speaking);
+            ScreenshotHelper.Flush();
+            ScreenshotHelper.CaptureAlreadyShown(
+                ChatPanelTestAccess.Instance!, "chat-panel-speaking-stop-square.png");
+        }
+        finally
+        {
+            ChatPanel.SetSpeakState(TextToSpeech.SpeakState.Idle);
+        }
+    }
+
     private static OrbWindow KindOrb(SessionKind kind)
     {
         var orb = NewOrb();

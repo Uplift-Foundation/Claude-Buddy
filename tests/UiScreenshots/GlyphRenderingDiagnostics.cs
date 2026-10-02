@@ -239,7 +239,37 @@ public class GlyphRenderingDiagnostics
                      (0x21C4, "U+21C4 arrows"),
                      (0x2699, "U+2699 gear"),
                      (0x0040, "U+0040 at"),
-                     (0x0023, "U+0023 hash")
+                     (0x0023, "U+0023 hash"),
+
+                     // CB-173's sweep: every other non-ASCII symbol that reaches
+                     // a TextBlock, so the PR's table is on record per rid
+                     // through Avalonia's own lookup rather than only through a
+                     // SkiaSharp probe. Drawn now: keyboard, stop square and the
+                     // tray's warning sign. Left as text because they agree on
+                     // both platforms: the rest.
+                     //
+                     // Read this list as a lower bound on fallback, not as what
+                     // reaches the screen. On macOS it reports U+23F3 as STIX
+                     // Two Math, while orb-flyout-preparing-hourglass.png from
+                     // the same run shows an Apple Color Emoji hourglass: text
+                     // shaping takes a different route for an emoji-presentation
+                     // character than this one-codepoint lookup does. The
+                     // captures are the evidence; this is the index to them.
+                     (0x2328, "U+2328 keyboard"),
+                     (0x23F9, "U+23F9 stop square"),
+                     (0x26A0, "U+26A0 warning"),
+                     (0x2665, "U+2665 heart"),
+                     (0x2713, "U+2713 check"),
+                     (0x2715, "U+2715 cross"),
+                     (0x27A4, "U+27A4 send arrow"),
+                     (0x2022, "U+2022 bullet"),
+                     (0x2192, "U+2192 arrow"),
+                     (0x23F3, "U+23F3 hourglass"),
+                     (0x1F508, "U+1F508 speaker"),
+                     (0x1F3A4, "U+1F3A4 microphone"),
+                     (0x1F4CC, "U+1F4CC pushpin"),
+                     (0x2728, "U+2728 sparkles"),
+                     (0x1F4CE, "U+1F4CE paperclip")
                  })
         {
             var inDefault = FontManager.Current.TryGetGlyphTypeface(

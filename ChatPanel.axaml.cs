@@ -2569,8 +2569,8 @@ namespace ClaudeBuddy
         {
             if (_owner is null) return;
 
-            ApplyKindChip(_owner.KindGlyphText, _owner.KindMarkData, _owner.KindLabel,
-                _owner.PresenceLabel, (_session as IRemoteChatMachine)?.MachineName);
+            ApplyKindChip(_owner.KindGlyphText, _owner.KindMarkData, _owner.KindLabel, _owner.PresenceLabel,
+                (_session as IRemoteChatMachine)?.MachineName);
 
             // The same answer arriving changes the meta line too, and it is the
             // half that changes colour: until the roster names the machine, a

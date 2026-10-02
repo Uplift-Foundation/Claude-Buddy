@@ -658,6 +658,11 @@ public class LastReachableArmsTests
         var note = LocalCliChatSession.NoPaneNote(new SessionStatus { Cli = "claude" }, LocalSessionShape.Background, onMacOS: true, onWindows: false);
 
         Assert.Contains("Attach it", note);
+
+        // CB-173: names the gear button rather than typing U+2699, which is a
+        // colour emoji on Windows and would not match the drawn button.
+        Assert.Contains("gear button", note);
+        Assert.DoesNotContain("\u2699", note);
         Assert.Contains("background job", note);
         Assert.DoesNotContain("Reply in the terminal instead", note);
     }
@@ -714,6 +719,11 @@ public class LastReachableArmsTests
         Assert.Contains("job-hunter", note);
         Assert.Contains("isn't registered", note);
         Assert.Contains("Attach it", note);
+
+        // CB-173: names the gear button rather than typing U+2699, which is a
+        // colour emoji on Windows and would not match the drawn button.
+        Assert.Contains("gear button", note);
+        Assert.DoesNotContain("\u2699", note);
     }
 
     [Fact]
