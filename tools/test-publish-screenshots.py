@@ -156,6 +156,39 @@ fi
         # The commit is on the remote's branch, not a pre-rebase one that never arrived.
         self.assertEqual(0, self.git("merge-base", "--is-ancestor", ref, "screenshots").returncode)
 
+    def test_a_run_that_lands_right_after_our_push_does_not_take_our_link(self):
+        """The race this ticket is about, at its tightest: another run's commit lands on
+        `screenshots` after our push succeeded and before we name a commit. The link must
+        name the commit WE pushed, not whatever the tip is by the time we look — which a
+        read of the remote after the push (`git ls-remote ... | cut -f1`) would get wrong,
+        and which every other case here passes either way, because nothing else moves the
+        tip in that window. post-receive runs after the ref update and before the client's
+        push returns, so it lands the competing commit exactly there."""
+        flag = os.path.join(self.tmp, "landed-once")
+        hook = os.path.join(self.remote, "hooks", "post-receive")
+        with open(hook, "w") as f:
+            f.write("""#!/bin/sh
+if [ ! -e "%s" ]; then
+  touch "%s"
+  tip=$(git rev-parse refs/heads/screenshots)
+  blob=$(printf 'IMAGE-FROM-THE-NEXT-RUN' | git hash-object -w --stdin)
+  sub=$( { git ls-tree "$tip:osx-arm64" | grep -v '	a.png$'; printf '100644 blob %%s\\ta.png\\n' "$blob"; } | git mktree )
+  tree=$( { git ls-tree "$tip^{tree}" | grep -v '	osx-arm64$'; printf '040000 tree %%s\\tosx-arm64\\n' "$sub"; } | git mktree )
+  c=$(git commit-tree "$tree" -p "$tip" -m "the next run pushed right after us")
+  git update-ref refs/heads/screenshots "$c"
+fi
+""" % (flag, flag))
+        os.chmod(hook, 0o755)
+
+        _, comment = self.run_step(139, b"IMAGE-FROM-OUR-RUN", 2)
+
+        # The competing commit really landed: the tip now shows the other run's image.
+        self.assertEqual(b"IMAGE-FROM-THE-NEXT-RUN",
+                         self.git("show", "screenshots:osx-arm64/a.png").stdout)
+        shown, ref = self.shown_by(comment)
+        self.assertEqual(b"IMAGE-FROM-OUR-RUN", shown)
+        self.assertNotEqual(self.git("rev-parse", "screenshots").stdout.decode().strip(), ref)
+
     def test_the_resolver_would_catch_a_branch_tip_link(self):
         """Control for the checks above: build the OLD link form by hand and show that
         it is the one that resolves to the wrong run."""
