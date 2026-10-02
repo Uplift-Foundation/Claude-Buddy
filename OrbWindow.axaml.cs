@@ -2842,7 +2842,29 @@ namespace ClaudeBuddy
 
         internal void EndSession_Click(object? sender, RoutedEventArgs e)
         {
-            _ = CurrentManager()?.EndSession(SessionId);
+            _ = EndSessionRecordingFailureAsync();
+        }
+
+        // The click's task, observed (CB-228). EndSession fails closed — a read
+        // or a kill that throws ends nothing — but it now fails on a pool
+        // thread, into a task the click used to discard, so a failure left no
+        // trace at all. It goes to crash.log, the one log every user has, under
+        // a source naming the gesture. There is still nothing to show on screen:
+        // the app has no dialog vocabulary, and the orb staying put is what the
+        // user sees.
+        internal async Task EndSessionRecordingFailureAsync()
+        {
+            var manager = CurrentManager();
+            if (manager is null) return;
+
+            try
+            {
+                await manager.EndSession(SessionId);
+            }
+            catch (Exception error)
+            {
+                CrashLog.Record("End this session", error);
+            }
         }
 
         // --- CB-170: an OpenClaw conversation's Interrupt and End rows -------

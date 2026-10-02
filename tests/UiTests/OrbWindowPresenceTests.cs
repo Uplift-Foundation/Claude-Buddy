@@ -1014,5 +1014,8 @@ public class OrbWindowPresenceTests
 
         orb.Dismiss_Click(null, new Avalonia.Interactivity.RoutedEventArgs());
         orb.EndSession_Click(null, new Avalonia.Interactivity.RoutedEventArgs());
+
+        // The click's own task, awaited: with no manager it ends at once.
+        Assert.True(orb.EndSessionRecordingFailureAsync().IsCompletedSuccessfully);
     }
 }

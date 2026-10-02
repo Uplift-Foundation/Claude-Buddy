@@ -466,6 +466,14 @@ namespace ClaudeBuddy
             using var searcher = new System.Management.ManagementObjectSearcher(
                 "SELECT ProcessId, ParentProcessId, CommandLine FROM Win32_Process");
 
+            // Bounded (CB-228), as `ps` already is by TryRun's five seconds.
+            // The read is off the UI thread now and the row gives up on it
+            // after ReadTimeout, but giving up does not cancel it — and WMI's
+            // default timeout is infinite, so a wedged WMI service would leave
+            // a pool thread blocked here for every menu open. This applies per
+            // WMI call, which on a healthy box is the whole quarter-second.
+            searcher.Options.Timeout = TimeSpan.FromSeconds(8);
+
             foreach (var row in searcher.Get())
             {
                 using var process = (System.Management.ManagementObject)row;

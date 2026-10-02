@@ -4211,21 +4211,41 @@ namespace ClaudeBuddy
         // Returned so a test can wait for the outcome; the click handler
         // discards it, since the orb going away on the next scan is the only
         // feedback this gesture has ever had.
+        //
+        // One end per session at a time. The synchronous version serialised two
+        // clicks by blocking; this one would have let a second click start its
+        // own read while the first was still reading, and both pass
+        // StillEndable — the status stays in _statuses until the next scan —
+        // so the kill ran twice. QA found it with a test. A second call while
+        // one is in flight now does nothing: the first is already doing what
+        // it asked. UI-thread state, like _statuses, and released in a finally
+        // that also runs on the UI thread, because every await above it
+        // resumes there.
         public async Task EndSession(string sessionId)
         {
             if (!_statuses.TryGetValue(sessionId, out var status)) return;
             if (!SessionPresence.CanEndSession(status)) return;
+            if (!_ending.Add(sessionId)) return;
 
-            var pid = status.SessionPid;
-            var read = _dependents;
+            try
+            {
+                var pid = status.SessionPid;
+                var read = _dependents;
 
-            var dependents = await Task.Run(() => read(pid));
-            if (SessionDependents.BlocksTermination(dependents)) return;
-            if (!StillEndable(sessionId, pid)) return;
+                var dependents = await Task.Run(() => read(pid));
+                if (SessionDependents.BlocksTermination(dependents)) return;
+                if (!StillEndable(sessionId, pid)) return;
 
-            var terminate = _terminate;
-            await Task.Run(() => terminate(pid, dependents));
+                var terminate = _terminate;
+                await Task.Run(() => terminate(pid, dependents));
+            }
+            finally
+            {
+                _ending.Remove(sessionId);
+            }
         }
+
+        private readonly HashSet<string> _ending = new(StringComparer.Ordinal);
 
         // Whether the session a click named is still there, still on the pid
         // the read was about, and still endable.

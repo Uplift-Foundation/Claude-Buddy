@@ -2866,6 +2866,56 @@ public class SessionScanTests
         Assert.Equal(0, kills);
     }
 
+    // QA's finding: two Ends for one session, the second while the first is
+    // still reading, used to both pass StillEndable and kill twice. The second
+    // is now a no-op while the first is in flight.
+    [AvaloniaFact]
+    public async Task ADoubleEndKillsOnce()
+    {
+        using var scratch = new Scratch();
+
+        var kills = 0;
+        var manager = Manager(scratch, () => Listing(),
+            dependents: _ => { Thread.Sleep(150); return SessionDependents.Nothing; },
+            terminate: (_, _) => Interlocked.Increment(ref kills));
+        StatusesOf(manager)["dbl"] = Endable();
+
+        var first = manager.EndSession("dbl");
+        var second = manager.EndSession("dbl");
+        await Task.WhenAll(first, second);
+
+        Assert.Equal(1, kills);
+
+        // And the guard is released once the first finishes: a later End —
+        // the next gesture, not a double click — is not swallowed by it.
+        await manager.EndSession("dbl");
+        Assert.Equal(2, kills);
+    }
+
+    // The click observes its task: a read that throws is written to crash.log
+    // under the gesture's name, rather than vanishing into a discarded task.
+    [AvaloniaFact]
+    public async Task AFailedEndFromTheClickIsWrittenToTheCrashLog()
+    {
+        using var scratch = new Scratch();
+        var logDir = Path.Combine(scratch.Dir, "logs");
+        using var scope = CrashLog.ScopeForTests(logDir);
+
+        var kills = 0;
+        var manager = Manager(scratch, () => Listing(),
+            dependents: _ => throw new InvalidOperationException("WMI said no"),
+            terminate: (_, _) => Interlocked.Increment(ref kills));
+        StatusesOf(manager)["failing"] = Endable();
+        var orb = new OrbWindow("failing") { CurrentManager = () => manager };
+
+        await orb.EndSessionRecordingFailureAsync();
+
+        Assert.Equal(0, kills);
+        var log = File.ReadAllText(CrashLog.Path_);
+        Assert.Contains("End this session", log);
+        Assert.Contains("WMI said no", log);
+    }
+
     // The menu's real Opening handler, against a manager the orb was given: the
     // row starts checking, the read is the manager's, on a pool thread, and the
     // husk's refusal lands on the row once it answers.
