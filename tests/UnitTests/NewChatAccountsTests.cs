@@ -33,17 +33,17 @@ namespace ClaudeBuddy.Tests
         [Fact]
         public void WithNoExtrasOnlyDefaultIsOffered()
         {
-            var choices = NewChatAccounts.Choices(Home, Array.Empty<string>());
+            var choices = NewChatAccounts.Choices(NewChatCli.ClaudeCode, Home, Array.Empty<string>());
 
             var only = Assert.Single(choices);
-            Assert.Equal(NewChatAccounts.DefaultLabel, only.Label);
+            Assert.Equal(NewChatAccounts.DefaultLabelFor(NewChatCli.ClaudeCode), only.Label);
             Assert.Null(only.ProfileDir);
         }
 
         [Fact]
         public void ARealExtraIsOfferedWithATildeLabelAndItsRawProfileDir()
         {
-            var choices = NewChatAccounts.Choices(Home, new[] { ".claude-work" });
+            var choices = NewChatAccounts.Choices(NewChatCli.ClaudeCode, Home, new[] { ".claude-work" });
 
             Assert.Equal(2, choices.Count);
             Assert.Equal(Tilde(".claude-work"), choices[1].Label);
@@ -60,7 +60,7 @@ namespace ClaudeBuddy.Tests
         [Fact]
         public void ARelativeExtraLabelsAsATildePath()
         {
-            var choices = NewChatAccounts.Choices(Home, new[] { ".claude-work" });
+            var choices = NewChatAccounts.Choices(NewChatCli.ClaudeCode, Home, new[] { ".claude-work" });
 
             Assert.Equal(Tilde(".claude-work"), choices[1].Label);
         }
@@ -74,7 +74,7 @@ namespace ClaudeBuddy.Tests
         [Fact]
         public void ALiteralLeadingTildeInTheRawSettingIsNotExpanded()
         {
-            var choices = NewChatAccounts.Choices(Home, new[] { "~/x" });
+            var choices = NewChatAccounts.Choices(NewChatCli.ClaudeCode, Home, new[] { "~/x" });
 
             Assert.Equal(Tilde("~" + Path.DirectorySeparatorChar + "x"), choices[1].Label);
             Assert.Equal("~/x", choices[1].ProfileDir);
@@ -87,7 +87,7 @@ namespace ClaudeBuddy.Tests
         public void AnAbsoluteExtraUnderHomeLabelsAsATildePath()
         {
             var absolute = Path.Combine(Home, ".claude-work");
-            var choices = NewChatAccounts.Choices(Home, new[] { absolute });
+            var choices = NewChatAccounts.Choices(NewChatCli.ClaudeCode, Home, new[] { absolute });
 
             Assert.Equal(Tilde(".claude-work"), choices[1].Label);
             Assert.Equal(absolute, choices[1].ProfileDir);
@@ -100,7 +100,7 @@ namespace ClaudeBuddy.Tests
         [Fact]
         public void AnAbsoluteExtraOutsideHomeLabelsAsTheAbsolutePathUnchanged()
         {
-            var choices = NewChatAccounts.Choices(Home, new[] { OutsideHome });
+            var choices = NewChatAccounts.Choices(NewChatCli.ClaudeCode, Home, new[] { OutsideHome });
 
             Assert.Equal(
                 Path.TrimEndingDirectorySeparator(Path.GetFullPath(OutsideHome)), choices[1].Label);
@@ -123,7 +123,7 @@ namespace ClaudeBuddy.Tests
         {
             var noncanonicalHome = Home + Path.DirectorySeparatorChar + ".";
 
-            var choices = NewChatAccounts.Choices(noncanonicalHome, new[] { ".claude-work" });
+            var choices = NewChatAccounts.Choices(NewChatCli.ClaudeCode, noncanonicalHome, new[] { ".claude-work" });
 
             Assert.Equal(Tilde(".claude-work"), choices[1].Label);
         }
@@ -131,10 +131,10 @@ namespace ClaudeBuddy.Tests
         [Fact]
         public void SeveralRealExtrasAreOfferedInOrderAfterDefault()
         {
-            var choices = NewChatAccounts.Choices(Home, new[] { ".claude-work", ".claude-board" });
+            var choices = NewChatAccounts.Choices(NewChatCli.ClaudeCode, Home, new[] { ".claude-work", ".claude-board" });
 
             Assert.Equal(
-                new[] { NewChatAccounts.DefaultLabel, Tilde(".claude-work"), Tilde(".claude-board") },
+                new[] { NewChatAccounts.DefaultLabelFor(NewChatCli.ClaudeCode), Tilde(".claude-work"), Tilde(".claude-board") },
                 choices.Select(c => c.Label).ToArray());
         }
 
@@ -147,7 +147,7 @@ namespace ClaudeBuddy.Tests
         [InlineData(".claude/")]
         public void AnExtraNamingTheDefaultAccountIsDropped(string profileDir)
         {
-            var choices = NewChatAccounts.Choices(Home, new[] { profileDir });
+            var choices = NewChatAccounts.Choices(NewChatCli.ClaudeCode, Home, new[] { profileDir });
 
             var only = Assert.Single(choices);
             Assert.Null(only.ProfileDir);
@@ -159,7 +159,7 @@ namespace ClaudeBuddy.Tests
         [Fact]
         public void AnAbsoluteSpellingOfTheDefaultAccountIsDropped()
         {
-            var choices = NewChatAccounts.Choices(Home, new[] { Path.Combine(Home, ".claude") });
+            var choices = NewChatAccounts.Choices(NewChatCli.ClaudeCode, Home, new[] { Path.Combine(Home, ".claude") });
 
             var only = Assert.Single(choices);
             Assert.Null(only.ProfileDir);
@@ -168,7 +168,7 @@ namespace ClaudeBuddy.Tests
         [Fact]
         public void ADuplicateExtraIsOfferedOnlyOnce()
         {
-            var choices = NewChatAccounts.Choices(Home, new[] { ".claude-work", ".claude-work" });
+            var choices = NewChatAccounts.Choices(NewChatCli.ClaudeCode, Home, new[] { ".claude-work", ".claude-work" });
 
             Assert.Equal(2, choices.Count);
         }
@@ -178,10 +178,104 @@ namespace ClaudeBuddy.Tests
         [InlineData("   ")]
         public void BlankExtrasAreSkipped(string blank)
         {
-            var choices = NewChatAccounts.Choices(Home, new[] { blank, ".claude-work" });
+            var choices = NewChatAccounts.Choices(NewChatCli.ClaudeCode, Home, new[] { blank, ".claude-work" });
 
             Assert.Equal(2, choices.Count);
             Assert.Equal(".claude-work", choices[1].ProfileDir);
+        }
+
+        // --- CB-203: Codex and Grok, each keyed on its own default home ----
+
+        [Theory]
+        [InlineData("ClaudeCode", ".claude")]
+        [InlineData("Codex", ".codex")]
+        [InlineData("Grok", ".grok")]
+        public void TheDefaultRowNamesThatCliOwnDefaultDirectory(string cliName, string defaultDir)
+        {
+            var cli = Enum.Parse<NewChatCli>(cliName);
+            var only = Assert.Single(NewChatAccounts.Choices(cli, Home, Array.Empty<string>()));
+
+            Assert.Equal("Default (" + Tilde(defaultDir) + ")", only.Label);
+            Assert.Equal(only.Label, NewChatAccounts.DefaultLabelFor(cli));
+            Assert.Null(only.ProfileDir);
+        }
+
+        // Each CLI drops every spelling of *its own* default home — relative,
+        // trailing separator, absolute — the CB-42 de-duplication rule moved
+        // onto ".codex" and ".grok".
+        [Theory]
+        [InlineData("Codex", ".codex")]
+        [InlineData("Codex", ".codex/")]
+        [InlineData("Grok", ".grok")]
+        [InlineData("Grok", ".grok/")]
+        public void AnExtraNamingThatCliDefaultHomeIsDropped(string cliName, string profileDir)
+        {
+            var cli = Enum.Parse<NewChatCli>(cliName);
+            var only = Assert.Single(NewChatAccounts.Choices(cli, Home, new[] { profileDir }));
+            Assert.Null(only.ProfileDir);
+        }
+
+        [Theory]
+        [InlineData("Codex", ".codex")]
+        [InlineData("Grok", ".grok")]
+        public void AnAbsoluteSpellingOfThatCliDefaultHomeIsDropped(string cliName, string defaultDir)
+        {
+            var cli = Enum.Parse<NewChatCli>(cliName);
+            var only = Assert.Single(NewChatAccounts.Choices(cli, Home, new[] { Path.Combine(Home, defaultDir) }));
+            Assert.Null(only.ProfileDir);
+        }
+
+        // The other way round: ".claude" is not Codex's default, so in a
+        // Codex list it is a real (if odd) extra rather than being folded
+        // into Default — the de-dup is keyed on the CLI being launched, not
+        // on Claude Code's directory for everything.
+        [Fact]
+        public void AnotherCliDefaultDirectoryIsARealExtraForCodex()
+        {
+            var choices = NewChatAccounts.Choices(NewChatCli.Codex, Home, new[] { ".claude" });
+
+            Assert.Equal(2, choices.Count);
+            Assert.Equal(".claude", choices[1].ProfileDir);
+        }
+
+        [Theory]
+        [InlineData("Codex", ".codex-work")]
+        [InlineData("Grok", ".grok-work")]
+        public void ARealExtraIsOfferedForCodexAndGrok(string cliName, string extra)
+        {
+            var cli = Enum.Parse<NewChatCli>(cliName);
+            var choices = NewChatAccounts.Choices(cli, Home, new[] { extra, extra, " " });
+
+            Assert.Equal(2, choices.Count);
+            Assert.Equal(Tilde(extra), choices[1].Label);
+            Assert.Equal(extra, choices[1].ProfileDir);
+        }
+
+        [Fact]
+        public void AnAbsoluteGrokExtraOutsideHomeLabelsAsTheAbsolutePath()
+        {
+            var outside = OperatingSystem.IsWindows() ? @"D:\Backup\.grok-mobile" : "/Volumes/Backup/.grok-mobile";
+
+            var choices = NewChatAccounts.Choices(NewChatCli.Grok, Home, new[] { outside });
+
+            Assert.Equal(Path.TrimEndingDirectorySeparator(Path.GetFullPath(outside)), choices[1].Label);
+            Assert.Equal(outside, choices[1].ProfileDir);
+        }
+
+        // The table itself: every CLI's default directory and variable, so a
+        // swapped pair is a named failure rather than a launch under the
+        // wrong account.
+        [Theory]
+        [InlineData("ClaudeCode", ".claude", "CLAUDE_CONFIG_DIR")]
+        [InlineData("Codex", ".codex", "CODEX_HOME")]
+        [InlineData("Grok", ".grok", "GROK_HOME")]
+        public void EachCliNamesItsOwnDefaultDirectoryAndVariable(string cliName, string dir, string variable)
+        {
+            var cli = Enum.Parse<NewChatCli>(cliName);
+            var home = NewChatAccountHome.For(cli);
+
+            Assert.Equal(dir, home.DefaultDirName);
+            Assert.Equal(variable, home.EnvVar);
         }
 
         [Fact]

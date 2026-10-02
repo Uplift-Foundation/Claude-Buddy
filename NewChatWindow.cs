@@ -498,8 +498,12 @@ namespace ClaudeBuddy
             // never reserved for something that could not appear in it. A
             // user with no extra accounts gets no gap where the picker would
             // be; the window reads exactly as it did before CB-201.
-            var claudeCodeUsable = options.Any(o => o.Cli == NewChatCli.ClaudeCode && o.Enabled);
-            _accountGhost.IsVisible = claudeCodeUsable && AccountChoices().Count > 1;
+            //
+            // Any usable local CLI with a real extra account reserves it
+            // (CB-203): the picker can appear for Codex or Grok as well as
+            // Claude Code, so the slot is held when any of the three could
+            // show it, not only Claude Code.
+            _accountGhost.IsVisible = options.Any(o => o.Enabled && AccountChoices(o.Cli).Count > 1);
             _folderGhost.IsVisible = options.Any(o => o.Enabled);
             _agentGhost.IsVisible = openClawReady;
 
@@ -578,11 +582,12 @@ namespace ClaudeBuddy
             _folderSection.IsVisible = !_openClawSelected;
             _agentSection.IsVisible = _openClawSelected;
 
-            // Claude Code only (CB-201's "Claude Code only" decision — Codex
-            // and Grok use CODEX_HOME/GROK_HOME, a separate mechanism this
-            // ticket leaves alone), never alongside OpenClaw, and never shown
-            // for a one-entry list (Default alone) — CB-201's "empty list
-            // means no picker" decision. Read off the combo's own item count
+            // Any of the three local CLIs (CB-203 extended CB-201's Claude
+            // Code-only picker to Codex and Grok), never alongside OpenClaw,
+            // and never shown for a one-entry list (Default alone) — CB-201's
+            // "empty list means no picker" decision. BuildAccountCombo has
+            // already filled the combo from the selected CLI's own list, or
+            // cleared it for OpenClaw. Read off the combo's own item count
             // rather than a separate field, so this can never drift out of
             // sync with what BuildAccountCombo actually populated.
             var accountChoiceCount = (_accountCombo.ItemsSource as IEnumerable<NewChatAccounts.Choice>)?.Count() ?? 0;
@@ -596,7 +601,7 @@ namespace ClaudeBuddy
             // opens; one removed mid-session just hides the picker, leaving
             // the ghost to hold the height.
             _accountSection.IsVisible = _accountGhost.IsVisible
-                && !_openClawSelected && _selectedCli == NewChatCli.ClaudeCode && accountChoiceCount > 1;
+                && !_openClawSelected && _selectedCli is not null && accountChoiceCount > 1;
 
             // An empty slot would still collect the root StackPanel's spacing,
             // leaving a 12px gap where the picker never appears.
@@ -604,23 +609,25 @@ namespace ClaudeBuddy
         }
 
         // Populates the Account combo for whichever CLI is now selected —
-        // every real choice from ClaudeCodeProfileDirs when it's Claude Code,
-        // cleared otherwise so a stale list from a previous selection can
-        // never leak into UpdateTargetSectionVisibility's item count. Restores
-        // the last-chosen account, falling back to Default when that entry
+        // every real choice from that CLI's own list (CB-203: Codex reads
+        // CodexHomes and Grok GrokHomes, never Claude Code's
+        // ClaudeCodeProfileDirs), cleared for OpenClaw so a stale list from a
+        // previous selection can never leak into
+        // UpdateTargetSectionVisibility's item count. Restores the account
+        // last chosen *for this CLI*, falling back to Default when that entry
         // has since been removed from settings (CB-201's own restore rule).
         private void BuildAccountCombo()
         {
-            if (_selectedCli != NewChatCli.ClaudeCode)
+            if (_openClawSelected || _selectedCli is not { } cli)
             {
                 _accountCombo.ItemsSource = null;
                 return;
             }
 
-            var choices = AccountChoices();
+            var choices = AccountChoices(cli);
             _accountCombo.ItemsSource = choices;
 
-            var saved = ClaudeBuddySettings.NewChatLastProfile;
+            var saved = ClaudeBuddySettings.NewChatLastProfileFor(cli);
             var preferredIndex = saved is { Length: > 0 }
                 ? choices.FindIndex(c => c.ProfileDir == saved)
                 : -1;
@@ -628,10 +635,16 @@ namespace ClaudeBuddy
             _accountCombo.SelectedIndex = preferredIndex >= 0 ? preferredIndex : 0;
         }
 
-        private static List<NewChatAccounts.Choice> AccountChoices() =>
+        private static List<NewChatAccounts.Choice> AccountChoices(NewChatCli cli) =>
             NewChatAccounts.Choices(
+                cli,
                 Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                ClaudeBuddySettings.ClaudeCodeProfileDirs).ToList();
+                cli switch
+                {
+                    NewChatCli.Codex => ClaudeBuddySettings.CodexHomes,
+                    NewChatCli.Grok => ClaudeBuddySettings.GrokHomes,
+                    _ => ClaudeBuddySettings.ClaudeCodeProfileDirs
+                }).ToList();
 
         // The stated reason/warning line under a CLI row — small, secondary
         // text, indented to read as belonging to the row above it. Tag
@@ -740,11 +753,14 @@ namespace ClaudeBuddy
                 ? chosen
                 : Environment.CurrentDirectory;
 
-            // Only Claude Code ever shows the Account section (CB-201), so
-            // this reads as "the account combo's real selection when that
-            // section is what's on screen, otherwise Default" rather than
-            // needing its own visibility check.
-            var profileDir = cli == NewChatCli.ClaudeCode && _accountCombo.SelectedItem is NewChatAccounts.Choice choice
+            // The account combo's real selection when that section is what's
+            // on screen, otherwise Default. Gated on the section rather than
+            // the CLI since CB-203 (all three local CLIs can show it): the
+            // combo is filled for the selected CLI even when the section stays
+            // hidden — an account added in Settings while this dialog was
+            // open, with no slot reserved for it (CB-207) — and a launch must
+            // never run under an account the user could not see chosen.
+            var profileDir = _accountSection.IsVisible && _accountCombo.SelectedItem is NewChatAccounts.Choice choice
                 ? choice.ProfileDir
                 : null;
 
@@ -761,7 +777,7 @@ namespace ClaudeBuddy
             if (launch.Outcome != LaunchOutcome.Launched) return;
 
             ClaudeBuddySettings.SetNewChatLastCli(cli.ToString());
-            ClaudeBuddySettings.SetNewChatLastProfile(profileDir);
+            ClaudeBuddySettings.SetNewChatLastProfile(cli, profileDir);
 
             var updatedFolders = RecentFolders.Merge(
                 CurrentStatuses().Values,

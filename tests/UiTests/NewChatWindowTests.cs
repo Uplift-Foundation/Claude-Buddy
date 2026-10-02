@@ -303,11 +303,11 @@ public class NewChatWindowTests : IDisposable
 
         Assert.True(window.AccountSection.IsVisible);
         var items = window.AccountCombo.ItemsSource!.Cast<NewChatAccounts.Choice>().ToList();
-        Assert.Equal(new[] { NewChatAccounts.DefaultLabel, Tilde(".claude-board") }, items.Select(i => i.Label));
+        Assert.Equal(new[] { NewChatAccounts.DefaultLabelFor(NewChatCli.ClaudeCode), Tilde(".claude-board") }, items.Select(i => i.Label));
     }
 
     [AvaloniaFact]
-    public void TheAccountPickerIsHiddenForCodex()
+    public void TheAccountPickerIsHiddenForCodexWhenOnlyClaudeCodeHasExtras()
     {
         FreshSettings();
         ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-board");
@@ -319,7 +319,7 @@ public class NewChatWindowTests : IDisposable
     }
 
     [AvaloniaFact]
-    public void TheAccountPickerIsHiddenForGrok()
+    public void TheAccountPickerIsHiddenForGrokWhenOnlyClaudeCodeHasExtras()
     {
         FreshSettings();
         ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-board");
@@ -364,7 +364,7 @@ public class NewChatWindowTests : IDisposable
         Click(window.StartButton);
 
         Assert.Null(seenProfileDir);
-        Assert.Null(ClaudeBuddySettings.NewChatLastProfile);
+        Assert.Null(ClaudeBuddySettings.NewChatLastProfileFor(NewChatCli.ClaudeCode));
     }
 
     [AvaloniaFact]
@@ -387,7 +387,7 @@ public class NewChatWindowTests : IDisposable
         Click(window.StartButton);
 
         Assert.Equal(".claude-board", seenProfileDir);
-        Assert.Equal(".claude-board", ClaudeBuddySettings.NewChatLastProfile);
+        Assert.Equal(".claude-board", ClaudeBuddySettings.NewChatLastProfileFor(NewChatCli.ClaudeCode));
     }
 
     [AvaloniaFact]
@@ -395,7 +395,7 @@ public class NewChatWindowTests : IDisposable
     {
         FreshSettings();
         ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-board");
-        ClaudeBuddySettings.SetNewChatLastProfile(".claude-board");
+        ClaudeBuddySettings.SetNewChatLastProfile(NewChatCli.ClaudeCode, ".claude-board");
         NewChatAvailability.CurrentForTests = () => new[] { Enabled(NewChatCli.ClaudeCode) };
 
         var window = NewWindow(prefillCli: NewChatCli.ClaudeCode);
@@ -408,13 +408,224 @@ public class NewChatWindowTests : IDisposable
     public void ARemovedSavedAccountFallsBackToDefault()
     {
         FreshSettings();
-        ClaudeBuddySettings.SetNewChatLastProfile(".claude-gone");
+        ClaudeBuddySettings.SetNewChatLastProfile(NewChatCli.ClaudeCode, ".claude-gone");
         NewChatAvailability.CurrentForTests = () => new[] { Enabled(NewChatCli.ClaudeCode) };
 
         var window = NewWindow(prefillCli: NewChatCli.ClaudeCode);
 
         var selected = (NewChatAccounts.Choice)window.AccountCombo.SelectedItem!;
         Assert.Null(selected.ProfileDir);
+    }
+
+    // --- CB-203: Codex and Grok accounts ---
+
+    private static List<NewChatAccounts.Choice> Items(NewChatWindow window) =>
+        window.AccountCombo.ItemsSource!.Cast<NewChatAccounts.Choice>().ToList();
+
+    private static void Select(NewChatWindow window, NewChatCli cli)
+    {
+        window.CliList.Children.OfType<RadioButton>().Single(r => r.Tag is NewChatCli c && c == cli).IsChecked = true;
+        Flush();
+    }
+
+    [AvaloniaFact]
+    public void TheAccountPickerListsCodexHomesForCodexAndNeverClaudeProfiles()
+    {
+        FreshSettings();
+        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-board");
+        ClaudeBuddySettings.AddCodexHome(".codex-work");
+        NewChatAvailability.CurrentForTests = () => new[] { Enabled(NewChatCli.Codex) };
+
+        var window = NewWindow(prefillCli: NewChatCli.Codex);
+
+        Assert.True(window.AccountSection.IsVisible);
+        Assert.Equal(
+            new[] { NewChatAccounts.DefaultLabelFor(NewChatCli.Codex), Tilde(".codex-work") },
+            Items(window).Select(i => i.Label));
+    }
+
+    [AvaloniaFact]
+    public void TheAccountPickerListsGrokHomesForGrokAndNeverClaudeProfiles()
+    {
+        FreshSettings();
+        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-board");
+        ClaudeBuddySettings.AddCodexHome(".codex-work");
+        ClaudeBuddySettings.AddGrokHome(".grok-work");
+        NewChatAvailability.CurrentForTests = () => new[] { Enabled(NewChatCli.Grok) };
+
+        var window = NewWindow(prefillCli: NewChatCli.Grok);
+
+        Assert.True(window.AccountSection.IsVisible);
+        Assert.Equal(
+            new[] { NewChatAccounts.DefaultLabelFor(NewChatCli.Grok), Tilde(".grok-work") },
+            Items(window).Select(i => i.Label));
+    }
+
+    // Switching CLI rebuilds the list from the newly selected CLI's own
+    // settings, and hides the picker for one whose list is Default alone.
+    [AvaloniaFact]
+    public void SwitchingCliRebuildsTheAccountListForThatCli()
+    {
+        FreshSettings();
+        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-board");
+        ClaudeBuddySettings.AddCodexHome(".codex-work");
+        NewChatAvailability.CurrentForTests = () => new[]
+        {
+            Enabled(NewChatCli.ClaudeCode), Enabled(NewChatCli.Codex), Enabled(NewChatCli.Grok)
+        };
+
+        var window = NewWindow(prefillCli: NewChatCli.ClaudeCode);
+        Assert.Equal(".claude-board", Items(window)[1].ProfileDir);
+
+        Select(window, NewChatCli.Codex);
+        Assert.True(window.AccountSection.IsVisible);
+        Assert.Equal(".codex-work", Items(window)[1].ProfileDir);
+
+        Select(window, NewChatCli.Grok);
+        Assert.False(window.AccountSection.IsVisible);
+
+        Select(window, NewChatCli.ClaudeCode);
+        Assert.True(window.AccountSection.IsVisible);
+        Assert.Equal(".claude-board", Items(window)[1].ProfileDir);
+    }
+
+    // The slot is reserved when only Codex has extras — the CB-207 ghost
+    // used to be decided by Claude Code's list alone.
+    [AvaloniaFact]
+    public void TheAccountSlotIsReservedWhenOnlyCodexHasExtras()
+    {
+        FreshSettings();
+        ClaudeBuddySettings.AddCodexHome(".codex-work");
+        NewChatAvailability.CurrentForTests = () => new[] { Enabled(NewChatCli.ClaudeCode), Enabled(NewChatCli.Codex) };
+
+        var window = NewWindow(prefillCli: NewChatCli.ClaudeCode);
+
+        Assert.True(window.AccountGhost.IsVisible);
+        Assert.False(window.AccountSection.IsVisible);
+
+        Select(window, NewChatCli.Codex);
+        Assert.True(window.AccountSection.IsVisible);
+    }
+
+    // A disabled CLI's extras reserve nothing: it can never be selected, so
+    // its picker can never appear.
+    [AvaloniaFact]
+    public void ADisabledCliExtrasReserveNoSlot()
+    {
+        FreshSettings();
+        ClaudeBuddySettings.AddGrokHome(".grok-work");
+        NewChatAvailability.CurrentForTests = () => new[]
+        {
+            Enabled(NewChatCli.ClaudeCode), Disabled(NewChatCli.Grok, "Grok isn't installed.")
+        };
+
+        var window = NewWindow();
+
+        Assert.False(window.AccountGhost.IsVisible);
+    }
+
+    [AvaloniaTheory]
+    [InlineData("Codex", ".codex-work")]
+    [InlineData("Grok", ".grok-work")]
+    public void StartWithAChosenCodexOrGrokAccountPassesItAndRemembersItForThatCliOnly(string cliName, string home)
+    {
+        var cli = Enum.Parse<NewChatCli>(cliName);
+        FreshSettings();
+        if (cli == NewChatCli.Codex) ClaudeBuddySettings.AddCodexHome(home); else ClaudeBuddySettings.AddGrokHome(home);
+        ClaudeBuddySettings.SetNewChatLastProfile(NewChatCli.ClaudeCode, ".claude-board");
+        NewChatWindow.CurrentStatusesForTests = () => new Dictionary<string, SessionStatus>();
+        NewChatAvailability.CurrentForTests = () => new[] { Enabled(cli) };
+        (NewChatCli Cli, string? Dir)? seen = null;
+        NewChatLauncher.LaunchForTests = (launchedCli, _, profileDir) =>
+        {
+            seen = (launchedCli, profileDir);
+            return new LaunchResult(LaunchOutcome.Launched, "started in /repo/one.");
+        };
+
+        var window = NewWindow(prefillCli: cli, prefillCwd: "/repo/one");
+        window.AccountCombo.SelectedItem = Items(window).Single(c => c.ProfileDir == home);
+        Click(window.StartButton);
+
+        Assert.Equal((cli, (string?)home), seen);
+        Assert.Equal(home, ClaudeBuddySettings.NewChatLastProfileFor(cli));
+        Assert.Equal(".claude-board", ClaudeBuddySettings.NewChatLastProfileFor(NewChatCli.ClaudeCode));
+    }
+
+    [AvaloniaFact]
+    public void StartWithCodexDefaultAccountPassesNull()
+    {
+        FreshSettings();
+        ClaudeBuddySettings.AddCodexHome(".codex-work");
+        NewChatWindow.CurrentStatusesForTests = () => new Dictionary<string, SessionStatus>();
+        NewChatAvailability.CurrentForTests = () => new[] { Enabled(NewChatCli.Codex) };
+        string? seenProfileDir = "not set yet";
+        NewChatLauncher.LaunchForTests = (_, _, profileDir) =>
+        {
+            seenProfileDir = profileDir;
+            return new LaunchResult(LaunchOutcome.Launched, "Codex started in /repo/one.");
+        };
+
+        var window = NewWindow(prefillCli: NewChatCli.Codex, prefillCwd: "/repo/one");
+        Click(window.StartButton);
+
+        Assert.Null(seenProfileDir);
+        Assert.Null(ClaudeBuddySettings.NewChatLastProfileFor(NewChatCli.Codex));
+    }
+
+    // Each CLI restores its own remembered account — a Claude Code pick is
+    // never restored onto Codex's picker, even when the names collide.
+    [AvaloniaFact]
+    public void EachCliRestoresItsOwnLastAccount()
+    {
+        FreshSettings();
+        ClaudeBuddySettings.AddClaudeCodeProfileDir(".shared-work");
+        ClaudeBuddySettings.AddCodexHome(".shared-work");
+        ClaudeBuddySettings.AddGrokHome(".grok-work");
+        ClaudeBuddySettings.SetNewChatLastProfile(NewChatCli.ClaudeCode, ".shared-work");
+        ClaudeBuddySettings.SetNewChatLastProfile(NewChatCli.Grok, ".grok-work");
+        NewChatAvailability.CurrentForTests = () => new[]
+        {
+            Enabled(NewChatCli.ClaudeCode), Enabled(NewChatCli.Codex), Enabled(NewChatCli.Grok)
+        };
+
+        var window = NewWindow(prefillCli: NewChatCli.ClaudeCode);
+        Assert.Equal(".shared-work", ((NewChatAccounts.Choice)window.AccountCombo.SelectedItem!).ProfileDir);
+
+        Select(window, NewChatCli.Codex);
+        Assert.Null(((NewChatAccounts.Choice)window.AccountCombo.SelectedItem!).ProfileDir);
+
+        Select(window, NewChatCli.Grok);
+        Assert.Equal(".grok-work", ((NewChatAccounts.Choice)window.AccountCombo.SelectedItem!).ProfileDir);
+    }
+
+    // The picker for an account added while the dialog was open stays hidden
+    // (CB-207), and Start must not launch under a selection nobody could see —
+    // even when that hidden selection is a remembered extra.
+    [AvaloniaFact]
+    public void AHiddenAccountComboNeverChoosesTheLaunchAccount()
+    {
+        FreshSettings();
+        NewChatWindow.CurrentStatusesForTests = () => new Dictionary<string, SessionStatus>();
+        NewChatAvailability.CurrentForTests = () => new[] { Enabled(NewChatCli.Codex), Enabled(NewChatCli.Grok) };
+        string? seenProfileDir = "not set yet";
+        NewChatLauncher.LaunchForTests = (_, _, profileDir) =>
+        {
+            seenProfileDir = profileDir;
+            return new LaunchResult(LaunchOutcome.Launched, "Codex started in /repo/one.");
+        };
+
+        var window = NewWindow(prefillCli: NewChatCli.Codex, prefillCwd: "/repo/one");
+        ClaudeBuddySettings.AddCodexHome(".codex-work");
+        ClaudeBuddySettings.SetNewChatLastProfile(NewChatCli.Codex, ".codex-work");
+        Select(window, NewChatCli.Grok);
+        Select(window, NewChatCli.Codex);
+
+        Assert.False(window.AccountSection.IsVisible);
+        Assert.Equal(".codex-work", ((NewChatAccounts.Choice)window.AccountCombo.SelectedItem!).ProfileDir);
+
+        Click(window.StartButton);
+
+        Assert.Null(seenProfileDir);
     }
 
     // --- the watch tick, driven directly per LocalCliChatSessionTests' own

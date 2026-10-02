@@ -465,6 +465,14 @@ Three things that are not obvious and cost time to find:
 - **`CODEX_HOME` selects the account**, the way `CLAUDE_CONFIG_DIR` does for
   Claude Code. It is the only reason a second Codex account can be polled.
 
+### `CODEX_HOME` and the default home (CB-203)
+
+**Setting `CODEX_HOME` to `~/.codex` behaves the same as leaving it unset**, so CB-42's split does not exist for Codex. Measured 2 Oct 2026: on the MacBook (codex-cli 0.160.0) and the Windows box (0.148.0), `codex login status` reports `Logged in using ChatGPT` both ways against the real home, and an empty `CODEX_HOME` reports `Not logged in` as the negative control. Under a scratch `$HOME` via `env -i`, unset and `CODEX_HOME=$HOME/.codex` created identical trees apart from one randomly named `tmp/arg0/codex-arg0*` directory.
+
+**A `CODEX_HOME` that does not exist is refused**, on both platforms: `Error loading configuration: CODEX_HOME points to "…", but that path does not exist`. So a stale entry in the Codex profiles list opens a terminal that shows that error and stops. Grok creates a missing home instead.
+
+The New chat dialog still sets nothing for the default account — one rule for all three CLIs, and a `CODEX_HOME` Buddy itself was launched under reaches the chat unchanged.
+
 Measured at ~800ms end to end, and it returned 100% of the five-hour window
 while the newest snapshot on disk still read 99% from three hours earlier — so
 it is genuinely live rather than a replay of the same file.
@@ -509,5 +517,4 @@ Not measured. Do not write these down as facts until they are.
   way, but the shape of the failure has not been seen.
 - What `credits.balance` is denominated in, and whether a cap ever arrives
   beside it. No snapshot here had `has_credits: true`.
-- Windows Codex and a second `CODEX_HOME` account, neither of which have
-  been run here.
+- A second *logged-in* `CODEX_HOME` account. CB-203 measured the default-home rule on Windows and macOS with scratch homes, which shows where Codex reads from, not that a second subscription polls correctly.

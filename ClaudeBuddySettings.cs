@@ -106,6 +106,7 @@ namespace ClaudeBuddy
             "remoteControlIdleMinutes", "remoteControlServeOnLaunch",
             "peerLinkEnabled", "peerLinkPort",
             "newChatRecentFolders", "newChatLastCli", "newChatLastProfile",
+            "newChatLastCodexProfile", "newChatLastGrokProfile",
             // Every hotkey override. toggleOrbsHotkey was missing from this
             // list from CB-155 until the new-chat hotkey was added beside it;
             // Save's ContainsKey guard kept that from throwing, but it meant
@@ -725,6 +726,17 @@ namespace ClaudeBuddy
             // anyway when nothing else applies.
             public string? NewChatLastProfile { get; set; }
 
+            // The same, for Codex (a CodexHomes entry) and Grok (a GrokHomes
+            // entry) — CB-203. One key per CLI rather than one shared one,
+            // because the three lists name different kinds of directory: a
+            // Codex pick restored onto Claude Code's picker would match
+            // nothing at best, and a dir that happens to share a name would
+            // start the wrong CLI under it at worst. NewChatLastProfile above
+            // stays Claude Code's key, unrenamed, so a file written before
+            // CB-203 keeps its remembered account with no migration.
+            public string? NewChatLastCodexProfile { get; set; }
+            public string? NewChatLastGrokProfile { get; set; }
+
             // Auto-organize: which shape and how much space between orbs.
             public string ArrangeShape { get; set; } = DefaultArrangeShape;
             public double ArrangeSpacing { get; set; } = DefaultArrangeSpacing;
@@ -1190,26 +1202,36 @@ namespace ClaudeBuddy
             Save();
         }
 
-        // The account last chosen in the "New chat…" dialog (CB-201). Null
-        // means never chosen, or Default — the dialog treats both the same.
-        public static string? NewChatLastProfile
-        {
-            get
-            {
-                Load();
-                lock (Gate)
-                {
-                    return _model.NewChatLastProfile;
-                }
-            }
-        }
-
-        public static void SetNewChatLastProfile(string? profileDir)
+        // The account last chosen in the "New chat…" dialog for one CLI
+        // (CB-201, per CLI since CB-203). Null means never chosen, or Default
+        // — the dialog treats both the same.
+        internal static string? NewChatLastProfileFor(NewChatCli cli)
         {
             Load();
             lock (Gate)
             {
-                _model.NewChatLastProfile = string.IsNullOrWhiteSpace(profileDir) ? null : profileDir;
+                return cli switch
+                {
+                    NewChatCli.Codex => _model.NewChatLastCodexProfile,
+                    NewChatCli.Grok => _model.NewChatLastGrokProfile,
+                    _ => _model.NewChatLastProfile
+                };
+            }
+        }
+
+        internal static void SetNewChatLastProfile(NewChatCli cli, string? profileDir)
+        {
+            var value = string.IsNullOrWhiteSpace(profileDir) ? null : profileDir;
+
+            Load();
+            lock (Gate)
+            {
+                switch (cli)
+                {
+                    case NewChatCli.Codex: _model.NewChatLastCodexProfile = value; break;
+                    case NewChatCli.Grok: _model.NewChatLastGrokProfile = value; break;
+                    default: _model.NewChatLastProfile = value; break;
+                }
             }
 
             Save();
@@ -1948,7 +1970,9 @@ namespace ClaudeBuddy
                         TurnFinishedSound = Text(root["turnFinishedSound"]),
                         NeedsAttentionSound = Text(root["needsAttentionSound"]),
                         NewChatLastCli = Text(root["newChatLastCli"]),
-                        NewChatLastProfile = Text(root["newChatLastProfile"])
+                        NewChatLastProfile = Text(root["newChatLastProfile"]),
+                        NewChatLastCodexProfile = Text(root["newChatLastCodexProfile"]),
+                        NewChatLastGrokProfile = Text(root["newChatLastGrokProfile"])
                     };
 
                     // Same shape as claudeCodeProfileDirs below: read as an array
@@ -2501,6 +2525,8 @@ namespace ClaudeBuddy
                         ["newChatRecentFolders"] = newChatRecentFolders,
                         ["newChatLastCli"] = _model.NewChatLastCli,
                         ["newChatLastProfile"] = _model.NewChatLastProfile,
+                        ["newChatLastCodexProfile"] = _model.NewChatLastCodexProfile,
+                        ["newChatLastGrokProfile"] = _model.NewChatLastGrokProfile,
                         // Grouped rather than three top-level keys: it reads as
                         // one setting in the file the way it reads as one card in
                         // the window. A null entry — which is what a colour left

@@ -168,6 +168,14 @@ falls back to `GROK_SESSION_ID` / `GROK_WORKSPACE_ROOT`.
 PreToolUse is blocking; exit 2 is a deny. The hook still exits 0 and prints
 nothing.
 
+## `GROK_HOME` and the default home (CB-203)
+
+**Setting `GROK_HOME` to `~/.grok` behaves the same as leaving it unset** — unlike Claude Code, where `CLAUDE_CONFIG_DIR=~/.claude` reads a different identity file from no variable at all (CB-42). Measured 2 Oct 2026 on grok 1.0.46 (MacBook) and 1.0.34 (Windows box), by running `grok du` under a scratch `$HOME` via `env -i`, once unset and once with `GROK_HOME=$HOME/.grok`, and diffing every file each run created: identical trees, and both print `Disk usage for ~/.grok`. The bundled user guide says the same ("when it is unset, Grok uses `~/.grok`"). The negative control was Claude Code under the same harness (`claude config list`), which does show CB-42's split — unset writes `$HOME/.claude.json`, set does not — so the method can see the difference when there is one.
+
+**A `GROK_HOME` that does not exist is created, not refused** — a scratch `GROK_HOME=…/.grok-work` came back with `docs/` and `logs/` in it, and Grok runs logged out there. Codex differs on exactly this point (see `codex-findings.md`).
+
+The New chat dialog still sets nothing for the default account (`NewChatAccountHome`, `ClaudeProfile.ConfigDirFor`): one rule for all three CLIs, and a `GROK_HOME` Buddy itself was launched under reaches the chat unchanged.
+
 ## Still unknown
 
 - The JSON field `/rename` writes when `title_is_manual` is true.
@@ -178,5 +186,4 @@ nothing.
   wait on a findings update rather than pretending a five-minute poll.
 - Whether Grok fires `permission_prompt` before auto-approve (Codex's
   PermissionRequest problem). PostToolUse is not wired until that is known.
-- Windows Grok, WSL Grok, and a second `GROK_HOME` account, none of which
-  have been run here.
+- Windows Grok beyond `grok du`/`--version`, WSL Grok, and a second *logged-in* `GROK_HOME` account, none of which have been run here — CB-203's measurement used a scratch home, which proves where Grok reads from, not that a second subscription works.
