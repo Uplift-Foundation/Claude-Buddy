@@ -104,7 +104,7 @@ So busy is `status_bucket == "working"`. `worker_status` is not a reliable busy 
 
 ### Not measured
 
-- **409 `session_inactive` for an archived session.** The code is read out of the CLI binary, which handles it; no archived session was sent to.
+- ~~**409 `session_inactive` for an archived session.**~~ **Measured by CB-225** (below): 409, and the error type is `session_not_active` — the binary's `session_inactive` was its own name for the case, not the wire string.
 - **413** (too large). Also from the binary only.
 - **A device-bound 403.** The CLI re-sends with `device_attestation`, which Buddy cannot do. No session that demands it was available, so the 403 split stays two-way (edge block / account refusal).
 - **Sending while the session is waiting on a permission prompt** (`requires_action`).
@@ -115,6 +115,46 @@ So busy is `status_bucket == "working"`. `worker_status` is not a reliable busy 
 A cloud session is listed under the account whose login found it, and a send goes out as that account — never as whichever login happens to be current. Every Claude Code account directory the user has listed is read (PR #121).
 
 On the Mac this was measured on, those logins turned out to live in the plaintext `<config dir>/.credentials.json` rather than in the Keychain. The hypothesis is that the CLI's own Keychain writes fail when it runs over SSH and it falls back to the file; that is consistent with the Keychain entries' last-written dates, which predate the file's by weeks, and it is not demonstrated. Either way the reader has to look in both places, which it does.
+
+## Archive and delete (CB-225)
+
+Measured 2026-10-02 on the MacBook against three throwaway sessions made with `claude --cloud` (interactive only — `--cloud` refuses `--print`) on the default account, every one deleted afterwards, with `tools/claude-cloud-probe`'s `archive`, `delete`, `route` and `v2-session` verbs. `lifecycle.sh` is the sequence. No real session was archived or deleted. The routes were read out of the Claude Code CLI 2.1.288 binary as strings; the binary was not run against the API.
+
+### What the CLI does, read from the binary
+
+The fleet view's `archiveRemote` calls `archiveRemoteSession`, which posts `{}` to `/v1/code/sessions/<id>/archive` with the same header set as a send (User-Agent, Bearer, `anthropic-version`, and `X-Trusted-Device-Token` only when device identity is on), and counts **200 or 409** as archived. **The CLI has no delete.** Every `/v1/code/sessions/<id>/…` path in the binary was enumerated and none is sent with DELETE or PATCH; its only DELETE anywhere is `/v1/environments/bridge/<id>`. `PUT /v1/code/sessions/<id>` with `{title}` exists and is a rename.
+
+### Measured
+
+| request | result |
+| --- | --- |
+| `POST …/archive`, body `{}`, real token | **200**, `{"session":{… "status":"archived" …}}` — the whole session object |
+| the same archive again | **200** again, not 409. Idempotent in practice; the CLI's tolerance of 409 was never exercised |
+| archive with no `anthropic-version` | 400, "anthropic-version: header is required" |
+| archive with a bogus Bearer | 401, "OAuth access token is invalid." |
+| archive with no `Authorization` | 401, "Authentication failed" |
+| after archive, `GET /v1/code/sessions/<id>` | 200, `status` "archived", `connection_status` "disconnected" |
+| after archive, the `/v2/ccr-sessions/<id>` row | 200, `session_status` **"archived"**, `connection_status` "disconnected" |
+| after archive, the roster | the session is gone from the app's own roster count (3 → 2 on that account): `ClaudeCloudRoster.Keep`'s archived filter drops it with no change |
+| after archive, `/v2/…/events` | 200 — the history stays readable |
+| after archive, `POST …/events` (a send) | **409**, error type `session_not_active`, "Session <id> is not active" |
+| `DELETE /v1/code/sessions/<id>` on an archived session | **200**, body `{}` |
+| `DELETE` on an active, never-archived session | **200** — no archive needed first |
+| `DELETE` with no `anthropic-version` / bogus Bearer / no `Authorization` | 400 / 401 OAuth / 401 "Authentication failed", as for archive |
+| after delete, `GET /v1/code/sessions/<id>` | 404 JSON, `not_found_error`, "Session <id> not found" |
+| after delete, `/v2/…/events` | 404 → the shipped `SessionGone` |
+
+**The controls that make the two routes real.** A nonsense sub-route (`…/<id>/cb225-no-such-route`) on the same live id with the same token answers **404 `text/plain` "404 page not found"** — the router. Archive and DELETE aimed at an id whose GET has just answered 404 answer **404 JSON `not_found_error`** — a handler. So both routes exist as handlers, and a 404 from either comes in two kinds that mean different things: a JSON `not_found_error` is "no such session", and a plain-text 404 is "no such route". `CloudOutcomes.OutcomeFor` cannot tell those apart and reads both as `SessionGone`, which is why the lifecycle code (`ClaudeCloudLifecycle`) does not use a 404 as evidence of success.
+
+An invented id is not a usable control: the API validates tagged ids before looking them up and answers **400** "invalid session ID: must be a cse_… or session_… tagged ID". The probe's `--absent-id` therefore accepts only an id whose GET answered 404 — a real id that has been deleted.
+
+### Not measured
+
+- **Another account's token on this id.** The board account's Keychain entry did not answer from the shell the probe ran in, so the cross-account refusal (403 or 404?) is not known.
+- **A device-bound 403.** The throwaways succeeded with no `X-Trusted-Device-Token`; a session that demands one was not available.
+- **Archive or delete while a turn is running.**
+- **How long a deleted session's id keeps answering 404**, or whether a deleted id can ever be reused.
+- **That DELETE stays.** It is the one route here the CLI does not itself call, so it is the likeliest to move. A route that moves answers the router's plain-text 404, which the app shows as a refusal rather than a success.
 
 ## The roster, measured across 578 rows
 
@@ -219,6 +259,7 @@ dotnet run --project tools/claude-cloud-probe -- stamp
 dotnet run --project tools/claude-cloud-probe -- read --keys-only
 dotnet run --project tools/claude-cloud-probe -- list --shape
 dotnet run --project tools/claude-cloud-probe -- roster
+tools/claude-cloud-probe/lifecycle.sh <throwaway id>   # CB-225: archives and DELETES it
 ```
 
 It references the app rather than building its own request, so its answer is the app's answer rather than a second opinion. `stamp` prompts for nothing. `read` prints a length and a four-character prefix and has no mode that prints a token. `list --shape` prints field names and JSON types with every value stripped, so a fixture can be designed without a single session title. `roster` prints the `environment_kind` histogram and the status sentence — **the cheapest available check that the filter still matches something**, and much cheaper than diagnosing it from a screenshot of missing orbs.

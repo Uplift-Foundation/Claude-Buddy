@@ -63,12 +63,14 @@ internal static class WriteProbe
             "CB-199 write gate (aim these only at a session created for the probe):\n" +
             "  v1-session <id>  [auth]            GET  /v1/code/sessions/<id>, shape + status fields\n" +
             "  v1-events  <id>  [auth]            GET  /v1/code/sessions/<id>/events, shape only\n" +
+            "  v2-session <id>  [auth]            GET  /v2/ccr-sessions/<id>, shape + status fields (CB-225)\n" +
             "  v2-events  <id>                    GET  /v2/ccr-sessions/<id>/events via the app's own parser\n" +
             "  send <id> --throwaway [opts]       POST a user turn to .../events\n" +
             "  interrupt <id> --throwaway [opts]  POST a control_request interrupt to .../events\n" +
             "  archive <id> --throwaway [opts]    POST {} to /v1/code/sessions/<id>/archive (CB-225)\n" +
             "  delete <id> --throwaway [opts]     DELETE /v1/code/sessions/<id> (CB-225)\n" +
             "  route <id> --throwaway [opts]      POST to a sub-route that does not exist (control)\n" +
+            "         --save <path>            write the raw response body to <path>, 0600, never printed\n" +
             "         --absent-id              allow a lifecycle verb only on an id that GETs 404\n" +
             "\n" +
             "  auth:  --auth real|none|bogus   (default real; none/bogus are the negative controls)\n" +
@@ -187,6 +189,12 @@ internal static class WriteProbe
                 method = HttpMethod.Get;
                 path = $"{CloudRequest.CodeSessionsPath}/{Uri.EscapeDataString(id)}";
                 break;
+            case "v2-session":
+                // CB-225: the /v2 row itself, which is what the roster's Keep
+                // filter reads `session_status` off.
+                method = HttpMethod.Get;
+                path = CloudRequest.SessionPath(id);
+                break;
             case "v1-events":
                 method = HttpMethod.Get;
                 path = events + "?limit=20&sort_order=desc";
@@ -281,6 +289,16 @@ internal static class WriteProbe
         {
             var text = await response.Content.ReadAsStringAsync();
             Console.WriteLine($"status   {(int)response.StatusCode}");
+            // CB-225: the raw body, to a file only the user can read, for
+            // scrubbing into a fixture. Never to the console: the body holds
+            // a title and ids, which the allow-list below exists to keep out.
+            if (Value(opts, "--save") is { } save)
+            {
+                File.WriteAllText(save, text);
+                if (!OperatingSystem.IsWindows())
+                    File.SetUnixFileMode(save, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+                Console.WriteLine($"saved    {text.Length} chars");
+            }
             Console.WriteLine($"ctype    {response.Content.Headers.ContentType?.MediaType ?? "(none)"}");
             Console.WriteLine($"cf       {(response.Headers.Contains("cf-mitigated") ? "cf-mitigated present" : "no cf-mitigated")}");
             Console.WriteLine("response:");

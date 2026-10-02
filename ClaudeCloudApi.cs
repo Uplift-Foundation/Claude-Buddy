@@ -67,11 +67,12 @@ namespace ClaudeBuddy
         // that is.
         Unavailable,
 
-        // 409, on a write. **Not measured**: CB-199's gate never had an ended
-        // session to aim at, so this is the Claude Code CLI's own reading of the
-        // status — its binary maps a 409 from `/v1/code/sessions/{id}/events` to
-        // `session_inactive` — rather than an answer anybody here has seen. The
-        // detail string says whose reading it is for that reason.
+        // 409, on a write. **Measured by CB-225**: a send to a session archived
+        // moments earlier answered 409 with error type `session_not_active`,
+        // "Session <id> is not active". CB-199 had only the CLI binary's name
+        // for it, `session_inactive`, which turned out to be the CLI's own
+        // label rather than the wire string — so nothing here matches on the
+        // type, only on the status.
         SessionInactive,
 
         // 413. Plain HTTP: the body was bigger than the endpoint takes. The CLI
@@ -346,13 +347,12 @@ namespace ClaudeBuddy
 
         // The two write refusals, worded for what is actually known.
         //
-        // The 409 sentence names the CLI as the source of its meaning because
-        // that is the evidence: nobody here has had a 409 back, and the CB-164
-        // lesson above is exactly what happens when a detail string states as a
-        // fact something that was only a reading. It is worded so it stays true
-        // if the CLI's reading turns out to be wrong.
+        // The 409 sentence used to name the CLI as the source of its meaning,
+        // because a reading was all there was. CB-225 measured it — the API's
+        // own words are "is not active", on a session that had been archived —
+        // so it now says what the endpoint said.
         internal const string SessionInactiveDetail =
-            "the endpoint answered 409, which Claude Code reads as the session no longer taking input";
+            "the endpoint answered 409: this session is no longer active";
 
         internal const string SessionGoneDetail = "this cloud session no longer exists";
 
