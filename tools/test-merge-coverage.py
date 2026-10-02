@@ -17,6 +17,7 @@ does not re-test; the arithmetic is what has been wrong.
 """
 import importlib.util
 import os
+import sys
 import unittest
 from collections import defaultdict
 
@@ -119,6 +120,130 @@ class LineUnion(unittest.TestCase):
             {"ClaudeDesktopBundles.cs": {90: False}}, {},
             {"ClaudeDesktopBundles.cs": {90}})
         self.assertEqual({90: True}, dict(lines["ClaudeDesktopBundles.cs"]))
+
+
+class ReportCount(unittest.TestCase):
+    """CB-229: never print a figure from other than the expected four reports."""
+
+    def test_four_reports_are_accepted(self):
+        self.assertIsNone(merge_coverage.refuse_unless_expected(list("abcd"), 4))
+
+    def test_two_reports_are_refused_with_a_reason(self):
+        msg = merge_coverage.refuse_unless_expected(["u.xml", "s.xml"], 4)
+        self.assertIn("REFUSING", msg)
+        self.assertIn("merged 2", msg)
+        self.assertIn("u.xml", msg)
+
+    def test_six_reports_are_refused_too(self):
+        self.assertIsNotNone(merge_coverage.refuse_unless_expected(list("abcdef"), 4))
+
+    def test_no_reports_are_refused(self):
+        self.assertIn("none", merge_coverage.refuse_unless_expected([], 4))
+
+    def test_default_expectation_is_four(self):
+        self.assertEqual(4, merge_coverage.EXPECTED_REPORTS)
+
+    def test_expect_flag_and_dedup_in_parse_args(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            f = os.path.join(d, "a.xml")
+            open(f, "w").close()
+            base, reports, expect = merge_coverage.parse_args(
+                [f, os.path.join(d, "*.xml"), "--base", "x", "--expect", "1"])
+            self.assertEqual(("x", 1, [f]), (base, expect, reports))
+
+    def test_main_exits_nonzero_with_wrong_count(self):
+        import sys
+        old = sys.argv
+        sys.argv = ["merge-coverage.py", "/definitely/not/there.xml"]
+        try:
+            with self.assertRaises(SystemExit) as cm:
+                merge_coverage.main()
+        finally:
+            sys.argv = old
+        self.assertIn("REFUSING", str(cm.exception.code))
+
+
+class MsysPaths(unittest.TestCase):
+    """A native Windows Python cannot glob an MSYS /c/... path."""
+
+    def test_drive_path_becomes_native_on_windows(self):
+        self.assertEqual("C:/Users/x/*.xml",
+                         merge_coverage.native_path("/c/Users/x/*.xml", windows=True))
+
+    def test_bare_drive(self):
+        self.assertEqual("D:/", merge_coverage.native_path("/d", windows=True))
+
+    def test_native_and_other_paths_untouched_on_windows(self):
+        for p in ("C:/a/b", "rel/x", "/tmp/x", "/cc/x"):
+            self.assertEqual(p, merge_coverage.native_path(p, windows=True))
+
+    def test_posix_is_identity(self):
+        self.assertEqual("/c/foo", merge_coverage.native_path("/c/foo", windows=False))
+
+
+class EmptyReportArrayUnderSetU(unittest.TestCase):
+    """coverage.sh expands its report array under `set -u`; bash 3.2 (macOS)
+    aborts on an empty one before merge-coverage.py can explain itself."""
+
+    IDIOM = 'python3 tools/merge-coverage.py ${REPORTS[@]+"${REPORTS[@]}"} "$@"'
+
+    def test_coverage_sh_uses_the_guarded_expansion(self):
+        src = open(os.path.join(os.path.dirname(__file__), "coverage.sh")).read()
+        self.assertIn(self.IDIOM, src)
+
+    def test_zero_reports_reach_the_refusal_not_an_unbound_variable(self):
+        import shutil, subprocess
+        bash = shutil.which("bash")
+        if not bash:
+            self.skipTest("no bash")
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        r = subprocess.run(
+            [bash, "-c", "set -euo pipefail; REPORTS=(); " + self.IDIOM.replace(
+                "python3", sys.executable.replace("\\", "/"))],
+            cwd=root, capture_output=True, text=True)
+        self.assertNotEqual(0, r.returncode)
+        self.assertIn("REFUSING", r.stderr)
+        self.assertNotIn("unbound variable", r.stderr)
+
+
+class MissingReportNote(unittest.TestCase):
+    """coverage.sh's note_missing_report: red AND no report says so on the RED line."""
+
+    def _run(self, make_report):
+        import re, shutil, subprocess, tempfile
+        bash = shutil.which("bash")
+        if not bash:
+            self.skipTest("no bash")
+        src = open(os.path.join(os.path.dirname(__file__), "coverage.sh")).read()
+        fn = re.search(r"^note_missing_report\(\) \{.*?^\}", src, re.S | re.M).group(0)
+        with tempfile.TemporaryDirectory() as out:
+            os.makedirs(os.path.join(out, "unit", "guid"))
+            if make_report:
+                open(os.path.join(out, "unit", "guid", "coverage.cobertura.xml"), "w").close()
+            r = subprocess.run(
+                [bash, "-c", f'set -euo pipefail; OUT="{out.replace(chr(92), "/")}"; RED=(); {fn}; '
+                             'note_missing_report unit tests/UnitTests; '
+                             'echo "RED=${RED[*]:-}"'],
+                capture_output=True, text=True)
+        return r
+
+    def test_no_report_is_named_on_the_red_line(self):
+        r = self._run(make_report=False)
+        self.assertEqual(0, r.returncode, r.stderr)
+        self.assertIn("RED=tests/UnitTests (no report)", r.stdout)
+        self.assertIn("produced no cobertura report", r.stderr)
+
+    def test_a_report_leaves_the_red_line_alone(self):
+        r = self._run(make_report=True)
+        self.assertEqual(0, r.returncode, r.stderr)
+        self.assertIn("RED=\n", r.stdout + "\n")
+        self.assertNotIn("no report", r.stdout)
+
+    def test_coverage_sh_checks_both_vstest_suites(self):
+        src = open(os.path.join(os.path.dirname(__file__), "coverage.sh")).read()
+        self.assertIn("note_missing_report unit tests/UnitTests", src)
+        self.assertIn("note_missing_report integration tests/IntegrationTests", src)
 
 
 if __name__ == "__main__":
