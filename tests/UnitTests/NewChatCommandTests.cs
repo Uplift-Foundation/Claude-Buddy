@@ -124,7 +124,7 @@ namespace ClaudeBuddy.Tests
             var cli = Enum.Parse<NewChatCli>(cliName);
             var command = NewChatCommand.For(cli, binary, configDir: "/Users/me/.work home");
 
-            Assert.Equal(variable + "='/Users/me/.work home' '" + binary + "'", command);
+            Assert.Equal("env " + variable + "='/Users/me/.work home' '" + binary + "'", command);
         }
 
         [Theory]

@@ -29,7 +29,8 @@ public class NewChatExecLineShellTests
     {
         var path = Path.Combine(dir, "fake claude");
         File.WriteAllText(path,
-            "#!/bin/sh\nprintf '%s|%s\\n' \"${CLAUDE_CONFIG_DIR-<unset>}\" \"$0\"\n");
+            "#!/bin/sh\nprintf '%s|%s|%s|%s\\n' \"${CLAUDE_CONFIG_DIR-<unset>}\" \"${CODEX_HOME-<unset>}\" "
+            + "\"${GROK_HOME-<unset>}\" \"$0\"\n");
         File.SetUnixFileMode(path,
             UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         return path;
@@ -50,6 +51,8 @@ public class NewChatExecLineShellTests
         // (this repo's own agent shells routinely are); the default-account
         // case has to start from none.
         psi.Environment.Remove("CLAUDE_CONFIG_DIR");
+        psi.Environment.Remove("CODEX_HOME");
+        psi.Environment.Remove("GROK_HOME");
         psi.Environment["HOME"] = home;
         psi.Environment["ZDOTDIR"] = home;
 
@@ -78,14 +81,23 @@ public class NewChatExecLineShellTests
         }
     }
 
-    [UnixFact]
-    public void ANamedAccountStartsTheCliWithItsConfigDirInEveryShell()
+    // The variables in the stub's output order.
+    private static readonly string[] Variables = { "CLAUDE_CONFIG_DIR", "CODEX_HOME", "GROK_HOME" };
+
+    // CB-203: each CLI's named account sets its own variable and only that
+    // one — CLAUDE_CONFIG_DIR, CODEX_HOME or GROK_HOME.
+    [UnixTheory]
+    [InlineData("ClaudeCode", "CLAUDE_CONFIG_DIR")]
+    [InlineData("Codex", "CODEX_HOME")]
+    [InlineData("Grok", "GROK_HOME")]
+    public void ANamedAccountStartsTheCliWithItsOwnVariableInEveryShell(string cliName, string variable)
     {
+        var cli = Enum.Parse<NewChatCli>(cliName);
         InScratch((root, stub, cwd) =>
         {
-            var configDir = Path.Combine(root, "o'brien $HOME .claude-work");
-            var line = TerminalScripts.ShellCommandLine(
-                cwd, NewChatCommand.ExecLine(NewChatCli.ClaudeCode, stub, configDir));
+            var configDir = Path.Combine(root, "o'brien $HOME .work");
+            var line = TerminalScripts.ShellCommandLine(cwd, NewChatCommand.ExecLine(cli, stub, configDir));
+            var expected = string.Join("|", Variables.Select(v => v == variable ? configDir : "<unset>")) + "|" + stub;
 
             Assert.NotEmpty(PresentShells());
             foreach (var shell in PresentShells())
@@ -93,32 +105,32 @@ public class NewChatExecLineShellTests
                 var (exit, stdout, stderr) = Run(shell, line, root);
 
                 Assert.True(exit == 0, $"{shell}: exit {exit}: {stderr}");
-                Assert.Equal(configDir + "|" + stub, stdout.TrimEnd('\n'));
+                Assert.Equal(expected, stdout.TrimEnd('\n'));
             }
         });
     }
 
-    [UnixFact]
-    public void TheDefaultAccountStartsTheCliWithNoConfigDirInEveryShell()
+    [UnixTheory]
+    [InlineData("ClaudeCode")]
+    [InlineData("Codex")]
+    [InlineData("Grok")]
+    public void TheDefaultAccountStartsTheCliWithNoAccountVariableInEveryShell(string cliName)
     {
+        var cli = Enum.Parse<NewChatCli>(cliName);
         InScratch((root, stub, cwd) =>
         {
-            var line = TerminalScripts.ShellCommandLine(
-                cwd, NewChatCommand.ExecLine(NewChatCli.ClaudeCode, stub, configDir: null));
+            var line = TerminalScripts.ShellCommandLine(cwd, NewChatCommand.ExecLine(cli, stub, configDir: null));
 
             foreach (var shell in PresentShells())
             {
                 var (exit, stdout, stderr) = Run(shell, line, root);
 
                 Assert.True(exit == 0, $"{shell}: exit {exit}: {stderr}");
-                Assert.Equal("<unset>|" + stub, stdout.TrimEnd('\n'));
+                Assert.Equal("<unset>|<unset>|<unset>|" + stub, stdout.TrimEnd('\n'));
             }
         });
     }
 
-    // The negative control: the pre-CB-232 line, built the way RealLaunch
-    // used to build it, fails in every shell. Without this, the two tests
-    // above passing could mean the harness never ran the line at all.
     [UnixFact]
     public void TheOldExecThenAssignmentLineFailsInEveryShell()
     {
