@@ -17,6 +17,7 @@ does not re-test; the arithmetic is what has been wrong.
 """
 import importlib.util
 import os
+import sys
 import unittest
 from collections import defaultdict
 
@@ -179,6 +180,31 @@ class MsysPaths(unittest.TestCase):
 
     def test_posix_is_identity(self):
         self.assertEqual("/c/foo", merge_coverage.native_path("/c/foo", windows=False))
+
+
+class EmptyReportArrayUnderSetU(unittest.TestCase):
+    """coverage.sh expands its report array under `set -u`; bash 3.2 (macOS)
+    aborts on an empty one before merge-coverage.py can explain itself."""
+
+    IDIOM = 'python3 tools/merge-coverage.py ${REPORTS[@]+"${REPORTS[@]}"} "$@"'
+
+    def test_coverage_sh_uses_the_guarded_expansion(self):
+        src = open(os.path.join(os.path.dirname(__file__), "coverage.sh")).read()
+        self.assertIn(self.IDIOM, src)
+
+    def test_zero_reports_reach_the_refusal_not_an_unbound_variable(self):
+        import shutil, subprocess
+        bash = shutil.which("bash")
+        if not bash:
+            self.skipTest("no bash")
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        r = subprocess.run(
+            [bash, "-c", "set -euo pipefail; REPORTS=(); " + self.IDIOM.replace(
+                "python3", sys.executable.replace("\\", "/"))],
+            cwd=root, capture_output=True, text=True)
+        self.assertNotEqual(0, r.returncode)
+        self.assertIn("REFUSING", r.stderr)
+        self.assertNotIn("unbound variable", r.stderr)
 
 
 if __name__ == "__main__":
