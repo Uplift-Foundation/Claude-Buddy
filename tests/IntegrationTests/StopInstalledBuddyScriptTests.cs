@@ -54,18 +54,41 @@ public class StopInstalledBuddyScriptTests : IDisposable
         Directory.CreateDirectory(macOs);
         var exe = Path.Combine(macOs, "ClaudeBuddy");
         File.Copy("/bin/bash", exe);
-
-        using var sign = Process.Start(new ProcessStartInfo("/usr/bin/codesign")
-        {
-            ArgumentList = { "-s", "-", "-f", exe },
-            RedirectStandardError = true,
-            UseShellExecute = false,
-        })!;
-        sign.StandardError.ReadToEnd();
-        sign.WaitForExit();
-        Assert.Equal(0, sign.ExitCode);
-
+        Sign(exe);
         return exe;
+    }
+
+    // Ad-hoc signs the copy. QA saw codesign exit 1 intermittently, only
+    // when the whole integration suite ran in parallel under load, and never
+    // with this class alone. So signing is serialised across the class, a
+    // failure is retried twice, and a final failure carries codesign's own
+    // stderr and exit code, which the first version threw away.
+    private static readonly object SignGate = new();
+
+    private static void Sign(string exe)
+    {
+        var failures = new List<string>();
+
+        lock (SignGate)
+        {
+            for (var attempt = 1; attempt <= 3; attempt++)
+            {
+                using var sign = Process.Start(new ProcessStartInfo("/usr/bin/codesign")
+                {
+                    ArgumentList = { "-s", "-", "-f", exe },
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                })!;
+                var stderr = sign.StandardError.ReadToEnd();
+                sign.WaitForExit();
+                if (sign.ExitCode == 0) return;
+
+                failures.Add($"attempt {attempt}: exit {sign.ExitCode}: {stderr.Trim()}");
+                Thread.Sleep(250 * attempt);
+            }
+        }
+
+        Assert.Fail("codesign could not sign the stand-in:\n" + string.Join("\n", failures));
     }
 
     // Runs the stand-in as bash with a script, so `ps` reports the stand-in's
