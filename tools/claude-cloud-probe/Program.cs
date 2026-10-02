@@ -70,7 +70,8 @@ internal static class Program
             "read" => await ReadAsync(flags),
             "list" => await ListAsync(flags),
             "roster" => await RosterAsync(),
-            "v1-session" or "v1-events" or "v2-events" or "send" or "interrupt" =>
+            "v1-session" or "v1-events" or "v2-events" or "send" or "interrupt"
+                or "archive" or "delete" or "route" =>
                 await WriteProbe.RunAsync(args[0], flags, ReadFirstFoundAsync, OrganizationUuid),
             _ => UnknownCommand(args[0]),
         };
