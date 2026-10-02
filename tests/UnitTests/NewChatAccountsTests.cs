@@ -278,6 +278,46 @@ namespace ClaudeBuddy.Tests
             Assert.Equal(variable, home.EnvVar);
         }
 
+        // --- CB-203: NewChatAccountWarning ---------------------------------
+
+        [Theory]
+        [InlineData("ClaudeCode", ".claude-work", "Claude Code will start first-run setup there.")]
+        [InlineData("Codex", ".codex-work", "Codex will refuse to start.")]
+        [InlineData("Grok", ".grok-work", "Grok will create a fresh, logged-out account there.")]
+        public void AMissingAccountDirectoryIsWarnedPerCli(string cliName, string profileDir, string consequence)
+        {
+            var cli = Enum.Parse<NewChatCli>(cliName);
+            string? asked = null;
+
+            var warning = NewChatAccountWarning.For(cli, Home, profileDir, dir => { asked = dir; return false; });
+
+            Assert.Equal("This folder doesn't exist; " + consequence, warning);
+            Assert.Equal(Path.Combine(Home, profileDir), asked);
+        }
+
+        [Fact]
+        public void AnExistingAccountDirectoryIsNotWarned()
+        {
+            Assert.Null(NewChatAccountWarning.For(NewChatCli.Codex, Home, ".codex-work", _ => true));
+        }
+
+        // Default has no directory of ours to check — the filesystem is never
+        // asked, so a missing ~/.codex is the CLI's business, not a warning.
+        [Theory]
+        [InlineData("Codex", null)]
+        [InlineData("Codex", ".codex")]
+        [InlineData("Grok", ".grok/")]
+        public void TheDefaultAccountIsNeverWarned(string cliName, string? profileDir)
+        {
+            var asked = false;
+
+            var warning = NewChatAccountWarning.For(
+                Enum.Parse<NewChatCli>(cliName), Home, profileDir, _ => { asked = true; return false; });
+
+            Assert.Null(warning);
+            Assert.False(asked);
+        }
+
         [Fact]
         public void ChoiceToStringIsItsLabel()
         {

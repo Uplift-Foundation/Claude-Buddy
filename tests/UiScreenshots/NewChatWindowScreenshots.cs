@@ -36,6 +36,13 @@ public class NewChatWindowScreenshots : IDisposable
     {
         FreshSettings();
         ClearSeams();
+
+        // Every account directory "exists" unless a scenario says otherwise
+        // (CB-203): otherwise the missing-home warning would depend on the
+        // runner's real home directory — present on a dev Mac with
+        // ~/.claude-board, absent on CI — and the same scenario would draw
+        // differently on each.
+        NewChatWindow.AccountDirectoryExistsForTests = _ => true;
     }
 
     public void Dispose() => ClearSeams();
@@ -232,6 +239,28 @@ public class NewChatWindowScreenshots : IDisposable
         ScreenshotHelper.Capture(window, "new-chat-codex-accounts.png");
     }
 
+    // CB-203's missing-home warning: Codex with an extra CODEX_HOME whose
+    // directory does not exist. Codex refuses to start there, so the line
+    // under the picker says so before Start is pressed rather than leaving a
+    // terminal that flashes and closes.
+    [AvaloniaFact]
+    public void CodexAccountWithMissingHome()
+    {
+        NewChatAvailability.CurrentForTests = () => new[]
+        {
+            Enabled(NewChatCli.ClaudeCode), Enabled(NewChatCli.Codex), Enabled(NewChatCli.Grok)
+        };
+        NewChatWindow.OpenClawAvailabilityForTests = () => OpenClawNewChatAvailability.NoGateway;
+        NewChatWindow.CurrentStatusesForTests = () => new Dictionary<string, SessionStatus>();
+        NewChatWindow.AccountDirectoryExistsForTests = _ => false;
+        ClaudeBuddySettings.AddCodexHome(".codex-work");
+        ClaudeBuddySettings.SetNewChatLastProfile(NewChatCli.Codex, ".codex-work");
+
+        var window = NewWindow(prefillCli: NewChatCli.Codex);
+
+        ScreenshotHelper.Capture(window, "new-chat-codex-missing-home.png");
+    }
+
     // The OpenClaw row selected, Ready, with agents loaded — the agent
     // section replacing the folder section is CB-168's own decision record
     // ("OpenClaw selected: an agent picker replaces the folder field"), and
@@ -293,5 +322,6 @@ public class NewChatWindowScreenshots : IDisposable
         NewChatWindow.KnownAgentsForTests = null;
         NewChatWindow.StartOpenClawConversationForTests = null;
         NewChatWindow.OrbForTests = null;
+        NewChatWindow.AccountDirectoryExistsForTests = null;
     }
 }

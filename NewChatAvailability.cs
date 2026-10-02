@@ -117,6 +117,37 @@ namespace ClaudeBuddy
         };
     }
 
+    // What happens if the chosen account's directory does not exist (CB-203).
+    // Each CLI answers differently, measured on the MacBook and the Windows
+    // box: Codex refuses to start ("CODEX_HOME points to ..., but that path
+    // does not exist"), Grok scaffolds a fresh, logged-out home there, and
+    // Claude Code starts first-run setup. None of the three gets an orb from
+    // it, and the launch is `exec <cli>`, so a Codex that exits at once can
+    // close its own tmux window before anyone reads the error. The dialog
+    // states it under the picker instead, and leaves Start enabled — a
+    // directory about to be created on purpose is a real reason to go ahead.
+    //
+    // Pure: the filesystem check is a parameter, so every arm is a test
+    // rather than a real missing directory.
+    internal static class NewChatAccountWarning
+    {
+        // Null for Default (ConfigDirFor's null — there is no directory of
+        // ours to check) and for a directory that exists.
+        internal static string? For(
+            NewChatCli cli, string home, string? profileDir, Func<string, bool> directoryExists)
+        {
+            var dir = NewChatLauncher.ConfigDirFor(cli, home, profileDir);
+            return dir is null || directoryExists(dir) ? null : TextFor(cli);
+        }
+
+        internal static string TextFor(NewChatCli cli) => cli switch
+        {
+            NewChatCli.Codex => "This folder doesn't exist; Codex will refuse to start.",
+            NewChatCli.Grok => "This folder doesn't exist; Grok will create a fresh, logged-out account there.",
+            _ => "This folder doesn't exist; Claude Code will start first-run setup there."
+        };
+    }
+
     // CB-201's Account picker, per CLI since CB-203: turns the user's
     // configured extra accounts for one CLI (ClaudeCodeProfileDirs, CodexHomes
     // or GrokHomes) into the rows a combo box shows, plus the profile dir

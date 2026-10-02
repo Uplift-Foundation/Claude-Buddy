@@ -200,7 +200,21 @@ namespace ClaudeBuddy
         // CB-207's space-holders, one per slot whose occupant changes after
         // show. See ReservedSlot for why they exist and Ghost for what they
         // are; which ones are visible is decided once, in BuildCliList.
-        private readonly Control _accountGhost = Ghost("Account", withBrowse: false);
+        private readonly StackPanel _accountGhost = Ghost("Account", withBrowse: false);
+
+        // CB-203's missing-directory warning under the Account picker, and its
+        // placeholder in the account ghost. The line can appear and disappear
+        // after show, so — the CB-207 rule — it never moves the window: its
+        // height is fixed at three lines (the longest warning wraps to three
+        // in the headless font the height tests measure with, the same reason
+        // the status line reserves three), and the ghost reserves the same
+        // lines whenever any account the dialog could select has a missing
+        // directory (decided once, in BuildCliList). When none does, nothing
+        // is reserved and the dialog reads exactly as it did before.
+        private const int AccountWarningLines = 3;
+        private const double AccountWarningLineHeight = 15;
+        private readonly TextBlock _accountWarning = AccountWarningLine(opacity: 0.7);
+        private readonly TextBlock _accountWarningGhost = AccountWarningLine(opacity: 0);
         private readonly Control _folderGhost = Ghost("Folder", withBrowse: true);
         private readonly Control _agentGhost = Ghost("Agent", withBrowse: false);
         private Grid? _accountSlot;
@@ -291,6 +305,9 @@ namespace ClaudeBuddy
             // Claude Code (see that method's own comment).
             _accountSection.Children.Add(new TextBlock { Text = "Account", FontWeight = FontWeight.SemiBold });
             _accountSection.Children.Add(_accountCombo);
+            _accountSection.Children.Add(_accountWarning);
+            _accountGhost.Children.Add(_accountWarningGhost);
+            _accountCombo.SelectionChanged += (_, _) => UpdateAccountWarning();
             _accountSlot = ReservedSlot(_accountGhost, _accountSection);
             root.Children.Add(_accountSlot);
 
@@ -374,7 +391,7 @@ namespace ClaudeBuddy
         // height, so it measures the same in both themes and at any font size.
         // The tests pin that the height really does hold across every switch,
         // which catches this shape drifting away from the real one.
-        private static Control Ghost(string label, bool withBrowse)
+        private static StackPanel Ghost(string label, bool withBrowse)
         {
             var field = new ComboBox
             {
@@ -426,6 +443,8 @@ namespace ClaudeBuddy
         internal StackPanel CliList => _cliList;
         internal StackPanel AccountSection => _accountSection;
         internal ComboBox AccountCombo => _accountCombo;
+        internal TextBlock AccountWarning => _accountWarning;
+        internal TextBlock AccountWarningGhost => _accountWarningGhost;
         internal ComboBox FolderCombo => _folderCombo;
         internal StackPanel FolderSection => _folderSection;
         internal ComboBox AgentCombo => _agentCombo;
@@ -504,6 +523,8 @@ namespace ClaudeBuddy
             // Claude Code, so the slot is held when any of the three could
             // show it, not only Claude Code.
             _accountGhost.IsVisible = options.Any(o => o.Enabled && AccountChoices(o.Cli).Count > 1);
+            _accountWarningGhost.IsVisible = _accountGhost.IsVisible && options.Any(o =>
+                o.Enabled && AccountChoices(o.Cli).Any(c => AccountWarningFor(o.Cli, c) is not null));
             _folderGhost.IsVisible = options.Any(o => o.Enabled);
             _agentGhost.IsVisible = openClawReady;
 
@@ -633,7 +654,46 @@ namespace ClaudeBuddy
                 : -1;
 
             _accountCombo.SelectedIndex = preferredIndex >= 0 ? preferredIndex : 0;
+            UpdateAccountWarning();
         }
+
+        // The selected account's missing-directory warning, shown only in
+        // space BuildCliList reserved for it — see _accountWarning.
+        private void UpdateAccountWarning()
+        {
+            var text = _selectedCli is { } cli && _accountCombo.SelectedItem is NewChatAccounts.Choice choice
+                ? AccountWarningFor(cli, choice)
+                : null;
+
+            _accountWarning.Text = text;
+            ToolTip.SetTip(_accountWarning, text);
+            _accountWarning.IsVisible = _accountWarningGhost.IsVisible && text is not null;
+        }
+
+        // The dialog's own seam for the filesystem half of
+        // NewChatAccountWarning, the same shape as ChooseFolderForTests: a
+        // test or screenshot decides which account directories "exist"
+        // rather than depending on what is in the real home directory.
+        internal static Func<string, bool>? AccountDirectoryExistsForTests;
+
+        private static string? AccountWarningFor(NewChatCli cli, NewChatAccounts.Choice choice) =>
+            NewChatAccountWarning.For(
+                cli,
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                choice.ProfileDir,
+                AccountDirectoryExistsForTests ?? Directory.Exists);
+
+        private static TextBlock AccountWarningLine(double opacity) => new()
+        {
+            FontSize = 11,
+            Opacity = opacity,
+            TextWrapping = TextWrapping.Wrap,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            MaxLines = AccountWarningLines,
+            LineHeight = AccountWarningLineHeight,
+            Height = AccountWarningLines * AccountWarningLineHeight,
+            IsVisible = false
+        };
 
         private static List<NewChatAccounts.Choice> AccountChoices(NewChatCli cli) =>
             NewChatAccounts.Choices(

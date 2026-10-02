@@ -21,8 +21,17 @@ namespace ClaudeBuddy.Tests;
 [Collection("Settings")]
 public class NewChatWindowTests : IDisposable
 {
+    // Every account directory "exists" unless a test says otherwise, so the
+    // CB-203 warning never depends on what is in the real home directory of
+    // the machine running the suite.
+    public NewChatWindowTests()
+    {
+        NewChatWindow.AccountDirectoryExistsForTests = _ => true;
+    }
+
     public void Dispose()
     {
+        NewChatWindow.AccountDirectoryExistsForTests = null;
         NewChatAvailability.CurrentForTests = null;
         NewChatLauncher.LaunchForTests = null;
         NewChatWindow.CurrentStatusesForTests = null;
@@ -626,6 +635,88 @@ public class NewChatWindowTests : IDisposable
         Click(window.StartButton);
 
         Assert.Null(seenProfileDir);
+    }
+
+    // --- CB-203: the missing-home warning under the picker ---
+
+    [AvaloniaTheory]
+    [InlineData("ClaudeCode", ".claude-gone", "Claude Code will start first-run setup there.")]
+    [InlineData("Codex", ".codex-gone", "Codex will refuse to start.")]
+    [InlineData("Grok", ".grok-gone", "Grok will create a fresh, logged-out account there.")]
+    public void AMissingAccountDirectoryIsWarnedUnderThePickerAndStartStaysEnabled(
+        string cliName, string home, string consequence)
+    {
+        var cli = Enum.Parse<NewChatCli>(cliName);
+        FreshSettings();
+        switch (cli)
+        {
+            case NewChatCli.Codex: ClaudeBuddySettings.AddCodexHome(home); break;
+            case NewChatCli.Grok: ClaudeBuddySettings.AddGrokHome(home); break;
+            default: ClaudeBuddySettings.AddClaudeCodeProfileDir(home); break;
+        }
+        NewChatWindow.AccountDirectoryExistsForTests = _ => false;
+        NewChatAvailability.CurrentForTests = () => new[] { Enabled(cli) };
+
+        var window = NewWindow(prefillCli: cli);
+        Assert.False(window.AccountWarning.IsVisible);
+
+        window.AccountCombo.SelectedItem = Items(window).Single(c => c.ProfileDir == home);
+        Flush();
+
+        Assert.True(window.AccountWarning.IsVisible);
+        Assert.Equal("This folder doesn't exist; " + consequence, window.AccountWarning.Text);
+        Assert.Equal(window.AccountWarning.Text, ToolTip.GetTip(window.AccountWarning));
+        Assert.True(window.StartButton.IsEnabled);
+
+        window.AccountCombo.SelectedIndex = 0;
+        Flush();
+        Assert.False(window.AccountWarning.IsVisible);
+    }
+
+    // The real filesystem, with the seam unset: an existing directory is not
+    // warned about, a missing one is. Absolute temp paths, so the answer does
+    // not depend on the home directory of the machine running this.
+    [AvaloniaFact]
+    public void TheWarningReadsTheRealFilesystemWhenNoSeamIsSet()
+    {
+        FreshSettings();
+        NewChatWindow.AccountDirectoryExistsForTests = null;
+        var existing = Path.Combine(Path.GetTempPath(), "cb203-home-" + Guid.NewGuid());
+        Directory.CreateDirectory(existing);
+        var missing = Path.Combine(Path.GetTempPath(), "cb203-missing-" + Guid.NewGuid());
+        ClaudeBuddySettings.AddCodexHome(existing);
+        ClaudeBuddySettings.AddCodexHome(missing);
+        NewChatAvailability.CurrentForTests = () => new[] { Enabled(NewChatCli.Codex) };
+
+        var window = NewWindow(prefillCli: NewChatCli.Codex);
+
+        window.AccountCombo.SelectedItem = Items(window).Single(c => c.ProfileDir == existing);
+        Flush();
+        Assert.False(window.AccountWarning.IsVisible);
+
+        window.AccountCombo.SelectedItem = Items(window).Single(c => c.ProfileDir == missing);
+        Flush();
+        Assert.True(window.AccountWarning.IsVisible);
+    }
+
+    // A missing home on a CLI that is disabled reserves nothing: it can never
+    // be selected, so its warning can never appear.
+    [AvaloniaFact]
+    public void ADisabledCliMissingHomeReservesNoWarningLine()
+    {
+        FreshSettings();
+        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-work");
+        ClaudeBuddySettings.AddGrokHome(".grok-gone");
+        NewChatWindow.AccountDirectoryExistsForTests = dir => !dir.EndsWith(".grok-gone", StringComparison.Ordinal);
+        NewChatAvailability.CurrentForTests = () => new[]
+        {
+            Enabled(NewChatCli.ClaudeCode), Disabled(NewChatCli.Grok, "Grok isn't installed.")
+        };
+
+        var window = NewWindow();
+
+        Assert.True(window.AccountGhost.IsVisible);
+        Assert.False(window.AccountWarningGhost.IsVisible);
     }
 
     // --- the watch tick, driven directly per LocalCliChatSessionTests' own

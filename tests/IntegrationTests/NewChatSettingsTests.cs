@@ -190,10 +190,14 @@ public class NewChatSettingsTests
         Assert.Equal(".codex-work", ClaudeBuddySettings.NewChatLastProfileFor(NewChatCli.Codex));
         Assert.Equal(".grok-work", ClaudeBuddySettings.NewChatLastProfileFor(NewChatCli.Grok));
 
-        var json = File.ReadAllText(Path.Combine(dir, "settings.json"));
-        Assert.Contains("\"newChatLastProfile\": \".claude-work\"", json);
-        Assert.Contains("\"newChatLastCodexProfile\": \".codex-work\"", json);
-        Assert.Contains("\"newChatLastGrokProfile\": \".grok-work\"", json);
+        var root = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(Path.Combine(dir, "settings.json")))!;
+        var map = root["newChatLastProfiles"]!.AsObject();
+        Assert.Equal(new[] { "ClaudeCode", "Codex", "Grok" }, map.Select(p => p.Key));
+        Assert.Equal(".codex-work", (string?)map["Codex"]);
+
+        // The pre-CB-203 key is still written, from the Claude Code entry,
+        // so an older build reading this file keeps its account.
+        Assert.Equal(".claude-work", (string?)root["newChatLastProfile"]);
     }
 
     [Theory]
@@ -227,5 +231,46 @@ public class NewChatSettingsTests
         Assert.Equal(".claude-board", ClaudeBuddySettings.NewChatLastProfileFor(NewChatCli.ClaudeCode));
         Assert.Null(ClaudeBuddySettings.NewChatLastProfileFor(NewChatCli.Codex));
         Assert.Null(ClaudeBuddySettings.NewChatLastProfileFor(NewChatCli.Grok));
+    }
+
+    // The map wins over the legacy key when both name Claude Code's account,
+    // and a key that is not a NewChatCli name is dropped on load.
+    [Fact]
+    public void TheMapWinsOverTheLegacyKeyAndUnknownCliNamesAreDropped()
+    {
+        FreshSettings();
+        var dir = Environment.GetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR")!;
+        File.WriteAllText(Path.Combine(dir, "settings.json"),
+            "{ \"newChatLastProfile\": \".claude-old\", "
+            + "\"newChatLastProfiles\": { \"ClaudeCode\": \".claude-new\", \"codex\": \".lowercase\", "
+            + "\"0\": \".numeric\", \"OpenClaw\": \".nope\", \"Grok\": \" \" } }");
+
+        ClaudeBuddySettings.ReloadForTests();
+        ClaudeBuddySettings.SetNewChatLastCli("Codex");
+
+        Assert.Equal(".claude-new", ClaudeBuddySettings.NewChatLastProfileFor(NewChatCli.ClaudeCode));
+        Assert.Null(ClaudeBuddySettings.NewChatLastProfileFor(NewChatCli.Codex));
+        Assert.Null(ClaudeBuddySettings.NewChatLastProfileFor(NewChatCli.Grok));
+
+        var map = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(Path.Combine(dir, "settings.json")))!
+            ["newChatLastProfiles"]!.AsObject();
+        Assert.Equal(new[] { "ClaudeCode" }, map.Select(p => p.Key));
+    }
+
+    // Choosing Default for Claude Code clears both the map entry and the
+    // legacy key, so the legacy key cannot resurrect the old pick on reload.
+    [Fact]
+    public void ClearingClaudeCodeClearsTheLegacyKeyToo()
+    {
+        FreshSettings();
+        var dir = Environment.GetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR")!;
+
+        ClaudeBuddySettings.SetNewChatLastProfile(NewChatCli.ClaudeCode, ".claude-work");
+        ClaudeBuddySettings.SetNewChatLastProfile(NewChatCli.ClaudeCode, null);
+        ClaudeBuddySettings.ReloadForTests();
+
+        Assert.Null(ClaudeBuddySettings.NewChatLastProfileFor(NewChatCli.ClaudeCode));
+        var root = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(Path.Combine(dir, "settings.json")))!;
+        Assert.Null(root["newChatLastProfile"]);
     }
 }

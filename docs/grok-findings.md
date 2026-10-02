@@ -172,7 +172,11 @@ nothing.
 
 **Setting `GROK_HOME` to `~/.grok` behaves the same as leaving it unset** — unlike Claude Code, where `CLAUDE_CONFIG_DIR=~/.claude` reads a different identity file from no variable at all (CB-42). Measured 2 Oct 2026 on grok 1.0.46 (MacBook) and 1.0.34 (Windows box), by running `grok du` under a scratch `$HOME` via `env -i`, once unset and once with `GROK_HOME=$HOME/.grok`, and diffing every file each run created: identical trees, and both print `Disk usage for ~/.grok`. The bundled user guide says the same ("when it is unset, Grok uses `~/.grok`"). The negative control was Claude Code under the same harness (`claude config list`), which does show CB-42's split — unset writes `$HOME/.claude.json`, set does not — so the method can see the difference when there is one.
 
-**A `GROK_HOME` that does not exist is created, not refused** — a scratch `GROK_HOME=…/.grok-work` came back with `docs/` and `logs/` in it, and Grok runs logged out there. Codex differs on exactly this point (see `codex-findings.md`).
+A second reading, by a different method, agrees: `grok -p "Reply with exactly: OK"` against the real home printed `OK` both unset and with `GROK_HOME=$HOME/.grok`, and printed a not-logged-in prompt naming `grok login --device-code` with `GROK_HOME` pointed at an empty directory (the negative control). Same machine, grok 1.0.46, 2 Oct 2026.
+
+Reading `~/.grok` itself: the shell's `ls` here is aliased to a tool that, given several paths at once, listed `~/.grok` as holding only `bin/`. `/bin/ls -la ~/.grok` shows the whole tree — `auth.json`, `sessions/`, `logs/` and the rest. Confirm a directory listing that looks empty with `/bin/ls` before concluding anything from it.
+
+**A `GROK_HOME` that does not exist is created, not refused.** `grok du` against a scratch `GROK_HOME=…/.grok-work` left `docs/` and `logs/` behind, and a first interactive or `-p` run scaffolds a full home (`config.toml`, `agent_id`, `sessions/`, `logs/` and more), logged out. So a mistyped extra home silently becomes a fresh, logged-out account rather than an error. Codex differs on exactly this point (see `codex-findings.md`). The New chat dialog states this under the Account picker when the chosen home is missing (`NewChatAccountWarning`).
 
 The New chat dialog still sets nothing for the default account (`NewChatAccountHome`, `ClaudeProfile.ConfigDirFor`): one rule for all three CLIs, and a `GROK_HOME` Buddy itself was launched under reaches the chat unchanged.
 

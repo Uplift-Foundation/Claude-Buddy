@@ -469,7 +469,7 @@ Three things that are not obvious and cost time to find:
 
 **Setting `CODEX_HOME` to `~/.codex` behaves the same as leaving it unset**, so CB-42's split does not exist for Codex. Measured 2 Oct 2026: on the MacBook (codex-cli 0.160.0) and the Windows box (0.148.0), `codex login status` reports `Logged in using ChatGPT` both ways against the real home, and an empty `CODEX_HOME` reports `Not logged in` as the negative control. Under a scratch `$HOME` via `env -i`, unset and `CODEX_HOME=$HOME/.codex` created identical trees apart from one randomly named `tmp/arg0/codex-arg0*` directory.
 
-**A `CODEX_HOME` that does not exist is refused**, on both platforms: `Error loading configuration: CODEX_HOME points to "…", but that path does not exist`. So a stale entry in the Codex profiles list opens a terminal that shows that error and stops. Grok creates a missing home instead.
+**A `CODEX_HOME` that does not exist is refused**, on both platforms: `Error loading configuration: CODEX_HOME points to "…", but that path does not exist`. Codex creates nothing in that case. Because the dialog launches `exec codex`, a Codex that exits at once can take its tmux window or terminal with it before the error is read, so the New chat dialog warns under the Account picker when the chosen home is missing (`NewChatAccountWarning`), and leaves Start enabled. Grok creates a missing home instead.
 
 The New chat dialog still sets nothing for the default account — one rule for all three CLIs, and a `CODEX_HOME` Buddy itself was launched under reaches the chat unchanged.
 
