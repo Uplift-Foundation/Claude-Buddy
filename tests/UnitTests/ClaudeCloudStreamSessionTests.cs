@@ -71,8 +71,21 @@ public partial class ClaudeCloudEventsTests
         // that is the signal: the next open, or a failure as soon as the run
         // that would have made it has finished without making it. Slow is now
         // only slow; wrong still fails, and fails at once with a reason.
+        //
+        // **One backstop, and it is not the old timeout.** A run that parks —
+        // alive, never opening again, never ending — would otherwise hang the
+        // test, and a hang is the failure CI shows worst: a job timeout with no
+        // message. So past Backstop the wait fails, naming what it saw. The
+        // passing path never reaches it (an open or an ending arrives first),
+        // and at minutes rather than seconds no plausible amount of runner load
+        // gets there either: the whole UnitTests suite runs in under two
+        // minutes on CI's slowest leg.
+        internal TimeSpan Backstop { get; init; } = TimeSpan.FromMinutes(2);
+
         internal async Task<ChannelWriter<CloudStreamEvent>> NextOpenAsync()
         {
+            var backstop = Task.Delay(Backstop);
+
             while (true)
             {
                 if (_opened.Reader.TryRead(out var open)) return open.Writer;
@@ -90,7 +103,16 @@ public partial class ClaudeCloudEventsTests
                     throw new Xunit.Sdk.XunitException("the stream run ended without opening again");
                 }
 
-                await Task.WhenAny(_opened.Reader.WaitToReadAsync().AsTask(), run);
+                await Task.WhenAny(_opened.Reader.WaitToReadAsync().AsTask(), run, backstop);
+
+                // An open or an ending that landed alongside the backstop wins:
+                // the top of the loop takes either. Only neither is a park.
+                if (backstop.IsCompleted && _opened.Reader.Count == 0 && !run.IsCompleted)
+                {
+                    throw new Xunit.Sdk.XunitException(
+                        $"the stream run is still alive after {Backstop} with no new open and no ending " +
+                        $"(opens so far: {OpenCount}, run status: {run.Status}) — the session has parked");
+                }
             }
         }
 
@@ -546,6 +568,29 @@ public partial class ClaudeCloudEventsTests
         var refused = await Assert.ThrowsAsync<Xunit.Sdk.XunitException>(stream.NextOpenAsync);
         Assert.Contains("ended without opening again", refused.Message);
         Assert.True(chat.StreamTask!.IsCompleted);
+    }
+
+    // The control for the backstop: a run parked in a held wait — alive, not
+    // reopening, not ending — fails by name instead of hanging the suite. The
+    // backstop is shortened for this one stream only; every other test keeps
+    // the two-minute one its passing path never reaches.
+    [Fact]
+    public async Task AParkedRunFailsByNameRatherThanHanging()
+    {
+        var api = new RoutingApi(Answer(200, Receipt));
+        var stream = new FakeStream { Backstop = TimeSpan.FromMilliseconds(200) };
+        var clock = new FakeClock { Hold = true };
+        var chat = Sender(api, clock, stream: stream);
+        chat.PanelOpened();
+
+        (await stream.NextOpenAsync()).TryWrite(EndedWith(503));
+
+        var parked = await Assert.ThrowsAsync<Xunit.Sdk.XunitException>(stream.NextOpenAsync);
+        Assert.Contains("has parked", parked.Message);
+        Assert.Contains("opens so far: 1", parked.Message);
+        Assert.False(chat.StreamTask!.IsCompleted);
+
+        await Close(chat);
     }
 
     [Fact]
