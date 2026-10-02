@@ -64,7 +64,7 @@ namespace ClaudeBuddy.Tests
             var command = NewChatCommand.For(
                 NewChatCli.ClaudeCode, "/usr/local/bin/claude", configDir: "/Users/me/.claude-work");
 
-            Assert.Equal("CLAUDE_CONFIG_DIR='/Users/me/.claude-work' '/usr/local/bin/claude'", command);
+            Assert.Equal("env CLAUDE_CONFIG_DIR='/Users/me/.claude-work' '/usr/local/bin/claude'", command);
         }
 
         // A space in the config dir has to survive as one shell word, same
@@ -76,7 +76,7 @@ namespace ClaudeBuddy.Tests
             var command = NewChatCommand.For(
                 NewChatCli.ClaudeCode, "/usr/local/bin/claude", configDir: "/Users/me/My Claude Work");
 
-            Assert.Equal("CLAUDE_CONFIG_DIR='/Users/me/My Claude Work' '/usr/local/bin/claude'", command);
+            Assert.Equal("env CLAUDE_CONFIG_DIR='/Users/me/My Claude Work' '/usr/local/bin/claude'", command);
         }
 
         // An apostrophe in the config dir needs the same shell-safe escaping
@@ -89,7 +89,30 @@ namespace ClaudeBuddy.Tests
                 NewChatCli.ClaudeCode, "/usr/local/bin/claude", configDir: "/Users/o'brien/.claude-work");
 
             Assert.Equal(
-                "CLAUDE_CONFIG_DIR='/Users/o'\\''brien/.claude-work' '/usr/local/bin/claude'", command);
+                "env CLAUDE_CONFIG_DIR='/Users/o'\\''brien/.claude-work' '/usr/local/bin/claude'", command);
+        }
+
+        // --- ExecLine: the one place a new chat's `exec` is written (CB-232) --
+
+        [Fact]
+        public void ExecLineForTheDefaultAccountExecsTheBinary()
+        {
+            Assert.Equal(
+                "exec '/usr/local/bin/claude'",
+                NewChatCommand.ExecLine(NewChatCli.ClaudeCode, "/usr/local/bin/claude", configDir: null));
+        }
+
+        // The CB-232 shape: whatever follows `exec` is a program — env — and
+        // never the variable assignment, which exec would take as the program
+        // name. NewChatExecLineShellTests runs this line in real shells.
+        [Fact]
+        public void ExecLineForANamedAccountNeverPutsTheAssignmentAfterExec()
+        {
+            var line = NewChatCommand.ExecLine(
+                NewChatCli.ClaudeCode, "/usr/local/bin/claude", configDir: "/Users/me/.claude-work");
+
+            Assert.Equal("exec env CLAUDE_CONFIG_DIR='/Users/me/.claude-work' '/usr/local/bin/claude'", line);
+            Assert.DoesNotMatch(@"^exec [A-Z_]+=", line);
         }
 
         // --- GeneralWindowsStartInfo / WindowsProcessStartInfo ------------
