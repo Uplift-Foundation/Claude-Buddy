@@ -362,9 +362,9 @@ namespace ClaudeBuddy
         // parsed $env:CLAUDEBUDDY_CHIME as one positional argument token,
         // the runtime value is never re-parsed as a flag the way a literal
         // "-something" written directly in the script text could be.
-        // TextToSpeech's own PowerShell voice-name escaping has the
-        // identical smart-quote hole and is deliberately left alone here —
-        // out of scope for this fix, tracked as its own bug.
+        // TextToSpeech's PowerShell escaping had the identical smart-quote
+        // hole; CB-184 fixed it separately the same way (text and voice
+        // now travel in the environment).
         internal static ProcessStartInfo WindowsStartInfoFor(string path)
         {
             var startInfo = new ProcessStartInfo

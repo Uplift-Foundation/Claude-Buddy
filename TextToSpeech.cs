@@ -841,8 +841,10 @@ namespace ClaudeBuddy
             {
                 startInfo = new ProcessStartInfo("powershell")
                 {
-                    ArgumentList = { "-NoProfile", "-Command", WindowsSpeakScript(text, voice, volume) }
+                    ArgumentList = { "-NoProfile", "-Command", WindowsSpeakScript(volume) }
                 };
+                startInfo.EnvironmentVariables[SpeakTextEnvVar] = text;
+                startInfo.EnvironmentVariables[SpeakVoiceEnvVar] = voice;
             }
             else
             {
@@ -874,10 +876,22 @@ namespace ClaudeBuddy
         // script every earlier build ran; SAPI's own default is 100. The value
         // is an integer SapiVolume has already clamped, because the property
         // throws outside 0-100 — measured, not assumed (see AudioVolume).
-        internal static string WindowsSpeakScript(string text, string voice, double volume)
+        //
+        // CB-184: neither the text nor the voice is in the script. Both were
+        // once interpolated into single-quoted literals with ' doubled, but
+        // PowerShell also accepts U+2018 through U+201B as quote delimiters,
+        // so a curly quote in either one closed the literal early: a
+        // ParserError (silent, since stderr is discarded) or whatever followed
+        // it run as a command. The spoken text is the likelier carrier, being
+        // whatever an LLM wrote, and it was exactly as exposed as the voice.
+        // They now travel in the environment — the shape CB-167 gave
+        // ChimePlayer — and the script only reads them back, so no character
+        // in either can be parsed as anything.
+        internal const string SpeakTextEnvVar = "CLAUDEBUDDY_SPEAK_TEXT";
+        internal const string SpeakVoiceEnvVar = "CLAUDEBUDDY_SPEAK_VOICE";
+
+        internal static string WindowsSpeakScript(double volume)
         {
-            var escaped = text.Replace("'", "''");
-            var voiceEscaped = voice.Replace("'", "''");
             var volumeLine = AudioVolume.IsFull(volume)
                 ? ""
                 : "$s.Volume = "
@@ -886,9 +900,9 @@ namespace ClaudeBuddy
 
             return "Add-Type -AssemblyName System.Speech; " +
                    "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; " +
-                   $"try {{ $s.SelectVoice('{voiceEscaped}') }} catch {{ }}; " +
+                   $"try {{ $s.SelectVoice($env:{SpeakVoiceEnvVar}) }} catch {{ }}; " +
                    volumeLine +
-                   $"$s.Speak('{escaped}')";
+                   $"$s.Speak($env:{SpeakTextEnvVar})";
         }
 
         // Everything about starting the user's speak command except the start:
