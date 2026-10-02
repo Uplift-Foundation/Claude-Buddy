@@ -1939,6 +1939,8 @@ open "dist/Claude Buddy.app"      # or: open -a "Claude Buddy"
 Nothing appears in the Dock and nothing opens a window — **look for the orb
 in the menu bar**, that's the app running. Quit it from that menu.
 
+`--install` replaces a running copy rather than adding a second one: it stops the Claude Buddy already running from `/Applications`, installs, and leaves exactly one running the new build — started by the crash keep-alive if "Serve on launch" is on, otherwise relaunched for you. Nothing is started if nothing was running. Only one Claude Buddy runs per user however it was launched — a second launch from a terminal, ssh or an agent shell finds the first and exits quietly.
+
 The bundle is worth using over the loose binary for reasons beyond
 double-clickability: it's `LSUIElement`, so macOS itself treats it as a
 menu-bar app; it declares `NSAppleEventsUsageDescription`, without which

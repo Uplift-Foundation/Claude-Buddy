@@ -49,4 +49,25 @@ public class SingleInstanceTests
         Assert.Throws<ArgumentOutOfRangeException>(
             () => SingleInstance.ShouldProceed((SingleInstanceClaim)99));
     }
+
+    // CB-206: off Windows the mutex is one per user across every session, so a
+    // Buddy launched from a terminal or ssh sees the login item's claim.
+    [Fact]
+    public void Off_windows_the_claim_spans_sessions_but_not_users()
+    {
+        var options = SingleInstance.OptionsFor(onWindows: false);
+
+        Assert.NotNull(options);
+        Assert.True(options.Value.CurrentUserOnly);
+        Assert.False(options.Value.CurrentSessionOnly);
+    }
+
+    // And Windows keeps the bare name and its logon-session scope: the
+    // cross-session options would mean the Global namespace there, where two
+    // users on one PC would block each other.
+    [Fact]
+    public void On_windows_the_claim_keeps_its_old_scope()
+    {
+        Assert.Null(SingleInstance.OptionsFor(onWindows: true));
+    }
 }

@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Runtime.InteropServices;
 using ClaudeBuddy;
 using Xunit;
 
@@ -13,12 +15,11 @@ namespace ClaudeBuddy.IntegrationTests;
 // this suite can never collide with a real running Buddy on this machine, nor
 // with a parallel CI leg exercising the same code (CB-178).
 //
-// All of these run in-process, on purpose — not as two separate `dotnet`
-// invocations. The harness proved that matters: on this platform a named
-// mutex is scoped to one POSIX session (see MutexName's own comment), and
-// two commands started from two separate shell invocations land in
-// different sessions and simply cannot see each other's mutex at all — a
-// cross-process version of this test would pass, but for the wrong reason.
+// The first four run in-process. The CB-206 cases at the bottom do not: the
+// defect there was that the mutex was scoped to one POSIX session, so a Buddy
+// launched from another session never saw it, and only a second process in a
+// session of its own can show that. tests/SingleInstanceProbe is that second
+// process; it compiles SingleInstance.cs in and makes one claim.
 //
 // Not covered here: SingleInstanceClaim.AbandonedByPreviousOwner. That arm
 // only fires when `WaitOne` throws `AbandonedMutexException`, and
@@ -199,6 +200,175 @@ public class SingleInstanceTests
         {
             secondMutex.ReleaseMutex();
             secondMutex.Dispose();
+        }
+    }
+
+    // --- CB-206: one per user, across sessions ------------------------------
+
+    // The probe beside this assembly, run under the same dotnet host the test
+    // is running under — DOTNET_HOST_PATH is what the dotnet CLI hands its
+    // children for exactly this.
+    private static Process StartProbe(params string[] args)
+    {
+        var host = Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet";
+        var psi = new ProcessStartInfo(host)
+        {
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+        };
+        psi.ArgumentList.Add(Path.Combine(AppContext.BaseDirectory, "SingleInstanceProbe.dll"));
+        foreach (var arg in args) psi.ArgumentList.Add(arg);
+        return Process.Start(psi)!;
+    }
+
+    // The probe's one line, parsed: its session id and what its claim was.
+    private static (int Sid, SingleInstanceClaim Claim) ReadProbe(Process probe)
+    {
+        var lineTask = probe.StandardOutput.ReadLineAsync();
+        Assert.True(lineTask.Wait(TimeSpan.FromSeconds(30)), "the probe never answered");
+        var line = lineTask.Result ?? throw new Xunit.Sdk.XunitException(
+            "the probe printed nothing: " + probe.StandardError.ReadToEnd());
+
+        var parts = line.Split(' ');
+        Assert.True(parts.Length == 2 && parts[0].StartsWith("sid=") && parts[1].StartsWith("claim="),
+            "unexpected probe output: " + line);
+        return (int.Parse(parts[0][4..]), Enum.Parse<SingleInstanceClaim>(parts[1][6..]));
+    }
+
+    private static (int Sid, SingleInstanceClaim Claim) RunProbe(params string[] args)
+    {
+        using var probe = StartProbe(args);
+        var answer = ReadProbe(probe);
+        Assert.True(probe.WaitForExit(30_000), "the probe did not exit");
+        return answer;
+    }
+
+    [DllImport("libc")]
+    private static extern int getsid(int pid);
+
+    // The defect, closed. This process holds the mutex; a probe that has put
+    // itself in a new POSIX session — what a terminal, agent shell, ssh or
+    // setsid launch gives a real Buddy — must find it held. On Windows there is
+    // no setsid and the probe shares this logon session, which is the scope
+    // Windows has always had.
+    [Fact]
+    public void A_claim_from_a_new_session_finds_the_mutex_held()
+    {
+        var name = FreshName();
+        var (claim, mutex) = SingleInstance.Claim(name);
+        try
+        {
+            Assert.Equal(SingleInstanceClaim.Acquired, claim);
+
+            var (sid, probeClaim) = RunProbe(name, "--new-session");
+
+            // That the probe really is in another session, without which a
+            // HeldByAnother below would prove nothing about sessions at all.
+            if (!OperatingSystem.IsWindows()) Assert.NotEqual(getsid(0), sid);
+
+            Assert.Equal(SingleInstanceClaim.HeldByAnother, probeClaim);
+        }
+        finally
+        {
+            mutex.ReleaseMutex();
+            mutex.Dispose();
+        }
+    }
+
+    // The paired control that would have caught a setup that only looks right:
+    // the same pair of processes, the same new session, the old session-scoped
+    // claim — and on macOS the probe gets its own mutex and Acquires it, which
+    // is the bug exactly as it was found. If this ever answers HeldByAnother on
+    // Unix, the probe is not really in another session and the test above has
+    // stopped measuring anything. On Windows that scope *is* the platform's, so
+    // the probe finds it held there.
+    [Fact]
+    public void The_old_session_scoped_claim_is_blind_across_sessions()
+    {
+        var name = FreshName();
+        var (claim, mutex) = SingleInstance.Claim(name, onWindows: true);
+        try
+        {
+            Assert.Equal(SingleInstanceClaim.Acquired, claim);
+
+            var (_, probeClaim) = RunProbe(name, "--new-session", "--windows-scope");
+
+            Assert.Equal(
+                OperatingSystem.IsWindows() ? SingleInstanceClaim.HeldByAnother : SingleInstanceClaim.Acquired,
+                probeClaim);
+        }
+        finally
+        {
+            mutex.ReleaseMutex();
+            mutex.Dispose();
+        }
+    }
+
+    // And the plain negative control: with this process holding one name, a
+    // new-session probe claiming another acquires it. Without this, a scope so
+    // wide that everything blocked everything would pass the first test.
+    [Fact]
+    public void A_different_name_from_a_new_session_is_still_acquired()
+    {
+        var name = FreshName();
+        var (claim, mutex) = SingleInstance.Claim(name);
+        try
+        {
+            Assert.Equal(SingleInstanceClaim.Acquired, claim);
+
+            var (_, probeClaim) = RunProbe(FreshName(), "--new-session");
+
+            Assert.Equal(SingleInstanceClaim.Acquired, probeClaim);
+        }
+        finally
+        {
+            mutex.ReleaseMutex();
+            mutex.Dispose();
+        }
+    }
+
+    // Crash recovery under the new scope, with a real crash: a probe in its own
+    // session holds the mutex, is killed outright, and the next claim here is
+    // Acquired — the keep-alive's restart after a genuine crash still gets to
+    // run. Measured by hand three times before this test existed; this is that
+    // measurement, kept.
+    [Fact]
+    public void A_killed_holder_in_another_session_does_not_strand_the_mutex()
+    {
+        var name = FreshName();
+
+        using var holder = StartProbe(name, "--new-session", "--hold");
+        try
+        {
+            Assert.Equal(SingleInstanceClaim.Acquired, ReadProbe(holder).Claim);
+
+            var (whileHeld, heldMutex) = SingleInstance.Claim(name);
+            heldMutex.Dispose();
+            Assert.Equal(SingleInstanceClaim.HeldByAnother, whileHeld);
+        }
+        finally
+        {
+            holder.Kill();
+            Assert.True(holder.WaitForExit(30_000), "the holder did not die");
+        }
+
+        // Acquired on macOS, where a dead holder's claim is simply gone (see
+        // AbandonedByPreviousOwner's comment). Windows' kernel does track
+        // abandonment, so there the same crash may surface as that arm
+        // instead; either way the app proceeds, which is the property the
+        // keep-alive depends on.
+        var (claim, mutex) = SingleInstance.Claim(name);
+        try
+        {
+            Assert.True(SingleInstance.ShouldProceed(claim));
+            if (!OperatingSystem.IsWindows()) Assert.Equal(SingleInstanceClaim.Acquired, claim);
+        }
+        finally
+        {
+            mutex.ReleaseMutex();
+            mutex.Dispose();
         }
     }
 }
