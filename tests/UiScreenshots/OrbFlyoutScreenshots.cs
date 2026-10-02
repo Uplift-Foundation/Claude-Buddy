@@ -105,6 +105,20 @@ public class OrbFlyoutScreenshots
         ScreenshotHelper.CaptureAlreadyShown(flyout, "orb-flyout-click-speak-button.png");
     }
 
+    // CB-173. The speaking look, which is the one state whose glyph changed:
+    // the stop square is drawn now, where U+23F9 was Segoe UI Emoji on
+    // Windows. The settings gear and the keyboard are in every flyout capture
+    // above; this is the only one with the square in it.
+    [AvaloniaFact]
+    public void TheSpeakButtonWhileSpeakingShowsTheStopSquare()
+    {
+        var flyout = new OrbFlyout();
+        flyout.SetSpeakState(TextToSpeech.SpeakState.Speaking);
+        flyout.Show();
+        ScreenshotHelper.Flush();
+        ScreenshotHelper.CaptureAlreadyShown(flyout, "orb-flyout-speaking-stop-square.png");
+    }
+
     [AvaloniaFact]
     public void ClickingMicButtonRaisesMicClickedExactlyOnce()
     {

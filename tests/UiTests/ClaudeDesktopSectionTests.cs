@@ -240,7 +240,7 @@ public class ClaudeDesktopSectionTests
     {
         var label = ClaudeDesktopSection.ProfileLabel(Profile(running: false, orphanPid: 26126));
 
-        Assert.Contains("⚠", label);
+        Assert.Contains("(!)", label);
         Assert.Contains("on Default", label);
     }
 

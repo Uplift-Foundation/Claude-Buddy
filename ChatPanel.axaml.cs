@@ -204,6 +204,11 @@ namespace ClaudeBuddy
         {
             InitializeComponent();
 
+            // Drawn rather than typed — see SymbolMarks. The same gear the
+            // background-job badge wears, which is the whole point of this
+            // button's mark.
+            AttachMark.Data = StreamGeometry.Parse(SymbolMarks.Gear);
+
             _defaultWidth = Width;
             _defaultHeight = Height;
 
@@ -842,8 +847,7 @@ namespace ClaudeBuddy
             // one of those is badged — and a chip that made room for the
             // impossible case would be a claim about this app that is not true.
             KindChip.IsVisible = kind is not null;
-            KindChipText.Text = KindChipLabel(
-                orb.KindGlyphText, kind, presence,
+            ApplyKindChip(orb.KindGlyphText, orb.KindMarkData, kind, presence,
                 (_session as IRemoteChatMachine)?.MachineName);
 
             ApplyHeartbeat(orb.IsHeartbeat);
@@ -2421,12 +2425,12 @@ namespace ClaudeBuddy
                 _ => IdleFill
             };
 
-            SpeakGlyph.Text = state switch
-            {
-                TextToSpeech.SpeakState.Speaking => "⏹",
-                TextToSpeech.SpeakState.Preparing => "⏳",
-                _ => "\U0001F508"
-            };
+            var (glyph, mark) = SymbolMarks.SpeakLook(state);
+
+            SpeakGlyph.Text = glyph;
+            SpeakGlyph.IsVisible = glyph is not null;
+            SpeakStopMark.Data = mark is null ? null : StreamGeometry.Parse(mark);
+            SpeakStopMark.IsVisible = mark is not null;
         }
 
         private bool _loadingOlder;
@@ -2565,9 +2569,8 @@ namespace ClaudeBuddy
         {
             if (_owner is null) return;
 
-            KindChipText.Text = KindChipLabel(
-                _owner.KindGlyphText, _owner.KindLabel, _owner.PresenceLabel,
-                (_session as IRemoteChatMachine)?.MachineName);
+            ApplyKindChip(_owner.KindGlyphText, _owner.KindMarkData, _owner.KindLabel,
+                _owner.PresenceLabel, (_session as IRemoteChatMachine)?.MachineName);
 
             // The same answer arriving changes the meta line too, and it is the
             // half that changes colour: until the roster names the machine, a
@@ -2593,16 +2596,31 @@ namespace ClaudeBuddy
         //
         // Pure and static so the wording is a unit test rather than a
         // screenshot. See CB-59.
+        //
+        // A null glyph means the kind's mark is drawn beside the text instead
+        // (see ApplyKindChip), so the words stand alone rather than behind a
+        // gap where a character used to be.
         internal static string KindChipLabel(
-            string glyph, string? kind, string? presence, string? machine)
+            string? glyph, string? kind, string? presence, string? machine)
         {
             if (kind is null) return "";
 
             var what = string.IsNullOrWhiteSpace(machine) ? kind : machine;
+            var words = presence is null ? what : $"{what} · {presence}";
 
-            return presence is null
-                ? $"{glyph}  {what}"
-                : $"{glyph}  {what} · {presence}";
+            return glyph is null ? words : $"{glyph}  {words}";
+        }
+
+        // The chip wears the orb's own either-or: the drawn mark when the kind
+        // has one, the typed character when it does not (@, #). Typing ⏱ or ☁
+        // here is the CB-173 defect in a second place — on Windows they fall
+        // back to Segoe UI Emoji and ignore the chip's ink entirely.
+        private void ApplyKindChip(
+            string? glyph, string? mark, string? kind, string? presence, string? machine)
+        {
+            KindChipMark.Data = mark is null ? null : StreamGeometry.Parse(mark);
+            KindChipMark.IsVisible = mark is not null;
+            KindChipText.Text = KindChipLabel(mark is null ? glyph : null, kind, presence, machine);
         }
 
 

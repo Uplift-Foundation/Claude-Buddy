@@ -271,6 +271,72 @@ public class OrbWindowUpdateFromTests
     // shrinks everything else to fit it. That reads as "the badge looks
     // slightly off", not as a failure, which is exactly the kind of thing
     // nobody files.
+    // CB-173. The clock, gear and arrows had the cloud's defect on Windows —
+    // Segoe UI Emoji, in its own colours — and are drawn the same way now.
+    // KindGlyphText still says the character, which the chat panel and the
+    // accessibility label use; what reaches the badge is the mark.
+    [AvaloniaTheory]
+    [InlineData(SessionKind.Cron)]
+    [InlineData(SessionKind.Background)]
+    [InlineData(SessionKind.Remote)]
+    public void ClockGearAndArrowsAreDrawnRatherThanTyped(SessionKind kind)
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        var status = PlainStatus();
+        status.Kind = kind;
+
+        orb.UpdateFrom(status);
+
+        var mark = orb.FindControl<Avalonia.Controls.Shapes.Path>("KindMark")!;
+        var glyph = orb.FindControl<TextBlock>("KindGlyph")!;
+
+        Assert.True(orb.FindControl<Border>("KindBadge")!.IsVisible);
+        Assert.True(mark.IsVisible);
+        Assert.NotNull(mark.Data);
+        Assert.False(glyph.IsVisible);
+        Assert.True(string.IsNullOrEmpty(glyph.Text));
+        Assert.Equal(OrbWindow.KindMarkFor(kind), orb.KindMarkData);
+    }
+
+    // Typed kinds have no mark data to hand the chat panel, so the chip types
+    // their character instead.
+    [AvaloniaFact]
+    public void ATypedKindHasNoMarkData()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        var status = PlainStatus();
+        status.Kind = SessionKind.Direct;
+
+        orb.UpdateFrom(status);
+
+        Assert.Null(orb.KindMarkData);
+    }
+
+    // Every mark in SymbolMarks, not only the kind badges: the flyout's gear
+    // and keyboard and the speak button's stop square are parsed in a
+    // constructor or a state change, so a typo there throws the first time a
+    // flyout or a panel is built. Read by reflection so a mark added later is
+    // covered without anyone remembering to list it.
+    [AvaloniaFact]
+    public void EverySymbolMarkParsesAndStaysInsideItsBox()
+    {
+        var marks = typeof(SymbolMarks)
+            .GetFields(System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)
+            .Where(f => f.IsLiteral && f.FieldType == typeof(string))
+            .ToList();
+
+        Assert.True(marks.Count >= 6);
+
+        foreach (var field in marks)
+        {
+            var bounds = Avalonia.Media.StreamGeometry.Parse((string)field.GetValue(null)!).Bounds;
+
+            Assert.True(bounds.Width > 0 && bounds.Height > 0, field.Name);
+            Assert.True(bounds.Left >= 0 && bounds.Top >= 0, field.Name);
+            Assert.True(bounds.Right <= 16 && bounds.Bottom <= 16, field.Name);
+        }
+    }
+
     [AvaloniaFact]
     public void EveryDrawnKindMarkParsesAndStaysInsideItsBox()
     {

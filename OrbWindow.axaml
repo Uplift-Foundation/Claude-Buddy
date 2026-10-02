@@ -273,19 +273,16 @@
                 HorizontalAlignment="Right" VerticalAlignment="Bottom"
                 Margin="0,0,4,4"
                 IsHitTestVisible="False">
-            <!-- Two ways to wear a kind, and a kind picks one. Most of them
-                 are punctuation the user already reads as the thing (@ for a
-                 direct message, # for a channel), so a TextBlock is right and
-                 costs nothing. A cloud is not punctuation: U+2601 resolves
-                 through font fallback to whatever the OS has, which is
-                 Hiragino Sans on macOS and Segoe UI Emoji on Windows, and at
-                 13px neither draws anything a person reads as a cloud — the
-                 macOS one is a white lump and the Windows one is a lavender
-                 blob that overflows the disc and ignores Foreground entirely,
-                 because a colour-emoji glyph carries its own colour. So that
-                 one is drawn, the same way CliMark draws its four marks and
-                 for the same reason: a mark this small has to be designed at
-                 this size, not borrowed from a font at it. See KindMarkFor.
+            <!-- Two ways to wear a kind, and a kind picks one. @ and # are
+                 punctuation the user already reads as the thing, every font
+                 has them and no emoji face is ever involved, so a TextBlock is
+                 right and costs nothing. Every other kind is drawn: the clock,
+                 gear, arrows and cloud all resolve through font fallback to
+                 Segoe UI Emoji on Windows, a colour font, so as text they
+                 arrive in that font's own colours and size and ignore
+                 Foreground entirely (CB-171, CB-173). A mark this small has to
+                 be designed at this size, not borrowed from a font at it. See
+                 KindMarkFor and SymbolMarks.
 
                  Both live in a Panel because a Border takes one child and
                  exactly one of the two is ever visible. -->

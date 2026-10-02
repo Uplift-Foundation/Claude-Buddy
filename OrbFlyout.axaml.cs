@@ -49,6 +49,11 @@ namespace ClaudeBuddy
         public OrbFlyout()
         {
             InitializeComponent();
+
+            // Drawn rather than typed — see SymbolMarks.
+            SettingsMark.Data = StreamGeometry.Parse(SymbolMarks.Gear);
+            ChatMark.Data = StreamGeometry.Parse(SymbolMarks.Keyboard);
+
             LayoutArc();
             LabelButtons();
 
@@ -238,12 +243,12 @@ namespace ClaudeBuddy
                 _ => SpeakNormalFill
             };
 
-            SpeakGlyph.Text = state switch
-            {
-                TextToSpeech.SpeakState.Speaking => "⏹",
-                TextToSpeech.SpeakState.Preparing => "⏳",
-                _ => "\U0001F508"
-            };
+            var (glyph, mark) = SymbolMarks.SpeakLook(state);
+
+            SpeakGlyph.Text = glyph;
+            SpeakGlyph.IsVisible = glyph is not null;
+            SpeakStopMark.Data = mark is null ? null : StreamGeometry.Parse(mark);
+            SpeakStopMark.IsVisible = mark is not null;
 
             // And what it says it is. This button is three things depending on
             // state, and a tooltip fixed at "read aloud" would be wrong on two

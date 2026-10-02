@@ -105,6 +105,43 @@ public class OrbWindowScreenshots
         ScreenshotHelper.Capture(orb, "orb-window-cron-kind-clock-badge.png");
     }
 
+    // CB-173. With the cron clock above, one capture per drawn kind, so the
+    // win-x64 and osx-arm64 badges can be compared directly: same white mark,
+    // same size, on both. Before this they were Segoe UI Emoji on Windows —
+    // lavender and oversized — and STIX Two Math on macOS.
+    [AvaloniaFact]
+    public void BackgroundKindShowsTheGearBadge()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        var status = PlainStatus();
+        status.Kind = SessionKind.Background;
+        orb.UpdateFrom(status);
+
+        ScreenshotHelper.Capture(orb, "orb-window-background-kind-gear-badge.png");
+    }
+
+    [AvaloniaFact]
+    public void RemoteKindShowsTheArrowsBadge()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        var status = PlainStatus();
+        status.Kind = SessionKind.Remote;
+        orb.UpdateFrom(status);
+
+        ScreenshotHelper.Capture(orb, "orb-window-remote-kind-arrows-badge.png");
+    }
+
+    [AvaloniaFact]
+    public void CloudKindShowsTheCloudBadge()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        var status = PlainStatus();
+        status.Kind = SessionKind.Cloud;
+        orb.UpdateFrom(status);
+
+        ScreenshotHelper.Capture(orb, "orb-window-cloud-kind-cloud-badge.png");
+    }
+
     [AvaloniaFact]
     public void AHeartbeatSessionWearsABeatingHeart()
     {

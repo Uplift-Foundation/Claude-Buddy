@@ -223,6 +223,94 @@ public class ChatPanelAttachTests : IDisposable
 
         Assert.Contains("channel", chip.Text);
         Assert.DoesNotContain("·", chip.Text);
+
+        // # is typed, so the chip has no drawn mark to show (CB-173).
+        Assert.StartsWith("#", chip.Text);
+        Assert.False(ChatPanelTestAccess.Instance!
+            .FindControl<Avalonia.Controls.Shapes.Path>("KindChipMark")!.IsVisible);
+    }
+
+    // CB-173. The attach button wears the background-job badge's gear, and
+    // its own comment says that is the point — so it has to be the same
+    // drawing, not U+2699 through font fallback.
+    [AvaloniaFact]
+    public void TheAttachButtonDrawsTheBadgesGear()
+    {
+        ChatPanel.OpenFor(NewOrb(), NewFake("Needs input — attach to reply", canOpen: true));
+        Flush();
+
+        var mark = ChatPanelTestAccess.Instance!
+            .FindControl<Avalonia.Controls.Shapes.Path>("AttachMark")!;
+
+        Assert.NotNull(mark.Data);
+        Assert.Equal(
+            Avalonia.Media.StreamGeometry.Parse(SymbolMarks.Gear).Bounds,
+            mark.Data!.Bounds);
+    }
+
+    // The panel's speak button shares the flyout's three looks. Speaking
+    // draws the stop square and hides the typed glyph; going idle undoes both,
+    // since the button is one control that changes look in place.
+    [AvaloniaFact]
+    public void ThePanelsSpeakButtonDrawsItsStopSquareOnlyWhileSpeaking()
+    {
+        ChatPanel.OpenFor(NewOrb(), NewFake("Message…", canOpen: false));
+        Flush();
+
+        var panel = ChatPanelTestAccess.Instance!;
+        var stop = panel.FindControl<Avalonia.Controls.Shapes.Path>("SpeakStopMark")!;
+        var glyph = panel.FindControl<TextBlock>("SpeakGlyph")!;
+
+        try
+        {
+            ChatPanel.SetSpeakState(TextToSpeech.SpeakState.Speaking);
+
+            Assert.True(stop.IsVisible);
+            Assert.NotNull(stop.Data);
+            Assert.False(glyph.IsVisible);
+        }
+        finally
+        {
+            ChatPanel.SetSpeakState(TextToSpeech.SpeakState.Idle);
+        }
+
+        Assert.False(stop.IsVisible);
+        Assert.Null(stop.Data);
+        Assert.True(glyph.IsVisible);
+        Assert.Equal("\U0001F508", glyph.Text);
+    }
+
+    // CB-173: the chip used to type the orb's badge character, so on Windows
+    // the clock, gear, arrows and cloud came out of Segoe UI Emoji in that
+    // font's colours — the orb's defect, a second time, in the panel the orb
+    // opens. Now it draws the same mark the orb does and the text carries only
+    // the words.
+    [AvaloniaTheory]
+    [InlineData(SessionKind.Cron, "cron")]
+    [InlineData(SessionKind.Background, "background job")]
+    [InlineData(SessionKind.Remote, "another machine")]
+    [InlineData(SessionKind.Cloud, "in the cloud")]
+    public void TheHeaderChipDrawsTheKindsMarkInsteadOfTypingIt(SessionKind kind, string words)
+    {
+        var orb = NewOrb();
+        orb.UpdateFrom(new SessionStatus
+        {
+            State = "idle",
+            Cwd = "/Users/user/project",
+            Kind = kind,
+        });
+
+        ChatPanel.OpenFor(orb, NewFake("Message…", canOpen: false));
+        Flush();
+
+        var panel = ChatPanelTestAccess.Instance!;
+        var mark = panel.FindControl<Avalonia.Controls.Shapes.Path>("KindChipMark")!;
+        var text = panel.FindControl<TextBlock>("KindChipText")!;
+
+        Assert.True(mark.IsVisible);
+        Assert.NotNull(mark.Data);
+        Assert.Equal(words, text.Text);
+        Assert.DoesNotContain(orb.KindGlyphText!, text.Text);
     }
 
     // Rebinding the panel to a different session re-reads both halves. The panel
