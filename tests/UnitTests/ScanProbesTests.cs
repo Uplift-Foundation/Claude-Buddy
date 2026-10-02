@@ -19,6 +19,55 @@ public class ScanProbesTests
 
     private static readonly Func<int, string> NoTeams = _ => "";
 
+    private static readonly IReadOnlyDictionary<int, AgentTeam.Membership> NoMemberships =
+        new Dictionary<int, AgentTeam.Membership>();
+
+    // --- team memberships (CB-212) ----------------------------------------------
+
+    [Fact]
+    public void EveryRealPidInThePassIsAskedAboutOnce()
+    {
+        // Two entries sharing a pid, one with none, one with a negative one:
+        // the read is asked about each real pid once, in the order found.
+        var found = Found(Terminal(A, 300), Terminal(B, 0), Terminal(C, 300),
+            NoTerminal("d", -1), NoTerminal("e", 7, source: SessionSource.Codex));
+
+        Assert.Equal(new[] { 300, 7 }, ScanProbePlan.TeamPids(found));
+    }
+
+    [Fact]
+    public void TheUIHalfReadsTheGatheredMembership()
+    {
+        var member = new AgentTeam.Membership(A, "blue", "MenuUX");
+        var probes = ScanProbes.Gather(
+            new ScanProbePlan(Array.Empty<SessionStatus>(), false, false, Array.Empty<string>()),
+            new Dictionary<int, AgentTeam.Membership> { [300] = member },
+            _ => throw new InvalidOperationException("no claims"),
+            () => throw new InvalidOperationException("no daemon"),
+            () => throw new InvalidOperationException("no attach scan"),
+            _ => throw new InvalidOperationException("no viewer"));
+
+        Assert.Equal(member, probes.TeamOf(300));
+        Assert.Equal(A, probes.LeadOf(300));
+    }
+
+    [Theory]
+    [InlineData(301)]   // a pid nobody gathered
+    [InlineData(0)]     // not a pid
+    public void APidThePassDidNotGatherIsNotKnownToBeInATeam(int pid)
+    {
+        // "Not yet known" is None, the answer a failed read gives, rather than
+        // a fresh read on the UI thread.
+        var probes = ScanProbes.Gather(
+            new ScanProbePlan(Array.Empty<SessionStatus>(), false, false, Array.Empty<string>()),
+            new Dictionary<int, AgentTeam.Membership> { [300] = new(A, "blue", "MenuUX") },
+            _ => new Dictionary<TmuxPaneKey, string?>(), () => null, () => null, _ => null);
+
+        Assert.Equal(AgentTeam.None, probes.TeamOf(pid));
+        Assert.Equal("", probes.LeadOf(pid));
+        Assert.Equal(AgentTeam.None, ScanProbes.Nothing.TeamOf(pid));
+    }
+
     // --- the plan -------------------------------------------------------------
 
     [Fact]
@@ -176,6 +225,7 @@ public class ScanProbesTests
 
         var probes = ScanProbes.Gather(
             plan,
+            NoMemberships,
             paneOwners: claims =>
             {
                 Assert.Same(plan.PaneClaims, claims);
@@ -203,6 +253,7 @@ public class ScanProbesTests
 
         var probes = ScanProbes.Gather(
             plan,
+            NoMemberships,
             paneOwners: _ => throw new InvalidOperationException("no claims to ask about"),
             jobListing: () => throw new InvalidOperationException("the daemon was not wanted"),
             attachClients: () => throw new InvalidOperationException("the process table was not wanted"),
@@ -261,6 +312,7 @@ public class ScanProbesTests
         ScanProbes.Gather(
             new ScanProbePlan(Array.Empty<SessionStatus>(), false, false,
                 viewers.Select(v => v.Cwd).ToList()),
+            NoMemberships,
             _ => new Dictionary<TmuxPaneKey, string?>(),
             () => null,
             () => null,
