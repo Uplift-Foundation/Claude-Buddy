@@ -431,6 +431,15 @@ namespace ClaudeBuddy
             // it; the menu closing is what puts the plain wording back.
             if (!_openClawRowsHeld) RestoreOpenClawRows();
 
+            // CB-225. Asked of CloudOrbActions rather than decided here, for
+            // the reason the lifecycle rows above give, and held exactly as
+            // the OpenClaw rows are: an armed row or an answer survives the
+            // two-second refresh, and the menu closing puts the words back.
+            var cloud = CloudOrbActions.Offer(status.Source, SessionId, ClaudeBuddySettings.ClaudeCloudEnabled);
+            ArchiveCloudItem.IsVisible = cloud.Archive;
+            DeleteCloudItem.IsVisible = cloud.Delete;
+            if (!_cloudRowsHeld) RestoreCloudRows();
+
             // CB-168: a local-CLI orb pre-fills the dialog with its own cwd
             // and CLI; an OpenClaw orb pre-fills the dialog's agent picker
             // with its own agent (NewChatPrefillFor, via
@@ -2978,6 +2987,9 @@ namespace ClaudeBuddy
         // its answer releases them when it lands.
         internal void SessionMenu_Closed(object? sender, RoutedEventArgs e)
         {
+            if (_cloudBusy) _cloudReleaseWhenDone = true;
+            else ReleaseCloudRows();
+
             if (_openClawBusy)
             {
                 _openClawReleaseWhenDone = true;
@@ -2993,6 +3005,128 @@ namespace ClaudeBuddy
             _openClawRowsHeld = false;
             _openClawReleaseWhenDone = false;
             RestoreOpenClawRows();
+        }
+
+        // --- a cloud session's Archive and Delete (CB-225) -----------------------
+
+        // The request itself. Settable so a test can answer it without
+        // api.anthropic.com or a Keychain; production asks as the session's
+        // owner and tombstones the orb on success (ClaudeCloudSessions).
+        internal Func<CloudLifecycleAction, string, CancellationToken, Task<CloudLifecycleResult>>
+            CloudAction { get; set; } = (action, key, ct) => ClaudeCloudSessions.RunLifecycleAsync(action, key, ct);
+
+        // How long an armed row waits for its second click: the six seconds
+        // EndDisarmAfter gives, for the same reason. Settable only so a test
+        // can watch the timer fire.
+        internal TimeSpan CloudDisarmAfter { get; set; } = TimeSpan.FromSeconds(6);
+
+        // Separate from the OpenClaw rows' state on purpose. An orb is never
+        // both kinds today, but sharing one "busy" between two transports
+        // would let one's answer release the other's rows — the kind of
+        // coupling that only shows itself the day something changes.
+        private bool _cloudRowsHeld;
+        private bool _cloudBusy;
+        private bool _cloudReleaseWhenDone;
+        private DispatcherTimer? _cloudDisarm;
+        private CloudLifecycleAction? _cloudArmed;
+
+        internal CloudLifecycleAction? CloudArmed => _cloudArmed;
+
+        private MenuItem CloudRow(CloudLifecycleAction action) =>
+            action == CloudLifecycleAction.Archive ? ArchiveCloudItem : DeleteCloudItem;
+
+        internal void RestoreCloudRows()
+        {
+            foreach (var action in new[] { CloudLifecycleAction.Archive, CloudLifecycleAction.Delete })
+                SetRow(CloudRow(action), CloudActionText.Header(action), CloudActionText.Tip(action), enabled: true);
+        }
+
+        internal async void ArchiveCloud_Click(object? sender, RoutedEventArgs e) =>
+            await CloudActionClickAsync(CloudLifecycleAction.Archive);
+
+        internal async void DeleteCloud_Click(object? sender, RoutedEventArgs e) =>
+            await CloudActionClickAsync(CloudLifecycleAction.Delete);
+
+        // First click arms, second click acts — for Archive as well as Delete.
+        // Archive is not permanent, but it disconnects the session and takes
+        // an orb away, which is more than one stray click should do. Arming one
+        // row disarms the other, so a second click can only ever act on the row
+        // that says "Click again". A click while a request is out does nothing:
+        // two fast clicks after arming send one request.
+        internal async Task CloudActionClickAsync(CloudLifecycleAction action)
+        {
+            // A disabled row ignores the click in code as well as on screen:
+            // a row that has just said "Archived" must not re-arm because a
+            // click raced the disable, and Avalonia gives no promise that a
+            // click already dispatched checks IsEnabled again.
+            if (_cloudBusy || !CloudRow(action).IsEnabled) return;
+
+            if (_cloudArmed != action)
+            {
+                // Only the other *armed* row goes back to its plain words; an
+                // answer showing on it is still worth reading.
+                DisarmCloud();
+                _cloudRowsHeld = true;
+                _cloudArmed = action;
+                CloudRow(action).Header = CloudActionText.Armed(action);
+
+                _cloudDisarm = new DispatcherTimer { Interval = CloudDisarmAfter };
+                _cloudDisarm.Tick += (_, _) => DisarmCloud();
+                _cloudDisarm.Start();
+                return;
+            }
+
+            StopCloudDisarm();
+            _cloudBusy = true;
+            var row = CloudRow(action);
+            SetRow(row, CloudActionText.Working(action), CloudActionText.Tip(action), enabled: false);
+
+            CloudLifecycleResult result;
+            try
+            {
+                result = await CloudAction(action, SessionId, CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                // An async void handler that throws takes the app with it. The
+                // action layer turns every answer into a result, so this is for
+                // the one thing it cannot: something nobody anticipated.
+                result = new CloudLifecycleResult(CloudLifecycleVerdict.Refused, ex.Message);
+            }
+
+            _cloudBusy = false;
+
+            if (_cloudReleaseWhenDone)
+            {
+                ReleaseCloudRows();
+                return;
+            }
+
+            // A success stays disabled: the orb is about to go, and the row
+            // must not offer to do again what has just been done.
+            var text = CloudActionText.For(action, result);
+            SetRow(row, text, text, enabled: !result.Succeeded);
+        }
+
+        internal void DisarmCloud()
+        {
+            if (_cloudArmed is { } armed) CloudRow(armed).Header = CloudActionText.Header(armed);
+            StopCloudDisarm();
+        }
+
+        private void StopCloudDisarm()
+        {
+            _cloudDisarm?.Stop();
+            _cloudDisarm = null;
+            _cloudArmed = null;
+        }
+
+        private void ReleaseCloudRows()
+        {
+            StopCloudDisarm();
+            _cloudRowsHeld = false;
+            _cloudReleaseWhenDone = false;
+            RestoreCloudRows();
         }
 
         // What this orb would pre-fill the "New chat…" dialog with, or null
