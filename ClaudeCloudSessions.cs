@@ -89,7 +89,132 @@ namespace ClaudeBuddy
         // and opens no socket, which is stronger than "draws no orb" and is the
         // promise the settings copy makes.
         public static IReadOnlyList<Session> Snapshot() =>
-            ClaudeBuddySettings.ClaudeCloudEnabled ? _snapshot : Array.Empty<Session>();
+            ClaudeBuddySettings.ClaudeCloudEnabled
+                ? WithoutTombstones(_snapshot, TombstonesNow(DateTime.UtcNow))
+                : Array.Empty<Session>();
+
+        // --- archived or deleted from here (CB-225) ------------------------------
+
+        // Sessions this app has just archived or deleted, each with the moment
+        // it stops being hidden.
+        //
+        // **Why the orb goes at once rather than at the next roster read.** The
+        // roster already drops an archived row (Keep) and a deleted one (it is
+        // simply absent), so the orb would go by itself — after up to a short
+        // cycle, during which a person who has just watched "Archived" appear
+        // on the row is looking at the orb they archived. That reads as the
+        // archive having failed. So a success hides the id here, and the next
+        // roster publish that no longer lists it clears it (Publish).
+        //
+        // **Bounded rather than permanent**, for the case where the roster
+        // still lists it: then something disagrees with the 2xx, and the honest
+        // answer after a while is to show the orb again rather than to hide a
+        // session the account still has. Two minutes is the hold the Claude
+        // Code CLI's own fleet view gives an archived row for the same reason
+        // (read out of the 2.1.288 binary, not measured).
+        private static readonly Dictionary<string, DateTime> _tombstones = new(StringComparer.Ordinal);
+
+        internal static readonly TimeSpan TombstoneHold = TimeSpan.FromMinutes(2);
+
+        internal static void Tombstone(string id, DateTime now)
+        {
+            lock (Gate) _tombstones[id] = now + TombstoneHold;
+        }
+
+        // The ids still hidden at `now`, dropping any whose hold has run out.
+        internal static IReadOnlySet<string> TombstonesNow(DateTime now)
+        {
+            lock (Gate)
+            {
+                foreach (var expired in _tombstones.Where(t => t.Value <= now).Select(t => t.Key).ToList())
+                    _tombstones.Remove(expired);
+
+                return _tombstones.Count == 0
+                    ? EmptyIds
+                    : new HashSet<string>(_tombstones.Keys, StringComparer.Ordinal);
+            }
+        }
+
+        private static readonly IReadOnlySet<string> EmptyIds = new HashSet<string>();
+
+        internal static IReadOnlyList<Session> WithoutTombstones(IReadOnlyList<Session> sessions,
+            IReadOnlySet<string> hidden) =>
+            hidden.Count == 0 ? sessions : sessions.Where(s => !hidden.Contains(s.Id)).ToList();
+
+        // A roster read landing: publish it, and let go of every tombstone the
+        // roster now agrees with — the session is no longer listed, so there is
+        // nothing left to hide.
+        internal static void Publish(IReadOnlyList<Session> sessions)
+        {
+            _snapshot = sessions;
+
+            lock (Gate)
+            {
+                if (_tombstones.Count == 0) return;
+                var listed = new HashSet<string>(sessions.Select(s => s.Id), StringComparer.Ordinal);
+                foreach (var settled in _tombstones.Keys.Where(id => !listed.Contains(id)).ToList())
+                    _tombstones.Remove(settled);
+            }
+        }
+
+        internal static void ClearTombstonesForTests()
+        {
+            lock (Gate) _tombstones.Clear();
+        }
+
+        internal static bool IsTombstoned(string id)
+        {
+            lock (Gate) return _tombstones.ContainsKey(id);
+        }
+
+        // Where the action goes, and as whom. Settable so a test can hand in a
+        // fake endpoint and login instead of api.anthropic.com and the
+        // Keychain; production builds the real client once, on first use.
+        internal static ICloudApi LifecycleApi
+        {
+            get { lock (Gate) return _lifecycleApi ??= new HttpCloudApi(); }
+            set { lock (Gate) _lifecycleApi = value; }
+        }
+
+        private static ICloudApi? _lifecycleApi;
+
+        internal static Func<string?, ICloudCredentialSource> LifecycleCredentials { get; set; } =
+            CloudAccounts.SourceFor;
+
+        internal const string SwitchedOffDetail = "cloud sessions are switched off in Settings";
+        internal const string NotListedDetail = "this session is no longer in the list";
+
+        // Archive or delete the cloud session behind one orb.
+        //
+        // **As the account that owns it** (CB-221): the row's OwnerRoot picks
+        // the login, never "whichever is first" — a session can only be
+        // archived by its own account, and the default login would be refused
+        // or, worse, aimed at a different account's session of the same id
+        // shape. Read off the unfiltered snapshot, so a second click on a
+        // just-archived orb cannot reach a row the user can no longer see
+        // without the request saying so.
+        //
+        // On success the orb is hidden at once (Tombstone) and an open chat
+        // panel on it flips read-only on the next scan, which pushes it a
+        // missing row — the Gone path CB-199 built for a vanished session.
+        internal static async Task<CloudLifecycleResult> RunLifecycleAsync(CloudLifecycleAction action,
+            string? orbKey, CancellationToken ct)
+        {
+            if (!ClaudeBuddySettings.ClaudeCloudEnabled)
+                return new CloudLifecycleResult(CloudLifecycleVerdict.Refused, SwitchedOffDetail);
+
+            var id = CloudOrbActions.IdFromKey(orbKey);
+            var row = id is null ? null : _snapshot.FirstOrDefault(s => s.Id == id);
+            if (row is null)
+                return new CloudLifecycleResult(CloudLifecycleVerdict.Refused, NotListedDetail);
+
+            var result = await ClaudeCloudLifecycle
+                .RunAsync(LifecycleApi, LifecycleCredentials(row.OwnerRoot), action, row.Id, ct)
+                .ConfigureAwait(false);
+
+            if (result.Succeeded) Tombstone(row.Id, DateTime.UtcNow);
+            return result;
+        }
 
         // What the settings window shows on its status row.
         public static string StatusText
@@ -503,7 +628,7 @@ namespace ClaudeBuddy
                 }
 
                 state = step.Next;
-                _snapshot = board.Apply(account.Root, step, DateTime.UtcNow);
+                Publish(board.Apply(account.Root, step, DateTime.UtcNow));
 
                 try { await Task.Delay(step.Wait, ct).ConfigureAwait(false); } catch { break; }
             }
@@ -520,6 +645,7 @@ namespace ClaudeBuddy
                 _cts = null;
                 _board = null;
                 _snapshot = Array.Empty<Session>();
+                _tombstones.Clear();
 
                 if (!ClaudeBuddySettings.ClaudeCloudEnabled)
                 {
