@@ -53,11 +53,45 @@ public partial class ClaudeCloudEventsTests
             }
         }
 
+        // The session's current stream run — wired by Sender, read afresh on
+        // every look because a close and a reopen start a new one.
+        internal Func<Task?>? Run { get; set; }
+
         // The next connection the session opens, as something to write events to.
+        //
+        // **No clock (CB-230).** This used to give up after ten wall-clock
+        // seconds, and on a loaded macOS runner it did: the session reopened
+        // correctly, just later than that, and the test failed on how long the
+        // thread pool took rather than on anything the session decided. Forced
+        // by making the second credential read take eleven seconds, it failed
+        // here with the runner's own OperationCanceledException every time.
+        //
+        // What actually means "no open is coming" is the run having ended — a
+        // run that is still going will open again or end, and nothing else. So
+        // that is the signal: the next open, or a failure as soon as the run
+        // that would have made it has finished without making it. Slow is now
+        // only slow; wrong still fails, and fails at once with a reason.
         internal async Task<ChannelWriter<CloudStreamEvent>> NextOpenAsync()
         {
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-            return (await _opened.Reader.ReadAsync(timeout.Token)).Writer;
+            while (true)
+            {
+                if (_opened.Reader.TryRead(out var open)) return open.Writer;
+
+                var run = Run?.Invoke()
+                          ?? throw new Xunit.Sdk.XunitException("no stream run was started, so nothing will open");
+
+                if (run.IsCompleted)
+                {
+                    // An open the run made just before ending was written before
+                    // the run completed, so it is in the channel by now.
+                    if (_opened.Reader.TryRead(out open)) return open.Writer;
+
+                    await run; // a run that faulted says why, as itself
+                    throw new Xunit.Sdk.XunitException("the stream run ended without opening again");
+                }
+
+                await Task.WhenAny(_opened.Reader.WaitToReadAsync().AsTask(), run);
+            }
         }
 
         internal int OpenCount
@@ -496,6 +530,33 @@ public partial class ClaudeCloudEventsTests
         Assert.Equal(1, stream.OpenCount);
     }
 
+    // The control for NextOpenAsync having no clock (CB-230): a run that ends
+    // without opening again fails the wait at once and says so, rather than
+    // leaving the test parked on an open that is never coming. Without this,
+    // a green suite is equally consistent with every wait simply hanging
+    // until something else gave up.
+    [Fact]
+    public async Task AWaitForAnOpenThatIsNeverComingFailsAsSoonAsTheRunEnds()
+    {
+        var (chat, _, stream, _) = Streaming();
+        chat.PanelOpened();
+
+        (await stream.NextOpenAsync()).TryWrite(EndedWith(404));
+
+        var refused = await Assert.ThrowsAsync<Xunit.Sdk.XunitException>(stream.NextOpenAsync);
+        Assert.Contains("ended without opening again", refused.Message);
+        Assert.True(chat.StreamTask!.IsCompleted);
+    }
+
+    [Fact]
+    public async Task AWaitForAnOpenWithNoRunStartedFailsAtOnce()
+    {
+        var (_, _, stream, _) = Streaming();
+
+        var refused = await Assert.ThrowsAsync<Xunit.Sdk.XunitException>(stream.NextOpenAsync);
+        Assert.Contains("no stream run was started", refused.Message);
+    }
+
     [Fact]
     public async Task ARefusedLoginStopsTheStreamQuietly()
     {
@@ -591,6 +652,7 @@ public partial class ClaudeCloudEventsTests
                 ? ClaudeCloudStreamPolicy.UnmeasuredHealthyConnectionAge
                 : TimeSpan.FromSeconds(1),
         };
+        stream.Run = () => chat.StreamTask;
         chat.PanelOpened();
 
         for (var i = 0; i < ClaudeCloudStreamPolicy.UnmeasuredFailuresBeforeFallback; i++)
