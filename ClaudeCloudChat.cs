@@ -97,8 +97,8 @@ namespace ClaudeBuddy
     {
         Sendable,
 
-        // It no longer takes input: a 409 on a write, which the Claude Code CLI
-        // reads as `session_inactive` (not measured here), or a roster row whose
+        // It no longer takes input: a 409 on a write — measured by CB-225 as
+        // `session_not_active` on an archived session — or a roster row whose
         // bucket says the session is over.
         Ended,
 
