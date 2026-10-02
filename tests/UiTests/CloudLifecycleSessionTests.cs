@@ -65,7 +65,7 @@ public class CloudLifecycleSessionTests
     }
 
     private static CloudApiResult Answer(int status, string? body) =>
-        new(CloudOutcomes.OutcomeFor(status, body), body);
+        HttpCloudApi.ResultFor(CloudOutcomes.OutcomeFor(status, body), body);
 
     private const string NotFoundJson =
         """{"error":{"message":"Session session_01abc not found","type":"not_found_error"},"request_id":"r","type":"error"}""";
@@ -264,6 +264,55 @@ public class CloudLifecycleSessionTests
 
         Assert.Equal(ClaudeCloudSessions.NotListedDetail, result.Detail);
         Assert.Empty(api.Requests);
+    }
+
+    private sealed class GatedApi : ICloudApi
+    {
+        internal TaskCompletionSource<CloudApiResult> Gate { get; } = new();
+        internal int Requests;
+
+        public Task<CloudApiResult> SendAsync(CloudRequestContext context, CancellationToken token)
+        {
+            Interlocked.Increment(ref Requests);
+            return Gate.Task;
+        }
+    }
+
+    // Two callers at once for one session send one request; the second is
+    // told one is already on its way rather than racing to a 404.
+    [Fact]
+    public async Task ASecondRequestForTheSameSessionWhileOneIsOutIsRefused()
+    {
+        var api = new GatedApi();
+        using var scope = new Scope(api, sessions: Session("session_01abc"));
+
+        var first = ClaudeCloudSessions.RunLifecycleAsync(CloudLifecycleAction.Archive,
+            "cloud:session_01abc", CancellationToken.None);
+        var second = await ClaudeCloudSessions.RunLifecycleAsync(CloudLifecycleAction.Delete,
+            "cloud:session_01abc", CancellationToken.None);
+
+        Assert.Equal(ClaudeCloudSessions.InFlightDetail, second.Detail);
+
+        api.Gate.SetResult(Answer(200, "{}"));
+        Assert.True((await first).Succeeded);
+        Assert.Equal(1, api.Requests);
+    }
+
+    // And it lets go: deleting a session archived a moment ago is a real
+    // request, and the tombstone does not stand in its way.
+    [Fact]
+    public async Task TheGuardLetsGoSoADeleteAfterAnArchiveGoesOut()
+    {
+        var api = Accepting();
+        using var scope = new Scope(api, sessions: Session("session_01abc"));
+
+        Assert.True((await ClaudeCloudSessions.RunLifecycleAsync(CloudLifecycleAction.Archive,
+            "cloud:session_01abc", CancellationToken.None)).Succeeded);
+        var deleted = await ClaudeCloudSessions.RunLifecycleAsync(CloudLifecycleAction.Delete,
+            "cloud:session_01abc", CancellationToken.None);
+
+        Assert.Equal(CloudLifecycleVerdict.Done, deleted.Verdict);
+        Assert.Equal(3, api.Requests.Count); // archive, delete, confirming read
     }
 
     // --- the orb, and an open panel on it ----------------------------------------

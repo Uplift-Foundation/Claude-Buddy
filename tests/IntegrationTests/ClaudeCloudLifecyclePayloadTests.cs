@@ -80,8 +80,11 @@ public class ClaudeCloudLifecyclePayloadTests
             Wire.Add((request.Method, request.RequestUri!.ToString(),
                 request.Content?.Headers.ContentType?.MediaType));
 
+            // Handed back by the shipped wrapper's rule — the body on a 2xx
+            // and nothing else — so a captured 404 reaches the lifecycle code
+            // exactly as it would from the endpoint.
             var (status, body) = _answers.Dequeue();
-            return Task.FromResult(new CloudApiResult(CloudOutcomes.OutcomeFor(status, body), body));
+            return Task.FromResult(HttpCloudApi.ResultFor(CloudOutcomes.OutcomeFor(status, body), body));
         }
     }
 

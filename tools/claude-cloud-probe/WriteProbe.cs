@@ -294,9 +294,14 @@ internal static class WriteProbe
             // a title and ids, which the allow-list below exists to keep out.
             if (Value(opts, "--save") is { } save)
             {
-                File.WriteAllText(save, text);
+                // Created 0600, not chmodded after: a write then a chmod
+                // leaves the body readable at umask permissions in between.
+                var options = new FileStreamOptions { Mode = FileMode.Create, Access = FileAccess.Write };
                 if (!OperatingSystem.IsWindows())
-                    File.SetUnixFileMode(save, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+                    options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+                File.Delete(save);
+                using (var file = new StreamWriter(save, System.Text.Encoding.UTF8, options))
+                    file.Write(text);
                 Console.WriteLine($"saved    {text.Length} chars");
             }
             Console.WriteLine($"ctype    {response.Content.Headers.ContentType?.MediaType ?? "(none)"}");
@@ -347,7 +352,7 @@ internal static class WriteProbe
         return (result.Outcome.Status, result.Body);
     }
 
-    private static async Task<string?> KindOfAsync(string id, string token)
+    internal static async Task<string?> KindOfAsync(string id, string token)
     {
         using var api = new HttpCloudApi();
         var result = await api.SendAsync(new CloudRequestContext(token, CloudRequest.SessionPath(id)),

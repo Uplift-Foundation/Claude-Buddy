@@ -96,11 +96,21 @@ namespace ClaudeBuddy
 
     // One attempt's verdict. Status is the HTTP status where there was one and 0
     // where the request never got an answer.
+    //
+    // SessionNotFound (CB-225) is true only for a 404 whose body is the
+    // handler's JSON `not_found_error`. A 404 comes in two kinds that mean
+    // opposite things — that, and the router's plain-text "404 page not
+    // found" for a route that does not exist — and Kind reads both as
+    // SessionGone. The distinction is made here, where the body is in hand,
+    // so it can travel without the body: HttpCloudApi hands a caller the body
+    // only on a 2xx (ResultFor), and archive and delete need the distinction
+    // on a 404.
     internal sealed record CloudOutcome(
         CloudOutcomeKind Kind,
         int Status,
         TimeSpan? RetryAfter = null,
-        string? Detail = null);
+        string? Detail = null,
+        bool SessionNotFound = false);
 
     // A verdict plus the body, for Ok. The body is deliberately a string rather
     // than a parsed roster: parsing belongs to ClaudeCloudRoster, and keeping the
@@ -405,6 +415,33 @@ namespace ClaudeBuddy
             }
         }
 
+        // The handler's own word for "no such session". Matched on the parsed
+        // error type, never on the message, which names the session id.
+        internal const string NotFoundErrorType = "not_found_error";
+
+        // Whether a body is the handler's "no such session". Anything that is
+        // not a JSON error object of exactly that type — the router's plain
+        // text, an empty body, some other error — is not.
+        internal static bool IsSessionNotFoundError(string? body)
+        {
+            if (string.IsNullOrWhiteSpace(body)) return false;
+
+            try
+            {
+                using var doc = JsonDocument.Parse(body);
+                return doc.RootElement.ValueKind == JsonValueKind.Object
+                       && doc.RootElement.TryGetProperty("error", out var error)
+                       && error.ValueKind == JsonValueKind.Object
+                       && error.TryGetProperty("type", out var type)
+                       && type.ValueKind == JsonValueKind.String
+                       && type.GetString() == NotFoundErrorType;
+            }
+            catch (JsonException)
+            {
+                return false;
+            }
+        }
+
         internal static CloudOutcome OutcomeFor(int status, string? body,
             TimeSpan? retryAfter = null, bool cfMitigated = false)
         {
@@ -435,7 +472,7 @@ namespace ClaudeBuddy
 
                 case 404:
                     return new CloudOutcome(CloudOutcomeKind.SessionGone, status, null,
-                        SessionGoneDetail);
+                        SessionGoneDetail, IsSessionNotFoundError(body));
 
                 case 409:
                     return new CloudOutcome(CloudOutcomeKind.SessionInactive, status, null,
@@ -602,6 +639,20 @@ namespace ClaudeBuddy
         // still outstanding after half a minute is not going to help the user.
         private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(30) };
 
+        // What a caller is handed: the body on a 2xx, and on anything else
+        // only the verdict. An error body is unvetted text — it can echo ids,
+        // and nothing here has an allow-list for it — so it stops at the
+        // wrapper, and whatever a caller needs from it is decided in OutcomeFor
+        // and carried on the outcome (SessionNotFound is the case CB-225 found).
+        //
+        // Pulled out of SendAsync, which is excluded from coverage, so the rule
+        // is testable, and so a test's fake can apply the same rule instead of
+        // a friendlier one: CB-225's first fakes handed every body back, and
+        // the bug that hid — every delete reading as unconfirmed — was only
+        // found by reading this line.
+        internal static CloudApiResult ResultFor(CloudOutcome outcome, string? body) =>
+            new(outcome, outcome.Kind == CloudOutcomeKind.Ok ? body : null);
+
         public async Task<CloudApiResult> SendAsync(CloudRequestContext context,
             CancellationToken token)
         {
@@ -621,8 +672,7 @@ namespace ClaudeBuddy
                 var outcome = CloudOutcomes.OutcomeFor(
                     (int)response.StatusCode, body, retryAfter, mitigated);
 
-                return new CloudApiResult(outcome,
-                    outcome.Kind == CloudOutcomeKind.Ok ? body : null);
+                return ResultFor(outcome, body);
             }
             catch (OperationCanceledException) when (!token.IsCancellationRequested)
             {

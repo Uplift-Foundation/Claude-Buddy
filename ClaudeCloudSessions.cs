@@ -183,20 +183,29 @@ namespace ClaudeBuddy
 
         internal const string SwitchedOffDetail = "cloud sessions are switched off in Settings";
         internal const string NotListedDetail = "this session is no longer in the list";
+        internal const string InFlightDetail = "a request for this session is already on its way";
+
+        // Ids with an archive or delete out. The menu already ignores clicks
+        // while its row is working; this is the same promise kept one layer
+        // down, so two callers — two orbs' menus, a menu and anything later —
+        // cannot send two requests for one session, the second of which would
+        // answer 404 and print "not found" on a row that is going away.
+        private static readonly HashSet<string> _inFlight = new(StringComparer.Ordinal);
 
         // Archive or delete the cloud session behind one orb.
         //
         // **As the account that owns it** (CB-221): the row's OwnerRoot picks
         // the login, never "whichever is first" — a session can only be
-        // archived by its own account, and the default login would be refused
-        // or, worse, aimed at a different account's session of the same id
-        // shape. Read off the unfiltered snapshot, so a second click on a
-        // just-archived orb cannot reach a row the user can no longer see
-        // without the request saying so.
+        // archived by its own account, and the default login would be refused.
         //
         // On success the orb is hidden at once (Tombstone) and an open chat
         // panel on it flips read-only on the next scan, which pushes it a
         // missing row — the Gone path CB-199 built for a vanished session.
+        //
+        // The row is looked up in the unfiltered snapshot, so a session that
+        // has just been tombstoned can still be asked about — deleting one
+        // that was archived a moment ago is a real request. What stops the
+        // same request twice is the in-flight set, not the lookup.
         internal static async Task<CloudLifecycleResult> RunLifecycleAsync(CloudLifecycleAction action,
             string? orbKey, CancellationToken ct)
         {
@@ -208,12 +217,25 @@ namespace ClaudeBuddy
             if (row is null)
                 return new CloudLifecycleResult(CloudLifecycleVerdict.Refused, NotListedDetail);
 
-            var result = await ClaudeCloudLifecycle
-                .RunAsync(LifecycleApi, LifecycleCredentials(row.OwnerRoot), action, row.Id, ct)
-                .ConfigureAwait(false);
+            lock (Gate)
+            {
+                if (!_inFlight.Add(row.Id))
+                    return new CloudLifecycleResult(CloudLifecycleVerdict.Refused, InFlightDetail);
+            }
 
-            if (result.Succeeded) Tombstone(row.Id, DateTime.UtcNow);
-            return result;
+            try
+            {
+                var result = await ClaudeCloudLifecycle
+                    .RunAsync(LifecycleApi, LifecycleCredentials(row.OwnerRoot), action, row.Id, ct)
+                    .ConfigureAwait(false);
+
+                if (result.Succeeded) Tombstone(row.Id, DateTime.UtcNow);
+                return result;
+            }
+            finally
+            {
+                lock (Gate) _inFlight.Remove(row.Id);
+            }
         }
 
         // What the settings window shows on its status row.

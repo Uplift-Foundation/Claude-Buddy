@@ -24,8 +24,12 @@ public class ClaudeCloudLifecycleTests
     // The router's own answer to a path it has no handler for. Measured.
     private const string RouterNotFound = "404 page not found";
 
+    // Through the shipped wrapper's own rule, so a 404's body is null here
+    // exactly as it is in production. The first version of this handed every
+    // body back, and the bug it hid — every delete reading as unconfirmed —
+    // survived 58 green cases.
     private static CloudApiResult Answer(int status, string? body) =>
-        new(CloudOutcomes.OutcomeFor(status, body), body);
+        HttpCloudApi.ResultFor(CloudOutcomes.OutcomeFor(status, body), body);
 
     // --- the request ------------------------------------------------------------
 
@@ -83,7 +87,27 @@ public class ClaudeCloudLifecycleTests
     [Fact]
     public void OnlyTheHandlersJsonErrorIsSessionNotFound()
     {
-        Assert.True(ClaudeCloudLifecycle.IsSessionNotFound(NotFoundJson));
+        Assert.True(CloudOutcomes.IsSessionNotFoundError(NotFoundJson));
+        Assert.True(CloudOutcomes.OutcomeFor(404, NotFoundJson).SessionNotFound);
+        Assert.False(CloudOutcomes.OutcomeFor(404, RouterNotFound).SessionNotFound);
+
+        // Only a 404 carries it: the same body on any other status is not
+        // the handler saying the session is missing.
+        Assert.False(CloudOutcomes.OutcomeFor(400, NotFoundJson).SessionNotFound);
+        Assert.False(CloudOutcomes.OutcomeFor(200, NotFoundJson).SessionNotFound);
+    }
+
+    // The wrapper's rule itself: a body on a 2xx, and nothing else — so the
+    // 404 distinction has to travel on the outcome, which is what the cases
+    // below rely on.
+    [Fact]
+    public void TheWrapperHandsBackABodyOnlyOnASuccess()
+    {
+        Assert.Equal("{}", HttpCloudApi.ResultFor(CloudOutcomes.OutcomeFor(200, "{}"), "{}").Body);
+
+        var notFound = HttpCloudApi.ResultFor(CloudOutcomes.OutcomeFor(404, NotFoundJson), NotFoundJson);
+        Assert.Null(notFound.Body);
+        Assert.True(notFound.Outcome.SessionNotFound);
     }
 
     [Theory]
@@ -97,7 +121,8 @@ public class ClaudeCloudLifecycleTests
     [InlineData("""{"type":"error"}""")]
     public void AnythingElseIsNot(string? body)
     {
-        Assert.False(ClaudeCloudLifecycle.IsSessionNotFound(body));
+        Assert.False(CloudOutcomes.IsSessionNotFoundError(body));
+        Assert.False(CloudOutcomes.OutcomeFor(404, body).SessionNotFound);
     }
 
     // --- the action's own answer ------------------------------------------------
@@ -105,7 +130,7 @@ public class ClaudeCloudLifecycleTests
     [Fact]
     public void A200IsDone()
     {
-        var result = ClaudeCloudLifecycle.VerdictFor(CloudOutcomes.OutcomeFor(200, "{}"), "{}");
+        var result = ClaudeCloudLifecycle.VerdictFor(CloudOutcomes.OutcomeFor(200, "{}"));
 
         Assert.Equal(CloudLifecycleVerdict.Done, result.Verdict);
         Assert.True(result.Succeeded);
@@ -120,7 +145,7 @@ public class ClaudeCloudLifecycleTests
         var outcome = CloudOutcomes.OutcomeFor(404, RouterNotFound);
         Assert.Equal(CloudOutcomeKind.SessionGone, outcome.Kind);
 
-        var result = ClaudeCloudLifecycle.VerdictFor(outcome, RouterNotFound);
+        var result = ClaudeCloudLifecycle.VerdictFor(outcome);
 
         Assert.Equal(CloudLifecycleVerdict.Refused, result.Verdict);
         Assert.False(result.Succeeded);
@@ -130,7 +155,7 @@ public class ClaudeCloudLifecycleTests
     [Fact]
     public void AHandlerFourOhFourIsReportedAsNotFoundAndStillNotSuccess()
     {
-        var result = ClaudeCloudLifecycle.VerdictFor(CloudOutcomes.OutcomeFor(404, NotFoundJson), NotFoundJson);
+        var result = ClaudeCloudLifecycle.VerdictFor(CloudOutcomes.OutcomeFor(404, NotFoundJson));
 
         Assert.Equal(CloudLifecycleVerdict.Refused, result.Verdict);
         Assert.Equal(ClaudeCloudLifecycle.SessionNotFoundDetail, result.Detail);
@@ -149,7 +174,7 @@ public class ClaudeCloudLifecycleTests
     public void EveryOtherStatusIsARefusalInTheOutcomesOwnWords(int status, string body)
     {
         var outcome = CloudOutcomes.OutcomeFor(status, body);
-        var result = ClaudeCloudLifecycle.VerdictFor(outcome, body);
+        var result = ClaudeCloudLifecycle.VerdictFor(outcome);
 
         Assert.Equal(CloudLifecycleVerdict.Refused, result.Verdict);
         Assert.Equal(outcome.Detail, result.Detail);
@@ -161,14 +186,14 @@ public class ClaudeCloudLifecycleTests
     [Fact]
     public void TheHandlersFourOhFourConfirmsTheDelete()
     {
-        var result = ClaudeCloudLifecycle.ConfirmationFor(CloudOutcomes.OutcomeFor(404, NotFoundJson), NotFoundJson);
+        var result = ClaudeCloudLifecycle.ConfirmationFor(CloudOutcomes.OutcomeFor(404, NotFoundJson));
         Assert.Equal(CloudLifecycleVerdict.Done, result.Verdict);
     }
 
     [Fact]
     public void TheSessionStillAnsweringIsARefusalWhateverTheDeleteSaid()
     {
-        var result = ClaudeCloudLifecycle.ConfirmationFor(CloudOutcomes.OutcomeFor(200, "{}"), "{}");
+        var result = ClaudeCloudLifecycle.ConfirmationFor(CloudOutcomes.OutcomeFor(200, "{}"));
 
         Assert.Equal(CloudLifecycleVerdict.Refused, result.Verdict);
         Assert.Equal(ClaudeCloudLifecycle.StillThereDetail, result.Detail);
@@ -181,7 +206,7 @@ public class ClaudeCloudLifecycleTests
     public void AConfirmationThatCannotBeReadLeavesTheDeleteStandingUnconfirmed(int status, string body)
     {
         var outcome = CloudOutcomes.OutcomeFor(status, body);
-        var result = ClaudeCloudLifecycle.ConfirmationFor(outcome, body);
+        var result = ClaudeCloudLifecycle.ConfirmationFor(outcome);
 
         Assert.Equal(CloudLifecycleVerdict.DoneUnconfirmed, result.Verdict);
         Assert.True(result.Succeeded);
@@ -194,7 +219,7 @@ public class ClaudeCloudLifecycleTests
     public void AConfirmationWithNoDetailSaysWhatTheStatusWas()
     {
         var result = ClaudeCloudLifecycle.ConfirmationFor(
-            new CloudOutcome(CloudOutcomeKind.Unavailable, 0), null);
+            new CloudOutcome(CloudOutcomeKind.Unavailable, 0));
 
         Assert.Equal(CloudLifecycleVerdict.DoneUnconfirmed, result.Verdict);
         Assert.Equal("the endpoint answered 0", result.Detail);

@@ -21,10 +21,10 @@ namespace ClaudeBuddy
     //  * **A 404 from either comes in two kinds that mean opposite things.** A
     //    JSON `not_found_error` is a handler saying there is no such session; a
     //    plain-text "404 page not found" is the router saying there is no such
-    //    route. CloudOutcomes.OutcomeFor cannot see the difference and reads
-    //    both as SessionGone. So **nothing here treats a 404 on the action as
-    //    success** — if the route ever moved, "Deleted" on the row would be a
-    //    lie the user had no way to catch.
+    //    route. OutcomeFor's Kind reads both as SessionGone; its
+    //    SessionNotFound flag tells them apart. **Nothing here treats a 404 on
+    //    the action as success** — if the route ever moved, "Deleted" on the
+    //    row would be a lie the user had no way to catch.
     //  * Both refuse a bogus token, a missing token and a missing
     //    `anthropic-version` exactly as a send does, so the existing outcome
     //    arms already have the right words for every refusal.
@@ -68,10 +68,6 @@ namespace ClaudeBuddy
         // Exactly what the CLI posts. Measured: the endpoint takes it.
         internal const string ArchiveBody = "{}";
 
-        // The handler's own word for "no such session". Matched on the parsed
-        // error type, never on the message, which names the session id.
-        internal const string NotFoundErrorType = "not_found_error";
-
         internal const string SessionNotFoundDetail = "not found — the session may already be gone";
         internal const string RouteNotFoundDetail = "not found — the endpoint did not recognise the request";
         internal const string StillThereDetail = "the endpoint said it was deleted, but the session is still there";
@@ -96,29 +92,6 @@ namespace ClaudeBuddy
             }
         }
 
-        // Whether a 404 body is the handler's "no such session". Anything that
-        // is not a JSON error object of exactly that type — the router's plain
-        // text, an empty body, some other error — is not.
-        internal static bool IsSessionNotFound(string? body)
-        {
-            if (string.IsNullOrWhiteSpace(body)) return false;
-
-            try
-            {
-                using var doc = JsonDocument.Parse(body);
-                return doc.RootElement.ValueKind == JsonValueKind.Object
-                       && doc.RootElement.TryGetProperty("error", out var error)
-                       && error.ValueKind == JsonValueKind.Object
-                       && error.TryGetProperty("type", out var type)
-                       && type.ValueKind == JsonValueKind.String
-                       && type.GetString() == NotFoundErrorType;
-            }
-            catch (JsonException)
-            {
-                return false;
-            }
-        }
-
         // The verdict on the action's own answer.
         //
         // **2xx only.** A 404 is reported as not found, worded for which kind
@@ -127,14 +100,14 @@ namespace ClaudeBuddy
         // never seen (a second archive answered 200), and if it ever is, the
         // roster's own filter removes an archived session's orb on the next
         // read anyway, so saying what the endpoint said costs nothing.
-        internal static CloudLifecycleResult VerdictFor(CloudOutcome outcome, string? body)
+        internal static CloudLifecycleResult VerdictFor(CloudOutcome outcome)
         {
             if (outcome.Kind == CloudOutcomeKind.Ok) return new CloudLifecycleResult(CloudLifecycleVerdict.Done);
 
             if (outcome.Status == 404)
             {
                 return new CloudLifecycleResult(CloudLifecycleVerdict.Refused,
-                    IsSessionNotFound(body) ? SessionNotFoundDetail : RouteNotFoundDetail);
+                    outcome.SessionNotFound ? SessionNotFoundDetail : RouteNotFoundDetail);
             }
 
             return new CloudLifecycleResult(CloudLifecycleVerdict.Refused, outcome.Detail);
@@ -146,9 +119,9 @@ namespace ClaudeBuddy
         // still being there, which is a refusal however the delete answered.
         // Anything else — the read failed, timed out, was refused — leaves the
         // 2xx standing and says it could not be checked.
-        internal static CloudLifecycleResult ConfirmationFor(CloudOutcome outcome, string? body)
+        internal static CloudLifecycleResult ConfirmationFor(CloudOutcome outcome)
         {
-            if (outcome.Status == 404 && IsSessionNotFound(body))
+            if (outcome.SessionNotFound)
                 return new CloudLifecycleResult(CloudLifecycleVerdict.Done);
 
             if (outcome.Kind == CloudOutcomeKind.Ok)
@@ -185,7 +158,9 @@ namespace ClaudeBuddy
                 new CloudRequestContext(token, request.Path, request.Method, request.Body), ct)
                 .ConfigureAwait(false);
 
-            var verdict = VerdictFor(answer.Outcome, answer.Body);
+            // The outcome, never the body: HttpCloudApi hands a body back only
+            // on a 2xx, and what a 404 meant is already on the outcome.
+            var verdict = VerdictFor(answer.Outcome);
             if (action != CloudLifecycleAction.Delete || !verdict.Succeeded) return verdict;
 
             // Well formed, checked by RequestFor, so not null.
@@ -193,7 +168,7 @@ namespace ClaudeBuddy
                 new CloudRequestContext(token, CloudRequest.CodeSessionPath(id)!), ct)
                 .ConfigureAwait(false);
 
-            return ConfirmationFor(check.Outcome, check.Body);
+            return ConfirmationFor(check.Outcome);
         }
     }
 
