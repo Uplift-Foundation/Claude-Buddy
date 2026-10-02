@@ -1794,6 +1794,8 @@ happen once:
 
 **Agent teams on the other machine show as teams.** Over a direct link, a team running on the other machine draws an orb for its lead and one for each member, linked by the same arrows a team on this machine gets, each member wearing its own agent name and team colour rather than the title every member inherits from its lead. A member is shown only when its lead is: a team whose lead has Remote Control off stays hidden, members and all. This needs Claude Buddy on both machines, since it is the Buddy over there that knows which session belongs to which team.
 
+**Remote orbs, and the team shape between them, need Claude Buddy running on the far machine.** Everything this machine draws for another one comes over the direct link from the Buddy running there. The far Buddy knows its own sessions, which agent team each one belongs to, and which session leads it, and it sends all of that. A machine reached only through Remote Control, with no Buddy on it, draws no orbs here at all: not its sessions, not its team, not its lead. Claude Code's own Remote Control peer list does show each team member as a separate row, but Buddy doesn't read that list. Its relay poller was removed in favour of the direct link.
+
 Two situations need a different route in, and both have one.
 
 **A machine with no screen** — a Mac mini serving its sessions unattended — has
