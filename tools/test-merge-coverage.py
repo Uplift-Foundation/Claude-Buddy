@@ -121,5 +121,65 @@ class LineUnion(unittest.TestCase):
         self.assertEqual({90: True}, dict(lines["ClaudeDesktopBundles.cs"]))
 
 
+class ReportCount(unittest.TestCase):
+    """CB-229: never print a figure from other than the expected four reports."""
+
+    def test_four_reports_are_accepted(self):
+        self.assertIsNone(merge_coverage.refuse_unless_expected(list("abcd"), 4))
+
+    def test_two_reports_are_refused_with_a_reason(self):
+        msg = merge_coverage.refuse_unless_expected(["u.xml", "s.xml"], 4)
+        self.assertIn("REFUSING", msg)
+        self.assertIn("merged 2", msg)
+        self.assertIn("u.xml", msg)
+
+    def test_six_reports_are_refused_too(self):
+        self.assertIsNotNone(merge_coverage.refuse_unless_expected(list("abcdef"), 4))
+
+    def test_no_reports_are_refused(self):
+        self.assertIn("none", merge_coverage.refuse_unless_expected([], 4))
+
+    def test_default_expectation_is_four(self):
+        self.assertEqual(4, merge_coverage.EXPECTED_REPORTS)
+
+    def test_expect_flag_and_dedup_in_parse_args(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            f = os.path.join(d, "a.xml")
+            open(f, "w").close()
+            base, reports, expect = merge_coverage.parse_args(
+                [f, os.path.join(d, "*.xml"), "--base", "x", "--expect", "1"])
+            self.assertEqual(("x", 1, [f]), (base, expect, reports))
+
+    def test_main_exits_nonzero_with_wrong_count(self):
+        import sys
+        old = sys.argv
+        sys.argv = ["merge-coverage.py", "/definitely/not/there.xml"]
+        try:
+            with self.assertRaises(SystemExit) as cm:
+                merge_coverage.main()
+        finally:
+            sys.argv = old
+        self.assertIn("REFUSING", str(cm.exception.code))
+
+
+class MsysPaths(unittest.TestCase):
+    """A native Windows Python cannot glob an MSYS /c/... path."""
+
+    def test_drive_path_becomes_native_on_windows(self):
+        self.assertEqual("C:/Users/x/*.xml",
+                         merge_coverage.native_path("/c/Users/x/*.xml", windows=True))
+
+    def test_bare_drive(self):
+        self.assertEqual("D:/", merge_coverage.native_path("/d", windows=True))
+
+    def test_native_and_other_paths_untouched_on_windows(self):
+        for p in ("C:/a/b", "rel/x", "/tmp/x", "/cc/x"):
+            self.assertEqual(p, merge_coverage.native_path(p, windows=True))
+
+    def test_posix_is_identity(self):
+        self.assertEqual("/c/foo", merge_coverage.native_path("/c/foo", windows=False))
+
+
 if __name__ == "__main__":
     unittest.main()
