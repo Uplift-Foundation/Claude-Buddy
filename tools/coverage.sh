@@ -80,17 +80,30 @@ find tests/UiTests/bin tests/UiScreenshots/bin \
 # non-zero whenever there was one.
 RED=()
 
+# A suite can be red AND have written no report (Roxanne's first Windows run:
+# UnitTests had real failures and no cobertura file, and the RED line said only
+# "tests/UnitTests"). The UI suites already say so; the two VSTest suites write
+# their reports under $OUT/<dir>, so they get the same check, here, once.
+note_missing_report() { # $1 = directory under $OUT, $2 = suite name
+  if [[ -z "$(find "$OUT/$1" -name coverage.cobertura.xml -print -quit 2>/dev/null)" ]]; then
+    echo "$2 produced no cobertura report" >&2
+    RED+=("$2 (no report)")
+  fi
+}
+
 echo "==> tests/UnitTests"
 dotnet test tests/UnitTests \
   --collect:"XPlat Code Coverage" \
   --results-directory "$OUT/unit" \
   | tail -2 || RED+=("tests/UnitTests")
+note_missing_report unit tests/UnitTests
 
 echo "==> tests/IntegrationTests"
 dotnet test tests/IntegrationTests \
   --collect:"XPlat Code Coverage" \
   --results-directory "$OUT/integration" \
   | tail -2 || RED+=("tests/IntegrationTests")
+note_missing_report integration tests/IntegrationTests
 
 # --coverage-output is relative to the test binary's own TestResults directory,
 # so the file is fished out of there afterwards rather than written straight to

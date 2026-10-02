@@ -207,5 +207,44 @@ class EmptyReportArrayUnderSetU(unittest.TestCase):
         self.assertNotIn("unbound variable", r.stderr)
 
 
+class MissingReportNote(unittest.TestCase):
+    """coverage.sh's note_missing_report: red AND no report says so on the RED line."""
+
+    def _run(self, make_report):
+        import re, shutil, subprocess, tempfile
+        bash = shutil.which("bash")
+        if not bash:
+            self.skipTest("no bash")
+        src = open(os.path.join(os.path.dirname(__file__), "coverage.sh")).read()
+        fn = re.search(r"^note_missing_report\(\) \{.*?^\}", src, re.S | re.M).group(0)
+        with tempfile.TemporaryDirectory() as out:
+            os.makedirs(os.path.join(out, "unit", "guid"))
+            if make_report:
+                open(os.path.join(out, "unit", "guid", "coverage.cobertura.xml"), "w").close()
+            r = subprocess.run(
+                [bash, "-c", f'set -euo pipefail; OUT="{out.replace(chr(92), "/")}"; RED=(); {fn}; '
+                             'note_missing_report unit tests/UnitTests; '
+                             'echo "RED=${RED[*]:-}"'],
+                capture_output=True, text=True)
+        return r
+
+    def test_no_report_is_named_on_the_red_line(self):
+        r = self._run(make_report=False)
+        self.assertEqual(0, r.returncode, r.stderr)
+        self.assertIn("RED=tests/UnitTests (no report)", r.stdout)
+        self.assertIn("produced no cobertura report", r.stderr)
+
+    def test_a_report_leaves_the_red_line_alone(self):
+        r = self._run(make_report=True)
+        self.assertEqual(0, r.returncode, r.stderr)
+        self.assertIn("RED=\n", r.stdout + "\n")
+        self.assertNotIn("no report", r.stdout)
+
+    def test_coverage_sh_checks_both_vstest_suites(self):
+        src = open(os.path.join(os.path.dirname(__file__), "coverage.sh")).read()
+        self.assertIn("note_missing_report unit tests/UnitTests", src)
+        self.assertIn("note_missing_report integration tests/IntegrationTests", src)
+
+
 if __name__ == "__main__":
     unittest.main()
