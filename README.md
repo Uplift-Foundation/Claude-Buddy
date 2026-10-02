@@ -1792,6 +1792,8 @@ happen once:
    Local Network access and Windows raises a firewall prompt. Both are the
    feature working; a "no" here looks exactly like the network being broken.
 
+**Agent teams on the other machine show as teams.** Over a direct link, a team running on the other machine draws an orb for its lead and one for each member, linked by the same arrows a team on this machine gets, each member wearing its own agent name and team colour rather than the title every member inherits from its lead. A member is shown only when its lead is: a team whose lead has Remote Control off stays hidden, members and all. This needs Claude Buddy on both machines, since it is the Buddy over there that knows which session belongs to which team; through Remote Control alone, members arrive as separate orbs with no arrows between them.
+
 Two situations need a different route in, and both have one.
 
 **A machine with no screen** — a Mac mini serving its sessions unattended — has
