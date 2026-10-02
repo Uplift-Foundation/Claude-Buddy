@@ -1899,6 +1899,13 @@ public class MirrorRoundTripTests : IDisposable
         Assert.Null(leadRemote.LeadKey);
         Assert.All(remotes.Where(r => r.Route != leadRemote.Route),
             member => Assert.Equal(leadRemote.Key, member.LeadKey));
+
+        // Three sessions, one title: the client resolves each member by its
+        // route and refuses the shared title outright, rather than handing
+        // input to whichever arrived last.
+        Assert.Equal(Harness.FarRelay, harness.Client.RelayFor(RemoteMirrorServer.RouteFor(a)));
+        Assert.Equal(Harness.FarRelay, harness.Client.RelayFor(RemoteMirrorServer.RouteFor(b)));
+        Assert.Null(harness.Client.RelayFor("backlog status check"));
     }
 
     // The visibility rule, pinned: a member whose lead this machine does not
