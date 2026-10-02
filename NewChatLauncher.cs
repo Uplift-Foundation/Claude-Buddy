@@ -79,10 +79,9 @@ namespace ClaudeBuddy
                 return Decide(name, binary, directory, NewChatPlatform.Other, null, null, null);
             }
 
-            // "exec " so the terminal's own shell becomes the CLI rather than
-            // waiting behind it — the same reason every AgentTeamViewer
-            // launch site prefixes its command the same way.
-            var command = "exec " + NewChatCommand.For(cli, binary, configDir);
+            // NewChatCommand.ExecLine owns the "exec " — see its comment for
+            // why it is not written here any more (CB-232).
+            var command = NewChatCommand.ExecLine(cli, binary, configDir);
 
             // In the user's tmux first, for the same reason
             // AgentTeamViewer.AttachSession prefers tmux over a bare window:

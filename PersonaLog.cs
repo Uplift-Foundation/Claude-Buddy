@@ -44,7 +44,18 @@ namespace ClaudeBuddy
         // twenty identical lines about one oversized portrait, which is how a
         // diagnostic becomes noise nobody reads. Keyed on the whole message, so
         // the same file rejected for a new reason still says so.
-        private static readonly HashSet<string> Said = new(StringComparer.Ordinal);
+        //
+        // **Once per log file, not once per process** — keyed on the directory
+        // as well as the message (CB-214). The running app has one directory,
+        // so for it the two are the same rule. They part only where more than
+        // one directory is live at once, which is a test suite: there a class
+        // writing into its own scoped directory had its line dropped because a
+        // parallel class had said the same sentence into a *different* file
+        // first — a rejection names the picture as written, not where it was
+        // found, so two trees with an `over-cap.png` in them produce identical
+        // text. "Already said" has to mean "already in this file" or it is a
+        // claim about a file nobody is reading.
+        private static readonly HashSet<(string Directory, string Message)> Said = new();
 
         internal static void Record(string message) => Write(DateTimeOffset.Now, message);
 
@@ -54,17 +65,20 @@ namespace ClaudeBuddy
         {
             lock (Gate)
             {
-                if (!Said.Add(message)) return;
+                var directory = CrashLog.Directory;
+                if (!Said.Add((directory, message))) return;
 
                 try
                 {
-                    var directory = CrashLog.Directory;
                     System.IO.Directory.CreateDirectory(directory);
 
-                    var file = new FileInfo(Path_);
+                    // The directory read once above, so the file written is the
+                    // file the dedupe key names.
+                    var path = System.IO.Path.Combine(directory, "persona.log");
+                    var file = new FileInfo(path);
                     if (file.Exists && file.Length >= MaxBytes) return;
 
-                    File.AppendAllText(Path_, Format(when, message), Encoding.UTF8);
+                    File.AppendAllText(path, Format(when, message), Encoding.UTF8);
                 }
                 catch
                 {

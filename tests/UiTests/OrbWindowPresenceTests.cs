@@ -672,12 +672,15 @@ public class OrbWindowPresenceTests
     }
 
     // An orb whose row is not offered is not asked about at all: a gateway
-    // conversation has no local pid, and the read would only answer Nothing.
-    [AvaloniaFact]
-    public async Task ARowThatIsNotOfferedIsNotChecked()
+    // conversation, or a cloud session (CB-225's Archive/Delete orb), has no
+    // local pid, and the read would only answer Nothing.
+    [AvaloniaTheory]
+    [InlineData(SessionSource.OpenClaw)]
+    [InlineData(SessionSource.ClaudeCloud)]
+    public async Task ARowThatIsNotOfferedIsNotChecked(SessionSource source)
     {
         var orb = new OrbWindow(Guid.NewGuid().ToString());
-        orb.UpdateFrom(Status(source: SessionSource.OpenClaw, pid: 0));
+        orb.UpdateFrom(Status(source: source, pid: 0));
         Assert.False(EndRow(orb).IsVisible);
 
         var asked = 0;

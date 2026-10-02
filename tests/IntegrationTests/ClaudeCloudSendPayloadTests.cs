@@ -16,7 +16,8 @@ namespace ClaudeBuddy.Tests;
 // body, deliberately, so there is no captured body to paste. Each fixture below
 // is written from that shape output — the fields, their JSON types and the
 // allow-listed values the probe printed — with every id and number invented.
-// Where a status was not measured at all (409, 413) the fixture says so.
+// Where a status was not measured at all (413) the fixture says so; 409 was
+// measured later, by CB-225, and its fixture is a scrubbed capture.
 //
 // Here as well as in tests/UnitTests for the reason CLAUDE.md gives: the unit
 // suite checks each rule; this checks that the rules compose into the exchange
@@ -50,9 +51,10 @@ public class ClaudeCloudSendPayloadTests
     private const string NoVersionBody =
         """{"error":{"message":"anthropic-version: header is required","reason":"a reason","type":"invalid_request_error"},"request_id":"req_fixture_3","type":"error"}""";
 
-    // **Not measured** — the CLI binary's reading of this route. Invented body.
+    // **Measured by CB-225**: a send to a session archived moments earlier.
+    // Captured and scrubbed — the id is the fixture's, the request id invented.
     private const string InactiveBody =
-        """{"type":"error","error":{"type":"session_inactive","message":"session is not active"},"request_id":"req_fixture_4"}""";
+        """{"error":{"message":"Session session_01FixtureOnly is not active","type":"session_not_active"},"request_id":"req_fixture_4","type":"error"}""";
 
     // **Measured**, on `GET /v1/code/sessions/{id}` for a deleted session. The
     // write to one is not measured and is assumed to answer the same, which

@@ -63,9 +63,15 @@ internal static class WriteProbe
             "CB-199 write gate (aim these only at a session created for the probe):\n" +
             "  v1-session <id>  [auth]            GET  /v1/code/sessions/<id>, shape + status fields\n" +
             "  v1-events  <id>  [auth]            GET  /v1/code/sessions/<id>/events, shape only\n" +
+            "  v2-session <id>  [auth]            GET  /v2/ccr-sessions/<id>, shape + status fields (CB-225)\n" +
             "  v2-events  <id>                    GET  /v2/ccr-sessions/<id>/events via the app's own parser\n" +
             "  send <id> --throwaway [opts]       POST a user turn to .../events\n" +
             "  interrupt <id> --throwaway [opts]  POST a control_request interrupt to .../events\n" +
+            "  archive <id> --throwaway [opts]    POST {} to /v1/code/sessions/<id>/archive (CB-225)\n" +
+            "  delete <id> --throwaway [opts]     DELETE /v1/code/sessions/<id> (CB-225)\n" +
+            "  route <id> --throwaway [opts]      POST to a sub-route that does not exist (control)\n" +
+            "         --save <path>            write the raw response body to <path>, 0600, never printed\n" +
+            "         --absent-id              allow a lifecycle verb only on an id that GETs 404\n" +
             "\n" +
             "  auth:  --auth real|none|bogus   (default real; none/bogus are the negative controls)\n" +
             "  opts:  --text <s>               message text (default: a fixed probe sentence)\n" +
@@ -90,7 +96,11 @@ internal static class WriteProbe
 
         var id = args[0];
         var opts = args.Skip(1).ToArray();
-        var isWrite = verb is "send" or "interrupt";
+        // CB-225 adds the lifecycle verbs. `archive`, `delete` and `route` are
+        // writes for the guard's purposes even though `route` aims at a path
+        // nobody claims exists: a probe that guessed wrong about what a route
+        // does must not be able to guess wrong about a real session.
+        var isWrite = verb is "send" or "interrupt" or "archive" or "delete" or "route";
 
         if (isWrite && !opts.Contains("--throwaway"))
         {
@@ -139,6 +149,22 @@ internal static class WriteProbe
                 // Negative controls carry no usable token, so there is nothing
                 // to check the kind with — and nothing they send can land.
             }
+            else if (opts.Contains("--absent-id"))
+            {
+                // The negative control for a lifecycle route: the same call,
+                // real token, aimed at an id that does not exist. Allowed only
+                // once a GET on that id has just answered 404, so the write
+                // provably has nothing to land on. What it measures is whether
+                // the *route* exists — "Session ... not found" from the
+                // handler against a router-level 404 from `route`.
+                var (status, _) = await GetSessionAsync(id, token);
+                Console.WriteLine($"guard    GET on the id answered {status}");
+                if (status != 404)
+                {
+                    Console.Error.WriteLine("refusing: --absent-id needs an id the API says does not exist.");
+                    return 2;
+                }
+            }
             else
             {
                 var kind = await KindOfAsync(id, token);
@@ -163,6 +189,12 @@ internal static class WriteProbe
                 method = HttpMethod.Get;
                 path = $"{CloudRequest.CodeSessionsPath}/{Uri.EscapeDataString(id)}";
                 break;
+            case "v2-session":
+                // CB-225: the /v2 row itself, which is what the roster's Keep
+                // filter reads `session_status` off.
+                method = HttpMethod.Get;
+                path = CloudRequest.SessionPath(id);
+                break;
             case "v1-events":
                 method = HttpMethod.Get;
                 path = events + "?limit=20&sort_order=desc";
@@ -181,6 +213,27 @@ internal static class WriteProbe
                 path = events;
                 body = ClaudeCloudSend.InterruptBody(Guid.NewGuid().ToString(),
                     Value(opts, "--uuid") ?? Guid.NewGuid().ToString());
+                break;
+            case "archive":
+                // Read out of the CLI 2.1.288 binary: `tR` posts `{}` here with
+                // the same header set as a send, and counts 200 *and* 409 as
+                // archived. Measured below, not taken from the binary.
+                method = HttpMethod.Post;
+                path = $"{CloudRequest.CodeSessionsPath}/{Uri.EscapeDataString(id)}/archive";
+                body = "{}";
+                break;
+            case "delete":
+                // Nothing in the CLI binary sends this. It is the obvious REST
+                // shape, asked so that "no delete exists" is a measurement.
+                method = HttpMethod.Delete;
+                path = $"{CloudRequest.CodeSessionsPath}/{Uri.EscapeDataString(id)}";
+                break;
+            case "route":
+                // A sub-route that certainly does not exist: the router's own
+                // 404, to tell apart from a handler's "Session not found".
+                method = HttpMethod.Post;
+                path = $"{CloudRequest.CodeSessionsPath}/{Uri.EscapeDataString(id)}/cb225-no-such-route";
+                body = "{}";
                 break;
             default:
                 return 2;
@@ -236,6 +289,21 @@ internal static class WriteProbe
         {
             var text = await response.Content.ReadAsStringAsync();
             Console.WriteLine($"status   {(int)response.StatusCode}");
+            // CB-225: the raw body, to a file only the user can read, for
+            // scrubbing into a fixture. Never to the console: the body holds
+            // a title and ids, which the allow-list below exists to keep out.
+            if (Value(opts, "--save") is { } save)
+            {
+                // Created 0600, not chmodded after: a write then a chmod
+                // leaves the body readable at umask permissions in between.
+                var options = new FileStreamOptions { Mode = FileMode.Create, Access = FileAccess.Write };
+                if (!OperatingSystem.IsWindows())
+                    options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+                File.Delete(save);
+                using (var file = new StreamWriter(save, System.Text.Encoding.UTF8, options))
+                    file.Write(text);
+                Console.WriteLine($"saved    {text.Length} chars");
+            }
             Console.WriteLine($"ctype    {response.Content.Headers.ContentType?.MediaType ?? "(none)"}");
             Console.WriteLine($"cf       {(response.Headers.Contains("cf-mitigated") ? "cf-mitigated present" : "no cf-mitigated")}");
             Console.WriteLine("response:");
@@ -276,7 +344,15 @@ internal static class WriteProbe
         return 0;
     }
 
-    private static async Task<string?> KindOfAsync(string id, string token)
+    private static async Task<(int Status, string? Body)> GetSessionAsync(string id, string token)
+    {
+        using var api = new HttpCloudApi();
+        var result = await api.SendAsync(new CloudRequestContext(token, CloudRequest.SessionPath(id)),
+            CancellationToken.None);
+        return (result.Outcome.Status, result.Body);
+    }
+
+    internal static async Task<string?> KindOfAsync(string id, string token)
     {
         using var api = new HttpCloudApi();
         var result = await api.SendAsync(new CloudRequestContext(token, CloudRequest.SessionPath(id)),
