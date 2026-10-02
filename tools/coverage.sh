@@ -80,6 +80,42 @@ find tests/UiTests/bin tests/UiScreenshots/bin \
 # non-zero whenever there was one.
 RED=()
 
+# Each suite's whole output, kept (CB-239). The terminal still gets only the
+# last two lines of a suite — a green run is exactly as quiet as it was — but
+# those two lines are the summary, and on a red run the summary is the part
+# that does not say *which* tests failed. Piping straight into `tail -2` threw
+# the rest away, so a Windows run with nine red UiTests could say how many
+# and never which. The log lives beside the reports, in this checkout's own
+# $OUT, and is replaced on the next run like everything else there.
+LOGS=()
+
+# The failing test names out of one suite's log, both shapes this repo's
+# runners print: VSTest's `[xUnit.net 00:00:01.70]  <name> [FAIL]` and the
+# Microsoft Testing Platform's `failed <name> (12ms)`. A theory's name carries
+# its own parentheses, so the MTP arm takes everything up to the *last*
+# parenthesised group. `tr -d '\r'` first because dotnet on Windows writes CRLF,
+# and a trailing \r would defeat both `$` anchors in silence.
+failing_names() { # $1 = log file
+  tr -d '\r' < "$1" | sed -nE \
+    -e 's/^.*\[xUnit\.net [^]]*\][[:space:]]+(.*[^[:space:]])[[:space:]]+\[FAIL\][[:space:]]*$/\1/p' \
+    -e 's/^[[:space:]]*failed (.+) \([^()]*\)[[:space:]]*$/\1/p' | sort -u
+}
+
+# Runs one suite with its output going to $OUT/<log>.log, prints that log's
+# last two lines as the pipeline used to, and on a non-zero exit records the
+# suite as red along with where its log is.
+run_suite() { # $1 = suite name, $2 = log name, rest = the command
+  local suite="$1" log="$OUT/$2.log"
+  shift 2
+  local rc=0
+  "$@" > "$log" 2>&1 || rc=$?
+  tail -2 "$log"
+  if (( rc != 0 )); then
+    RED+=("$suite")
+    LOGS+=("$suite|$log")
+  fi
+}
+
 # A suite can be red AND have written no report (Roxanne's first Windows run:
 # UnitTests had real failures and no cobertura file, and the RED line said only
 # "tests/UnitTests"). The UI suites already say so; the two VSTest suites write
@@ -92,17 +128,15 @@ note_missing_report() { # $1 = directory under $OUT, $2 = suite name
 }
 
 echo "==> tests/UnitTests"
-dotnet test tests/UnitTests \
+run_suite tests/UnitTests unit dotnet test tests/UnitTests \
   --collect:"XPlat Code Coverage" \
-  --results-directory "$OUT/unit" \
-  | tail -2 || RED+=("tests/UnitTests")
+  --results-directory "$OUT/unit"
 note_missing_report unit tests/UnitTests
 
 echo "==> tests/IntegrationTests"
-dotnet test tests/IntegrationTests \
+run_suite tests/IntegrationTests integration dotnet test tests/IntegrationTests \
   --collect:"XPlat Code Coverage" \
-  --results-directory "$OUT/integration" \
-  | tail -2 || RED+=("tests/IntegrationTests")
+  --results-directory "$OUT/integration"
 note_missing_report integration tests/IntegrationTests
 
 # --coverage-output is relative to the test binary's own TestResults directory,
@@ -129,9 +163,8 @@ note_missing_report integration tests/IntegrationTests
 # would have concluded the suite was fine. The find/exit-1 guards below catch a
 # missing file; only `merged N` catches a present one that nobody should trust.
 echo "==> tests/UiTests"
-dotnet test tests/UiTests -- \
-  --coverage --coverage-output-format cobertura --coverage-output ui.cobertura.xml \
-  | tail -2 || RED+=("tests/UiTests")
+run_suite tests/UiTests ui dotnet test tests/UiTests -- \
+  --coverage --coverage-output-format cobertura --coverage-output ui.cobertura.xml
 
 UI_REPORT="$(find tests/UiTests/bin -name ui.cobertura.xml -print -quit)"
 if [[ -z "$UI_REPORT" ]]; then
@@ -147,9 +180,8 @@ fi
 # written to disk, most obviously. Same platform as tests/UiTests, so it
 # collects the same way.
 echo "==> tests/UiScreenshots"
-dotnet test tests/UiScreenshots -- \
-  --coverage --coverage-output-format cobertura --coverage-output shots.cobertura.xml \
-  | tail -2 || RED+=("tests/UiScreenshots")
+run_suite tests/UiScreenshots shots dotnet test tests/UiScreenshots -- \
+  --coverage --coverage-output-format cobertura --coverage-output shots.cobertura.xml
 
 SHOTS_REPORT="$(find tests/UiScreenshots/bin -name shots.cobertura.xml -print -quit)"
 if [[ -z "$SHOTS_REPORT" ]]; then
@@ -173,6 +205,17 @@ if (( ${#RED[@]} > 0 )); then
   echo >&2
   echo "!!! RED SUITES: ${RED[*]}" >&2
   echo "!!! The figure above was measured from a run with failing suites." >&2
+  for entry in ${LOGS[@]+"${LOGS[@]}"}; do
+    suite="${entry%%|*}"
+    log="${entry#*|}"
+    echo "!!! $suite failed — full log: $log" >&2
+    names="$(failing_names "$log")"
+    if [[ -n "$names" ]]; then
+      while IFS= read -r name; do echo "!!!     $name" >&2; done <<< "$names"
+    else
+      echo "!!!     (no failing test names in the log — it failed before or around the tests; read the log)" >&2
+    fi
+  done
 fi
 if (( ${#RED[@]} > 0 || MERGE_RC != 0 )); then
   exit 1
