@@ -150,7 +150,7 @@ REPORTS=()
 while IFS= read -r f; do REPORTS+=("$(native "$f")"); done < <(find "$OUT" -name '*.cobertura.xml' | sort)
 
 MERGE_RC=0
-python3 tools/merge-coverage.py "${REPORTS[@]}" "$@" || MERGE_RC=$?
+python3 tools/merge-coverage.py ${REPORTS[@]+"${REPORTS[@]}"} "$@" || MERGE_RC=$?
 
 if (( ${#RED[@]} > 0 )); then
   echo >&2
