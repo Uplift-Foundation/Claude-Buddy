@@ -190,12 +190,15 @@ public class ClaudeCloudLifecycleTests
         Assert.Equal(CloudLifecycleVerdict.Done, result.Verdict);
     }
 
+    // The 2xx is the success; a read still finding the session only makes the
+    // row less sure of itself. It never turns the delete into a refusal.
     [Fact]
-    public void TheSessionStillAnsweringIsARefusalWhateverTheDeleteSaid()
+    public void TheSessionStillAnsweringLeavesTheDeleteStandingUnconfirmed()
     {
         var result = ClaudeCloudLifecycle.ConfirmationFor(CloudOutcomes.OutcomeFor(200, "{}"));
 
-        Assert.Equal(CloudLifecycleVerdict.Refused, result.Verdict);
+        Assert.Equal(CloudLifecycleVerdict.DoneUnconfirmed, result.Verdict);
+        Assert.True(result.Succeeded);
         Assert.Equal(ClaudeCloudLifecycle.StillThereDetail, result.Detail);
     }
 
@@ -214,7 +217,7 @@ public class ClaudeCloudLifecycleTests
     }
 
     // A transport failure carries no status and may carry no detail; the row
-    // still says something rather than "couldn't confirm: ".
+    // still carries a detail saying what happened.
     [Fact]
     public void AConfirmationWithNoDetailSaysWhatTheStatusWas()
     {
@@ -291,15 +294,16 @@ public class ClaudeCloudLifecycleTests
     }
 
     [Fact]
-    public async Task ADeleteTheReadContradictsIsARefusal()
+    public async Task ADeleteTheReadContradictsIsStillASuccessJustUnconfirmed()
     {
         var api = new FakeApi(Answer(200, "{}"), Answer(200, """{"id":"session_01FixtureOnly"}"""));
 
         var result = await ClaudeCloudLifecycle.RunAsync(api, new FakeCredentials(),
             CloudLifecycleAction.Delete, Id, CancellationToken.None);
 
-        Assert.Equal(CloudLifecycleVerdict.Refused, result.Verdict);
-        Assert.Equal(ClaudeCloudLifecycle.StillThereDetail, result.Detail);
+        Assert.Equal(CloudLifecycleVerdict.DoneUnconfirmed, result.Verdict);
+        Assert.True(result.Succeeded);
+        Assert.Equal("Deleted — not yet confirmed", CloudActionText.For(CloudLifecycleAction.Delete, result));
     }
 
     // A refused delete is not followed by a confirmation read: there is
@@ -462,7 +466,7 @@ public class ClaudeCloudLifecycleTests
         Assert.Contains("cannot be restored", CloudActionText.Tip(CloudLifecycleAction.Delete), StringComparison.Ordinal);
         Assert.Equal("Deleted",
             CloudActionText.For(CloudLifecycleAction.Delete, new CloudLifecycleResult(CloudLifecycleVerdict.Done)));
-        Assert.Equal("Deleted — couldn't confirm: slow",
+        Assert.Equal("Deleted — not yet confirmed",
             CloudActionText.For(CloudLifecycleAction.Delete,
                 new CloudLifecycleResult(CloudLifecycleVerdict.DoneUnconfirmed, "slow")));
         Assert.Equal("Couldn't delete: why",

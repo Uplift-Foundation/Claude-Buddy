@@ -3030,6 +3030,16 @@ namespace ClaudeBuddy
         private DispatcherTimer? _cloudDisarm;
         private CloudLifecycleAction? _cloudArmed;
 
+        // What each row said when its action succeeded. **A success is never
+        // released.** The orb is about to go — its session is tombstoned — but
+        // until the next scan takes it the menu can still be opened, and a
+        // row restored to its plain, enabled words would offer to archive or
+        // delete again what has just been archived or deleted. Hana found the
+        // way there: a success answered after the menu had closed went through
+        // the release path and came back enabled. One orb is one session, so
+        // nothing ever needs to clear this.
+        private readonly Dictionary<CloudLifecycleAction, string> _cloudDone = new();
+
         internal CloudLifecycleAction? CloudArmed => _cloudArmed;
 
         private MenuItem CloudRow(CloudLifecycleAction action) =>
@@ -3038,7 +3048,12 @@ namespace ClaudeBuddy
         internal void RestoreCloudRows()
         {
             foreach (var action in new[] { CloudLifecycleAction.Archive, CloudLifecycleAction.Delete })
-                SetRow(CloudRow(action), CloudActionText.Header(action), CloudActionText.Tip(action), enabled: true);
+            {
+                if (_cloudDone.TryGetValue(action, out var done))
+                    SetRow(CloudRow(action), done, done, enabled: false);
+                else
+                    SetRow(CloudRow(action), CloudActionText.Header(action), CloudActionText.Tip(action), enabled: true);
+            }
         }
 
         internal async void ArchiveCloud_Click(object? sender, RoutedEventArgs e) =>
@@ -3096,15 +3111,18 @@ namespace ClaudeBuddy
 
             _cloudBusy = false;
 
+            // A success stays disabled, on this pass and every later restore:
+            // the orb is about to go, and the row must not offer to do again
+            // what has just been done.
+            var text = CloudActionText.For(action, result);
+            if (result.Succeeded) _cloudDone[action] = text;
+
             if (_cloudReleaseWhenDone)
             {
                 ReleaseCloudRows();
                 return;
             }
 
-            // A success stays disabled: the orb is about to go, and the row
-            // must not offer to do again what has just been done.
-            var text = CloudActionText.For(action, result);
             SetRow(row, text, text, enabled: !result.Succeeded);
         }
 

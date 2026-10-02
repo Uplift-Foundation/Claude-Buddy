@@ -187,7 +187,7 @@ public class OrbWindowCloudActionsTests
         await orb.CloudActionClickAsync(CloudLifecycleAction.Delete);
         await orb.CloudActionClickAsync(CloudLifecycleAction.Delete);
 
-        Assert.Equal("Deleted — couldn't confirm: the endpoint answered 503", Delete(orb).Header);
+        Assert.Equal("Deleted — not yet confirmed", Delete(orb).Header);
         Assert.False(Delete(orb).IsEnabled);
     }
 
@@ -365,6 +365,73 @@ public class OrbWindowCloudActionsTests
         // Released, not held: the next open starts clean.
         await orb.CloudActionClickAsync(CloudLifecycleAction.Archive);
         Assert.Equal(CloudLifecycleAction.Archive, orb.CloudArmed);
+    }
+
+    // Hana's repro: the request is out, the menu closes, and the answer is a
+    // success. The row must not come back enabled — reopening the menu before
+    // the scan takes the orb would otherwise offer the same action again. A
+    // refusal, the control, does come back usable.
+    [AvaloniaTheory]
+    [InlineData(CloudLifecycleAction.Archive, true)]
+    [InlineData(CloudLifecycleAction.Delete, true)]
+    [InlineData(CloudLifecycleAction.Archive, false)]
+    [InlineData(CloudLifecycleAction.Delete, false)]
+    public async Task AnAnswerAfterTheMenuClosedKeepsASuccessDisabled(CloudLifecycleAction action, bool succeeded)
+    {
+        using var scope = new Scope();
+        var answer = new TaskCompletionSource<CloudLifecycleResult>();
+        var (orb, calls) = OrbWith(_ => answer.Task);
+        var row = action == CloudLifecycleAction.Archive ? Archive(orb) : Delete(orb);
+
+        await orb.CloudActionClickAsync(action);
+        var pending = orb.CloudActionClickAsync(action);
+        orb.SessionMenu_Closed(null, new RoutedEventArgs());
+
+        answer.SetResult(succeeded
+            ? new CloudLifecycleResult(CloudLifecycleVerdict.Done)
+            : new CloudLifecycleResult(CloudLifecycleVerdict.Refused, "no"));
+        await pending;
+
+        // The menu reopening and the scan both restore the rows.
+        orb.UpdateFrom(Cloud());
+        orb.SessionMenu_Closed(null, new RoutedEventArgs());
+
+        await orb.CloudActionClickAsync(action);
+        await orb.CloudActionClickAsync(action);
+
+        if (succeeded)
+        {
+            Assert.Equal(action == CloudLifecycleAction.Archive ? "Archived" : "Deleted", row.Header);
+            Assert.False(row.IsEnabled);
+            Assert.Single(calls);
+        }
+        else
+        {
+            Assert.True(row.IsEnabled);
+            Assert.Equal(2, calls.Count);
+        }
+    }
+
+    // A success shown in the open menu survives the menu closing and the
+    // scan, too — the same rule from the other direction.
+    [AvaloniaFact]
+    public async Task ASuccessSurvivesTheMenuClosingAndTheScan()
+    {
+        using var scope = new Scope();
+        var (orb, calls) = OrbWith();
+
+        await orb.CloudActionClickAsync(CloudLifecycleAction.Archive);
+        await orb.CloudActionClickAsync(CloudLifecycleAction.Archive);
+        orb.SessionMenu_Closed(null, new RoutedEventArgs());
+        orb.UpdateFrom(Cloud());
+
+        Assert.Equal("Archived", Archive(orb).Header);
+        Assert.False(Archive(orb).IsEnabled);
+
+        // Delete is still offered: deleting an archived session is real.
+        Assert.Equal("Delete this session…", Delete(orb).Header);
+        Assert.True(Delete(orb).IsEnabled);
+        Assert.Single(calls);
     }
 
     // The production seam, reached without a socket: an orb whose session the

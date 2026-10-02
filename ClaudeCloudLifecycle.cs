@@ -44,9 +44,11 @@ namespace ClaudeBuddy
         Done,
 
         // The endpoint answered 2xx to a delete, and the read that should have
-        // confirmed it could not be made or did not answer. The 2xx came from a
-        // handler — a router does not 200 — so the session is treated as gone;
-        // the row says it could not be checked rather than claiming it was.
+        // confirmed it did not — it failed, timed out, met the router, or found
+        // the session still answering. **Still a success.** The 2xx is the
+        // answer and came from a handler (a router does not 200); the read
+        // decides only how sure the row sounds, never whether the orb goes or
+        // the row is offered again. The next roster read is the authority.
         DoneUnconfirmed,
 
         // Anything else. Detail says what, in the endpoint's terms.
@@ -70,7 +72,7 @@ namespace ClaudeBuddy
 
         internal const string SessionNotFoundDetail = "not found — the session may already be gone";
         internal const string RouteNotFoundDetail = "not found — the endpoint did not recognise the request";
-        internal const string StillThereDetail = "the endpoint said it was deleted, but the session is still there";
+        internal const string StillThereDetail = "the session still answered a read straight after the delete";
         internal const string NoCredentialDetail = "no usable Claude Code login for this session's account";
 
         // Null for an id that is not well formed, which is a refusal rather
@@ -115,20 +117,23 @@ namespace ClaudeBuddy
 
         // The verdict on the read that follows a delete's 2xx.
         //
-        // The handler's JSON 404 is the confirmation. A 200 is the session
-        // still being there, which is a refusal however the delete answered.
-        // Anything else — the read failed, timed out, was refused — leaves the
-        // 2xx standing and says it could not be checked.
+        // The handler's JSON 404 is the confirmation. Anything else leaves
+        // the 2xx standing as DoneUnconfirmed — **including a 200**, the session
+        // still answering. Measured twice, a read made the instant the DELETE
+        // returned already answered 404; two samples are not a property, so
+        // nothing here depends on it. Had a 200 been a refusal, a read that
+        // merely lagged would have kept the orb and re-offered a delete that
+        // had happened (Wren's decision, CB-225). The detail says which case it
+        // was, for whoever reads the result.
         internal static CloudLifecycleResult ConfirmationFor(CloudOutcome outcome)
         {
             if (outcome.SessionNotFound)
                 return new CloudLifecycleResult(CloudLifecycleVerdict.Done);
 
-            if (outcome.Kind == CloudOutcomeKind.Ok)
-                return new CloudLifecycleResult(CloudLifecycleVerdict.Refused, StillThereDetail);
-
             return new CloudLifecycleResult(CloudLifecycleVerdict.DoneUnconfirmed,
-                outcome.Detail ?? $"the endpoint answered {outcome.Status}");
+                outcome.Kind == CloudOutcomeKind.Ok
+                    ? StillThereDetail
+                    : outcome.Detail ?? $"the endpoint answered {outcome.Status}");
         }
 
         // The whole exchange for one action on one session.
@@ -237,7 +242,7 @@ namespace ClaudeBuddy
             return result.Verdict switch
             {
                 CloudLifecycleVerdict.Done => action == CloudLifecycleAction.Archive ? "Archived" : "Deleted",
-                CloudLifecycleVerdict.DoneUnconfirmed => $"Deleted — couldn't confirm: {result.Detail}",
+                CloudLifecycleVerdict.DoneUnconfirmed => "Deleted — not yet confirmed",
                 _ => $"Couldn't {verb}: {result.Detail}",
             };
         }

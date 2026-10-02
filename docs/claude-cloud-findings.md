@@ -143,8 +143,11 @@ The fleet view's `archiveRemote` calls `archiveRemoteSession`, which posts `{}` 
 | `DELETE` with no `anthropic-version` / bogus Bearer / no `Authorization` | 400 / 401 OAuth / 401 "Authentication failed", as for archive |
 | after delete, `GET /v1/code/sessions/<id>` | 404 JSON, `not_found_error`, "Session <id> not found" |
 | after delete, `/v2/…/events` | 404 → the shipped `SessionGone` |
+| the confirming `GET` made the instant `DELETE` returned, through the app's own `RunAsync` and `HttpCloudApi` (`lifecycle-run`) | 404 `not_found_error`, both times it was run (+347 ms and +259 ms from the start of the exchange, no delay between the two). So no read-after-delete lag was seen — a two-sample observation, not a property, and the app does not depend on it: the 2xx DELETE is the success, and a read that still finds the session only changes the row to "Deleted — not yet confirmed" |
 
 **The controls that make the two routes real.** A nonsense sub-route (`…/<id>/cb225-no-such-route`) on the same live id with the same token answers **404 `text/plain` "404 page not found"** — the router. Archive and DELETE aimed at an id whose GET has just answered 404 answer **404 JSON `not_found_error`** — a handler. So both routes exist as handlers, and a 404 from either comes in two kinds that mean different things: a JSON `not_found_error` is "no such session", and a plain-text 404 is "no such route". `CloudOutcomes.OutcomeFor` cannot tell those apart and reads both as `SessionGone`, which is why the lifecycle code (`ClaudeCloudLifecycle`) does not use a 404 as evidence of success.
+
+**What the app is handed is not what the endpoint sent.** HttpCloudApi returns a body only on a 2xx (`HttpCloudApi.ResultFor`), so the handler-or-router question has to be answered where the body is still in hand — `OutcomeFor` records it as `CloudOutcome.SessionNotFound` — and carried on the outcome. The first version read the body in the lifecycle code, every 404 arrived there as null, and every successful delete said "couldn't confirm"; `lifecycle-run`, which drives the shipped code through the shipped client, reproduced that before the fix and showed "Deleted" after it.
 
 An invented id is not a usable control: the API validates tagged ids before looking them up and answers **400** "invalid session ID: must be a cse_… or session_… tagged ID". The probe's `--absent-id` therefore accepts only an id whose GET answered 404 — a real id that has been deleted.
 
@@ -260,6 +263,7 @@ dotnet run --project tools/claude-cloud-probe -- read --keys-only
 dotnet run --project tools/claude-cloud-probe -- list --shape
 dotnet run --project tools/claude-cloud-probe -- roster
 tools/claude-cloud-probe/lifecycle.sh <throwaway id>   # CB-225: archives and DELETES it
+dotnet run --project tools/claude-cloud-probe -- lifecycle-run <throwaway id> archive|delete --throwaway
 ```
 
 It references the app rather than building its own request, so its answer is the app's answer rather than a second opinion. `stamp` prompts for nothing. `read` prints a length and a four-character prefix and has no mode that prints a token. `list --shape` prints field names and JSON types with every value stripped, so a fixture can be designed without a single session title. `roster` prints the `environment_kind` histogram and the status sentence — **the cheapest available check that the filter still matches something**, and much cheaper than diagnosing it from a screenshot of missing orbs.

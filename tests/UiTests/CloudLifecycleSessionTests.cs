@@ -206,6 +206,23 @@ public class CloudLifecycleSessionTests
         Assert.Empty(ClaudeCloudSessions.Snapshot());
     }
 
+    // Wren's rule, pinned: the 2xx DELETE is the success. A confirming read
+    // that still finds the session — a lag nobody has measured, but which
+    // nothing may depend on not happening — still takes the orb.
+    [Fact]
+    public async Task ADeleteWhoseReadStillFindsTheSessionStillTakesTheOrb()
+    {
+        var api = new FakeApi(c => c.Method is null ? Answer(200, "{}") : Answer(200, "{}"));
+        using var scope = new Scope(api, sessions: Session("session_01abc"));
+
+        var result = await ClaudeCloudSessions.RunLifecycleAsync(CloudLifecycleAction.Delete,
+            "cloud:session_01abc", CancellationToken.None);
+
+        Assert.Equal(CloudLifecycleVerdict.DoneUnconfirmed, result.Verdict);
+        Assert.True(ClaudeCloudSessions.IsTombstoned("session_01abc"));
+        Assert.Empty(ClaudeCloudSessions.Snapshot());
+    }
+
     [Fact]
     public async Task ARefusalLeavesTheOrbWhereItIs()
     {
