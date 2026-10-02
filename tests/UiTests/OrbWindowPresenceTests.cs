@@ -1,6 +1,8 @@
 using System;
 using System.Collections;
 using System.Reflection;
+using System.Collections.Generic;
+using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Controls.Shapes;
 using Avalonia.Headless;
@@ -486,6 +488,171 @@ public class OrbWindowPresenceTests
         var item = orb.FindControl<MenuItem>("EndSessionItem")!;
         Assert.True(item.IsEnabled);
         Assert.Equal("End this session", item.Header);
+    }
+
+    // --- CB-228: the End row is read off the UI thread ----------------------
+    //
+    // Driven through RefreshEndSessionGuardAsync rather than a real right-click,
+    // for the reason the two tests above drive ApplyEndSessionGuard directly: a
+    // ContextMenu's Opening needs a shown window and a working popup. The read is
+    // a TaskCompletionSource, so each case decides exactly when — and in what
+    // order — the answers arrive, which is what a real WMI read never lets a
+    // test decide.
+
+    private static MenuItem EndRow(OrbWindow orb) => orb.FindControl<MenuItem>("EndSessionItem")!;
+
+    // The defect itself. The menu used to wait for the read before it could
+    // appear; now the row is drawn at once, refused and saying it is checking,
+    // while the read is still outstanding — which is only possible because
+    // nothing on this thread is waiting for it.
+    [AvaloniaFact]
+    public async Task TheRowSaysItIsCheckingUntilTheReadAnswers()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        orb.UpdateFrom(Status());
+
+        var answer = new TaskCompletionSource<SessionDependents.Verdict>();
+        var asked = new List<string>();
+        var refresh = orb.RefreshEndSessionGuardAsync(id =>
+        {
+            asked.Add(id);
+            return answer.Task;
+        });
+
+        Assert.False(refresh.IsCompleted);
+        Assert.Equal(new[] { orb.SessionId }, asked);
+        Assert.False(EndRow(orb).IsEnabled);
+        Assert.Equal(SessionDependents.CheckingHeader, EndRow(orb).Header);
+        Assert.Equal(SessionDependents.CheckingTip, ToolTip.GetTip(EndRow(orb)));
+
+        answer.SetResult(SessionDependents.Nothing);
+        await refresh;
+
+        Assert.True(EndRow(orb).IsEnabled);
+        Assert.Equal("End this session", EndRow(orb).Header);
+    }
+
+    // And when the answer is the husk, the row turns into the refusal with its
+    // count — the CB-26 sentence, arriving late rather than not at all.
+    [AvaloniaFact]
+    public async Task ALateRefusalStillReachesTheRow()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        orb.UpdateFrom(Status());
+
+        var answer = new TaskCompletionSource<SessionDependents.Verdict>();
+        var refresh = orb.RefreshEndSessionGuardAsync(_ => answer.Task);
+
+        answer.SetResult(new SessionDependents.Verdict(DaemonBelow: true, JobsBelow: 3));
+        await refresh;
+
+        Assert.False(EndRow(orb).IsEnabled);
+        Assert.Equal("Can't end this: it is your view of 3 background jobs", EndRow(orb).Header);
+    }
+
+    // Two opens, the second answered first: the row shows the newest open's
+    // answer, and the older read finishing afterwards changes nothing.
+    [AvaloniaFact]
+    public async Task AnOlderReadFinishingLastDoesNotOverwriteTheNewerAnswer()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        orb.UpdateFrom(Status());
+
+        var older = new TaskCompletionSource<SessionDependents.Verdict>();
+        var newer = new TaskCompletionSource<SessionDependents.Verdict>();
+        var first = orb.RefreshEndSessionGuardAsync(_ => older.Task);
+        var second = orb.RefreshEndSessionGuardAsync(_ => newer.Task);
+
+        newer.SetResult(SessionDependents.Nothing);
+        await second;
+        older.SetResult(new SessionDependents.Verdict(DaemonBelow: true, JobsBelow: 1));
+        await first;
+
+        Assert.True(EndRow(orb).IsEnabled);
+        Assert.Equal("End this session", EndRow(orb).Header);
+    }
+
+    // A read that finishes after the menu has closed writes nothing, and the
+    // next scan is free to put the plain wording back.
+    [AvaloniaFact]
+    public async Task AReadFinishingAfterTheMenuClosedWritesNothing()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        orb.UpdateFrom(Status());
+
+        var answer = new TaskCompletionSource<SessionDependents.Verdict>();
+        var refresh = orb.RefreshEndSessionGuardAsync(_ => answer.Task);
+
+        orb.SessionMenu_Closed(null, new Avalonia.Interactivity.RoutedEventArgs());
+        answer.SetResult(new SessionDependents.Verdict(DaemonBelow: true, JobsBelow: 2));
+        await refresh;
+
+        Assert.Equal(SessionDependents.CheckingHeader, EndRow(orb).Header);
+
+        orb.UpdateFrom(Status());
+
+        Assert.True(EndRow(orb).IsEnabled);
+        Assert.Equal("End this session", EndRow(orb).Header);
+    }
+
+    // The same-kind defect on this branch: a scan landing while the menu is open
+    // used to reset a husk's row to an enabled "End this session" under the
+    // cursor. While the menu is open the answer is held; once it closes, the
+    // reset applies again — ARefusalDoesNotOutliveTheThingItWasAbout's rule.
+    [AvaloniaFact]
+    public async Task AScanWhileTheMenuIsOpenDoesNotOverwriteTheRefusal()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        orb.UpdateFrom(Status());
+
+        await orb.RefreshEndSessionGuardAsync(
+            _ => Task.FromResult(new SessionDependents.Verdict(DaemonBelow: true, JobsBelow: 1)));
+
+        orb.UpdateFrom(Status());
+
+        Assert.False(EndRow(orb).IsEnabled);
+        Assert.Equal("Can't end this: it is your view of 1 background job", EndRow(orb).Header);
+
+        orb.SessionMenu_Closed(null, new Avalonia.Interactivity.RoutedEventArgs());
+        orb.UpdateFrom(Status());
+
+        Assert.True(EndRow(orb).IsEnabled);
+        Assert.Equal("End this session", EndRow(orb).Header);
+    }
+
+    // A read that fails answers Nothing — fail open, as SessionDependents.Nothing
+    // argues — rather than leaving the row stuck on "Checking" for good.
+    [AvaloniaFact]
+    public async Task AReadThatFailsLeavesTheRowUsable()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        orb.UpdateFrom(Status());
+
+        await orb.RefreshEndSessionGuardAsync(
+            _ => Task.FromException<SessionDependents.Verdict>(new InvalidOperationException("no WMI")));
+
+        Assert.True(EndRow(orb).IsEnabled);
+        Assert.Equal("End this session", EndRow(orb).Header);
+    }
+
+    // An orb whose row is not offered is not asked about at all: a gateway
+    // conversation has no local pid, and the read would only answer Nothing.
+    [AvaloniaFact]
+    public async Task ARowThatIsNotOfferedIsNotChecked()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        orb.UpdateFrom(Status(source: SessionSource.OpenClaw, pid: 0));
+        Assert.False(EndRow(orb).IsVisible);
+
+        var asked = 0;
+        await orb.RefreshEndSessionGuardAsync(_ =>
+        {
+            asked++;
+            return Task.FromResult(SessionDependents.Nothing);
+        });
+
+        Assert.Equal(0, asked);
+        Assert.NotEqual(SessionDependents.CheckingHeader, EndRow(orb).Header);
     }
 
     [AvaloniaFact]

@@ -4179,24 +4179,59 @@ namespace ClaudeBuddy
         // the same shape ResetIdleItem already uses for a session it cannot
         // serve. This guard is what makes that row's promise true, because a
         // menu can be read from a snapshot taken a moment before the click.
-        public void EndSession(string sessionId)
+        //
+        // The status is read here, on the UI thread that owns _statuses, and
+        // everything after it runs on a pool thread (CB-228). Both halves of
+        // what follows read the machine: the guard is a full process-table read
+        // — a WMI query on Windows, measured at 218-273 ms on the Windows PC —
+        // and Windows' tree kill walks the table again. Neither belongs on the
+        // thread that draws every orb. The guard moves with the kill rather
+        // than staying behind on the UI thread, because the order is the whole
+        // point of it: ask, then refuse or act, on one reading.
+        //
+        // Returned so a test can wait for the outcome; the click handler
+        // discards it, since the orb going away on the next scan is the only
+        // feedback this gesture has ever had.
+        public Task EndSession(string sessionId)
         {
-            if (!_statuses.TryGetValue(sessionId, out var status)) return;
-            if (!SessionPresence.CanEndSession(status)) return;
+            if (!_statuses.TryGetValue(sessionId, out var status)) return Task.CompletedTask;
+            if (!SessionPresence.CanEndSession(status)) return Task.CompletedTask;
 
-            var dependents = _dependents(status.SessionPid);
-            if (SessionDependents.BlocksTermination(dependents)) return;
+            var pid = status.SessionPid;
+            var read = _dependents;
 
-            SessionTerminator.Terminate(status.SessionPid, dependents);
+            return Task.Run(() =>
+            {
+                var dependents = read(pid);
+                if (SessionDependents.BlocksTermination(dependents)) return;
+
+                SessionTerminator.Terminate(pid, dependents);
+            });
         }
 
         // What the orb's menu asks before it draws "End this session", so the
-        // row and this method's refusal come from one reading of the machine
-        // rather than two. See OrbWindow.SessionMenu_Opening.
-        internal SessionDependents.Verdict DependentsOf(string sessionId) =>
-            _statuses.TryGetValue(sessionId, out var status) && SessionPresence.CanEndSession(status)
-                ? _dependents(status.SessionPid)
-                : SessionDependents.Nothing;
+        // row and EndSession's refusal apply one rule to the same machine. See
+        // OrbWindow.RefreshEndSessionGuardAsync.
+        //
+        // Asynchronous because the answer is a process-table read (CB-228): the
+        // pid is looked up here on the UI thread and the read itself runs on a
+        // pool thread, so a right-click never waits on WMI. There is
+        // deliberately no synchronous version beside it — one would be the
+        // easy thing for the next caller on the UI thread to reach for.
+        //
+        // A session the menu does not offer the row for is answered without a
+        // read, and without a thread hop, so the cost a gateway orb's menu
+        // pays is nothing at all.
+        internal Task<SessionDependents.Verdict> DependentsOfAsync(string sessionId)
+        {
+            if (!_statuses.TryGetValue(sessionId, out var status) || !SessionPresence.CanEndSession(status))
+                return Task.FromResult(SessionDependents.Nothing);
+
+            var pid = status.SessionPid;
+            var read = _dependents;
+
+            return Task.Run(() => read(pid));
+        }
 
         public void ResetAllSessionsToIdle()
         {

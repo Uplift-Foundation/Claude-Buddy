@@ -446,7 +446,11 @@ namespace ClaudeBuddy
             // ordinary — a stale sentence being the one failure mode a menu
             // written at open-time can still have. SessionMenu_Opening puts the
             // real answer back a moment before anyone can read it.
-            ApplyEndSessionGuard(SessionDependents.Nothing);
+            //
+            // Except while the menu is open (CB-228): the answer on screen then
+            // is the one the user is reading, and RefreshEndSessionGuardAsync
+            // owns it until SessionMenu_Closed lets go.
+            if (!_endGuardHeld) ApplyEndSessionGuard(SessionDependents.Nothing);
             var resetIdleExplanation = status.Source switch
             {
                 SessionSource.OpenClaw => (
@@ -2838,7 +2842,7 @@ namespace ClaudeBuddy
 
         internal void EndSession_Click(object? sender, RoutedEventArgs e)
         {
-            SessionManager.Instance?.EndSession(SessionId);
+            _ = SessionManager.Instance?.EndSession(SessionId);
         }
 
         // --- CB-170: an OpenClaw conversation's Interrupt and End rows -------
@@ -2978,6 +2982,11 @@ namespace ClaudeBuddy
         // its answer releases them when it lands.
         internal void SessionMenu_Closed(object? sender, RoutedEventArgs e)
         {
+            // CB-228: an End-row read still in flight writes nothing now, and
+            // the next scan's UpdateFrom is free to put the plain wording back.
+            _endGuardRequests.Retire();
+            _endGuardHeld = false;
+
             if (_openClawBusy)
             {
                 _openClawReleaseWhenDone = true;
@@ -3042,12 +3051,12 @@ namespace ClaudeBuddy
         // Excluded from coverage: reads the live process table by way of
         // SessionManager.Instance, which this suite never sets — the same reason
         // TryOpenRemoteChat below carries the attribute. What it decides is
-        // ApplyEndSessionGuard, which is internal and driven directly.
+        // RefreshEndSessionGuardAsync, which is internal and driven directly.
         [ExcludeFromCodeCoverage]
         internal void SessionMenu_Opening(object? sender, System.ComponentModel.CancelEventArgs e)
         {
             // Ahead of the manager-null guard below, and unconditionally —
-            // the Sound submenus have nothing to do with DependentsOf and
+            // the Sound submenus have nothing to do with DependentsOfAsync and
             // should still populate for a test or a standalone window that
             // never made a SessionManager current.
             RebuildSoundSubmenus();
@@ -3056,8 +3065,64 @@ namespace ClaudeBuddy
             var manager = SessionManager.Instance;
             if (manager is null) return;
 
-            ApplyEndSessionGuard(manager.DependentsOf(SessionId));
+            _ = RefreshEndSessionGuardAsync(manager.DependentsOfAsync);
         }
+
+        // The End row's answer, read off the UI thread (CB-228).
+        //
+        // This used to be a synchronous call from the Opening handler, and on
+        // Windows the read under it is a WMI query over the whole process
+        // table — 218-273 ms per read on the Windows PC, which the menu waited
+        // for before it appeared. Now the menu opens straight away with the row
+        // disabled and saying it is checking (SessionDependents.CheckingHeader
+        // has why it starts refused rather than plain), and the answer replaces
+        // that when it arrives. The continuation after the await is back on the
+        // UI thread, so the row is only ever touched there.
+        //
+        // Asked only when the row is offered: an orb whose row is hidden
+        // (gateway, remote, pid-less) has nothing to check, and the manager
+        // would answer Nothing without reading anyway.
+        //
+        // A read that throws answers Nothing, the same fail-open direction
+        // SessionDependents.Nothing documents for a read that could not be
+        // made: losing "End this session" from a menu because one read failed
+        // breaks a working feature, and EndSession asks again before acting.
+        //
+        // Held while the menu is open, so UpdateFrom's reset to the plain
+        // wording — which runs for this orb every scan — cannot overwrite the
+        // answer the user is reading. Before this, a scan landing while the
+        // menu was open put a husk's row back to an enabled "End this session"
+        // under the cursor; the click was still refused, but the row had stopped
+        // telling the truth about it.
+        internal async Task RefreshEndSessionGuardAsync(
+            Func<string, Task<SessionDependents.Verdict>> read)
+        {
+            if (!EndSessionItem.IsVisible) return;
+
+            var ticket = _endGuardRequests.Begin();
+            _endGuardHeld = true;
+
+            EndSessionItem.IsEnabled = false;
+            EndSessionItem.Header = SessionDependents.CheckingHeader;
+            ToolTip.SetTip(EndSessionItem, SessionDependents.CheckingTip);
+
+            SessionDependents.Verdict verdict;
+            try
+            {
+                verdict = await read(SessionId);
+            }
+            catch
+            {
+                verdict = SessionDependents.Nothing;
+            }
+
+            if (!_endGuardRequests.IsCurrent(ticket)) return;
+
+            ApplyEndSessionGuard(verdict);
+        }
+
+        private readonly SessionDependents.GuardRequests _endGuardRequests = new();
+        private bool _endGuardHeld;
 
         // internal so a test can drive it directly rather than through the
         // real ContextMenu.Opening event, which needs a shown window with a

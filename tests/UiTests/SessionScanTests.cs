@@ -2595,7 +2595,7 @@ public class SessionScanTests
     }
 
     [AvaloniaFact]
-    public void EndingASessionRefusesEveryShapeItCannotEnd()
+    public async Task EndingASessionRefusesEveryShapeItCannotEnd()
     {
         // The one irreversible thing in the app, so what is asserted here is the
         // refusals. An id with no status at all, and a session with no pid
@@ -2611,13 +2611,13 @@ public class SessionScanTests
         statuses["pidless"] = new SessionStatus { Source = SessionSource.ClaudeCode, SessionPid = 0 };
         statuses["gateway"] = new SessionStatus { Source = SessionSource.OpenClaw, SessionPid = 4321 };
 
-        manager.EndSession("never-heard-of-it");
-        manager.EndSession("pidless");
-        manager.EndSession("gateway");
+        await manager.EndSession("never-heard-of-it");
+        await manager.EndSession("pidless");
+        await manager.EndSession("gateway");
     }
 
     [AvaloniaFact]
-    public void EndingASessionSignalsThePidTheStatusNames()
+    public async Task EndingASessionSignalsThePidTheStatusNames()
     {
         // The one path that does reach SessionTerminator, driven with a pid
         // nothing can be behind: 2147483646 is far above any platform's pid_max,
@@ -2642,7 +2642,7 @@ public class SessionScanTests
             SessionPid = NeverAllocatedPid,
         };
 
-        manager.EndSession("ends");
+        await manager.EndSession("ends");
 
         // Nothing is removed from screen by the call itself — the orb goes when
         // the next scan sees the pid stop answering, which is the same path any
@@ -2661,14 +2661,23 @@ public class SessionScanTests
     // makes the case constructible at all: asking the real process table would
     // be asking about whichever daemon happens to be running beside the suite.
     [AvaloniaFact]
-    public void EndingASessionThatIsHostingTheDaemonIsRefused()
+    public async Task EndingASessionThatIsHostingTheDaemonIsRefused()
     {
         using var scratch = new Scratch();
 
+        // Which thread each read ran on, by managed id rather than by asking
+        // Dispatcher.UIThread from the pool — CB-183 is what reading that
+        // property off a stray thread once cost this suite.
+        var uiThread = Environment.CurrentManagedThreadId;
         var asked = new List<int>();
+        var askedOn = new List<int>();
         var manager = Manager(scratch, () => Listing(), dependents: pid =>
         {
-            asked.Add(pid);
+            lock (asked)
+            {
+                asked.Add(pid);
+                askedOn.Add(Environment.CurrentManagedThreadId);
+            }
             return new SessionDependents.Verdict(DaemonBelow: true, JobsBelow: 3);
         });
 
@@ -2682,7 +2691,7 @@ public class SessionScanTests
             SessionPid = NeverAllocatedPid,
         };
 
-        manager.EndSession("husk");
+        await manager.EndSession("husk");
 
         // Asked about the session's own pid, and only that one — the whole
         // point of the rule is that this pid is not the ordinary case, so a
@@ -2690,18 +2699,24 @@ public class SessionScanTests
         // a different question correctly.
         Assert.Equal(new[] { NeverAllocatedPid }, asked);
 
-        // And the menu row for it says so, from the same reading.
-        var verdict = manager.DependentsOf("husk");
+        // And the menu row for it says so, from the same rule.
+        var verdict = await manager.DependentsOfAsync("husk");
         Assert.True(SessionDependents.BlocksTermination(verdict));
         Assert.Equal("Can't end this: it is your view of 3 background jobs",
             SessionDependents.Explain(verdict));
+
+        // CB-228: neither read ran on the UI thread. On Windows each is a WMI
+        // query over the whole process table, 218-273 ms measured, and both the
+        // right-click and the End click used to wait for it here.
+        Assert.Equal(2, askedOn.Count);
+        Assert.DoesNotContain(uiThread, askedOn);
     }
 
     // The other half of the acceptance, and the half the guard is most likely to
     // break: an ordinary session with nothing underneath it still reaches the
     // terminator exactly as it did before.
     [AvaloniaFact]
-    public void EndingAnOrdinarySessionStillAsksAndStillProceeds()
+    public async Task EndingAnOrdinarySessionStillAsksAndStillProceeds()
     {
         using var scratch = new Scratch();
 
@@ -2722,11 +2737,11 @@ public class SessionScanTests
             SessionPid = NeverAllocatedPid,
         };
 
-        manager.EndSession("ordinary");
+        await manager.EndSession("ordinary");
 
         Assert.Equal(new[] { NeverAllocatedPid }, asked);
         Assert.Equal("End this session",
-            SessionDependents.Explain(manager.DependentsOf("ordinary")));
+            SessionDependents.Explain(await manager.DependentsOfAsync("ordinary")));
     }
 
     // A session the menu would never offer the row for is not asked about at
@@ -2734,7 +2749,7 @@ public class SessionScanTests
     // process table every time a gateway orb's menu opens, for a row that is
     // not on it.
     [AvaloniaFact]
-    public void ASessionThatCannotBeEndedIsNotAskedWhatIsUnderneathIt()
+    public async Task ASessionThatCannotBeEndedIsNotAskedWhatIsUnderneathIt()
     {
         using var scratch = new Scratch();
 
@@ -2752,12 +2767,12 @@ public class SessionScanTests
         statuses["pidless"] = new SessionStatus { Source = SessionSource.ClaudeCode, SessionPid = 0 };
         statuses["gateway"] = new SessionStatus { Source = SessionSource.OpenClaw, SessionPid = 4321 };
 
-        Assert.Equal(SessionDependents.Nothing, manager.DependentsOf("pidless"));
-        Assert.Equal(SessionDependents.Nothing, manager.DependentsOf("gateway"));
-        Assert.Equal(SessionDependents.Nothing, manager.DependentsOf("never-heard-of-it"));
+        Assert.Equal(SessionDependents.Nothing, await manager.DependentsOfAsync("pidless"));
+        Assert.Equal(SessionDependents.Nothing, await manager.DependentsOfAsync("gateway"));
+        Assert.Equal(SessionDependents.Nothing, await manager.DependentsOfAsync("never-heard-of-it"));
 
-        manager.EndSession("pidless");
-        manager.EndSession("gateway");
+        await manager.EndSession("pidless");
+        await manager.EndSession("gateway");
 
         Assert.Equal(0, asked);
     }

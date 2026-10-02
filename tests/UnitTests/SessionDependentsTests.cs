@@ -425,4 +425,52 @@ public class SessionDependentsTests
         Assert.True(SessionDependents.BlocksTermination(verdict));
         Assert.Equal(1, verdict.JobsBelow);
     }
+
+    // --- which read may write to the row (CB-228) ---------------------------
+
+    // The newest read wins, whatever order the reads finish in. A second menu
+    // open inside one WMI read's quarter-second can hit the two-second cache
+    // and answer first; the slower, older read must then write nothing.
+    [Fact]
+    public void OnlyTheNewestReadMayAnswer()
+    {
+        var requests = new SessionDependents.GuardRequests();
+
+        var first = requests.Begin();
+        Assert.True(requests.IsCurrent(first));
+
+        var second = requests.Begin();
+        Assert.True(requests.IsCurrent(second));
+        Assert.False(requests.IsCurrent(first));
+    }
+
+    // Closing the menu retires the read in flight, so an answer arriving after
+    // the menu has gone writes nothing — and the next open starts a ticket that
+    // is current again, rather than one retired along with the last.
+    [Fact]
+    public void ClosingTheMenuRetiresTheReadInFlight()
+    {
+        var requests = new SessionDependents.GuardRequests();
+
+        var inFlight = requests.Begin();
+        requests.Retire();
+        Assert.False(requests.IsCurrent(inFlight));
+
+        var next = requests.Begin();
+        Assert.True(requests.IsCurrent(next));
+    }
+
+    // The wording the row wears while it waits says it is waiting, and does not
+    // borrow either answer's sentence — "End this session" would promise the
+    // action before the read, and a refusal would claim a daemon nobody found.
+    [Fact]
+    public void ThePendingRowSaysItIsChecking()
+    {
+        Assert.NotEqual(SessionDependents.Explain(SessionDependents.Nothing), SessionDependents.CheckingHeader);
+        Assert.NotEqual(
+            SessionDependents.Explain(new SessionDependents.Verdict(DaemonBelow: true, JobsBelow: 0)),
+            SessionDependents.CheckingHeader);
+        Assert.StartsWith("Checking", SessionDependents.CheckingHeader);
+        Assert.False(string.IsNullOrWhiteSpace(SessionDependents.CheckingTip));
+    }
 }
