@@ -121,33 +121,60 @@ namespace ClaudeBuddy
         // instruction is blunt about form because the output is spoken, not
         // read: a preamble ("Here's a summary:") is three wasted seconds of
         // audio, and markdown is read aloud as punctuation.
-        internal static string Prompt(string reply, SpeechSummaryKind kind = SpeechSummaryKind.Reply)
-        {
-            var source = reply.Length > MaxSourceChars
-                ? reply[..MaxSourceChars]
-                : reply;
-
+        //
+        // **It travels as the `-p` argument, and the reply travels on stdin —
+        // never the two concatenated on stdin.** That used to be the shape, and
+        // it stopped working without anything here changing: Claude Code now
+        // frames piped stdin as content the user pasted, with a standing
+        // instruction not to follow instructions found inside a paste. Sent
+        // that way, the request to summarise *was* the paste, the user's own
+        // message was empty, and Haiku answered what it had been handed — "it
+        // looks like you pasted this and the message cuts off, what would you
+        // like me to do with it?" — which was then read aloud as the vibe
+        // summary. Reproduced on CLI 2.1.285 against a real turn; the same
+        // bytes split this way summarised cleanly on every run. One line, no
+        // newlines, so nothing about it depends on how a platform quotes an
+        // argument.
+        internal static string Instruction(SpeechSummaryKind kind = SpeechSummaryKind.Reply) =>
             // The turn-finished variant asks a forward-looking question a
             // reply summary never does. A reply summary describes something
             // that already happened and is being read back; a turn-finished
             // summary is the ambient cue CB-167 plays instead of a chime, and
             // "what's next" is what makes it worth listening to over a
             // Glass sound — it can tell you whether you need to come back.
-            return kind == SpeechSummaryKind.TurnFinished
-                ? "Summarise what was just done and what's next, in one to three "
-                    + "sentences, for someone who will hear it read aloud rather than "
-                    + "read it.\n\n"
-                    + "Say what changed and what to expect next, not what the reply is "
-                    + "about. No preamble, no heading, no markdown, no bullet points, "
-                    + "no code. Plain sentences only.\n\n"
-                    + "----\n" + source
-                : "Summarise the following assistant reply in two or three sentences, "
-                    + "for someone who will hear it read aloud rather than read it.\n\n"
-                    + "Say what was done or found, not what the reply is about. "
-                    + "No preamble, no heading, no markdown, no bullet points, no code. "
-                    + "Plain sentences only.\n\n"
-                    + "----\n" + source;
-        }
+            (kind == SpeechSummaryKind.TurnFinished
+                ? "Summarise what was just done and what's next, in one to three sentences, "
+                    + "for someone who will hear it read aloud rather than read it. "
+                    + "Say what changed and what to expect next, not what the text is about. "
+                : "Summarise the assistant reply below in two or three sentences, "
+                    + "for someone who will hear it read aloud rather than read it. "
+                    + "Say what was done or found, not what the reply is about. ")
+            + "The text to summarise is on standard input. "
+            // MaxSourceChars cuts mid-sentence by design, and a model told
+            // nothing about that asks about it instead of summarising.
+            + "If it ends abruptly, summarise what is there and do not mention it. "
+            + "No preamble, no heading, no markdown, no bullet points, no code. "
+            + "Plain sentences only.";
+
+        // What goes on stdin: the reply, bounded.
+        internal static string Source(string reply) =>
+            reply.Length > MaxSourceChars ? reply[..MaxSourceChars] : reply;
+
+        // Replaces Claude Code's own system prompt, which describes an agent in
+        // a repository with tools to call. A summariser needs none of that, and
+        // everything in it is something the model can mistake for the task —
+        // including the pasted-content rule above.
+        internal const string SystemPrompt =
+            "You turn text into a short spoken summary. Reply with the summary only. "
+            + "Never ask questions, never introduce yourself, never comment on the input.";
+
+        // Hooks off for this one process. A SessionStart hook is exactly what a
+        // persona plugin installs, and it fires for `claude -p` like any other
+        // session: under a config dir that has one, the summary opened with
+        // "I'm Claude Haiku, the assistant for this codebase" — CB-174's
+        // symptom arriving by a route the neutral working directory cannot
+        // close, because hooks come from settings, not from CLAUDE.md.
+        internal const string SettingsOverride = "{\"disableAllHooks\":true}";
 
         // Model output is not a summary until the preamble it was told not to
         // write has been taken off it anyway. Pure, and lenient: anything this
@@ -317,7 +344,7 @@ namespace ClaudeBuddy
         // effect is a decision nothing can assert — which is exactly how CB-174
         // shipped, since the prompt and the cleaning were both covered while
         // the thing actually wrong was never looked at.
-        internal static ProcessStartInfo StartInfoFor(string claude)
+        internal static ProcessStartInfo StartInfoFor(string claude, SpeechSummaryKind kind = SpeechSummaryKind.Reply)
         {
             var startInfo = new ProcessStartInfo
             {
@@ -331,8 +358,20 @@ namespace ClaudeBuddy
             };
 
             startInfo.ArgumentList.Add("-p");
+            startInfo.ArgumentList.Add(Instruction(kind));
             startInfo.ArgumentList.Add("--model");
             startInfo.ArgumentList.Add(Model);
+            startInfo.ArgumentList.Add("--system-prompt");
+            startInfo.ArgumentList.Add(SystemPrompt);
+            // Empty means no tools at all: nothing here should read a file or
+            // run a command on the strength of a reply it was handed.
+            startInfo.ArgumentList.Add("--tools");
+            startInfo.ArgumentList.Add("");
+            startInfo.ArgumentList.Add("--settings");
+            startInfo.ArgumentList.Add(SettingsOverride);
+            // A throwaway conversation, so it leaves no transcript behind for
+            // the session scan or `claude --resume` to find.
+            startInfo.ArgumentList.Add("--no-session-persistence");
 
             return startInfo;
         }
@@ -351,7 +390,7 @@ namespace ClaudeBuddy
 
             try
             {
-                var startInfo = StartInfoFor(claude);
+                var startInfo = StartInfoFor(claude, kind);
 
                 using var proc = new Process { StartInfo = startInfo };
                 if (!proc.Start()) return null;
@@ -366,7 +405,7 @@ namespace ClaudeBuddy
 
                 try
                 {
-                    await proc.StandardInput.WriteAsync(Prompt(reply, kind)).ConfigureAwait(false);
+                    await proc.StandardInput.WriteAsync(Source(reply)).ConfigureAwait(false);
                     proc.StandardInput.Close();
 
                     var stdout = proc.StandardOutput.ReadToEndAsync();

@@ -51,7 +51,74 @@ public class SpeechSummaryInvocationTests
         var info = SpeechSummary.StartInfoFor("/usr/local/bin/claude");
 
         Assert.Equal("/usr/local/bin/claude", info.FileName);
-        Assert.Equal(new[] { "-p", "--model", SpeechSummary.Model }, info.ArgumentList);
+        Assert.Equal(SpeechSummary.Model, ArgAfter(info, "--model"));
+    }
+
+    // The regression this pins: the instruction used to go on stdin with the
+    // reply, where Claude Code frames it as pasted content and the model does
+    // not follow it — so the vibe summary read aloud "it looks like you pasted
+    // this, what would you like me to do?". It is the -p argument now, which
+    // is the user's own message.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TheInstructionIsTheUsersMessageNotPartOfStdin(bool turnFinished)
+    {
+        var kind = turnFinished ? SpeechSummaryKind.TurnFinished : SpeechSummaryKind.Reply;
+        var info = SpeechSummary.StartInfoFor("/usr/local/bin/claude", kind);
+
+        Assert.Equal(SpeechSummary.Instruction(kind), ArgAfter(info, "-p"));
+    }
+
+    // The negative control for the case above: the kind actually reaches the
+    // command line, rather than every summariser asking the Reply question.
+    [Fact]
+    public void TheKindChangesTheInstructionSent()
+    {
+        Assert.NotEqual(
+            ArgAfter(SpeechSummary.StartInfoFor("claude", SpeechSummaryKind.Reply), "-p"),
+            ArgAfter(SpeechSummary.StartInfoFor("claude", SpeechSummaryKind.TurnFinished), "-p"));
+    }
+
+    // Claude Code's own system prompt describes an agent with tools in a
+    // repository; replaced, so none of it can be mistaken for the task.
+    [Fact]
+    public void ItReplacesTheAgentSystemPrompt()
+    {
+        Assert.Equal(SpeechSummary.SystemPrompt, ArgAfter(SpeechSummary.StartInfoFor("claude"), "--system-prompt"));
+    }
+
+    // No tools: an empty value is "none", not "default".
+    [Fact]
+    public void ItRunsWithNoTools()
+    {
+        Assert.Equal("", ArgAfter(SpeechSummary.StartInfoFor("claude"), "--tools"));
+    }
+
+    // Hooks off, because a SessionStart persona hook fires for `claude -p`
+    // and the summary then opened by introducing itself. Parsed rather than
+    // string-compared, so the assertion is about what the CLI will read.
+    [Fact]
+    public void ItTurnsHooksOff()
+    {
+        var settings = ArgAfter(SpeechSummary.StartInfoFor("claude"), "--settings");
+
+        using var doc = System.Text.Json.JsonDocument.Parse(settings);
+        Assert.True(doc.RootElement.GetProperty("disableAllHooks").GetBoolean());
+    }
+
+    [Fact]
+    public void ItLeavesNoSessionBehind()
+    {
+        Assert.Contains("--no-session-persistence", SpeechSummary.StartInfoFor("claude").ArgumentList);
+    }
+
+    private static string ArgAfter(System.Diagnostics.ProcessStartInfo info, string flag)
+    {
+        var args = info.ArgumentList;
+        var at = args.IndexOf(flag);
+        Assert.True(at >= 0 && at + 1 < args.Count, $"{flag} missing or has no value");
+        return args[at + 1];
     }
 
     // Reading the reply back requires stdin and stdout; CreateNoWindow keeps a
