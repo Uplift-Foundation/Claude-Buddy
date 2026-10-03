@@ -281,6 +281,66 @@ namespace ClaudeBuddy
                   + "terminal, or end the job from its own orb."
                 : "Stops the process behind this session. This cannot be undone.";
 
+        // While the answer is being read (CB-228).
+        //
+        // The read is a full process-table walk — a WMI query on Windows,
+        // 218-273 ms measured on the Windows PC — so it runs off the UI thread
+        // and the menu opens before it returns. Until it does, the row is
+        // disabled and says so. Not enabled-and-plain: the read's whole purpose
+        // is to find the one shape where the row must refuse, and a row that
+        // turned from "End this session" into a refusal a quarter of a second
+        // after the menu appeared would move under a cursor already travelling
+        // towards it. Starting refused and becoming available is the order in
+        // which a late answer costs nothing. EndSession asks again in any case,
+        // so this wording is a promise about the row, not the guard.
+        internal const string CheckingHeader = "Checking for background jobs…";
+
+        internal const string CheckingTip =
+            "Looking at what is running under this session before offering to end it.";
+
+        // And when the read failed or did not come back (CB-228). Disabled,
+        // and saying so: the read exists to find the one shape where ending
+        // the session must be refused, so not knowing is not permission. This
+        // is a different case from the one Nothing's comment argues for — that
+        // is SessionDependents.Of finding the table unreadable, which it
+        // answers as Nothing deliberately and which stays as it is. This is the
+        // read itself throwing or hanging past ReadTimeout, which Of's own
+        // catch should make impossible and which, if it happens anyway, means
+        // something is wrong that the row should not paper over.
+        internal const string UnknownHeader = "Couldn't check for background jobs";
+
+        internal const string UnknownTip =
+            "Claude Buddy could not read what is running under this session, so it is not "
+            + "offering to end it. Close this menu and open it again to retry.";
+
+        // How long the row waits for an answer before saying it has none. Twice
+        // `ps`'s own five-second timeout in TryRun, and forty times the slowest
+        // WMI read measured on the Windows PC.
+        internal static readonly TimeSpan ReadTimeout = TimeSpan.FromSeconds(10);
+
+        // Which of several overlapping reads may still write to the row.
+        //
+        // A menu can be closed and reopened inside one read's quarter-second,
+        // and the reads do not finish in the order they started: the second
+        // open's read can hit SessionDependents' two-second cache while the
+        // first is still walking WMI. The row must show the newest answer
+        // rather than the last one to arrive, so each read takes a ticket and
+        // only the newest ticket is honoured. Closing the menu retires every
+        // ticket outstanding, so a read finishing after the menu is gone writes
+        // nothing.
+        //
+        // UI-thread only, like the row it guards, so a plain counter is enough.
+        internal sealed class GuardRequests
+        {
+            private int _generation;
+
+            internal int Begin() => ++_generation;
+
+            internal void Retire() => _generation++;
+
+            internal bool IsCurrent(int ticket) => ticket == _generation;
+        }
+
         // --- reading the machine ------------------------------------------------
 
         // A live process table's shape changes constantly, so this is a cache
@@ -405,6 +465,14 @@ namespace ClaudeBuddy
 
             using var searcher = new System.Management.ManagementObjectSearcher(
                 "SELECT ProcessId, ParentProcessId, CommandLine FROM Win32_Process");
+
+            // Bounded (CB-228), as `ps` already is by TryRun's five seconds.
+            // The read is off the UI thread now and the row gives up on it
+            // after ReadTimeout, but giving up does not cancel it — and WMI's
+            // default timeout is infinite, so a wedged WMI service would leave
+            // a pool thread blocked here for every menu open. This applies per
+            // WMI call, which on a healthy box is the whole quarter-second.
+            searcher.Options.Timeout = TimeSpan.FromSeconds(8);
 
             foreach (var row in searcher.Get())
             {
