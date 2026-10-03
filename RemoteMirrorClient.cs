@@ -1049,7 +1049,7 @@ namespace ClaudeBuddy
                 var frame = MirrorProtocol.BuildFrame(type, id, fields, payload);
 
                 if (!await Send(relay, frame).ConfigureAwait(false))
-                    return new Reply(false, null, null, null, "couldn't reach the relay");
+                    return new Reply(false, null, null, null, "couldn't reach the other machine");
 
                 if (!awaitReply) return new Reply(true, null, null, null, null);
 
@@ -1100,7 +1100,7 @@ namespace ClaudeBuddy
 
         // Excluded from coverage: exists to be the try/catch around the relay,
         // and the swallow is what turns a relay that has gone away into
-        // "couldn't reach the relay" in the panel rather than an exception on a
+        // "couldn't reach the other machine" in the panel rather than an exception on a
         // background task. Asserted through a courier that throws in
         // MirrorRoundTripTests; only the swallow itself is unmeasured.
         [ExcludeFromCodeCoverage]

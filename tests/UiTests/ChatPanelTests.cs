@@ -1260,7 +1260,7 @@ public class ChatPanelTests : IDisposable
         // And the hint, which is the half that stops an ordinary wait reading
         // as a fault.
         var hint = RenderedText(panel.FindControl<TextBlock>("FetchWaitHint")!);
-        Assert.Contains("minutes", hint);
+        Assert.Equal(RemoteControlChatSession.WaitHint, hint);
     }
 
     // It has to go away again, and on every ending rather than only the happy

@@ -332,15 +332,19 @@ public class TypingRefusalTests
     // screen for the whole transfer and is the exact sentence that meant failure
     // an hour earlier — a working transfer got reported as "no live view" twice
     // on the strength of it.
+    //
+    // CB-238: it no longer quotes "several minutes" or blames a relay. Both
+    // were true of the relay, which is gone; the link has not been timed.
     [Fact]
-    public void TheFetchingNoteSaysSomethingIsHappeningAndThatItTakesMinutes()
+    public void TheFetchingNoteSaysSomethingIsHappeningAndWhereFrom()
     {
         var said = RemoteControlChatSession.FetchingNote(Remote);
 
-        Assert.Contains(Remote, said);
-        Assert.Contains("fetching its conversation", said);
-        Assert.Contains("several minutes", said);
-        Assert.DoesNotContain("Checking whether", said);
+        Assert.Equal(
+            $"Found a live view of {Remote} — fetching its conversation from Claude Buddy on the other machine.",
+            said);
+        Assert.DoesNotContain("relay", said);
+        Assert.DoesNotContain("minute", said);
     }
 
     // --- the counter that runs while nothing appears to happen ---------------
@@ -381,13 +385,29 @@ public class TypingRefusalTests
         Assert.DoesNotContain("-", said);
     }
 
-    // The hint is what stops an ordinary three-minute wait reading as a fault,
-    // so it has to name a duration and it has to match what was measured.
+    // The hint is what stops an ordinary wait reading as a fault. It used to
+    // name "three or four minutes", which was measured over the relay; the
+    // relay is gone (CB-238) and the link has not been timed, so it names
+    // where the conversation comes from instead, and no duration at all.
     [Fact]
-    public void TheWaitHintSaysHowLongTheseActuallyTake()
+    public void TheWaitHintSaysWhereTheConversationIsComingFrom()
     {
-        Assert.Contains("minutes", RemoteControlChatSession.WaitHint);
-        Assert.DoesNotContain("second", RemoteControlChatSession.WaitHint);
+        Assert.Equal("coming over the link from Claude Buddy on the other machine",
+            RemoteControlChatSession.WaitHint);
+        Assert.DoesNotContain("minute", RemoteControlChatSession.WaitHint);
+        Assert.DoesNotContain("relay", RemoteControlChatSession.WaitHint);
+    }
+
+    // The note for a session the far Buddy cannot show. It used to promise a
+    // messaging channel whose replies were "written for you" — the relay's
+    // channel, gone since 937de9ec.
+    [Fact]
+    public void TheNoLiveViewNoteSaysThereIsNothingToReadOrTypeInto()
+    {
+        Assert.Equal(
+            $"No live view: Claude Buddy on the other machine lists {Remote} but can't show its "
+            + "conversation, so there's nothing to read or type into here.",
+            RemoteControlChatSession.NoLiveViewNote(Remote));
     }
 
     // And specifically not the singular it used to promise.

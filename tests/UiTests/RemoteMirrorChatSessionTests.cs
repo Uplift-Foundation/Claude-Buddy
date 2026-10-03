@@ -630,9 +630,9 @@ public class RemoteMirrorChatSessionTests : IDisposable
 
     // --- no live view --------------------------------------------------------------
 
-    // A bare peer — no Buddy on the other machine — keeps the messaging channel
-    // and says so, including the part people need to know: that the replies are
-    // written for them and may summarise.
+    // A peer the far Buddy cannot show says so once, in so many words. It used
+    // to promise a messaging channel whose replies "may summarise"; that
+    // channel was the relay, gone since 937de9ec (CB-238).
     [AvaloniaFact]
     public async Task WithoutABuddyOverThereThePanelSaysWhyItIsNotALiveView()
     {
@@ -648,8 +648,7 @@ public class RemoteMirrorChatSessionTests : IDisposable
 
         var last = session.History[^1];
 
-        Assert.Contains("No live view", last.Text);
-        Assert.Contains("may summarise", last.Text);
+        Assert.Equal(RemoteControlChatSession.NoLiveViewNote(Name), last.Text);
         Assert.Contains("Message", session.ComposerHint);
     }
 

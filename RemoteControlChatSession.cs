@@ -338,34 +338,46 @@ namespace ClaudeBuddy
         // a fault. Fixed rather than counting down: an estimate that ran out
         // while the transfer was still going would be the same broken promise
         // as the "about a minute" this project has already had to correct once.
-        internal const string WaitHint = "these usually take three or four minutes";
+        //
+        // It said "these usually take three or four minutes" until CB-238. That
+        // was measured over the relay, whose model retyped every piece by hand,
+        // and the relay is gone (937de9ec). Nothing has timed the direct link,
+        // so this now says where the conversation is coming from rather than
+        // quoting a duration measured on a transport that no longer exists.
+        internal const string WaitHint = "coming over the link from Claude Buddy on the other machine";
 
         // Named for the same reason the refusals are: a line a user reads while
         // nothing appears to be happening has to say that something is.
-        // **"A minute" was wrong, and understating it is the same bug in a
-        // quieter form.** The first version said the wait could take a minute,
-        // which was a guess; a single window off the mini was then timed at
-        // `7m 15s`, because each piece is base64 the far relay's *model* has to
-        // retype exactly. A user told to expect one minute and left waiting
-        // seven concludes it has hung — which is how a transfer that was working
-        // perfectly got reported as broken, twice, on the strength of a wording.
-        // So it says minutes, and says why, rather than promising a number this
-        // wire has never met. See CB-54.
+        //
+        // **It promises no duration, on purpose.** CB-54 found "a minute" wrong
+        // over the relay, where a window measured 7m 15s because the relay's
+        // model retyped each piece by hand, and replaced it with "several
+        // minutes" and that reason. The relay went in 937de9ec, and CB-238
+        // removed the reason, which described a mechanism that no longer
+        // exists. The direct link has not been timed, and quoting the relay's
+        // number for it would be the same wrong-number bug in the other
+        // direction. The WaitLabel counter shows the real elapsed time instead.
         internal static string FetchingNote(string remoteName) =>
-            $"Found a live view of {remoteName} — fetching its conversation from the other machine. "
-          + "This can take several minutes: the transcript comes across in pieces, and each one "
-          + "waits its turn on the relay, which retypes it by hand.";
+            $"Found a live view of {remoteName} — fetching its conversation from Claude Buddy "
+          + "on the other machine.";
 
         private void SayNoLiveView()
         {
             if (_saidNoLiveView) return;
             _saidNoLiveView = true;
 
-            Note($"No live view: the other machine isn't running Claude Buddy's Remote Control for "
-               + $"this session, so this stays a messaging channel — a way to talk to {_remoteName}, "
-               + "not a view of it. Its replies here are written for you, and may summarise what it "
-               + "actually did.");
+            // Until CB-238 this said the panel "stays a messaging channel" whose
+            // replies were "written for you". That channel was the relay, which
+            // is gone (937de9ec): a session the far Buddy cannot show cannot be
+            // written to from here either (see NoWayToSendNote).
+            Note(NoLiveViewNote(_remoteName));
         }
+
+        // Said once, when the far Buddy has answered that it cannot show this
+        // session. Named so the wording is a unit test, like FetchingNote.
+        internal static string NoLiveViewNote(string remoteName) =>
+            $"No live view: Claude Buddy on the other machine lists {remoteName} but can't show "
+          + "its conversation, so there's nothing to read or type into here.";
 
         private void OnDelivered(RemoteMirrorClient.MirrorRows rows)
         {

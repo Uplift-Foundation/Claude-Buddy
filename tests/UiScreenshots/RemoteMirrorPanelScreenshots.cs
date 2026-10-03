@@ -185,8 +185,7 @@ public class RemoteMirrorPanelScreenshots : IDisposable
     private bool _mangle;
 
     // Swallows the FETCH so the request stays pending and the panel keeps
-    // drawing its wait. The real wait is three or four minutes of a model
-    // retyping base64; a screenshot cannot sit through one, and holding the
+    // drawing its wait. A screenshot cannot sit through a real one, and holding the
     // frame at the door is the same trick MirrorEdgeCaseTests uses to make
     // "in flight" a fact rather than a race.
     private bool _swallowFetch;
