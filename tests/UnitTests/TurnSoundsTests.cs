@@ -1249,4 +1249,39 @@ public class TurnSoundsTests : IDisposable
 
         lock (played) Assert.Equal(2, played.Count);   // d is deferred, not played
     }
+
+    // CB-240. FirePending reads its pending state under the lock, validates and
+    // chooses outside it, then re-takes the lock to check the gap and claim the
+    // slot. A reset in between (a generation bump) means what it chose belongs to
+    // a world that no longer exists, so it plays nothing. A chime would be
+    // dropped anyway by EnqueueChime's own generation check; a SUMMARY has no
+    // such check on its speech call, so a summary is what shows the guard is
+    // needed. currentStateFor runs in exactly that stretch, outside the lock, so
+    // resetting from inside it forces the ordering.
+    [Fact]
+    public async Task APendingSummaryIsNotSpokenWhenAResetLandsBetweenChoosingAndClaiming()
+    {
+        ChimePlayer.PlayForTests = _ => { };
+        ClaudeBuddySettings.TurnSoundsEnabled = true;
+        ClaudeBuddySettings.TurnFinishedSound = "summary";
+
+        var spokenFor = new List<string>();
+        Task<bool> Speak(string sessionId)
+        {
+            lock (spokenFor) spokenFor.Add(sessionId);
+            return Task.FromResult(true);
+        }
+
+        var t0 = DateTime.UtcNow;
+        TurnSounds.Deliver(new[] { Finished("key-a", "session-a") }, Speak, t0);        // spoken, stamps t0
+        TurnSounds.Deliver(
+            new[] { Finished("key-b", "session-b") }, Speak, t0.AddSeconds(0.5),
+            currentStateFor: _ => { TurnSounds.ResetForTests(); return "idle"; });     // deferred to t0+2
+        lock (spokenFor) Assert.Equal(new[] { "session-a" }, spokenFor);
+
+        TurnSounds.FirePending(t0.AddSeconds(2.06));
+        await TurnSounds.ChimesEnqueuedSoFar();
+
+        lock (spokenFor) Assert.Equal(new[] { "session-a" }, spokenFor);   // b was chosen, then the reset dropped it
+    }
 }
