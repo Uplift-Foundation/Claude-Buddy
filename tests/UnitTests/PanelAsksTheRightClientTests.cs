@@ -16,39 +16,65 @@ namespace ClaudeBuddy.UnitTests;
 // Unknown, and the panel says "checking whether a live view is available…" and
 // means it — forever, with the roster arriving every ten seconds the whole
 // time. It was found by a person clicking an orb.
+//
+// The relay table is gone (CB-238), and with it the particular way around the
+// accessor that bit CB-69. The way around it now would be to read
+// PeerSessions.Host directly, which is what the guard below watches for.
 public class PanelAsksTheRightClientTests
 {
     private static RemoteMirrorClient Client(string account) =>
         new(account, new RemoteMirrorClient.Seams((_, _) => Task.FromResult(true)));
 
+    // Where reading PeerSessions.Host is the job rather than a way around it:
+    // the accessor itself, and the link's own plumbing — the pump that ticks
+    // the halves and the republish that turns the roster into orb rows. None
+    // of the three answers a panel's question.
+    private static readonly string[] HostReadersAllowed =
+        { "MirrorClientFor", "MirrorTickAsync", "RepublishFromLink" };
+
     [Fact]
     public void EveryPanelQuestionGoesThroughTheOneAccessor()
     {
         // Asserted as a fact about the source rather than about behaviour,
-        // because behaviour cannot see the difference: a caller that reads the
-        // relay table directly returns a perfectly well-formed "I don't know".
+        // because behaviour cannot see the difference: a caller that reaches
+        // the client some other way returns a perfectly well-formed "I don't
+        // know" whenever that other way is empty.
         //
-        // The relay table is a test seam now and nothing in the app writes it,
-        // so a direct read outside MirrorClientFor and the seams themselves is
-        // a caller that will silently never see the link.
-        var source = File.ReadAllLines(SourceOf("RemoteControlSessions.cs"));
+        // Each scan carries a positive control (CB-238, Rafaela Quintero's
+        // review): the version this replaced scanned for `Relays.TryGetValue`
+        // after the relay table was deleted, matched nothing, and so passed
+        // whatever the code did. A scan that cannot match is not a guard.
+        var panel = CodeLines(SourceOf("RemoteControlChatSession.cs"));
+        var sessions = CodeLines(SourceOf("RemoteControlSessions.cs"));
 
-        var offenders = source
-            .Select((line, i) => (Line: line, Number: i + 1))
-            // Only reads that pull a *client* out of the table. That is the bug
-            // class: a caller that fetches a client without going through
-            // MirrorClientFor cannot see the link. Reading anything else out of
-            // the table is a different question with different answers.
-            .Where(l => l.Line.Contains("Relays.TryGetValue") && l.Line.Contains("Client"))
-            .Where(l => !Within(source, l.Number, "MirrorClientFor")
-                        && !Within(source, l.Number, "ForTests"))
-            .Select(l => $"{l.Number}: {l.Line.Trim()}")
+        // The panel asks through the accessor — and does, or this fails on a
+        // rename rather than silently finding nothing to object to.
+        var asks = panel.Where(l =>
+            l.Text.Contains("RemoteControlSessions.MirrorClientFor(")
+            || l.Text.Contains("RemoteControlSessions.MirrorStateFor(")).ToList();
+        Assert.NotEmpty(asks);
+
+        // ...and never around it.
+        var panelBypasses = panel.Where(l => l.Text.Contains("PeerSessions.Host")).ToList();
+        Assert.True(panelBypasses.Count == 0,
+            "the panel reads PeerSessions.Host instead of asking MirrorClientFor:\n  "
+            + string.Join("\n  ", panelBypasses.Select(l => $"{l.Number}: {l.Text.Trim()}")));
+
+        // In RemoteControlSessions, the only readers of PeerSessions.Host are
+        // the accessor and the link's plumbing. The positive control is that
+        // the accessor really does read it: if the pattern stopped matching
+        // there, the offender check below would be scanning for nothing.
+        var hostReads = sessions.Where(l => l.Text.Contains("PeerSessions.Host")).ToList();
+        Assert.Contains(hostReads, l => EnclosingMember(sessions, l.Index) == "MirrorClientFor");
+
+        var offenders = hostReads
+            .Where(l => !HostReadersAllowed.Contains(EnclosingMember(sessions, l.Index)))
+            .Select(l => $"{l.Number} (in {EnclosingMember(sessions, l.Index) ?? "?"}): {l.Text.Trim()}")
             .ToList();
 
-        Assert.True(
-            offenders.Count == 0,
-            "these read the relay table directly instead of asking MirrorClientFor, "
-            + "so they cannot see the peer link:\n  " + string.Join("\n  ", offenders));
+        Assert.True(offenders.Count == 0,
+            "these read PeerSessions.Host instead of asking MirrorClientFor, "
+            + "so a panel question could go around the one accessor:\n  " + string.Join("\n  ", offenders));
     }
 
     // --- and the behaviour the bug produced ------------------------------------
@@ -80,19 +106,34 @@ public class PanelAsksTheRightClientTests
         Assert.Null(state.Entry);
     }
 
-    private static bool Within(string[] source, int lineNumber, string marker)
+    private readonly record struct CodeLine(int Index, int Number, string Text);
+
+    // Lines that are code, not comments — a comment naming PeerSessions.Host
+    // (this file's own neighbours do) is not a read of it.
+    private static List<CodeLine> CodeLines(string path)
     {
-        // Walk back to the enclosing member's signature and look for the marker
-        // in it. Crude, and enough: the members here are short and named.
-        for (var i = lineNumber - 1; i >= 0 && i > lineNumber - 25; i--)
+        var all = File.ReadAllLines(path);
+        return all
+            .Select((text, i) => new CodeLine(i, i + 1, text))
+            .Where(l => !l.Text.TrimStart().StartsWith("//"))
+            .ToList();
+    }
+
+    // The member a line sits in: the nearest `static` or instance member
+    // signature above it. Crude, and enough — the members that matter are
+    // short and named, and a wrong answer only ever makes the check stricter.
+    private static string? EnclosingMember(List<CodeLine> lines, int index)
+    {
+        var signature = new System.Text.RegularExpressions.Regex(
+            @"^\s+(?:internal|public|private)\b[^=;(]*?\b(\w+)\s*\(");
+
+        foreach (var line in lines.Where(l => l.Index <= index).OrderByDescending(l => l.Index))
         {
-            if (source[i].Contains(marker)) return true;
-            if (source[i].TrimStart().StartsWith("internal static")
-                || source[i].TrimStart().StartsWith("public static"))
-                return source[i].Contains(marker);
+            var m = signature.Match(line.Text);
+            if (m.Success) return m.Groups[1].Value;
         }
 
-        return false;
+        return null;
     }
 
     private static string SourceOf(string file)
