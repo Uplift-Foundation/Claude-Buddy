@@ -398,7 +398,7 @@ class SourceStamp(unittest.TestCase):
             self.skipTest("no bash")
         with open(os.path.join(os.path.dirname(__file__), "coverage.sh")) as f:
             src = f.read()
-        line = re.search(r'^\{ git rev-parse HEAD;.*> "\$OUT/source-stamp"$', src, re.M).group(0)
+        block = re.search(r"^# --- source-stamp begin\n(.*?)^# --- source-stamp end$", src, re.M | re.S).group(1)
         # The hash tool is chosen by coverage.sh's own line, run by the same bash that runs
         # the stamp. Looking for it on Python's PATH instead picked a `shasum` bash could not
         # see on a Windows runner, and the digest line came out empty.
@@ -410,10 +410,32 @@ class SourceStamp(unittest.TestCase):
             f.write("class U {}\n")
         out_dir = os.path.join(self.tmp, "o").replace("\\", "/")
         repo = self.repo.replace("\\", "/")
-        subprocess.run([bash, "-c", f'cd "{repo}" && OUT="{out_dir}"; {pick}; {line}'],
+        subprocess.run([bash, "-c", f'set -euo pipefail; cd "{repo}"; OUT="{out_dir}"; {pick}\n{block}'],
                        check=True, capture_output=True)
         with open(os.path.join(self.tmp, "o", "source-stamp")) as f:
             self.assertEqual(merge_coverage.source_stamp(self.repo), f.read())
+
+    def test_the_shell_stamp_fails_loudly_when_the_digest_comes_out_empty(self):
+        # The case pipefail cannot catch: a hash tool that exists, succeeds, and prints
+        # nothing. A one-line stamp would silently disagree with merge-coverage.py's and
+        # refuse a legitimate run, so the script must stop instead.
+        import re, shutil, subprocess
+        bash = shutil.which("bash")
+        if not bash:
+            self.skipTest("no bash")
+        with open(os.path.join(os.path.dirname(__file__), "coverage.sh")) as f:
+            src = f.read()
+        block = re.search(r"^# --- source-stamp begin\n(.*?)^# --- source-stamp end$", src, re.M | re.S).group(1)
+        os.makedirs(os.path.join(self.tmp, "o"))
+        out_dir = os.path.join(self.tmp, "o").replace("\\", "/")
+        repo = self.repo.replace("\\", "/")
+        r = subprocess.run(
+            [bash, "-c", f'set -euo pipefail; cd "{repo}"; OUT="{out_dir}"; '
+                         f'silent_hash() {{ cat >/dev/null; }}; HASHER=silent_hash\n{block}'],
+            capture_output=True, text=True)
+        self.assertNotEqual(0, r.returncode)
+        self.assertIn("could not compute the source stamp", r.stderr)
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "o", "source-stamp")))
 
     def test_coverage_sh_stamps_before_any_suite_runs(self):
         src = open(os.path.join(os.path.dirname(__file__), "coverage.sh")).read()

@@ -61,7 +61,13 @@ mkdir -p "$OUT"
 # another's sources attribute their lines to the wrong code, which `merged 4` and
 # fresh timestamps cannot see. Written before any suite runs, so an edit made
 # while they run is caught too.
-{ git rev-parse HEAD; { git diff HEAD; git ls-files --others --exclude-standard; } | $HASHER | cut -c1-16; } > "$OUT/source-stamp"
+# --- source-stamp begin
+STAMP_DIGEST="$({ git diff HEAD; git ls-files --others --exclude-standard; } | $HASHER | cut -c1-16)"
+# A one-line stamp would silently disagree with merge-coverage.py's and refuse a
+# legitimate run, so an empty digest stops the script here instead.
+[[ -n "$STAMP_DIGEST" ]] || { echo "coverage.sh: could not compute the source stamp (is $HASHER installed?)" >&2; exit 1; }
+printf '%s\n%s\n' "$(git rev-parse HEAD)" "$STAMP_DIGEST" > "$OUT/source-stamp"
+# --- source-stamp end
 
 # A native Windows Python (what `python3` is under Git Bash) does not understand
 # MSYS paths: "/c/Users/..." is a path on the current drive to it, and glob()
