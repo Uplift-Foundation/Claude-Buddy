@@ -71,6 +71,12 @@ jobs:
       - name: Unit tests (publish-screenshots.yml)
         run: python tools/test-publish-screenshots.py
 
+      # coverage.sh's log-keeping and failing-name extraction (CB-239), run
+      # as the shell that ships. On the Windows leg it uses Git Bash
+      # explicitly, which is where the names had gone missing.
+      - name: Unit tests (coverage.sh functions)
+        run: python tools/test-coverage-sh.py
+
       # Everything added after those three is xUnit, in tests/Tests.sln. Run
       # as separate `dotnet test` invocations rather than one pass over the
       # whole solution, so a red run in one attributes to a suite by its own

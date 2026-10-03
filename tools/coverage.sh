@@ -71,7 +71,8 @@ native() {
 # old file if this run's suite failed before writing one -- the "merged 6" story
 # in CLAUDE.md is the same hazard from the other side.
 find tests/UiTests/bin tests/UiScreenshots/bin \
-  \( -name ui.cobertura.xml -o -name shots.cobertura.xml \) -delete 2>/dev/null || true
+  \( -name ui.cobertura.xml -o -name shots.cobertura.xml \
+     -o -name ui.xunit.xml -o -name shots.xunit.xml \) -delete 2>/dev/null || true
 
 # A red suite must not stop the others being measured -- `set -e` used to abort
 # at the first one, so on any machine with a failing test everything after it
@@ -89,16 +90,37 @@ RED=()
 # $OUT, and is replaced on the next run like everything else there.
 LOGS=()
 
-# The failing test names out of one suite's log, both shapes this repo's
-# runners print: VSTest's `[xUnit.net 00:00:01.70]  <name> [FAIL]` and the
-# Microsoft Testing Platform's `failed <name> (12ms)`. A theory's name carries
-# its own parentheses, so the MTP arm takes everything up to the *last*
-# parenthesised group. `tr -d '\r'` first because dotnet on Windows writes CRLF,
-# and a trailing \r would defeat both `$` anchors in silence.
-failing_names() { # $1 = log file
-  tr -d '\r' < "$1" | sed -nE \
-    -e 's/^.*\[xUnit\.net [^]]*\][[:space:]]+(.*[^[:space:]])[[:space:]]+\[FAIL\][[:space:]]*$/\1/p' \
-    -e 's/^[[:space:]]*failed (.+) \([^()]*\)[[:space:]]*$/\1/p' | sort -u
+# The failing test names, from what each runner actually leaves behind.
+#
+# VSTest (UnitTests, IntegrationTests) prints `[xUnit.net 00:00:01.70]  <name>
+# [FAIL]` into the suite's own output, so those come out of the log. The
+# Microsoft Testing Platform suites (UiTests, UiScreenshots) print no per-test
+# line at all under `dotnet test` — only the Failed! summary and a pointer to a
+# TestResults .log that does not name the test either, measured on macOS and
+# on the Windows box — so for them the names come from the xUnit report each
+# run now writes, `<test ... name="..." result="Fail">`, with the entities a
+# theory's arguments are escaped with turned back into characters.
+#
+# dotnet on Windows writes CRLF, and a bare `$` after the name would miss every
+# line in silence; the `[[:space:]]*` before it swallows the \r, and
+# tools/test-coverage-sh.py pins that with a CRLF log. The grep is guarded
+# because "no match" is exit 1, which under `set -e` and `pipefail` would end
+# the script in the middle of reporting a red run.
+failing_names() { # any number of files: suite logs and xUnit reports
+  local f
+  for f in "$@"; do
+    [[ -f "$f" ]] || continue
+    case "$f" in
+      *.xml)
+        { grep -o '<test [^>]*result="Fail"[^>]*>' "$f" || true; } \
+          | sed -E 's/.* name="([^"]*)".*/\1/' \
+          | sed -e 's/&quot;/"/g' -e "s/&apos;/'/g" -e 's/&lt;/</g' -e 's/&gt;/>/g' -e 's/&amp;/\&/g'
+        ;;
+      *)
+        sed -nE 's/^.*\[xUnit\.net [^]]*\][[:space:]]+(.*[^[:space:]])[[:space:]]+\[FAIL\][[:space:]]*$/\1/p' "$f"
+        ;;
+    esac
+  done | sort -u
 }
 
 # Runs one suite with its output going to $OUT/<log>.log, prints that log's
@@ -164,7 +186,8 @@ note_missing_report integration tests/IntegrationTests
 # missing file; only `merged N` catches a present one that nobody should trust.
 echo "==> tests/UiTests"
 run_suite tests/UiTests ui dotnet test tests/UiTests -- \
-  --coverage --coverage-output-format cobertura --coverage-output ui.cobertura.xml
+  --coverage --coverage-output-format cobertura --coverage-output ui.cobertura.xml \
+  --report-xunit --report-xunit-filename ui.xunit.xml
 
 UI_REPORT="$(find tests/UiTests/bin -name ui.cobertura.xml -print -quit)"
 if [[ -z "$UI_REPORT" ]]; then
@@ -173,6 +196,8 @@ if [[ -z "$UI_REPORT" ]]; then
 else
   cp "$UI_REPORT" "$OUT/ui.cobertura.xml"
 fi
+XUNIT="$(find tests/UiTests/bin -name ui.xunit.xml -print -quit)"
+if [[ -n "$XUNIT" ]]; then cp "$XUNIT" "$OUT/ui.xunit.xml"; fi
 
 # tests/UiScreenshots, which CI has always run and this number never counted.
 # It is the only suite that draws through real Skia rather than the null
@@ -181,7 +206,8 @@ fi
 # collects the same way.
 echo "==> tests/UiScreenshots"
 run_suite tests/UiScreenshots shots dotnet test tests/UiScreenshots -- \
-  --coverage --coverage-output-format cobertura --coverage-output shots.cobertura.xml
+  --coverage --coverage-output-format cobertura --coverage-output shots.cobertura.xml \
+  --report-xunit --report-xunit-filename shots.xunit.xml
 
 SHOTS_REPORT="$(find tests/UiScreenshots/bin -name shots.cobertura.xml -print -quit)"
 if [[ -z "$SHOTS_REPORT" ]]; then
@@ -190,6 +216,8 @@ if [[ -z "$SHOTS_REPORT" ]]; then
 else
   cp "$SHOTS_REPORT" "$OUT/shots.cobertura.xml"
 fi
+XUNIT="$(find tests/UiScreenshots/bin -name shots.xunit.xml -print -quit)"
+if [[ -n "$XUNIT" ]]; then cp "$XUNIT" "$OUT/shots.xunit.xml"; fi
 
 echo
 # Resolved here, in bash, and handed over as plain native paths.
@@ -208,8 +236,8 @@ if (( ${#RED[@]} > 0 )); then
   for entry in ${LOGS[@]+"${LOGS[@]}"}; do
     suite="${entry%%|*}"
     log="${entry#*|}"
-    echo "!!! $suite failed — full log: $log" >&2
-    names="$(failing_names "$log")"
+    echo "!!! $suite failed — full log: $(native "$log")" >&2
+    names="$(failing_names "$log" "${log%.log}.xunit.xml")"
     if [[ -n "$names" ]]; then
       while IFS= read -r name; do echo "!!!     $name" >&2; done <<< "$names"
     else
