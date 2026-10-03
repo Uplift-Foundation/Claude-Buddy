@@ -99,19 +99,41 @@ public class StopInstalledBuddyScriptTests : IDisposable
     // fork is a child that carries the stand-in's path in `ps` until it execs —
     // so under load the script, or Running below, could catch a pid that was
     // gone a moment later, and one full run failed on exactly that.
-    private Process Launch(string exe, bool ignoreTerm = false)
+    // `beforeTrap` is shell run ahead of the trap, for the case that pins the
+    // race below; nothing else passes it.
+    private Process Launch(string exe, bool ignoreTerm = false, string beforeTrap = "")
     {
-        var body = (ignoreTerm ? "trap '' TERM; " : "") + "while :; do read -r _ || :; done";
+        // A stand-in that ignores SIGTERM says so on stdout once the trap is in
+        // place, and this waits for that line (CB-243). Waiting only for it to
+        // appear in ps was not enough: ps lists it the moment it is exec'd, and
+        // the `trap '' TERM` runs a moment later inside bash. A SIGTERM landing
+        // in that gap killed the "stubborn" copy outright, the script saw it
+        // gone and correctly stopped waiting, and the test reported "SIGKILL
+        // came before the grace ran out" about a run in which no SIGKILL was
+        // ever sent. Forced by sleeping a second before the trap: 3 of 3 failed
+        // that way, the stand-in exiting 143 (SIGTERM) in 0.26 s, against 137
+        // (SIGKILL) in 1.60 s when the trap was already set.
+        var body = ignoreTerm
+            ? beforeTrap + "trap '' TERM; echo ready; while :; do read -r _ || :; done"
+            : "while :; do read -r _ || :; done";
         var process = Process.Start(new ProcessStartInfo(exe)
         {
             ArgumentList = { "-c", body },
             RedirectStandardInput = true,
+            RedirectStandardOutput = ignoreTerm,
             UseShellExecute = false,
         })!;
         _started.Add(process);
 
-        // Until `ps` can see it under the stand-in's path, the script could not
-        // either, and a test that raced it would pass for the wrong reason.
+        if (ignoreTerm)
+        {
+            // The signal itself, with a backstop only for a stand-in that never
+            // gets as far as its trap.
+            var ready = process.StandardOutput.ReadLineAsync();
+            Assert.True(ready.Wait(TimeSpan.FromSeconds(30)), "the stand-in never set its SIGTERM trap");
+            Assert.Equal("ready", ready.Result);
+        }
+
         var deadline = DateTime.UtcNow.AddSeconds(10);
         while (!Running(exe).Contains(process.Id))
         {
@@ -213,17 +235,33 @@ public class StopInstalledBuddyScriptTests : IDisposable
     // A copy that ignores SIGTERM is still gone once the grace runs out —
     // without the SIGKILL arm, the install would go ahead with it running.
     [MacInstallFact]
-    public void Kills_a_copy_that_ignores_sigterm_after_the_grace()
+    public void Kills_a_copy_that_ignores_sigterm_after_the_grace() => KillsAStubbornCopyAfterTheGrace();
+
+    // The same, with the stand-in slow to set its trap (CB-243). A second
+    // before `trap '' TERM` is the startup gap that flaked under load, widened
+    // until it is certain; the old Launch failed this every time. Kept as well
+    // as fixed, because it pins the property — wait for the trap, not for ps —
+    // rather than how quickly bash happens to start.
+    [MacInstallFact]
+    public void Kills_a_copy_that_ignores_sigterm_even_when_it_is_slow_to_say_so() =>
+        KillsAStubbornCopyAfterTheGrace(beforeTrap: "sleep 1; ");
+
+    private void KillsAStubbornCopyAfterTheGrace(string beforeTrap = "")
     {
         var exe = StandIn("Claude Buddy");
-        var stubborn = Launch(exe, ignoreTerm: true);
+        var stubborn = Launch(exe, ignoreTerm: true, beforeTrap: beforeTrap);
 
         var result = Stop([exe], grace: "1");
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal(new[] { stubborn.Id }, Pids(result.Stdout));
-        Assert.True(result.Took >= TimeSpan.FromSeconds(1), "SIGKILL came before the grace ran out");
         Assert.True(stubborn.WaitForExit(5000));
+
+        // How it died, not only when: 137 is 128 + SIGKILL. A copy that died
+        // to the SIGTERM instead (143) never exercised the arm this is about,
+        // which is exactly what the old timing-only assertion misreported.
+        Assert.Equal(137, stubborn.ExitCode);
+        Assert.True(result.Took >= TimeSpan.FromSeconds(1), "the script sent SIGKILL before the grace ran out");
         Assert.Empty(Running(exe));
     }
 
