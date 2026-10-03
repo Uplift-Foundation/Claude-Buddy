@@ -116,8 +116,8 @@ namespace ClaudeBuddy
             return only;
         }
 
-        // How that subprocess is set up, split out for the reason
-        // RemoteControlBridge.LaunchLine is: the environment it does *not* carry
+        // How that subprocess is set up, split out for the reason the relay's
+        // launch line was (deleted in 937de9ec): the environment it does *not* carry
         // is as load-bearing as the environment it does, and until this was its
         // own function the only way to check either was to run a real `claude`
         // against a real account.
@@ -147,10 +147,9 @@ namespace ClaudeBuddy
         // Asks this machine's Claude Code what it has registered, under a
         // specific profile.
         //
-        // CLAUDE_CONFIG_DIR is set for the same reason RemoteControlBridge sets
-        // it when launching a relay: the registry is per-account, and reading
-        // the wrong account's would answer confidently about sessions this relay
-        // cannot see.
+        // CLAUDE_CONFIG_DIR is set because the registry is per-account, and
+        // reading the wrong account's would answer confidently about sessions
+        // that account cannot see.
         //
         // ...and left unset for the default account, for the reason
         // ClaudeProfile gives: naming that directory explicitly is not the same
@@ -179,8 +178,7 @@ namespace ClaudeBuddy
                 using var process = Process.Start(psi);
                 if (process is null) return Array.Empty<Entry>();
 
-                // Both pipes drained before waiting, same as
-                // RemoteControlBridge.Run and for the same two reasons: a
+                // Both pipes drained before waiting, for two reasons: a
                 // blocking read makes the timeout unreachable, and an undrained
                 // stderr can deadlock a chatty child.
                 var outTask = process.StandardOutput.ReadToEndAsync();

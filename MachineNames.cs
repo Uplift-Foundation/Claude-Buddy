@@ -5,8 +5,8 @@ namespace ClaudeBuddy
     // What this machine calls itself on a wire, and how to recognise a relay
     // that outlived the code that started it.
     //
-    // **Both of these used to live in RemoteControlBridge, and both outlive
-    // it.** The tag is what a peer announcement carries, which has nothing to do
+    // **Both of these used to live in the relay's bridge class, and both
+    // outlive it (937de9ec).** The tag is what a peer announcement carries, which has nothing to do
     // with relays and only lived there because the relay was the first thing
     // that needed a short, safe machine name. The relay-name test is the
     // opposite case: the relay is gone, and precisely because it is gone this

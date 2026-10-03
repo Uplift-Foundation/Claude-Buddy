@@ -432,7 +432,8 @@ namespace ClaudeBuddy
             // Control on. Off by default, and deliberately more than a display
             // switch: turning it on is what permits Buddy to start a real
             // Claude Code session of its own, which costs the user's quota.
-            // See RemoteControlBridge for why a bridge is the only way in.
+            // The bridge was deleted in 937de9ec; the direct link below is the
+            // only way remote sessions arrive now.
             public bool RemoteControlEnabled { get; set; }
 
             // Talking directly to another machine running Claude Buddy, rather

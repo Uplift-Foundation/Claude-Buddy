@@ -258,8 +258,8 @@ namespace ClaudeBuddy
         Grok,
         OpenClaw,
 
-        // A Claude Code session on another machine, seen through the bridge (see
-        // RemoteControlBridge). Its own CLI is Claude Code, but it is not local
+        // A session on another machine, served over the direct link by the
+        // Claude Buddy running there (see PeerSessions). It is not local
         // and there is no terminal here to focus, which is the distinction
         // IsLocalCli draws and the only one the rest of the app cares about.
         RemoteControl,
@@ -2038,9 +2038,9 @@ namespace ClaudeBuddy
                 // Suppressing the orb further down would have left a session the
                 // menu could still be pointed at.
                 //
-                // The same prefix test the bridge and the mirror already key on —
-                // see RemoteControlBridge.IsOwnRelayCwd for why it is the prefix
-                // and not the live tag, and why the cwd rather than argv.
+                // The prefix test that recognises a relay this app once started —
+                // see MachineNames.LooksLikeALeftoverRelay for why it is the
+                // prefix and not the live tag, and why the cwd rather than argv.
                 if (MachineNames.LooksLikeALeftoverRelay(status.Cwd)) continue;
 
                 // A CLI this app started for its own purposes — the throwaway

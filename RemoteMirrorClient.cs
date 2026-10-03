@@ -78,8 +78,9 @@ namespace ClaudeBuddy
         }
 
         // Which relay answered for a session, for a caller that wants to say
-        // *where* it is rather than talk to it. The relay's name carries the far
-        // machine's — see RemoteControlBridge.MachineFromRelayName — so this is
+        // *where* it is rather than talk to it. It is the name of the peer that
+        // served the session, which over the direct link is the far machine
+        // itself — so this is
         // how the panel names the machine without anything new going on the
         // wire. Null before the roster has answered, which a panel can open
         // before.

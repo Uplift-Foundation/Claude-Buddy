@@ -27,10 +27,10 @@ namespace ClaudeBuddy
     //    setting, the same one a local panel obeys. A person who has turned
     //    replying off has said something about this machine, and a request
     //    arriving over a wire does not change it.
-    //  * **Requests are only served to a Buddy relay**, matched on the name
-    //    prefix RemoteControlBridge builds. It is a weak check on its own — the
-    //    account is shared, so anything on it could wear the name — and it is
-    //    named as such in the PR rather than presented as a boundary.
+    //  * **Requests are only served to a peer the link allows** — see
+    //    Seams.PeerAllowed below. Over the relay this was a name-prefix match, a
+    //    weak check since the account is shared; the relay is gone (937de9ec)
+    //    and the link's answer is a pinned TLS certificate.
     internal sealed class RemoteMirrorServer
     {
         // Everything this needs from the world outside itself.
@@ -65,8 +65,8 @@ namespace ClaudeBuddy
             //
             // **A seam because the answer depends on the transport, and the
             // hard-coded version was a second copy of a string.** Over the relay
-            // it meant "the name starts with the prefix RemoteControlBridge
-            // builds" — a guard rather than a boundary, since the account is
+            // it meant "the name starts with the relay prefix" (MachineNames)
+            // — a guard rather than a boundary, since the account is
             // shared and anything on it could wear that name. Over a direct link
             // it means something much stronger: this peer completed a TLS
             // handshake presenting a certificate we pinned when a person typed a

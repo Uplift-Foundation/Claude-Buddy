@@ -3164,7 +3164,7 @@ public class SessionScanTests
     // would build today: a different account directory or a renamed Mac changes
     // the tail of the name, and the still-running relay from before must not
     // reappear as an orb. That is the prefix's whole job — see
-    // RemoteControlBridge.IsOwnRelayName.
+    // MachineNames.IsRelayName.
     [AvaloniaFact]
     public void ARelayFromAnEarlierProfileOrMachineIsAlsoSuppressed()
     {

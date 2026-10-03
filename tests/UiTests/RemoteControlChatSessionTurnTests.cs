@@ -16,12 +16,11 @@ namespace ClaudeBuddy.UiTests;
 // reaches the panel by Post, and one raised inline reaches it directly — and only
 // a suite with a real dispatcher can tell the difference.
 //
-// What is NOT here is the send path. SendAsync with remote control switched on
-// calls EnsureStarted, and RemoteControlProfileDirs always returns at least the
-// default account, so it would try to start a real bridge: a live Claude Code
-// session in a tmux pane. tests/IntegrationTests/RemoteControlBridgeLiveTests is
-// where that belongs, behind its platform gate. The switched-off arm is safe and
-// is covered below.
+// The send path with the link switched on is covered in
+// RemoteMirrorChatSessionTests, against a fake wire. This file used to stop
+// short of it because a send then started a real relay — a live Claude Code
+// session in a tmux pane — and the relay is gone (937de9ec). The switched-off
+// arm is covered below.
 [Collection("Settings")]
 public class RemoteControlChatSessionTurnTests
 {

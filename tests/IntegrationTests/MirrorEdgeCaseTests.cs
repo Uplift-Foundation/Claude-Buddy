@@ -9,10 +9,10 @@ namespace ClaudeBuddy.Tests;
 // what the feature does, and this one carries the accumulated "and what if"
 // list without burying it.
 // In the Settings collection, which by now is really "tests that touch
-// process-global Buddy state" — RemoteControlBridgeLiveTests joined it for the
-// same reason, and this class calls RemoteControlSessions.ResetForTests(), which
-// clears the relay table and the MirrorChanged subscribers out from under
-// anything else using them. IntegrationTests does not disable parallelisation
+// process-global Buddy state" — this class calls
+// RemoteControlSessions.ResetForTests(), which clears the installed mirror
+// client and the MirrorChanged subscribers out from under anything else using
+// them. IntegrationTests does not disable parallelisation
 // the way UiTests does, so without this these classes really do run at once.
 // Costs nothing in an ordinary run: the live tests skip in milliseconds.
 [Collection("Settings")]
