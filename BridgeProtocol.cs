@@ -33,13 +33,6 @@ namespace ClaudeBuddy
     {
         // --- what the bridge is asked to do ---
 
-        // Imperative and bare. An instruction with any conversational slack in
-        // it ("could you check...") invites the model to answer from memory
-        // instead of calling the tool, and a stale answer here is an orb list
-        // that quietly stops matching reality.
-        public const string ListAgentsPrompt =
-            "Call the ListAgents tool now and paste its raw output verbatim. Do not summarise it.";
-
         // "Is this the answer I was waiting for?" — the two predicates the bridge
         // hands to AskAsync, which reads a live session's output until one of them
         // says yes.
@@ -57,14 +50,6 @@ namespace ClaudeBuddy
         // answered", not "does this parse" — parsing happens after, and a
         // predicate strict enough to be a parser would wait forever on output
         // that is perfectly usable.
-
-        // Either the header of a peer list, or the phrasing a session uses when
-        // it has none. The second matters as much as the first: without it, a
-        // machine that legitimately has no peers times out instead of answering
-        // "none", and the relay reports not-answering rather than empty.
-        public static bool LooksLikeAgentList(string text) =>
-            text.Contains("Peer sessions", StringComparison.Ordinal)
-            || text.Contains("no peer", StringComparison.OrdinalIgnoreCase);
 
         // A send is acknowledged by a receipt carrying an id. Case-sensitive
         // because it is a field name in the tool's own output rather than
@@ -276,153 +261,6 @@ namespace ClaudeBuddy
             }
 
             return null;
-        }
-
-        // How to address a peer so SendMessage cannot come back asking which one.
-        //
-        // Buddy sends every frame and every message by typing a prompt into the
-        // relay's pane, and nobody is sitting there. So anything that raises a
-        // prompt *in that pane* does not merely fail — it stops the machine
-        // serving, because every later frame queues behind it, including mirror
-        // answers for completely unrelated sessions. CB-40 was that failure with
-        // a tool permission; this is the same failure with Buddy's own outbound
-        // message as the cause. A bare name that matches two live sessions makes
-        // SendMessage render a "which one?" picker and wait.
-        //
-        // The ref is the answer and it is already in the row: SendMessage
-        // documents "name [ref]" as the way to disambiguate, and RemoteAgent has
-        // carried Ref all along.
-        //
-        // Bare when the name is unique, which is nearly always, and which keeps
-        // the address identical to what has always been sent — a ref is only
-        // resolvable while it is listed, so spending one where it is not needed
-        // would trade a rare failure for a new one.
-        //
-        // Offline rows are not competition. A registration outlives its process,
-        // and one live session wearing three stale registrations of its own is
-        // exactly the case this was found on, so counting the dead ones would
-        // make a name look ambiguous that is not.
-        //
-        // When two genuinely live sessions share a name, the first is chosen
-        // rather than the send being refused. That can pick the wrong one — but
-        // Buddy's orb for that name was already ambiguous, since a name is all
-        // an orb has, so the user clicking it had no way to mean one over the
-        // other either. Refusing would leave that session permanently unusable;
-        // guessing reaches a real session, and neither one wedges the relay for
-        // every *other* session on the machine, which is what happens today.
-        public static string AddressFor(string peerName, IReadOnlyList<RemoteAgent>? peers)
-        {
-            if (peers is null || string.IsNullOrEmpty(peerName)) return peerName;
-
-            // The first live namesake's ref, kept as the string rather than as a
-            // nullable row: holding the row would need a null test below that
-            // `live >= 2` has already made unreachable, and an arm nothing can
-            // execute reads as an untested branch forever.
-            string? chosen = null;
-            var live = 0;
-
-            foreach (var peer in peers)
-            {
-                if (!peer.Name.Equals(peerName, StringComparison.OrdinalIgnoreCase)) continue;
-                if (peer.IsOffline) continue;
-
-                live++;
-                chosen ??= peer.Ref;
-            }
-
-            if (live < 2) return peerName;
-            if (string.IsNullOrWhiteSpace(chosen)) return peerName;
-
-            return $"{peerName} [{chosen}]";
-        }
-
-        // --- the peer list ---
-
-        // One row of ListAgents' output. Kind is kept as the raw label rather
-        // than parsed into an enum: the set is open (a Claude Code release can
-        // add one), and an unrecognised label should show up as itself rather
-        // than collapse into an "Other" that hides what changed.
-        public readonly record struct RemoteAgent(string Name, string Ref, string Kind, string Status)
-        {
-            // The label a session on another machine carries. Local peers read
-            // "interactive" or "bg" instead, which is the whole reason this
-            // distinction is available to us at all.
-            public bool IsRemoteControl =>
-                Kind.Equals("Remote Control", StringComparison.OrdinalIgnoreCase);
-
-            // A relay of Buddy's own, not a session anyone wants an orb for.
-            //
-            // The current relay excludes itself — ListAgents says so in its own
-            // header — but a *previous* one does not: its Remote Control
-            // registration outlives the process, so an earlier relay turns up as
-            // a peer with status "offline". Observed exactly that way, and it
-            // would have put a phantom orb on screen named after Buddy's own
-            // plumbing.
-            //
-            // Matched on the name prefix, which is the only thing about a relay
-            // that is recognisable from out here — and which, until this was
-            // measured, a relay did not actually wear.
-            //
-            // This test used to be a no-op and nobody knew. The prefix is the
-            // one RemoteControlBridge builds its *tmux session* name from, and
-            // that name was assumed to reach Remote Control because it is passed
-            // to `--remote-control`. It does not: the flag is ignored, and a
-            // relay was really called `user-9b`, after the directory it
-            // ran in. So this matched nothing, every stale relay was worth an orb
-            // after all, and the mirror's discovery — which keys on the same
-            // prefix — could never have found anything. RemoteControlBridge.RelayCwd
-            // has the measurement and the fix, which is to run the relay from a
-            // directory named after itself.
-            // One prefix test, in RemoteControlBridge beside the constant that
-            // builds the name. It used to be a second copy of the literal here,
-            // and the two decide whether a relay becomes an orb — the local scan
-            // now asks the same question of a status file's cwd.
-            public bool IsOwnRelay => MachineNames.IsRelayName(Name);
-
-            // A session that has gone away. Worth an orb only if it is actually
-            // there — "offline" is the state a peer's registration sits in after
-            // its process is gone, and drawing it would be an orb for something
-            // nothing can be sent to.
-            public bool IsOffline =>
-                Status.Contains("offline", StringComparison.OrdinalIgnoreCase);
-
-            // Everything that has to be true for this to become an orb.
-            public bool IsWorthAnOrb => IsRemoteControl && !IsOwnRelay && !IsOffline;
-        }
-
-        // "  job-hunter [94f106]  ·  Remote Control  ·  idle"
-        //
-        // Anchored to the leading indent because the header line ("This session
-        // is ...") is flush left and must never be mistaken for a peer — it
-        // carries a name and a ref in exactly the same shape.
-        private static readonly Regex PeerRow = new(
-            @"^\s+(?<name>\S(?:.*?\S)?)\s+\[(?<ref>[^\]]+)\]\s+·\s+(?<kind>[^·]+?)\s+·\s+(?<status>.+?)\s*$",
-            RegexOptions.Compiled);
-
-        // Every peer the bridge can see, in the order listed.
-        //
-        // The bridge's own session is not in here and needs no filtering — the
-        // header says so itself ("it is not listed below; a message to it would
-        // be a message to yourself"), which is a promise from the tool rather
-        // than something we arrange.
-        public static IReadOnlyList<RemoteAgent> ParseAgents(string toolResultText)
-        {
-            var found = new List<RemoteAgent>();
-            if (string.IsNullOrWhiteSpace(toolResultText)) return found;
-
-            foreach (var line in toolResultText.Split('\n'))
-            {
-                var m = PeerRow.Match(line);
-                if (!m.Success) continue;
-
-                found.Add(new RemoteAgent(
-                    m.Groups["name"].Value.Trim(),
-                    m.Groups["ref"].Value.Trim(),
-                    m.Groups["kind"].Value.Trim(),
-                    m.Groups["status"].Value.Trim()));
-            }
-
-            return found;
         }
 
         // --- an inbound reply ---
