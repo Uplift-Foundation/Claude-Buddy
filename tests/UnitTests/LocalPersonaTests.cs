@@ -68,10 +68,84 @@ public class LocalPersonaTests : IDisposable
         var full = Path.GetFullPath(cwd);
         var parent = Path.GetDirectoryName(full)!;
 
-        var files = LocalPersona.CandidateFiles(cwd, Array.Empty<string>(), SessionSource.ClaudeCode);
+        // No ceiling: the rule itself, unaffected by the one the suite's
+        // bootstrap sets in the environment.
+        var files = LocalPersona.CandidatesBelow(
+            cwd, Array.Empty<string>(), SessionSource.ClaudeCode, "", ceiling: null)
+            .Select(candidate => candidate.Path).ToArray();
 
         Assert.Equal(Path.Combine(parent, "CLAUDE.md"), files[4]);
         Assert.Contains(Path.Combine(Path.GetPathRoot(full)!, "CLAUDE.md"), files);
+    }
+
+    // The ceiling is the last directory visited: its own files are offered,
+    // nothing above it is. This is what keeps a scratch project under a
+    // Windows temp directory from reading the developer's home CLAUDE.md.
+    [Fact]
+    public void ACeilingIsTheLastDirectoryTheWalkVisits()
+    {
+        var ceiling = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "cb-ceiling"));
+        var cwd = Path.Combine(ceiling, "a", "b");
+
+        var files = LocalPersona.CandidatesBelow(
+            cwd, Array.Empty<string>(), SessionSource.ClaudeCode, "", ceiling)
+            .Select(candidate => candidate.Path).ToArray();
+
+        Assert.Contains(Path.Combine(ceiling, "CLAUDE.md"), files);
+        Assert.Contains(Path.Combine(ceiling, "a", "CLAUDE.md"), files);
+        Assert.DoesNotContain(Path.Combine(Path.GetDirectoryName(ceiling)!, "CLAUDE.md"), files);
+        Assert.DoesNotContain(Path.Combine(Path.GetPathRoot(ceiling)!, "CLAUDE.md"), files);
+    }
+
+    // A ceiling the working directory is not below is never met, so the walk
+    // climbs to the root exactly as it would without one.
+    [Fact]
+    public void ACeilingTheWorkingDirectoryIsNotBelowChangesNothing()
+    {
+        var cwd = Path.Combine(Path.GetTempPath(), "cb-candidates", "a");
+        var elsewhere = Path.Combine(Path.GetTempPath(), "cb-elsewhere");
+
+        var bounded = LocalPersona.CandidatesBelow(
+            cwd, Array.Empty<string>(), SessionSource.ClaudeCode, "", elsewhere);
+        var unbounded = LocalPersona.CandidatesBelow(
+            cwd, Array.Empty<string>(), SessionSource.ClaudeCode, "", null);
+
+        Assert.Equal(unbounded.Select(c => c.Path), bounded.Select(c => c.Path));
+    }
+
+    [Fact]
+    public void TheCeilingComparisonIgnoresCase()
+    {
+        var ceiling = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "cb-ceiling"));
+        var cwd = Path.Combine(ceiling, "a");
+
+        var files = LocalPersona.CandidatesBelow(
+            cwd, Array.Empty<string>(), SessionSource.ClaudeCode, "", ceiling.ToUpperInvariant())
+            .Select(candidate => candidate.Path).ToArray();
+
+        // On every OS, by the rule this file already keeps for paths (see the
+        // dedupe in Candidates): Windows paths ignore case, and so does the
+        // default macOS volume, so an upper-cased ceiling is the same directory.
+        // The salvaged draft of this test expected the opposite off Windows and
+        // failed on macOS against its own implementation.
+        Assert.Contains(Path.Combine(ceiling, "CLAUDE.md"), files);
+        Assert.DoesNotContain(Path.Combine(Path.GetDirectoryName(ceiling)!, "CLAUDE.md"), files);
+    }
+
+    // The wiring, read off the environment the suite's bootstrap set: a walk
+    // from a scratch project under the temp directory offers the temp
+    // directory's own files and stops there, on every OS.
+    [Fact]
+    public void TheEnvironmentCeilingBoundsTheWalkTheAppRuns()
+    {
+        var temp = Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.GetTempPath()));
+        var cwd = Path.Combine(temp, "cb-env-ceiling", "a");
+
+        var files = LocalPersona.Candidates(cwd, Array.Empty<string>(), SessionSource.ClaudeCode)
+            .Select(candidate => candidate.Path).ToArray();
+
+        Assert.Contains(Path.Combine(temp, "CLAUDE.md"), files);
+        Assert.DoesNotContain(Path.Combine(Path.GetDirectoryName(temp)!, "CLAUDE.md"), files);
     }
 
     // CB-154: an agent-team member's own files — the two layouts

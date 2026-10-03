@@ -18,7 +18,10 @@ which lines and which branch points are real, and the other engine may only
 contribute hits against them — see merge_secondary().
 
 Usage:
-    tools/merge-coverage.py <report.xml> [more.xml ...] [--base <git-ref>]
+    tools/merge-coverage.py <report.xml> [more.xml ...] [--base <git-ref>] [--expect N]
+
+Exits non-zero without printing a figure unless it finds exactly --expect
+(default 4) reports.
 
 With --base, also reports coverage restricted to the lines added since that ref
 — which is usually the number you actually want when reviewing a change, since
@@ -42,8 +45,37 @@ import xml.etree.ElementTree as ET
 from collections import defaultdict
 
 
+# coverage.sh runs four suites, each producing exactly one cobertura report.
+# Any other count means the headline is measuring something other than the
+# repository (CB-229: two reports, on Windows, and a whole-app figure printed
+# anyway).
+EXPECTED_REPORTS = 4
+
+_MSYS_DRIVE = re.compile(r"^/([A-Za-z])(/.*)?$")
+
+
+def native_path(pattern, windows=None):
+    """Turn an MSYS "/c/Users/x" path into "C:/Users/x" on Windows.
+
+    A native Windows Python reads "/c/Users/x" as a path on the current drive
+    and matches nothing, silently. coverage.sh hands over cygpath -m paths, but
+    a person running this by hand from Git Bash will type the MSYS spelling, so
+    be robust to it rather than to the caller's discipline. Anywhere but Windows
+    this is the identity (and "/c/foo" is a perfectly good POSIX path).
+    """
+    if windows is None:
+        windows = os.name == "nt"
+    if not windows:
+        return pattern
+    m = _MSYS_DRIVE.match(pattern)
+    if not m:
+        return pattern
+    return f"{m.group(1).upper()}:{m.group(2) or '/'}"
+
+
 def parse_args(argv):
     base = None
+    expect = EXPECTED_REPORTS
     patterns = []
     i = 0
     while i < len(argv):
@@ -51,10 +83,28 @@ def parse_args(argv):
             base = argv[i + 1]
             i += 2
             continue
+        if argv[i] == "--expect":
+            expect = int(argv[i + 1])
+            i += 2
+            continue
         patterns.append(argv[i])
         i += 1
-    reports = [p for pat in patterns for p in glob.glob(pat, recursive=True)]
-    return base, reports
+    reports = []
+    for pat in patterns:
+        for p in glob.glob(native_path(pat), recursive=True):
+            if p not in reports:
+                reports.append(p)
+    return base, reports, expect
+
+
+def refuse_unless_expected(reports, expect):
+    """Return an error message when the report count is wrong, else None."""
+    if len(reports) == expect:
+        return None
+    return (f"REFUSING to print a coverage figure: merged {len(reports)} report(s), "
+            f"expected exactly {expect}. A number computed from the wrong set of "
+            f"reports is fiction (CLAUDE.md, Coverage). Reports found: "
+            f"{', '.join(reports) if reports else 'none'}")
 
 
 def repo_root():
@@ -282,9 +332,10 @@ def added_lines(base):
 
 
 def main():
-    base, reports = parse_args(sys.argv[1:])
-    if not reports:
-        sys.exit("no cobertura reports matched — run tools/coverage.sh first")
+    base, reports, expect = parse_args(sys.argv[1:])
+    problem = refuse_unless_expected(reports, expect)
+    if problem:
+        sys.exit(problem)
 
     root = repo_root()
 

@@ -1042,6 +1042,8 @@ A local CLI can also be enabled but carry a warning instead: this means the bina
 
 That's the same rule every orb in this app already depends on: an orb is drawn from a status file the CLI's own hook writes, so a CLI running with no hook installed is genuinely running and genuinely invisible to Claude Buddy at the same time.
 
+**An Account picker appears when the selected CLI has a second account configured** — the additional-accounts list in that CLI's own section of Settings. Each CLI offers only its own list, headed by Default. Claude Code launches the chosen account with `CLAUDE_CONFIG_DIR`, Codex with `CODEX_HOME` and Grok with `GROK_HOME`. Default sets none of them, so the CLI uses its usual `~/.claude`, `~/.codex` or `~/.grok`, or whatever the variable already says if Claude Buddy itself was started with one. The dialog remembers the last account per CLI. With no extra accounts configured for a CLI, there is no picker, and the picker never appears for OpenClaw. If the chosen account's folder doesn't exist, a line under the picker says what will happen: Codex refuses to start, Grok creates a fresh, logged-out account there, and Claude Code starts first-run setup. **Start** stays enabled, because a folder you're about to set up on purpose is a fine reason to go ahead.
+
 **OpenClaw is the odd one of the four, because there's no local binary and no terminal to open.** Choosing it replaces the folder combo with a picker over the agents your gateway already knows about, sorted by the name you'd recognise rather than by its config id. **Start** doesn't open a terminal at all — it asks the gateway to create a brand-new conversation with the chosen agent and opens it straight into a chat panel, the same panel every other agent conversation in this app already uses.
 
 OpenClaw shows up disabled, with a reason stated directly under the row rather than only in a tooltip, in the two cases where starting a conversation with it can't work at all: **No gateway configured.**, when there's nothing to ask; and **Turn on "Allow replying to agents" in Settings.**, when there's a gateway but this app isn't allowed to start anything on it. That second reason is the same permission `OpenClawChatSession`'s own reply path already requires — creating a conversation needs the same scope replying to an existing one does, so there is no separate toggle to look for. A local CLI's own disabled/warning text is stated the same way, so all four rows read consistently.
@@ -1944,6 +1946,8 @@ open "dist/Claude Buddy.app"      # or: open -a "Claude Buddy"
 
 Nothing appears in the Dock and nothing opens a window — **look for the orb
 in the menu bar**, that's the app running. Quit it from that menu.
+
+`--install` replaces a running copy rather than adding a second one: it stops the Claude Buddy already running from `/Applications`, installs, and leaves exactly one running the new build — started by the crash keep-alive if "Serve on launch" is on, otherwise relaunched for you. Nothing is started if nothing was running. Only one Claude Buddy runs per user however it was launched — a second launch from a terminal, ssh or an agent shell finds the first and exits quietly.
 
 The bundle is worth using over the loose binary for reasons beyond
 double-clickability: it's `LSUIElement`, so macOS itself treats it as a

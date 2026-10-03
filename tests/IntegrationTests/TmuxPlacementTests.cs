@@ -146,17 +146,71 @@ public sealed class TmuxPlacementTests : IDisposable
     // `…/fmtcbtestx`, which does not, and tmux started the pane in $HOME with
     // the CLI running there. The cd guard in the command lands it exactly.
     [MacTmuxFact]
-    public void BothPlacementsLandInADirectoryNamedLikeATmuxFormat()
+    public void BothPlacementsLandInADirectoryNamedLikeATmuxFormat() => LandsInAFormatNamedDirectory();
+
+    // The same, with the pane's shell starting a second late (CB-235).
+    //
+    // For a directory like this one -c cannot land, so the pane begins in
+    // $HOME and only the command's own `cd` moves it — some moments after the
+    // placement has returned. The case above used to read tmux's
+    // pane_current_path straight away, and under load it now and then
+    // sampled the pane before the cd had run: "/Users/<you>" for the
+    // directory. A slow shell makes that window a full second wide, which
+    // failed the old shape of the test every time and is why this case is
+    // kept as well as fixed: the wait below is on the command having actually
+    // started where it should, not on how quickly a shell happens to start.
+    [MacTmuxFact]
+    public void BothPlacementsLandInADirectoryNamedLikeATmuxFormatEvenWhenTheShellStartsLate()
+    {
+        var slow = Path.Combine(_dir, "slow-sh");
+        File.WriteAllText(slow, "#!/bin/sh\nsleep 1\nexec /bin/sh \"$@\"\n");
+        File.SetUnixFileMode(slow, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        Tmux("set-option", "-g", "default-shell", slow);
+
+        LandsInAFormatNamedDirectory();
+    }
+
+    private void LandsInAFormatNamedDirectory()
     {
         AttachClient();
         var dir = Path.Combine(_dir, "fmt#{session_name}x");
         Directory.CreateDirectory(dir);
 
-        var chat = TerminalLauncher.PlaceInOwnTmuxWindow("exec /bin/sleep 30", dir);
-        var attach = TerminalLauncher.PlaceInTmux("exec /bin/sleep 30", dir);
+        var (chatCommand, chatLanded) = ReportingWhereItRuns("chat");
+        var (attachCommand, attachLanded) = ReportingWhereItRuns("attach");
 
+        var chat = TerminalLauncher.PlaceInOwnTmuxWindow(chatCommand, dir);
+        var attach = TerminalLauncher.PlaceInTmux(attachCommand, dir);
+
+        // Where each command actually ran, said by the command itself after
+        // the cd guard — and once it has, tmux's own view of the pane has
+        // settled too, so both can be asserted without racing the shell.
+        Assert.Equal(RealPath(dir), LandedIn(chatLanded));
+        Assert.Equal(RealPath(dir), LandedIn(attachLanded));
         Assert.Equal(RealPath(dir), PathOf(chat!));
         Assert.Equal(RealPath(dir), PathOf(attach!));
+    }
+
+    // A placed command that writes its own working directory to a file before
+    // it settles into the long-running process a pane needs.
+    private (string Command, string Marker) ReportingWhereItRuns(string name)
+    {
+        var marker = Path.Combine(_dir, name + ".cwd");
+        return ($"pwd -P > '{marker}'; exec /bin/sleep 30", marker);
+    }
+
+    // Waits on the command's own report, with a backstop only for a pane that
+    // never runs its command at all — not a tolerance the passing path uses.
+    private static string LandedIn(string marker)
+    {
+        var backstop = Stopwatch.StartNew();
+        while (!File.Exists(marker) || new FileInfo(marker).Length == 0)
+        {
+            Assert.True(backstop.Elapsed < TimeSpan.FromMinutes(1), "the placed command never reported where it ran");
+            Thread.Sleep(50);
+        }
+
+        return File.ReadAllText(marker).Trim();
     }
 
     // A cwd that has gone runs nothing on either path: the guard exits, the

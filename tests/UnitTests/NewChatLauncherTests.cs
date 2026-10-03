@@ -141,7 +141,7 @@ namespace ClaudeBuddy.Tests
             }
         }
 
-        // --- ConfigDirFor: the one path to CLAUDE_CONFIG_DIR -----------------
+        // --- ConfigDirFor: the one path to each CLI's account variable ------
 
         // Rooted for the platform the test runs on, the same reason
         // ClaudeProfileTests.Home is — ConfigDirFor's answer is a resolved
@@ -160,16 +160,47 @@ namespace ClaudeBuddy.Tests
             Assert.Equal(Path.Combine(Home, ".claude-work"), result);
         }
 
-        [Fact]
-        public void ConfigDirForIsNullForCodexRegardlessOfProfileDir()
+        // CB-203: Codex and Grok resolve a named home the same way, through
+        // the same normaliser, rather than being ignored as they were under
+        // CB-201's Claude Code-only picker.
+        [Theory]
+        [InlineData("Codex", ".codex-work")]
+        [InlineData("Grok", ".grok-work")]
+        public void ConfigDirForResolvesANamedHomeForCodexAndGrok(string cliName, string profileDir)
         {
-            Assert.Null(NewChatLauncher.ConfigDirFor(NewChatCli.Codex, "/Users/me", ".claude-work"));
+            var cli = Enum.Parse<NewChatCli>(cliName);
+            Assert.Equal(Path.Combine(Home, profileDir), NewChatLauncher.ConfigDirFor(cli, Home, profileDir));
         }
 
-        [Fact]
-        public void ConfigDirForIsNullForGrokRegardlessOfProfileDir()
+        // Each CLI's own default home is "set nothing" — measured harmless to
+        // set for Codex and Grok (CB-203), but null keeps one rule for all
+        // three and lets an inherited CODEX_HOME/GROK_HOME through.
+        [Theory]
+        [InlineData("Codex", ".codex")]
+        [InlineData("Codex", ".codex/")]
+        [InlineData("Grok", ".grok")]
+        [InlineData("Grok", null)]
+        public void ConfigDirForIsNullForCodexAndGrokDefaultHome(string cliName, string? profileDir)
         {
-            Assert.Null(NewChatLauncher.ConfigDirFor(NewChatCli.Grok, "/Users/me", ".claude-work"));
+            var cli = Enum.Parse<NewChatCli>(cliName);
+            Assert.Null(NewChatLauncher.ConfigDirFor(cli, Home, profileDir));
+        }
+
+        [Theory]
+        [InlineData("Codex", ".codex")]
+        [InlineData("Grok", ".grok")]
+        public void ConfigDirForIsNullForAnAbsoluteSpellingOfTheDefaultHome(string cliName, string dir)
+        {
+            var cli = Enum.Parse<NewChatCli>(cliName);
+            Assert.Null(NewChatLauncher.ConfigDirFor(cli, Home, Path.Combine(Home, dir)));
+        }
+
+        // The de-dup is per CLI: Claude Code's default directory, handed to
+        // Codex, is a real directory to point CODEX_HOME at, not Default.
+        [Fact]
+        public void ConfigDirForTreatsClaudeDefaultAsARealHomeForCodex()
+        {
+            Assert.Equal(Path.Combine(Home, ".claude"), NewChatLauncher.ConfigDirFor(NewChatCli.Codex, Home, ".claude"));
         }
 
         // CB-42's own case, reached through this seam: a profile dir that
