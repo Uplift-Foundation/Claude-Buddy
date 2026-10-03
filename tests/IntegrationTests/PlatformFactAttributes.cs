@@ -130,8 +130,29 @@ public sealed class MacOpenFactAttribute : FactAttribute
         }
 
         if (!File.Exists("/usr/bin/open"))
+        {
             Skip = "no /usr/bin/open on this machine";
+            return;
+        }
+
+        Skip = LaunchSkipReason(Environment.GetEnvironmentVariable("CI"),
+            Environment.GetEnvironmentVariable(LaunchOptIn));
     }
+
+    internal const string LaunchOptIn = "CLAUDE_BUDDY_LAUNCH_TESTS";
+
+    // These cases launch real app bundles through LaunchServices, and a launch
+    // lands in the session of whoever is logged in — on a developer's Mac that
+    // is a blank Probe tile in their Dock per launch, staying after the probe
+    // exits (CB-246: about fifty of them, mid-session). So by default they run
+    // only where nobody is sitting: CI, which every GitHub runner announces
+    // with CI=true, or a machine whose owner opted in. Skipped rather than
+    // passed, with the reason naming the switch, so a local run says what it
+    // did not cover. Pure, so the rule has its own cases.
+    internal static string? LaunchSkipReason(string? ci, string? optIn) =>
+        string.Equals(ci, "true", StringComparison.OrdinalIgnoreCase) || optIn == "1"
+            ? null
+            : $"launches apps through LaunchServices into the logged-in session (Dock tiles on a developer's Mac); runs in CI, or set {LaunchOptIn}=1 to run it here";
 }
 
 // The cloned-bundle cache is a macOS feature end to end: ClaudeDesktopBundles

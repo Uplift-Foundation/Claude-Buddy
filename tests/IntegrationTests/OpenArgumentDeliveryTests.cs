@@ -263,6 +263,23 @@ public sealed class OpenArgumentDeliveryTests : IDisposable
         Assert.True(ASecondOpenFoundTheRunningInstance(1,
             "_LSOpenURLsWithCompletionHandler() failed for the application /tmp/x/Probe.app with error -600."));
 
+    // The gate on the launching cases above (CB-246): on in CI and on opt-in,
+    // off — with a reason naming the switch — everywhere else.
+    [Theory]
+    [InlineData("true", null)]
+    [InlineData("TRUE", null)]
+    [InlineData(null, "1")]
+    public void LaunchingCasesRunInCiOrOnOptIn(string? ci, string? optIn) =>
+        Assert.Null(MacOpenFactAttribute.LaunchSkipReason(ci, optIn));
+
+    [Theory]
+    [InlineData(null, null)]
+    [InlineData("false", null)]
+    [InlineData(null, "0")]
+    [InlineData(null, "yes")]
+    public void LaunchingCasesSkipOnADevelopersMacAndSayHowToRunThem(string? ci, string? optIn) =>
+        Assert.Contains(MacOpenFactAttribute.LaunchOptIn + "=1", MacOpenFactAttribute.LaunchSkipReason(ci, optIn));
+
     [Theory]
     [InlineData("_LSOpenURLsWithCompletionHandler() failed for the application /tmp/x/Probe.app with error -10810.")]
     [InlineData("The application /tmp/x/Probe.app cannot be opened for an unexpected reason")]
