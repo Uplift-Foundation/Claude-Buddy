@@ -556,7 +556,7 @@ namespace ClaudeBuddy
         // usage poll behind them.
         internal AccountOrbs AccountOrbsForTests => _accountOrbs;
 
-        private FileSystemWatcher? _watcher;
+        private DeferredWatcher? _watcher;
         private readonly DispatcherTimer _pollTimer = new() { Interval = TimeSpan.FromSeconds(2) };
         private readonly DispatcherTimer _debounce = new() { Interval = TimeSpan.FromMilliseconds(150) };
 
@@ -682,21 +682,23 @@ namespace ClaudeBuddy
         [ExcludeFromCodeCoverage]
         private void StartWatching()
         {
-            try
-            {
-                _watcher = new FileSystemWatcher(_statusDir, "*.txt")
+            // Off this thread: Start() runs on the UI thread at launch, and on
+            // macOS turning a watcher on can wait on a machine-wide disk flush
+            // (see DeferredWatcher, CB-234). The poll timer covers us until it
+            // arrives, or for good if it never does.
+            _watcher = new DeferredWatcher(
+                () => new FileSystemWatcher(_statusDir, "*.txt")
                 {
                     NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.CreationTime | NotifyFilters.FileName,
                     EnableRaisingEvents = true
-                };
-                _watcher.Changed += (_, _) => Dispatcher.UIThread.Post(RestartDebounce);
-                _watcher.Created += (_, _) => Dispatcher.UIThread.Post(RestartDebounce);
-                _watcher.Deleted += (_, _) => Dispatcher.UIThread.Post(RestartDebounce);
-            }
-            catch
-            {
-                // If the watcher can't be set up for some reason, the poll timer still covers us.
-            }
+                },
+                watcher =>
+                {
+                    watcher.Changed += (_, _) => Dispatcher.UIThread.Post(RestartDebounce);
+                    watcher.Created += (_, _) => Dispatcher.UIThread.Post(RestartDebounce);
+                    watcher.Deleted += (_, _) => Dispatcher.UIThread.Post(RestartDebounce);
+                },
+                "SessionManager.StatusWatcher");
         }
 
         // Excluded from coverage: restarts an Avalonia timer, and is only ever
