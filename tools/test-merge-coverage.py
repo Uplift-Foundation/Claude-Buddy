@@ -344,6 +344,15 @@ class SourceStamp(unittest.TestCase):
         self.assertIn(merge_coverage.source_stamp(self.repo).split()[0], msg)
         self.assertIn("--allow-source-mismatch", msg)
 
+    def test_a_stamp_with_no_digest_line_refuses_cleanly_instead_of_crashing(self):
+        # A one-line stamp (an old or hand-made one; coverage.sh itself can no longer write
+        # one) differs from the current stamp, so it must refuse, with the message.
+        head = merge_coverage.source_stamp(self.repo).split()[0]
+        report = self._stamp_file(head + "\n")
+        msg = merge_coverage.source_mismatch([report], self.repo)
+        self.assertIn("REFUSING", msg)
+        self.assertIn("(missing)", msg)
+
     def test_an_edit_made_after_the_stamp_is_caught_too(self):
         # The case that bit this ticket's own measurements: same sha, tree edited while the
         # suites ran.

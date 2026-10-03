@@ -156,10 +156,18 @@ def source_mismatch(reports, root):
     current = source_stamp(root)
     if measured == current:
         return None
+
+    def parts(stamp):
+        # A stamp with no digest line (an old or hand-made one) must refuse with the
+        # message below, not crash building it.
+        found = stamp.split()
+        return (found + ["(missing)", "(missing)"])[:2]
+
+    (measured_head, measured_digest), (current_head, current_digest) = parts(measured), parts(current)
     return ("REFUSING to print a coverage figure: these reports were measured in a different "
-            f"checkout than the one being merged against.\n  measured: {measured.split()[0]} "
-            f"(changes {measured.split()[1]})\n  now:      {current.split()[0]} "
-            f"(changes {current.split()[1]})\n"
+            f"checkout than the one being merged against.\n  measured: {measured_head} "
+            f"(changes {measured_digest})\n  now:      {current_head} "
+            f"(changes {current_digest})\n"
             "Line numbers in the reports belong to the sources they were built from; against "
             "any others every attribution below would be plausible and wrong. Re-run "
             "coverage.sh in this checkout, or pass --allow-source-mismatch if the merge is "
