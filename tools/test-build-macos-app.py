@@ -77,6 +77,16 @@ class InstallTail(unittest.TestCase):
     def posix(self, path):
         return path.replace("\\", "/")
 
+    def bash_path(self, path):
+        """A directory as bash's PATH needs it. Git Bash reads `C:/x` fine as a
+        file path but PATH is colon-separated, so `C:/x` there is the two
+        entries `C` and `/x` and nothing on it is found — which is how the
+        Windows leg first reported `pgrep: command not found` for every stub."""
+        p = self.posix(path)
+        if re.match(r"^[A-Za-z]:/", p):
+            p = "/" + p[0].lower() + p[2:]
+        return p
+
     def stub(self, name, body):
         path = os.path.join(self.bin, name)
         with open(path, "w", newline="\n") as f:
@@ -106,7 +116,7 @@ class InstallTail(unittest.TestCase):
         script = ("set -euo pipefail\nPATH=%s:$PATH\nSTOPPED=\"%s\"\nWAS_RUNNING=\"%s\"\n"
                   "APP_NAME=\"Claude Buddy\"\nBUNDLE_ID=\"io.github.wtvamp.claudebuddy\"\n"
                   "INSTALLED_EXE=\"%s\"\n%s\necho TAIL-COMPLETED\n") % (
-                      self.posix(self.bin), stopped, was_running, INSTALLED, TAIL)
+                      self.bash_path(self.bin), stopped, was_running, INSTALLED, TAIL)
         path = os.path.join(self.tmp, "tail.sh")
         with open(path, "w", newline="\n") as f:
             f.write(script)
