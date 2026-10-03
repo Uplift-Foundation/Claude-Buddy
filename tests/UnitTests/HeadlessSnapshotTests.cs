@@ -331,6 +331,39 @@ public class HeadlessSnapshotTests
         }
     }
 
+    // Only Claude Code sessions are asked about: agent teams are Claude Code's,
+    // and a Codex session kept beside a member is left out of the batch.
+    [Fact]
+    public void ACodexSessionIsLeftOutOfTheTeamRead()
+    {
+        var dir = NewStatusDir();
+        var codexWas = ClaudeBuddySettings.CodexEnabled;
+        try
+        {
+            ClaudeBuddySettings.CodexEnabled = true;
+            WriteStatus(dir, "member", new SessionStatus
+                { State = "idle", Title = "backlog", Cwd = "/tmp/t", Source = SessionSource.ClaudeCode, SessionPid = 801 });
+            WriteStatus(dir, "codex", new SessionStatus
+                { State = "idle", Title = "codex", Cwd = "/tmp/t", Cli = "codex", SessionPid = 802 });
+
+            var asked = new List<IReadOnlyList<int>>();
+            var kept = SessionManager.HeadlessSnapshot(dir, NoJobs, isRunning: _ => true, nowUtc: DateTime.UtcNow,
+                teams: pids =>
+                {
+                    asked.Add(pids);
+                    return new Dictionary<int, AgentTeam.Membership>();
+                });
+
+            Assert.Contains(kept, k => k.SessionId == "codex");
+            Assert.Equal(new[] { 801 }, Assert.Single(asked));
+        }
+        finally
+        {
+            ClaudeBuddySettings.CodexEnabled = codexWas;
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
     // Nothing kept is Claude Code, so nothing is asked — on Windows the team
     // read is a WMI query, and a snapshot of no sessions should cost none.
     [Fact]

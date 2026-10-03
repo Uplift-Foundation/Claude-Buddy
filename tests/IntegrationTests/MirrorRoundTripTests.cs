@@ -1987,6 +1987,26 @@ public class MirrorRoundTripTests : IDisposable
         Assert.Equal(MirrorProtocol.CliClaudeCode, known.Single(e => e.Route == RemoteMirrorServer.RouteFor(nowhere)).Name);
     }
 
+    // A member offered from its status file carries the same facts any other
+    // row does: its own /color when it set one (which outranks the team's on
+    // the near side), and whether this machine can deliver text to it.
+    [Fact]
+    public async Task AMemberCarriesItsOwnColourAndItsDeliveryLikeAnyRow()
+    {
+        var harness = new Harness(_dir, wireDelivery: true) { CanDeliverAnswer = true };
+        harness.AddSession("lead", WriteTranscript("lead3.jsonl", Conversation(2)));
+        var lead = harness.SessionIdOf("lead");
+        var member = harness.AddTeamMember("lead", lead, "wren", "blue",
+            WriteTranscript("coloured.jsonl", Conversation(2)), color: "red");
+
+        await harness.Client.AskWhatTheyHaveAsync(harness.Peers);
+
+        var entry = harness.Client.Known().Select(k => k.Entry).Single(e => e.Route == RemoteMirrorServer.RouteFor(member));
+        Assert.Equal("red", entry.Color);
+        Assert.Equal("blue", entry.AgentColor);
+        Assert.True(entry.CanDeliver);
+    }
+
     // A roster with no team in it is the same bytes it always was — the new
     // fields are absent, not null-valued — so CB-216's "unchanged" answer
     // still holds for every machine not running a team.
@@ -2207,7 +2227,7 @@ public class MirrorRoundTripTests : IDisposable
         // list members; measured), whose Lead is its lead's session id, as the
         // snapshot's team read leaves it.
         public string AddTeamMember(string title, string leadSessionId, string agent, string agentColor,
-            string transcriptPath, string? cwd = null)
+            string transcriptPath, string? cwd = null, string color = "")
         {
             var sessionId = Guid.NewGuid().ToString();
             _sessions.Add((sessionId, new SessionStatus
@@ -2221,6 +2241,7 @@ public class MirrorRoundTripTests : IDisposable
                 Lead = leadSessionId,
                 Agent = agent,
                 AgentColor = agentColor,
+                Color = color,
             }));
             return sessionId;
         }

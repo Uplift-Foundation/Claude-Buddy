@@ -1457,8 +1457,12 @@ namespace ClaudeBuddy
                 .Distinct()
                 .ToList();
 
+            // A direct call, not `(teams ?? AgentTeam.OfAll)(pids)`: that form
+            // makes the compiler cache a delegate for the method group, which
+            // is an allocation for nothing and, to one of the two coverage
+            // engines, two more branch arcs on a line no UI suite runs.
             if (claudePids.Count > 0)
-                ApplyTeams(kept, (teams ?? AgentTeam.OfAll)(claudePids));
+                ApplyTeams(kept, teams is null ? AgentTeam.OfAll(claudePids) : teams(claudePids));
 
             return kept;
         }
