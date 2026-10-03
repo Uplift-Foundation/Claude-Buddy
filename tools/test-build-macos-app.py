@@ -88,10 +88,23 @@ class InstallTail(unittest.TestCase):
         return p
 
     def stub(self, name, body):
+        """A stand-in command that first records that it ran. The record is
+        what lets run_tail prove its stubs were the ones found: on the first
+        Windows CI run none of them was on PATH, every call was `command not
+        found`, and one case passed anyway because the script swallows a
+        failed pgrep by design."""
         path = os.path.join(self.bin, name)
+        calls = self.posix(os.path.join(self.tmp, "stub-calls"))
         with open(path, "w", newline="\n") as f:
-            f.write("#!/bin/sh\n" + body)
+            f.write('#!/bin/sh\necho %s >> "%s"\n' % (name, calls) + body)
         os.chmod(path, 0o755)
+
+    def stub_calls(self):
+        try:
+            with open(os.path.join(self.tmp, "stub-calls")) as f:
+                return f.read().split()
+        except FileNotFoundError:
+            return []
 
     def run_tail(self, processes, appear_on_call=1, stopped="", was_running="", keepalive=False):
         """processes: {pid: executable path}, visible to pgrep only from its
@@ -121,6 +134,10 @@ class InstallTail(unittest.TestCase):
         with open(path, "w", newline="\n") as f:
             f.write(script)
         r = subprocess.run([bash(), self.posix(path)], capture_output=True, text=True)
+        # Every version of the tail asks pgrep at least once. If the stub was
+        # not the pgrep that ran, nothing this case asserts means anything.
+        self.assertIn("pgrep", self.stub_calls(),
+                      "the stub pgrep was never called, so the stubs were not on PATH:\n" + r.stdout + r.stderr)
         return r.returncode, r.stdout, r.stderr
 
     def relaunched(self):
@@ -182,6 +199,29 @@ class InstallTail(unittest.TestCase):
         rc, out, err = self.run_tail({})
         self.assertEqual(0, rc, out + err)
         self.assertFalse(self.relaunched())
+        self.assertIn("Launch it with", out)
+
+    # Roxanne's surviving mutant B: with WAS_RUNNING dropped from the wait,
+    # every case above still passed, because each one that needed the wait also
+    # had STOPPED or a loaded keep-alive to trigger it. Here only WAS_RUNNING
+    # says a Buddy was up: stopped by something else, no keep-alive, the copy
+    # back a moment later.
+    def test_a_buddy_that_was_running_is_waited_for_on_that_alone(self):
+        rc, out, err = self.run_tail({42282: INSTALLED}, appear_on_call=2, stopped="",
+                                     was_running="40928", keepalive=False)
+        self.assertEqual(0, rc, out + err)
+        self.assertIn("==> Running: pid 42282", out)
+        self.assertFalse(self.relaunched())
+
+    # Roxanne's surviving mutant C: with the relaunch widened to "whenever none
+    # appears", every case still passed. A loaded keep-alive on a machine where
+    # nothing was running gets waited for — and if launchd never starts it,
+    # that is not this script's cue to launch one.
+    def test_a_loaded_keepalive_that_starts_nothing_is_not_relaunched_by_hand(self):
+        rc, out, err = self.run_tail({}, keepalive=True)
+        self.assertEqual(0, rc, out + err)
+        self.assertIn("launchctl", self.stub_calls())
+        self.assertFalse(self.relaunched(), "launched a Buddy on a machine where none was running")
         self.assertIn("Launch it with", out)
 
 
