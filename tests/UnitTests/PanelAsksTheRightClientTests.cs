@@ -64,18 +64,72 @@ public class PanelAsksTheRightClientTests
         // the accessor and the link's plumbing. The positive control is that
         // the accessor really does read it: if the pattern stopped matching
         // there, the offender check below would be scanning for nothing.
-        var hostReads = sessions.Where(l => l.Text.Contains("PeerSessions.Host")).ToList();
-        Assert.Contains(hostReads, l => EnclosingMember(sessions, l.Index) == "MirrorClientFor");
+        Assert.Contains(sessions, l =>
+            l.Text.Contains("PeerSessions.Host") && EnclosingMember(sessions, l.Index) == "MirrorClientFor");
 
-        var offenders = hostReads
-            .Where(l => !HostReadersAllowed.Contains(EnclosingMember(sessions, l.Index)))
-            .Select(l => $"{l.Number} (in {EnclosingMember(sessions, l.Index) ?? "?"}): {l.Text.Trim()}")
-            .ToList();
+        var offenders = HostOffenders(sessions);
 
         Assert.True(offenders.Count == 0,
             "these read PeerSessions.Host instead of asking MirrorClientFor, "
             + "so a panel question could go around the one accessor:\n  " + string.Join("\n  ", offenders));
     }
+
+    // The detector has to see a read that sits in a member of any shape, not
+    // only in a method. Idris Belanger's QA case on CB-238: an expression-bodied
+    // property placed straight after MirrorClientFor was attributed to
+    // MirrorClientFor, because the detector only knew signatures with a `(`,
+    // and so it passed. Pinned here against a synthetic source rather than by
+    // editing the real file, so it stays a test rather than a one-off check.
+    [Theory]
+    [InlineData("        internal static RemoteMirrorClient? Sneaky => PeerSessions.Host?.Client;", "Sneaky")]
+    [InlineData("        internal static RemoteMirrorClient? Sneaky\n        {\n            get { return PeerSessions.Host?.Client; }\n        }", "Sneaky")]
+    [InlineData("        private static readonly RemoteMirrorClient? Sneaky = PeerSessions.Host?.Client;", "Sneaky")]
+    [InlineData("        public static void Sneaky()\n        {\n            var c = PeerSessions.Host?.Client;\n        }", "Sneaky")]
+    public void AReadInAMemberOfAnyShapeAfterTheAccessorIsStillCaught(string member, string name)
+    {
+        var source = string.Join("\n", new[]
+        {
+            "    internal static class RemoteControlSessions",
+            "    {",
+            "        internal static RemoteMirrorClient? MirrorClientFor(string account)",
+            "        {",
+            "            return PeerSessions.Host?.Client;",
+            "        }",
+            "",
+            member,
+            "    }"
+        });
+
+        var lines = CodeLinesOf(source.Split('\n'));
+        var offenders = HostOffenders(lines);
+
+        Assert.Single(offenders);
+        Assert.Contains("(in " + name + ")", offenders[0]);
+    }
+
+    // And the same synthetic source with nothing added has no offender — the
+    // accessor's own read is allowed, so the theory above fails for the reason
+    // it says and not because every read is flagged.
+    [Fact]
+    public void TheAccessorsOwnReadIsNotAnOffender()
+    {
+        var lines = CodeLinesOf(new[]
+        {
+            "        internal static RemoteMirrorClient? MirrorClientFor(string account)",
+            "        {",
+            "            return PeerSessions.Host?.Client;",
+            "        }"
+        });
+
+        Assert.Empty(HostOffenders(lines));
+    }
+
+    private static List<string> HostOffenders(List<CodeLine> sessions) =>
+        sessions
+            .Where(l => l.Text.Contains("PeerSessions.Host"))
+            .Where(l => !HostReadersAllowed.Contains(EnclosingMember(sessions, l.Index)))
+            .Select(l => $"{l.Number} (in {EnclosingMember(sessions, l.Index) ?? "?"}): {l.Text.Trim()}")
+            .ToList();
 
     // --- and the behaviour the bug produced ------------------------------------
 
@@ -110,22 +164,32 @@ public class PanelAsksTheRightClientTests
 
     // Lines that are code, not comments — a comment naming PeerSessions.Host
     // (this file's own neighbours do) is not a read of it.
-    private static List<CodeLine> CodeLines(string path)
-    {
-        var all = File.ReadAllLines(path);
-        return all
+    private static List<CodeLine> CodeLines(string path) => CodeLinesOf(File.ReadAllLines(path));
+
+    private static List<CodeLine> CodeLinesOf(string[] all) =>
+        all
             .Select((text, i) => new CodeLine(i, i + 1, text))
             .Where(l => !l.Text.TrimStart().StartsWith("//"))
             .ToList();
-    }
 
-    // The member a line sits in: the nearest `static` or instance member
-    // signature above it. Crude, and enough — the members that matter are
-    // short and named, and a wrong answer only ever makes the check stricter.
+    // The member a line sits in: the nearest member declaration at or above
+    // it. A declaration is a line that starts with an access modifier and
+    // names a member followed by `(` (a method), `=>` (an expression-bodied
+    // member), `=` (a field with an initialiser) or the end of the line (a
+    // property or other member whose body opens on the next line).
+    //
+    // What it does not do, stated rather than implied: it is a line scanner,
+    // not a parser. A declaration split over several lines before its name, a
+    // member with no access modifier, or a read inside a nested type's member
+    // are attributed to whatever declaration line precedes them. That is the
+    // limit a member shape has to beat to slip past, and the theory above pins
+    // the four shapes this class actually uses. It replaced a version that
+    // knew only `(` and claimed a wrong answer could only make it stricter —
+    // which an expression-bodied property after MirrorClientFor disproved.
     private static string? EnclosingMember(List<CodeLine> lines, int index)
     {
         var signature = new System.Text.RegularExpressions.Regex(
-            @"^\s+(?:internal|public|private)\b[^=;(]*?\b(\w+)\s*\(");
+            @"^\s+(?:internal|public|private|protected)\b[^=;(]*?\b(\w+)\s*(?:\(|=>|=(?!=)|$)");
 
         foreach (var line in lines.Where(l => l.Index <= index).OrderByDescending(l => l.Index))
         {
