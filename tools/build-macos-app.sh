@@ -314,8 +314,25 @@ if [[ $INSTALL -eq 1 ]]; then
   # and without CLAUDE_CONFIG_DIR, which an agent shell would otherwise leak
   # into the app and mislabel every account orb with. Nothing is launched if
   # nothing was running: a first install still leaves starting it to you.
-  running_installed() { pgrep -x ClaudeBuddy | while read -r p; do
-    [[ "$(ps -o comm= -p "$p" 2>/dev/null)" == "$INSTALLED_EXE" ]] && echo "$p"; done; }
+  #
+  # Never fails, and that is load-bearing. It is only ever called inside
+  # `$(...)`, and under `set -euo pipefail` a failing substitution in an
+  # assignment ends the script: `pgrep` exits 1 when nothing matches, and
+  # the loop's last `[[ ]] && echo` returns 1 when the last pid is not ours.
+  # So a fresh install with no Buddy running — the ordinary first install,
+  # or a machine where launchd had not started the new one yet — exited 1
+  # straight after a successful install, before the 0/1/many report below,
+  # whose own "launch it with" arm could therefore never print. (CB-206's
+  # install tail; found installing develop at 0e09981d, fixed under CB-245.)
+  running_installed() {
+    local p
+    for p in $(pgrep -x ClaudeBuddy || true); do
+      if [[ "$(ps -o comm= -p "$p" 2>/dev/null || true)" == "$INSTALLED_EXE" ]]; then
+        echo "$p"
+      fi
+    done
+    return 0
+  }
   if [[ -n "$STOPPED" ]]; then
     for _ in 1 2 3 4 5 6 7 8 9 10; do
       [[ -n "$(running_installed)" ]] && break
