@@ -153,12 +153,22 @@ public class TurnSoundsTests : IDisposable
 
         var third = await Task.WhenAny(signal.Task, Task.Delay(TimeSpan.FromSeconds(2)));
         Assert.Equal(signal.Task, third);
+        var cPlayedAt = DateTime.UtcNow;
 
-        // Padded past B's own real two-second deadline (armed back near the
-        // top of this test) so its timer has genuinely had the chance to
-        // fire on its own before the final count is read.
-        await Task.Delay(TimeSpan.FromSeconds(2.5));
+        // B's own timer fires about two real seconds after A and finds C's
+        // live sound inside its gap (CB-240: FirePending holds itself to the
+        // gap now, where it used to play on top of C). B is not erased, it
+        // waits for its own gap again, which C's stamp puts a gap after C. So
+        // this waits for B to actually play, bounded only so a lost B fails
+        // instead of hanging, and asserts how far behind C it landed.
+        signal = new TaskCompletionSource<bool>();
+        var fourth = await Task.WhenAny(signal.Task, Task.Delay(TimeSpan.FromSeconds(10)));
+        Assert.Equal(signal.Task, fourth);
+        var bPlayedAt = DateTime.UtcNow;
+
         Assert.Equal(3, played.Count); // A live, B's own deferred Ping, C live — none erased the others
+        Assert.True(bPlayedAt - cPlayedAt >= TimeSpan.FromSeconds(1.9),
+            $"B played {(bPlayedAt - cPlayedAt).TotalMilliseconds:F0} ms after C");
     }
 
     // QA (CB-167): the 2 s rate limit only spaces out when a sound is
@@ -1042,5 +1052,236 @@ public class TurnSoundsTests : IDisposable
             Assert.True(starts[i] - starts[i - 1] >= TimeSpan.FromSeconds(1.9),
                 $"sounds {i} and {i + 1} started {(starts[i] - starts[i - 1]).TotalMilliseconds:F0} ms apart");
         }
+    }
+
+    // CB-240. The gap is enforced for a live scan (Decide) but a deferred sound
+    // that fires does not re-check it: its only protection is that its timer was
+    // armed for lastPlayed + MinimumGap. A live scan that lands after the
+    // pending sound is due but before the timer's callback runs -- thread-pool
+    // latency, which loaded machines have plenty of -- sees the gap closed and
+    // plays at once; the callback then plays the pending sound on top of it.
+    //
+    // Forced rather than waited for: the live scan is delivered first, then the
+    // timer's callback is invoked by hand, which is exactly that ordering. No
+    // sleeps, no dependence on how fast this machine is.
+    [Fact]
+    public async Task APendingSoundThatFiresLateDoesNotPlayOnTopOfALiveOneThatLandedFirst()
+    {
+        var played = new List<(DateTime At, string Path)>();
+        ChimePlayer.PlayForTests = path => { lock (played) played.Add((DateTime.UtcNow, path)); };
+
+        ClaudeBuddySettings.TurnSoundsEnabled = true;
+        ClaudeBuddySettings.TurnFinishedSound = null;
+        ClaudeBuddySettings.NeedsAttentionSound = null;
+
+        var t0 = DateTime.UtcNow;
+        TurnSounds.Deliver(new[] { Finished("key-a", "session-a") }, NoSummary, t0);   // plays, stamps t0
+        TurnSounds.Deliver(
+            new[] { NeedsAttention("key-b", "session-b") }, NoSummary, t0.AddSeconds(0.5),
+            currentStateFor: _ => "waiting");                                          // deferred to t0+2
+
+        // A regular scan after the pending sound's PlayAt, before its timer ran.
+        TurnSounds.Deliver(new[] { Finished("key-c", "session-c") }, NoSummary, t0.AddSeconds(2.05));
+
+        TurnSounds.FirePending();                                                      // the timer, late
+        await TurnSounds.ChimesEnqueuedSoFar();
+
+        List<DateTime> starts;
+        lock (played) starts = played.Select(p => p.At).OrderBy(t => t).ToList();
+        Assert.Equal(2, starts.Count);   // key-a and key-c; key-b waits for its own gap
+    }
+
+    // CB-240, the second window. FirePending releases the lock after reading
+    // what is pending and only stamps _lastPlayed once it has validated and
+    // chosen; a live scan that lands in between finds the gap still open and
+    // plays. currentStateFor runs in exactly that stretch, outside the lock, so
+    // delivering the live scan from inside it forces the ordering with no timing.
+    [Fact]
+    public async Task ALiveScanThatLandsWhileAPendingSoundIsBeingValidatedDoesNotDoubleUp()
+    {
+        var played = new List<(DateTime At, string Path)>();
+        ChimePlayer.PlayForTests = path => { lock (played) played.Add((DateTime.UtcNow, path)); };
+
+        ClaudeBuddySettings.TurnSoundsEnabled = true;
+        ClaudeBuddySettings.TurnFinishedSound = null;
+        ClaudeBuddySettings.NeedsAttentionSound = null;
+
+        var t0 = DateTime.UtcNow;
+        var slippedIn = false;
+        TurnSounds.Deliver(new[] { Finished("key-a", "session-a") }, NoSummary, t0);   // plays, stamps t0
+        TurnSounds.Deliver(
+            new[] { NeedsAttention("key-b", "session-b") }, NoSummary, t0.AddSeconds(0.5),
+            currentStateFor: _ =>
+            {
+                if (!slippedIn)
+                {
+                    slippedIn = true;
+                    // A regular scan, after the pending sound's PlayAt, arriving mid-validation.
+                    TurnSounds.Deliver(new[] { Finished("key-c", "session-c") }, NoSummary, t0.AddSeconds(2.05));
+                }
+                return "waiting";
+            });
+
+        TurnSounds.FirePending();
+        await TurnSounds.ChimesEnqueuedSoFar();
+
+        Assert.True(slippedIn);
+        lock (played) Assert.Equal(2, played.Count);   // key-a and key-c; key-b waits for its own gap
+    }
+
+    // CB-240, starvation. Re-deferring alone would let a live scan that keeps
+    // beating the re-armed timer push a pending sound back every gap. The rule:
+    // pushed back once, it goes first, and a live scan arriving while it waits
+    // joins it. So here, b is pushed back by c1, and plays at the next gap
+    // instead of yielding to c2.
+    [Fact]
+    public async Task APendingSoundPushedBackOnceGoesFirstAtTheNextGap()
+    {
+        var played = new List<string>();
+        ChimePlayer.PlayForTests = path => { lock (played) played.Add(path); };
+
+        ClaudeBuddySettings.TurnSoundsEnabled = true;
+        ClaudeBuddySettings.TurnFinishedSound = null;
+        ClaudeBuddySettings.NeedsAttentionSound = null;
+
+        var t0 = DateTime.UtcNow;
+        TurnSounds.Deliver(new[] { Finished("key-a", "session-a") }, NoSummary, t0);   // plays
+        TurnSounds.Deliver(
+            new[] { NeedsAttention("key-b", "session-b") }, NoSummary, t0.AddSeconds(0.5),
+            currentStateFor: _ => "waiting");                                          // deferred to t0+2
+
+        // Gap 1: a live scan lands first and plays; the late timer finds it and yields.
+        TurnSounds.Deliver(new[] { Finished("key-c1", "session-c1") }, NoSummary, t0.AddSeconds(2.05));
+        TurnSounds.FirePending(t0.AddSeconds(2.06));
+        await TurnSounds.ChimesEnqueuedSoFar();
+        lock (played) Assert.Equal(2, played.Count);   // a, c1 -- b has been pushed back once
+
+        // Gap 2: another live scan arrives before the timer. It must not play
+        // ahead of b a second time.
+        TurnSounds.Deliver(
+            new[] { Finished("key-c2", "session-c2") }, NoSummary, t0.AddSeconds(4.10),
+            currentStateFor: _ => "waiting");
+        await TurnSounds.ChimesEnqueuedSoFar();        // anything c2 enqueued has played by here
+        lock (played) Assert.Equal(2, played.Count);   // c2 joined b rather than playing live
+
+        TurnSounds.FirePending(t0.AddSeconds(4.11));
+        await TurnSounds.ChimesEnqueuedSoFar();
+        lock (played)
+        {
+            Assert.Equal(3, played.Count);
+            Assert.NotEqual(played[0], played[2]);   // b's attention sound, not another finish: it ranks over c2
+        }
+    }
+
+    // CB-240, the summary half, stated rather than argued. A chime's slot is
+    // claimed the moment it is decided. A summary's is claimed when it is heard
+    // (a summary that finds no text must not spend the rate limit on silence),
+    // so a pending chime that falls due while a live summary is still being
+    // prepared PLAYS: nothing has been heard yet to be inside a gap of. That is
+    // also what a live chime scan does in the same state, and it is the stated
+    // rule, not an accident; the "waits at most one extra gap" guarantee is
+    // about being pushed back by a sound that has been claimed.
+    [Fact]
+    public async Task APendingChimeFiresWhileALiveSummaryIsStillBeingPrepared()
+    {
+        var played = new List<string>();
+        ChimePlayer.PlayForTests = path => { lock (played) played.Add(path); };
+
+        ClaudeBuddySettings.TurnSoundsEnabled = true;
+        ClaudeBuddySettings.TurnFinishedSound = null;
+        ClaudeBuddySettings.NeedsAttentionSound = null;
+
+        var t0 = DateTime.UtcNow;
+        TurnSounds.Deliver(new[] { Finished("key-a", "session-a") }, NoSummary, t0);   // plays, stamps t0
+        TurnSounds.Deliver(
+            new[] { NeedsAttention("key-b", "session-b") }, NoSummary, t0.AddSeconds(0.5),
+            currentStateFor: _ => "waiting");                                          // deferred to t0+2
+
+        // A finished turn whose summary is still being prepared: decided live,
+        // not yet heard, so not yet stamped.
+        ClaudeBuddySettings.TurnFinishedSound = "summary";
+        var preparing = new TaskCompletionSource<bool>();
+        TurnSounds.Deliver(new[] { Finished("key-c", "session-c") }, _ => preparing.Task, t0.AddSeconds(2.05));
+
+        TurnSounds.FirePending(t0.AddSeconds(2.06));   // the pending chime's timer
+        await TurnSounds.ChimesEnqueuedSoFar();
+        lock (played) Assert.Equal(2, played.Count);   // a, and b -- not held back behind an unheard summary
+
+        preparing.SetResult(true);                     // the summary is heard; no extra chime for it
+        await TurnSounds.ChimesEnqueuedSoFar();
+        lock (played) Assert.Equal(2, played.Count);
+    }
+
+    // CB-240. The late summary stamp is written with the moment the summary was
+    // DECIDED. If a chime stamped later in between, that is an older moment, and
+    // writing it back would reopen a gap the chime had just closed: the next
+    // scan, which should have deferred, plays. Forced with a scan 5 ms inside the
+    // chime's gap but past the summary's.
+    [Fact]
+    public async Task ALateSummaryStampDoesNotReopenAGapAChimeJustClosed()
+    {
+        var played = new List<string>();
+        ChimePlayer.PlayForTests = path => { lock (played) played.Add(path); };
+
+        ClaudeBuddySettings.TurnSoundsEnabled = true;
+        ClaudeBuddySettings.TurnFinishedSound = null;
+        ClaudeBuddySettings.NeedsAttentionSound = null;
+
+        var t0 = DateTime.UtcNow;
+        TurnSounds.Deliver(new[] { Finished("key-a", "session-a") }, NoSummary, t0);
+        TurnSounds.Deliver(
+            new[] { NeedsAttention("key-b", "session-b") }, NoSummary, t0.AddSeconds(0.5),
+            currentStateFor: _ => "waiting");
+
+        ClaudeBuddySettings.TurnFinishedSound = "summary";
+        var preparing = new TaskCompletionSource<bool>();
+        TurnSounds.Deliver(new[] { Finished("key-c", "session-c") }, _ => preparing.Task, t0.AddSeconds(2.05));
+        TurnSounds.FirePending(t0.AddSeconds(2.06));   // b plays and stamps t0+2.06
+        await TurnSounds.ChimesEnqueuedSoFar();
+
+        preparing.SetResult(true);                     // the summary's late stamp: t0+2.05, older than b's
+        await TurnSounds.ChimesEnqueuedSoFar();
+
+        // 5 ms short of b's gap closing (t0+4.06), but past t0+2.05's (t0+4.05).
+        ClaudeBuddySettings.TurnFinishedSound = null;
+        TurnSounds.Deliver(new[] { Finished("key-d", "session-d") }, NoSummary, t0.AddSeconds(4.055));
+        await TurnSounds.ChimesEnqueuedSoFar();
+
+        lock (played) Assert.Equal(2, played.Count);   // d is deferred, not played
+    }
+
+    // CB-240. FirePending reads its pending state under the lock, validates and
+    // chooses outside it, then re-takes the lock to check the gap and claim the
+    // slot. A reset in between (a generation bump) means what it chose belongs to
+    // a world that no longer exists, so it plays nothing. A chime would be
+    // dropped anyway by EnqueueChime's own generation check; a SUMMARY has no
+    // such check on its speech call, so a summary is what shows the guard is
+    // needed. currentStateFor runs in exactly that stretch, outside the lock, so
+    // resetting from inside it forces the ordering.
+    [Fact]
+    public async Task APendingSummaryIsNotSpokenWhenAResetLandsBetweenChoosingAndClaiming()
+    {
+        ChimePlayer.PlayForTests = _ => { };
+        ClaudeBuddySettings.TurnSoundsEnabled = true;
+        ClaudeBuddySettings.TurnFinishedSound = "summary";
+
+        var spokenFor = new List<string>();
+        Task<bool> Speak(string sessionId)
+        {
+            lock (spokenFor) spokenFor.Add(sessionId);
+            return Task.FromResult(true);
+        }
+
+        var t0 = DateTime.UtcNow;
+        TurnSounds.Deliver(new[] { Finished("key-a", "session-a") }, Speak, t0);        // spoken, stamps t0
+        TurnSounds.Deliver(
+            new[] { Finished("key-b", "session-b") }, Speak, t0.AddSeconds(0.5),
+            currentStateFor: _ => { TurnSounds.ResetForTests(); return "idle"; });     // deferred to t0+2
+        lock (spokenFor) Assert.Equal(new[] { "session-a" }, spokenFor);
+
+        TurnSounds.FirePending(t0.AddSeconds(2.06));
+        await TurnSounds.ChimesEnqueuedSoFar();
+
+        lock (spokenFor) Assert.Equal(new[] { "session-a" }, spokenFor);   // b was chosen, then the reset dropped it
     }
 }
