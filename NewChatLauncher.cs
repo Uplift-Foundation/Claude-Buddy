@@ -108,18 +108,17 @@ namespace ClaudeBuddy
             return Decide(name, binary, directory, NewChatPlatform.MacOS, null, tmuxPane, terminalLaunched);
         }
 
-        // The config directory to hand this launch, given the account the
-        // dialog's picker chose (CB-201) — null for the default account and
-        // for the two CLIs that have no such picker at all. Codex and Grok
-        // use CODEX_HOME/GROK_HOME, a different mechanism this ticket
-        // deliberately leaves alone (see the plan's own "Claude Code only"
-        // decision), so profileDir is simply never consulted for them.
+        // The account directory to hand this launch, given the account the
+        // dialog's picker chose (CB-201, and CB-203 for Codex and Grok) — null
+        // for the default account, so the CLI's variable is left exactly as
+        // Buddy's own environment has it. Which variable that is, and which
+        // directory counts as the default, comes from NewChatAccountHome.
         //
         // Delegates to ClaudeProfile.ConfigDirFor rather than repeating its
         // CB-42 logic — there is exactly one place in this app that decides
         // "does this profile name the default account", and this is not it.
         internal static string? ConfigDirFor(NewChatCli cli, string home, string? profileDir) =>
-            cli == NewChatCli.ClaudeCode ? ClaudeProfile.ConfigDirFor(home, profileDir) : null;
+            ClaudeProfile.ConfigDirFor(home, profileDir, NewChatAccountHome.For(cli).DefaultDirName);
 
         // The working directory to actually launch into: the requested one
         // when it's real, the process's own current directory otherwise —

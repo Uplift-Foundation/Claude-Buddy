@@ -44,11 +44,12 @@ namespace ClaudeBuddy
         // quoted, with no verb — `claude attach <id>` names a session to
         // rejoin, and starting a new chat names nothing, it just runs the CLI.
         //
-        // configDir null (the default account, or any CLI but Claude Code —
-        // see NewChatLauncher.ConfigDirFor) leaves the command exactly as it
-        // was: the quoted binary alone, never anything that names the default
+        // configDir null (the default account — see
+        // NewChatLauncher.ConfigDirFor) leaves the command exactly as it was:
+        // the quoted binary alone, never anything that names the default
         // directory (CB-42's whole point). Set, it becomes
-        // `env CLAUDE_CONFIG_DIR='<dir>' '<binary>'`.
+        // `env <VAR>='<dir>' '<binary>'` — CLAUDE_CONFIG_DIR, CODEX_HOME or
+        // GROK_HOME, whichever NewChatAccountHome says this CLI reads (CB-203).
         //
         // **Always a program first, never a variable assignment** (CB-232).
         // This used to be `CLAUDE_CONFIG_DIR='<dir>' '<binary>'`, a POSIX
@@ -67,7 +68,7 @@ namespace ClaudeBuddy
         internal static string For(NewChatCli cli, string binaryPath, string? configDir = null) =>
             configDir is null
                 ? TerminalScripts.ShellQuote(binaryPath)
-                : "env CLAUDE_CONFIG_DIR=" + TerminalScripts.ShellQuote(configDir)
+                : "env " + NewChatAccountHome.For(cli).EnvVar + "=" + TerminalScripts.ShellQuote(configDir)
                     + " " + TerminalScripts.ShellQuote(binaryPath);
 
         // The line a terminal or tmux window actually runs: For's command with
@@ -131,7 +132,8 @@ namespace ClaudeBuddy
         //
         // configDir null reproduces the general builder's output byte for
         // byte. Set, the start info additionally switches to
-        // UseShellExecute = false and carries CLAUDE_CONFIG_DIR on
+        // UseShellExecute = false and carries the CLI's own account variable
+        // (NewChatAccountHome — CLAUDE_CONFIG_DIR, CODEX_HOME or GROK_HOME) on
         // Environment — true, wt.exe/cmd.exe's shared default, launches
         // through ShellExecuteEx and ignores ProcessStartInfo.Environment
         // entirely, so the variable would silently never leave this process.
@@ -165,7 +167,7 @@ namespace ClaudeBuddy
             if (start is not null && configDir is not null)
             {
                 start.UseShellExecute = false;
-                start.Environment["CLAUDE_CONFIG_DIR"] = configDir;
+                start.Environment[NewChatAccountHome.For(cli).EnvVar] = configDir;
             }
 
             return start;

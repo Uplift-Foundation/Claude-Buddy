@@ -36,6 +36,13 @@ public class NewChatWindowScreenshots : IDisposable
     {
         FreshSettings();
         ClearSeams();
+
+        // Every account directory "exists" unless a scenario says otherwise
+        // (CB-203): otherwise the missing-home warning would depend on the
+        // runner's real home directory — present on a dev Mac with
+        // ~/.claude-board, absent on CI — and the same scenario would draw
+        // differently on each.
+        NewChatWindow.AccountDirectoryExistsForTests = _ => true;
     }
 
     public void Dispose() => ClearSeams();
@@ -184,8 +191,9 @@ public class NewChatWindowScreenshots : IDisposable
         ScreenshotHelper.Capture(window, "new-chat-window-account-picker.png");
     }
 
-    // CB-207: the same two profiles, but Codex selected. The picker is hidden
-    // (CB-201) while its space is kept, so switching CLIs never resizes the
+    // CB-207: the same two profiles, but Codex selected. Codex has no extra
+    // homes of its own here, so its picker is hidden (CB-201, and CB-203's
+    // "Default alone means no picker") while its space is kept, so switching CLIs never resizes the
     // window on screen. This is the one state where that reserved space is
     // visible, and it should read as the same window as the capture above,
     // at the same height.
@@ -204,6 +212,53 @@ public class NewChatWindowScreenshots : IDisposable
         var window = NewWindow(prefillCli: NewChatCli.Codex);
 
         ScreenshotHelper.Capture(window, "new-chat-window-account-space-kept.png");
+    }
+
+    // CB-203: Codex selected with one extra CODEX_HOME. The picker offers
+    // Codex's own list — "Default (~/.codex)" and the extra — never the two
+    // Claude Code profiles also configured here, which is the whole point of
+    // capturing it beside AccountPickerWithTwoProfiles. Settings are the
+    // constructor's isolated FreshSettings() dir, so nothing here leaks into
+    // the next scenario (CB-201's review flag).
+    [AvaloniaFact]
+    public void CodexAccountPicker()
+    {
+        NewChatAvailability.CurrentForTests = () => new[]
+        {
+            Enabled(NewChatCli.ClaudeCode), Enabled(NewChatCli.Codex), Enabled(NewChatCli.Grok)
+        };
+        NewChatWindow.OpenClawAvailabilityForTests = () => OpenClawNewChatAvailability.NoGateway;
+        NewChatWindow.CurrentStatusesForTests = () => new Dictionary<string, SessionStatus>();
+        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-work");
+        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-board");
+        ClaudeBuddySettings.AddCodexHome(".codex-work");
+        ClaudeBuddySettings.SetNewChatLastProfile(NewChatCli.Codex, ".codex-work");
+
+        var window = NewWindow(prefillCli: NewChatCli.Codex);
+
+        ScreenshotHelper.Capture(window, "new-chat-codex-accounts.png");
+    }
+
+    // CB-203's missing-home warning: Codex with an extra CODEX_HOME whose
+    // directory does not exist. Codex refuses to start there, so the line
+    // under the picker says so before Start is pressed rather than leaving a
+    // terminal that flashes and closes.
+    [AvaloniaFact]
+    public void CodexAccountWithMissingHome()
+    {
+        NewChatAvailability.CurrentForTests = () => new[]
+        {
+            Enabled(NewChatCli.ClaudeCode), Enabled(NewChatCli.Codex), Enabled(NewChatCli.Grok)
+        };
+        NewChatWindow.OpenClawAvailabilityForTests = () => OpenClawNewChatAvailability.NoGateway;
+        NewChatWindow.CurrentStatusesForTests = () => new Dictionary<string, SessionStatus>();
+        NewChatWindow.AccountDirectoryExistsForTests = _ => false;
+        ClaudeBuddySettings.AddCodexHome(".codex-work");
+        ClaudeBuddySettings.SetNewChatLastProfile(NewChatCli.Codex, ".codex-work");
+
+        var window = NewWindow(prefillCli: NewChatCli.Codex);
+
+        ScreenshotHelper.Capture(window, "new-chat-codex-missing-home.png");
     }
 
     // The OpenClaw row selected, Ready, with agents loaded — the agent
@@ -267,5 +322,6 @@ public class NewChatWindowScreenshots : IDisposable
         NewChatWindow.KnownAgentsForTests = null;
         NewChatWindow.StartOpenClawConversationForTests = null;
         NewChatWindow.OrbForTests = null;
+        NewChatWindow.AccountDirectoryExistsForTests = null;
     }
 }

@@ -85,9 +85,73 @@ namespace ClaudeBuddy
         };
     }
 
-    // CB-201's Account picker: turns the user's configured
-    // ClaudeCodeProfileDirs into the rows a combo box shows, plus the profile
-    // dir NewChatLauncher.Launch should actually receive for each — pure, the
+    // How each local CLI names an account (CB-203): the directory it uses
+    // when nothing says otherwise, and the environment variable that points it
+    // somewhere else. One table, read by every place that needs either half —
+    // the Account picker's Default row and de-duplication, ConfigDirFor, the
+    // macOS command prefix and the Windows start info — so no caller spells a
+    // variable name of its own.
+    //
+    // Each CLI's own documentation and installer agree on these: Claude Code
+    // reads CLAUDE_CONFIG_DIR, Codex CODEX_HOME (defaulting to ~/.codex) and
+    // Grok GROK_HOME (defaulting to ~/.grok; its bundled user guide says "when
+    // it is unset, Grok uses ~/.grok"). The hook installers already honour the
+    // same three variables.
+    internal sealed record NewChatAccountHome(string DefaultDirName, string EnvVar)
+    {
+        internal static readonly NewChatAccountHome ClaudeCode =
+            new(ClaudeBuddySettings.DefaultRemoteControlProfileDir, "CLAUDE_CONFIG_DIR");
+
+        internal static readonly NewChatAccountHome Codex = new(".codex", "CODEX_HOME");
+
+        internal static readonly NewChatAccountHome Grok = new(".grok", "GROK_HOME");
+
+        // Claude Code is the arm the default lands on because NewChatCli has
+        // exactly three members — a fourth would need its own row here, and
+        // the unit tests pin each of the three explicitly.
+        internal static NewChatAccountHome For(NewChatCli cli) => cli switch
+        {
+            NewChatCli.Codex => Codex,
+            NewChatCli.Grok => Grok,
+            _ => ClaudeCode
+        };
+    }
+
+    // What happens if the chosen account's directory does not exist (CB-203).
+    // Each CLI answers differently, measured on the MacBook and the Windows
+    // box: Codex refuses to start ("CODEX_HOME points to ..., but that path
+    // does not exist"), Grok scaffolds a fresh, logged-out home there, and
+    // Claude Code starts first-run setup. None of the three gets an orb from
+    // it, and the launch is `exec <cli>`, so a Codex that exits at once can
+    // close its own tmux window before anyone reads the error. The dialog
+    // states it under the picker instead, and leaves Start enabled — a
+    // directory about to be created on purpose is a real reason to go ahead.
+    //
+    // Pure: the filesystem check is a parameter, so every arm is a test
+    // rather than a real missing directory.
+    internal static class NewChatAccountWarning
+    {
+        // Null for Default (ConfigDirFor's null — there is no directory of
+        // ours to check) and for a directory that exists.
+        internal static string? For(
+            NewChatCli cli, string home, string? profileDir, Func<string, bool> directoryExists)
+        {
+            var dir = NewChatLauncher.ConfigDirFor(cli, home, profileDir);
+            return dir is null || directoryExists(dir) ? null : TextFor(cli);
+        }
+
+        internal static string TextFor(NewChatCli cli) => cli switch
+        {
+            NewChatCli.Codex => "This folder doesn't exist; Codex will refuse to start.",
+            NewChatCli.Grok => "This folder doesn't exist; Grok will create a fresh, logged-out account there.",
+            _ => "This folder doesn't exist; Claude Code will start first-run setup there."
+        };
+    }
+
+    // CB-201's Account picker, per CLI since CB-203: turns the user's
+    // configured extra accounts for one CLI (ClaudeCodeProfileDirs, CodexHomes
+    // or GrokHomes) into the rows a combo box shows, plus the profile dir
+    // NewChatLauncher.Launch should actually receive for each — pure, the
     // same reason NewChatAvailability.Evaluate above is, so every branch (an
     // empty list, a duplicate, a blank, a second spelling of the default
     // account) is a test rather than a real settings file and a real $HOME.
@@ -100,7 +164,11 @@ namespace ClaudeBuddy
         // Windows CI while every real extra had already picked up "~\..."
         // from ChatHeaderMeta.HomeRelative, which two rows in the same list
         // disagreeing about their own separator is not a cosmetic gap.
-        internal static readonly string DefaultLabel = "Default (~" + Path.DirectorySeparatorChar + ".claude)";
+        //
+        // Per CLI since CB-203: "Default (~/.codex)" names the directory Codex
+        // will actually use, which "~/.claude" would not.
+        internal static string DefaultLabelFor(NewChatCli cli) =>
+            "Default (~" + Path.DirectorySeparatorChar + NewChatAccountHome.For(cli).DefaultDirName + ")";
 
         // One row of the combo box. ProfileDir is exactly what Launch should
         // be handed — null for Default, so a caller never needs its own
@@ -122,9 +190,9 @@ namespace ClaudeBuddy
         // account here (".claude", ".claude/", the absolute $HOME/.claude
         // spelling) is the same set of dirs ConfigDirFor would also read as
         // null — one resolver, one answer, asked from two places.
-        internal static IReadOnlyList<Choice> Choices(string home, IReadOnlyList<string> extras)
+        internal static IReadOnlyList<Choice> Choices(NewChatCli cli, string home, IReadOnlyList<string> extras)
         {
-            var choices = new List<Choice> { new(DefaultLabel, null) };
+            var choices = new List<Choice> { new(DefaultLabelFor(cli), null) };
 
             // Resolved once and reused for every HomeRelative call below,
             // rather than handing it the raw `home` argument as-is. QA
@@ -143,7 +211,7 @@ namespace ClaudeBuddy
 
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {
-                ClaudeProfile.Resolve(home, ClaudeBuddySettings.DefaultRemoteControlProfileDir)
+                ClaudeProfile.Resolve(home, NewChatAccountHome.For(cli).DefaultDirName)
             };
 
             foreach (var extra in extras)

@@ -16,6 +16,17 @@ public sealed class UnixFactAttribute : FactAttribute
     }
 }
 
+// The [Theory] twin of UnixFact, for a POSIX-shell seam run once per case
+// (NewChatExecLineShellTests, one row per CLI).
+public sealed class UnixTheoryAttribute : TheoryAttribute
+{
+    public UnixTheoryAttribute()
+    {
+        if (!OperatingSystem.IsMacOS() && !OperatingSystem.IsLinux())
+            Skip = "POSIX shells only run on macOS/Linux";
+    }
+}
+
 public sealed class WindowsFactAttribute : FactAttribute
 {
     public WindowsFactAttribute()

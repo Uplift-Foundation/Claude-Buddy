@@ -48,12 +48,27 @@ namespace ClaudeBuddy
         // path at their own home, and all three name the same context. Case is
         // ignored for the same reason it is there — Windows paths are, and one
         // account reached under two capitalizations is one account.
-        internal static string? ConfigDirFor(string home, string? profileDir)
+        internal static string? ConfigDirFor(string home, string? profileDir) =>
+            ConfigDirFor(home, profileDir, ClaudeBuddySettings.DefaultRemoteControlProfileDir);
+
+        // The same rule with the default directory named by the caller
+        // (CB-203): ".codex" for CODEX_HOME and ".grok" for GROK_HOME go
+        // through this exact comparison rather than a copy of it, so the
+        // three CLIs the New chat dialog launches share one normaliser — see
+        // NewChatAccountHome for the table that supplies the name.
+        //
+        // For those two CLIs, naming the default directory was measured to be
+        // harmless (CB-203: a scratch $HOME run unset and set to the default
+        // wrote identical files, for both), unlike CB-42's split for Claude
+        // Code. They still resolve to null here: one rule for all three is
+        // simpler than two, and null is what lets a variable Buddy itself was
+        // launched under reach the chat unchanged.
+        internal static string? ConfigDirFor(string home, string? profileDir, string defaultDirName)
         {
             if (string.IsNullOrWhiteSpace(profileDir)) return null;
 
             var wanted = Resolve(home, profileDir.Trim());
-            var standard = Resolve(home, ClaudeBuddySettings.DefaultRemoteControlProfileDir);
+            var standard = Resolve(home, defaultDirName);
 
             return string.Equals(wanted, standard, StringComparison.OrdinalIgnoreCase)
                 ? null
