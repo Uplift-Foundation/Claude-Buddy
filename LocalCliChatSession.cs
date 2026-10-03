@@ -101,7 +101,7 @@ namespace ClaudeBuddy
         // that never heals.
         private readonly List<byte> _carry = new();
 
-        private FileSystemWatcher? _watcher;
+        private DeferredWatcher? _watcher;
         private DispatcherTimer? _poll;
         private DispatcherTimer? _debounce;
         private bool _pumping;
@@ -126,7 +126,8 @@ namespace ClaudeBuddy
         public LocalCliChatSession(string sessionId, SessionStatus status,
                                    Func<string, string?>? findTranscript = null,
                                    SessionMessenger? messenger = null,
-                                   Func<string, SessionRegistry.Entry?>? findRegistry = null)
+                                   Func<string, SessionRegistry.Entry?>? findRegistry = null,
+                                   Func<string, string, FileSystemWatcher>? startWatcher = null)
         {
             SessionId = sessionId;
             _status = status;
@@ -136,11 +137,27 @@ namespace ClaudeBuddy
             _messenger = messenger ?? new SessionMessenger(SessionMessenger.Live(ClaudeConfigRoots.All()));
             _findRegistry = findRegistry ?? (id => SessionRegistry.Find(
                 SessionRegistry.Scan(ClaudeConfigRoots.All()), id, ProcessLiveness.IsRunning));
+            _startWatcher = startWatcher ?? StartRealWatcher;
         }
 
         private readonly Func<string, string?> _findTranscript;
         private readonly SessionMessenger _messenger;
         private readonly Func<string, SessionRegistry.Entry?> _findRegistry;
+
+        // startWatcher is the seam for the one call in this class that can
+        // block its caller indefinitely (CB-234): turning a FileSystemWatcher
+        // on. On macOS that is a native FSEvents stream, and under enough load
+        // it never returns -- a UiTests host sat at 0% CPU for hours in it,
+        // three times in one day. Production never passes one.
+        private readonly Func<string, string, FileSystemWatcher> _startWatcher;
+
+        // The thread that is turning the watcher on, kept so a test can join
+        // it instead of sleeping. Null until Watch has run.
+        internal Thread? WatcherStarter => _watcher?.Starter;
+
+        // The watcher itself, once it has arrived. Null before, after a failed
+        // start, and after Dispose.
+        internal FileSystemWatcher? Watcher => _watcher?.Watcher;
 
         public string SessionId { get; }
 
@@ -232,33 +249,46 @@ namespace ClaudeBuddy
             var name = Path.GetFileName(_transcriptPath);
             if (string.IsNullOrEmpty(dir) || string.IsNullOrEmpty(name)) return;
 
-            try
-            {
-                _watcher = new FileSystemWatcher(dir, name)
-                {
-                    NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Size,
-                    EnableRaisingEvents = true
-                };
+            // The backstop, and now first. FileSystemWatcher on macOS misses
+            // writes to a file that is appended to without its metadata
+            // changing the way the watcher expects, which is exactly what a
+            // JSONL append is. It used to start after the watcher, so a watcher
+            // that never finished starting took the poll down with it -- and
+            // this method runs on the UI thread (a click opens the panel,
+            // SessionManager creates the session and starts it), so it took the
+            // thread down too.
+            _poll = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+            _poll.Tick += (_, _) => Pump();
+            _poll.Start();
 
+            // The watcher is an optimisation over that poll, not a requirement,
+            // so it is switched on where it cannot hold anything up -- see
+            // DeferredWatcher for why that matters and what it cost to learn.
+            _watcher = new DeferredWatcher(
+                () => _startWatcher(dir, name),
                 // Straight onto the UI thread and through the same 150ms
                 // debounce SessionManager uses for status files, for the same
                 // reason: one logical append can raise several events, and
                 // parsing the tail three times to find the same two rows is
                 // work on the thread that draws.
-                _watcher.Changed += (_, _) => Dispatcher.UIThread.Post(Nudge);
-            }
-            catch
-            {
-                // A watcher is an optimisation over the poll below, not a
-                // requirement. Losing it costs latency, not correctness.
-            }
+                watcher => watcher.Changed += (_, _) => Dispatcher.UIThread.Post(Nudge),
+                "LocalCliChatSession.Watcher");
+        }
 
-            // The backstop. FileSystemWatcher on macOS misses writes to a file
-            // that is appended to without its metadata changing the way the
-            // watcher expects, which is exactly what a JSONL append is.
-            _poll = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
-            _poll.Tick += (_, _) => Pump();
-            _poll.Start();
+        // Split so the half a test can reach without waiting on the OS is
+        // reachable: building the watcher is instant, turning it on is the call
+        // that blocks. On macOS .NET's FSEvents start runs the kernel's global
+        // sync(2) first, and that waits for every dirty buffer on the machine
+        // to reach disk -- measured here at 118.7 s once, 0.4-1.8 s the next
+        // four times, at a load average of 16-23 (CB-234).
+        internal static FileSystemWatcher CreateWatcher(string dir, string name) =>
+            new(dir, name) { NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Size };
+
+        internal static FileSystemWatcher StartRealWatcher(string dir, string name)
+        {
+            var watcher = CreateWatcher(dir, name);
+            watcher.EnableRaisingEvents = true;
+            return watcher;
         }
 
         private void Nudge()
@@ -836,7 +866,7 @@ namespace ClaudeBuddy
 
             DeliveryResult.NoRegistryEntry =>
                 $"{name} isn't registered with Claude Code any more — the job may have stopped. "
-                + "Attach it (⚙) to answer it there.",
+                + "Attach it with the gear button to answer it there.",
 
             DeliveryResult.UnsupportedProtocol =>
                 $"{name} speaks a peer protocol Buddy doesn't recognize, so nothing was sent.",
@@ -874,8 +904,12 @@ namespace ClaudeBuddy
             // button beside the box is what does exist, so the note points at it.
             if (shape == LocalSessionShape.Background)
             {
+                // Names the button rather than typing U+2699 at it (CB-173):
+                // in a chat bubble that character is a colour emoji on Windows,
+                // so the sentence would point at a mark that looks nothing like
+                // the drawn gear on the button itself.
                 return "This is a background job with no terminal of its own. "
-                    + "Attach it (⚙ beside the box) to answer it there.";
+                    + "Attach it with the gear button beside the box to answer it there.";
             }
 
             // Locally the reason is knowable, so it is said. TerminalTyping

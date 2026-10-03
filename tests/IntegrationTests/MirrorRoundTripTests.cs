@@ -1331,7 +1331,7 @@ public class MirrorRoundTripTests : IDisposable
 
     // The relay is a tmux pane on another machine and it can go away between one
     // frame and the next. Both sides swallow that rather than letting it out:
-    // the client turns it into "couldn't reach the relay" in the panel, and the
+    // the client turns it into "couldn't reach the other machine" in the panel, and the
     // server simply stops talking to a peer it cannot reach.
     //
     // Asserted because the alternative is an exception on a background task —
@@ -1857,6 +1857,174 @@ public class MirrorRoundTripTests : IDisposable
             .SelectMany(frame => frame!.Payload!)
             .ToArray();
 
+    // --- CB-223: agent-team members over the direct link -----------------------
+
+    // A team running on the far machine: the lead is registered, its two
+    // members are not (the registry does not list them). The full roster now
+    // offers all three, and each member says whose team it is in by the
+    // lead's route — what the near side keys the lead's own orb by.
+    [Fact]
+    public async Task ATeamsMembersAreOfferedBesideTheirLeadAndSayWhoseTheyAre()
+    {
+        var harness = new Harness(_dir);
+        harness.AddSession("backlog status check", WriteTranscript("lead.jsonl", Conversation(2)));
+        var lead = harness.SessionIdOf("backlog status check");
+        var a = harness.AddTeamMember("backlog status check", lead, "wren-asare", "blue",
+            WriteTranscript("a.jsonl", Conversation(2)));
+        var b = harness.AddTeamMember("backlog status check", lead, "hana-moriyama", "purple",
+            WriteTranscript("b.jsonl", Conversation(2)));
+
+        await harness.Client.AskWhatTheyHaveAsync(harness.Peers);
+
+        var known = harness.Client.Known().Select(k => k.Entry).ToList();
+        Assert.Equal(3, known.Count);
+
+        var leadEntry = known.Single(e => e.Route == RemoteMirrorServer.RouteFor(lead));
+        Assert.Null(leadEntry.Lead);
+        Assert.Null(leadEntry.Agent);
+
+        var memberA = known.Single(e => e.Route == RemoteMirrorServer.RouteFor(a));
+        Assert.Equal(RemoteMirrorServer.RouteFor(lead), memberA.Lead);
+        Assert.Equal("wren-asare", memberA.Agent);
+        Assert.Equal("blue", memberA.AgentColor);
+
+        var memberB = known.Single(e => e.Route == RemoteMirrorServer.RouteFor(b));
+        Assert.Equal(RemoteMirrorServer.RouteFor(lead), memberB.Lead);
+        Assert.Equal("hana-moriyama", memberB.Agent);
+
+        // And the near side pairs them on its own keys, with nothing
+        // translated: each member's lead key is exactly the lead orb's key.
+        var remotes = RemoteControlSessions.RemotesFromRoster("acct", harness.Client.Known(), DateTime.UtcNow);
+        var leadRemote = remotes.Single(r => r.Route == RemoteMirrorServer.RouteFor(lead));
+        Assert.Null(leadRemote.LeadKey);
+        Assert.All(remotes.Where(r => r.Route != leadRemote.Route),
+            member => Assert.Equal(leadRemote.Key, member.LeadKey));
+
+        // Three sessions, one title: the client resolves each member by its
+        // route and refuses the shared title outright, rather than handing
+        // input to whichever arrived last.
+        Assert.Equal(Harness.FarRelay, harness.Client.RelayFor(RemoteMirrorServer.RouteFor(a)));
+        Assert.Equal(Harness.FarRelay, harness.Client.RelayFor(RemoteMirrorServer.RouteFor(b)));
+        Assert.Null(harness.Client.RelayFor("backlog status check"));
+    }
+
+    // The visibility rule, pinned: a member whose lead this machine does not
+    // offer — its lead has Remote Control off, so no registry row — is not
+    // offered either. The lead row is the control: it is a live session on the
+    // same disk and is not offered for the same reason.
+    [Fact]
+    public async Task AMemberWhoseLeadIsNotOfferedIsNotOfferedEither()
+    {
+        var harness = new Harness(_dir);
+        harness.AddSession("someone else", WriteTranscript("other.jsonl", Conversation(2)));
+        var hiddenLead = harness.AddUnregisteredSession("private team", WriteTranscript("hidden.jsonl", Conversation(2)));
+        harness.AddTeamMember("private team", hiddenLead, "bryn-kowalczyk", "yellow",
+            WriteTranscript("m.jsonl", Conversation(2)));
+
+        await harness.Client.AskWhatTheyHaveAsync(harness.Peers);
+
+        var entry = Assert.Single(harness.Client.Known()).Entry;
+        Assert.Equal("someone else", entry.Name);
+        Assert.Null(entry.Lead);
+    }
+
+    // The real liveness rule on members, not an injected one: a member nobody
+    // has spoken to since yesterday is not offered, exactly as a registered
+    // session in that state is not. Its lead's transcript path names no file,
+    // which is what keeps the lead itself out of the liveness question, and
+    // the members that do get offered cover the other two transcript shapes —
+    // a path to nothing, and no path at all — both offered without a
+    // transcript to show.
+    [Fact]
+    public async Task AMemberNobodyHasSpokenToSinceYesterdayIsNotOffered()
+    {
+        var harness = new Harness(_dir);
+        harness.AddSession("backlog status check", Path.Combine(_dir, "no-such-lead.jsonl"));
+        var lead = harness.SessionIdOf("backlog status check");
+        var stale = harness.AddTeamMember("backlog status check", lead, "stale", "grey",
+            WriteTranscript("stale-member.jsonl", Conversation(2)));
+        var pathToNothing = harness.AddTeamMember("backlog status check", lead, "ghost", "blue",
+            Path.Combine(_dir, "no-such-member.jsonl"));
+        var noPath = harness.AddTeamMember("backlog status check", lead, "fresh", "green", "");
+
+        harness.Server.Now = () => LiveAt.AddHours(23);
+
+        // Read off what the server sent rather than what the client kept: the
+        // client keeps only rows with a transcript to show, and two of these
+        // deliberately have none.
+        await harness.Server.HandleAsync(Harness.NearRelay, OldHello("stale1"));
+        var known = MirrorProtocol.DecodeRoster(ReassembledPayload(harness.ToClient, "stale1"))!.ToList();
+        Assert.DoesNotContain(known, e => e.Route == RemoteMirrorServer.RouteFor(stale));
+
+        var ghost = known.Single(e => e.Route == RemoteMirrorServer.RouteFor(pathToNothing));
+        Assert.False(ghost.HasTranscript);
+        Assert.Equal(RemoteMirrorServer.RouteFor(lead), ghost.Lead);
+
+        var fresh = known.Single(e => e.Route == RemoteMirrorServer.RouteFor(noPath));
+        Assert.False(fresh.HasTranscript);
+        Assert.Equal(3, known.Count);
+    }
+
+    // A member's display name when it has no title: its folder, and with no
+    // folder either, the name of its CLI — the same fallback Codex and Grok
+    // rows get. The near side prefers the agent name anyway; this is what an
+    // older Buddy, which knows nothing of agents, would show.
+    [Fact]
+    public async Task AnUntitledMemberIsNamedForItsFolderOrElseItsCli()
+    {
+        var harness = new Harness(_dir);
+        harness.AddSession("lead", WriteTranscript("lead2.jsonl", Conversation(2)));
+        var lead = harness.SessionIdOf("lead");
+        var inFolder = harness.AddTeamMember("", lead, "a", "blue",
+            WriteTranscript("folder.jsonl", Conversation(2)), cwd: Path.Combine(_dir, "menu-ux"));
+        var nowhere = harness.AddTeamMember("", lead, "b", "blue",
+            WriteTranscript("nowhere.jsonl", Conversation(2)), cwd: "");
+
+        await harness.Client.AskWhatTheyHaveAsync(harness.Peers);
+
+        var known = harness.Client.Known().Select(k => k.Entry).ToList();
+        Assert.Equal("menu-ux", known.Single(e => e.Route == RemoteMirrorServer.RouteFor(inFolder)).Name);
+        Assert.Equal(MirrorProtocol.CliClaudeCode, known.Single(e => e.Route == RemoteMirrorServer.RouteFor(nowhere)).Name);
+    }
+
+    // A member offered from its status file carries the same facts any other
+    // row does: its own /color when it set one (which outranks the team's on
+    // the near side), and whether this machine can deliver text to it.
+    [Fact]
+    public async Task AMemberCarriesItsOwnColourAndItsDeliveryLikeAnyRow()
+    {
+        var harness = new Harness(_dir, wireDelivery: true) { CanDeliverAnswer = true };
+        harness.AddSession("lead", WriteTranscript("lead3.jsonl", Conversation(2)));
+        var lead = harness.SessionIdOf("lead");
+        var member = harness.AddTeamMember("lead", lead, "wren", "blue",
+            WriteTranscript("coloured.jsonl", Conversation(2)), color: "red");
+
+        await harness.Client.AskWhatTheyHaveAsync(harness.Peers);
+
+        var entry = harness.Client.Known().Select(k => k.Entry).Single(e => e.Route == RemoteMirrorServer.RouteFor(member));
+        Assert.Equal("red", entry.Color);
+        Assert.Equal("blue", entry.AgentColor);
+        Assert.True(entry.CanDeliver);
+    }
+
+    // A roster with no team in it is the same bytes it always was — the new
+    // fields are absent, not null-valued — so CB-216's "unchanged" answer
+    // still holds for every machine not running a team.
+    [Fact]
+    public async Task ARosterWithNoTeamCarriesNoTeamFieldsOnTheWire()
+    {
+        var harness = new Harness(_dir);
+        harness.AddSession("solo", WriteTranscript("solo.jsonl", Conversation(2)));
+
+        await harness.Client.AskWhatTheyHaveAsync(harness.Peers);
+
+        var bytes = MirrorProtocol.RosterBytes(harness.Client.Known().Select(k => k.Entry).ToList());
+        var json = System.Text.Encoding.UTF8.GetString(bytes);
+        Assert.DoesNotContain("\"lead\"", json);
+        Assert.DoesNotContain("\"agent\"", json);
+        Assert.DoesNotContain("\"agentColor\"", json);
+    }
+
     private static MirrorProtocol.MirrorFrame OldHello(string id) =>
         MirrorProtocol.TryParseFrame(MirrorProtocol.BuildFrame(
             MirrorProtocol.Hello, id, new Dictionary<string, string> { ["pv"] = "1" }))!;
@@ -2053,6 +2221,50 @@ public class MirrorRoundTripTests : IDisposable
                 TmuxPane = "%2",
                 SessionPid = 2000 + _sessions.Count,
             }));
+
+        // CB-223: an agent-team member, as it really is on disk — a Claude
+        // Code status file with no agent-registry row (the registry does not
+        // list members; measured), whose Lead is its lead's session id, as the
+        // snapshot's team read leaves it.
+        public string AddTeamMember(string title, string leadSessionId, string agent, string agentColor,
+            string transcriptPath, string? cwd = null, string color = "")
+        {
+            var sessionId = Guid.NewGuid().ToString();
+            _sessions.Add((sessionId, new SessionStatus
+            {
+                Title = title,
+                Cwd = cwd ?? _dir,
+                Source = SessionSource.ClaudeCode,
+                TranscriptPath = transcriptPath,
+                TmuxPane = "%3",
+                SessionPid = 3000 + _sessions.Count,
+                Lead = leadSessionId,
+                Agent = agent,
+                AgentColor = agentColor,
+                Color = color,
+            }));
+            return sessionId;
+        }
+
+        // A Claude Code session with no registry row and no team: the shape of
+        // a lead whose own Remote Control is off, which the full roster must
+        // not start offering because a member points at it.
+        public string AddUnregisteredSession(string title, string transcriptPath)
+        {
+            var sessionId = Guid.NewGuid().ToString();
+            _sessions.Add((sessionId, new SessionStatus
+            {
+                Title = title,
+                Cwd = _dir,
+                Source = SessionSource.ClaudeCode,
+                TranscriptPath = transcriptPath,
+                TmuxPane = "%4",
+                SessionPid = 4000 + _sessions.Count,
+            }));
+            return sessionId;
+        }
+
+        public string SessionIdOf(string title) => _sessions.First(s => s.Status.Title == title).SessionId;
 
         public void AddSession(string name, string transcriptPath)
         {

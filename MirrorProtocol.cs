@@ -221,8 +221,8 @@ namespace ClaudeBuddy
 
         // True for anything that claims to be a frame, whether or not it parses.
         //
-        // Separate from TryParseFrame and used before it, exactly the way
-        // BridgeProtocol.IsInfoReply is: a frame that arrives malformed must
+        // Separate from TryParseFrame and used before it, the way the relay's
+        // CB-INFO check was (both deleted in CB-238): a frame that arrives malformed must
         // still be swallowed rather than shown. The person reading the panel did
         // not ask a question, so they should not see a fumbled answer to one —
         // and a wall of base64 in a chat bubble is the worst version of that.
@@ -236,9 +236,9 @@ namespace ClaudeBuddy
         //
         //  * **Payload and free text are standard base64.** Not base64url. The
         //    url alphabet's `_` would let a payload spell `msg_id`, which is the
-        //    exact string RemoteControlBridge.AskAsync waits for to decide a
-        //    send has been receipted — a frame that happened to contain it would
-        //    satisfy somebody else's request and derail the relay. Standard
+        //    exact string the relay (deleted in 937de9ec) waited for to decide a
+        //    send had been receipted — a frame that happened to contain it would
+        //    have satisfied somebody else's request and derailed it. Standard
         //    base64 also cannot contain `<` or `>`, so a frame can never close
         //    the `</cross-session-message>` tag it is travelling inside, which
         //    is the other way this could have gone wrong. The cost is `=`
@@ -518,7 +518,31 @@ namespace ClaudeBuddy
             //
             // Optional keeps an older peer useful: it still gets an orb, just
             // its ordinary title and glyph rather than a persona it never sent.
-            [property: JsonPropertyName("persona")] PeerPersona? Persona = null);
+            [property: JsonPropertyName("persona")] PeerPersona? Persona = null,
+
+            // CB-223: agent-team shape. A team's members are separate Claude
+            // Code processes on the far machine, each with its own status file
+            // and route, and the far Buddy knows which lead each belongs to —
+            // it reads it off the process (AgentTeam), as the local scan does.
+            // Before this nothing carried it, so a member either was not
+            // offered at all or arrived as a flat orb wearing the lead's title.
+            //
+            // Lead is the lead's **route**, never its title: titles collide
+            // (every member inherits the lead's) and a route is what the near
+            // side keys the lead's own orb by. Set only when the lead is itself
+            // in this roster, so a near machine is never pointed at an orb it
+            // was not offered. Agent is the member's name inside its team,
+            // which is what tells fourteen identically-titled orbs apart.
+            // AgentColor is the colour Claude Code assigned the member, the
+            // fallback the local scan uses when the session set none itself.
+            //
+            // Trailing and optional, like Status, Route and Persona: an older
+            // Buddy's roster reads as "no team" rather than failing to parse,
+            // and an entry with none of them serialises exactly as before, so a
+            // roster with no teams in it keeps the same CB-216 hash.
+            [property: JsonPropertyName("lead")] string? Lead = null,
+            [property: JsonPropertyName("agent")] string? Agent = null,
+            [property: JsonPropertyName("agentColor")] string? AgentColor = null);
 
         // The portable part of LocalPersona.Persona. Avatar is the already
         // bounded image bytes, never AvatarPath: the latter has meaning only

@@ -482,6 +482,31 @@ public class PersonaRealFileTests : IDisposable
         Assert.Contains("16,777,216 bytes", line);
     }
 
+    // CB-214, replayed in the order that made the case above fail once and
+    // never again. LocalPersonaFilesTests.APictureOneByteOverTheCapIsRefused
+    // writes a file with the same name and the same size and refuses it, from
+    // a collection that runs in parallel with this one and logs to the shared
+    // floor. Landing between this class's constructor and its resolve, it
+    // spoke the identical sentence first, and the process-wide dedupe dropped
+    // ours: no line in this file at all, and Assert.Single had nothing to say.
+    [Fact]
+    public void A_parallel_refusal_of_the_same_name_cannot_take_this_files_line()
+    {
+        var elsewhere = Path.Combine(_root, "elsewhere");
+        Directory.CreateDirectory(elsewhere);
+        File.WriteAllBytes(Path.Combine(elsewhere, "over-cap.png"), new byte[PersonaFiles.MaxAvatarBytes + 1]);
+
+        using (CrashLog.ScopeForTests(Path.Combine(_root, "their-log")))
+        {
+            Assert.Null(PersonaFiles.AvatarAt(elsewhere, "over-cap.png"));
+        }
+
+        var persona = Resolve(WriteTheRealTree((int)PersonaFiles.MaxAvatarBytes + 1, "over-cap.png"));
+
+        Assert.Null(persona.AvatarPath);
+        Assert.Contains("too large", Assert.Single(LinesAbout("over-cap.png")));
+    }
+
     // --- the bytes nobody keeps -------------------------------------------
 
     // The structural half of the amendment, and it is written to fail if

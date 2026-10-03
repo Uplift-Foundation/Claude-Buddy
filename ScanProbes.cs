@@ -44,8 +44,9 @@ namespace ClaudeBuddy
         // cloud sessions — never have a pid, a tmux pane or the Claude Code
         // source, so none of them could have changed an answer below.
         //
-        // leadOf is AgentTeam.LeadOf behind a seam: a process-argv read, cached
-        // for a minute, which the UI half asks again of the same pids.
+        // leadOf answers from the memberships this pass already gathered (see
+        // TeamPids and ScanProbes.TeamOf); a seam so the gates can be tested
+        // against invented teams.
         internal static ScanProbePlan For(List<SessionManager.ScanEntry> found, Func<int, string> leadOf)
         {
             // Exact: ReconcileTmuxPaneClaims probes every Claude Code entry with
@@ -103,6 +104,16 @@ namespace ClaudeBuddy
             // true, and not otherwise.
             return new ScanProbePlan(paneClaims, askTheDaemon, worthAsking, viewerCwds);
         }
+
+        // Every pid whose team membership this pass could read (CB-212): each
+        // entry's own, exactly as `found` has it. Exact rather than a superset,
+        // because both places the UI half asks — the live-agent pass and the
+        // membership block — read an entry of `found` by its SessionPid, which
+        // nothing in the pass reassigns, and the entries the UI half adds
+        // itself (gateway, remote-control, cloud) have no pid. The plan's own
+        // leadOf above asks about these same pids.
+        internal static IReadOnlyList<int> TeamPids(IEnumerable<SessionManager.ScanEntry> found) =>
+            found.Select(e => e.Status.SessionPid).Where(pid => pid > 0).Distinct().ToList();
     }
 
     // One pass's subprocess answers, gathered off the UI thread and read on it.
@@ -119,22 +130,47 @@ namespace ClaudeBuddy
     {
         internal static readonly ScanProbes Nothing = new(
             new Dictionary<TmuxPaneKey, string?>(), null, null,
-            new Dictionary<string, AgentViewer?>(StringComparer.Ordinal));
+            new Dictionary<string, AgentViewer?>(StringComparer.Ordinal),
+            new Dictionary<int, AgentTeam.Membership>());
 
         private readonly IReadOnlyDictionary<TmuxPaneKey, string?> _paneOwners;
         private readonly IReadOnlyDictionary<string, AgentViewer?> _viewers;
+        private readonly IReadOnlyDictionary<int, AgentTeam.Membership> _teams;
 
         private ScanProbes(
             IReadOnlyDictionary<TmuxPaneKey, string?> paneOwners,
             Dictionary<string, string>? jobs,
             HashSet<string>? attachClients,
-            IReadOnlyDictionary<string, AgentViewer?> viewers)
+            IReadOnlyDictionary<string, AgentViewer?> viewers,
+            IReadOnlyDictionary<int, AgentTeam.Membership> teams)
         {
             _paneOwners = paneOwners;
             Jobs = jobs;
             AttachClients = attachClients;
             _viewers = viewers;
+            _teams = teams;
         }
+
+        // Which agent team a process belongs to, as this pass's background half
+        // read it off the process's command line (CB-212). The UI half asks
+        // this and never AgentTeam, because on Windows AgentTeam's read is a WMI
+        // query: about 200 ms warm and up to 700 ms for a process's first one,
+        // measured on the Windows PC. CB-210 had already made the background
+        // half ask first, which kept AgentTeam's one-minute cache warm for the
+        // UI half — but only nearly. An entry that aged out between the two
+        // halves was re-read on the UI thread, and that was reproduced: 332 ms
+        // of WMI on the UI thread in one pass.
+        //
+        // A pid this pass did not gather is None, "not known to be in a team",
+        // the same answer a failed read gives. TeamPids makes that unreachable
+        // for any pid the UI half asks about today. If a future change asks
+        // about one it did not gather, that orb is drawn without its team for
+        // one pass and the next pass, two seconds later, has gathered it — a
+        // missing arrow for a tick is the better failure than a frozen UI.
+        internal AgentTeam.Membership TeamOf(int pid) =>
+            _teams.TryGetValue(pid, out var membership) ? membership : AgentTeam.None;
+
+        internal string LeadOf(int pid) => TeamOf(pid).Lead;
 
         // The daemon's listing, or null when it was not asked or could not be
         // read. The scan already treats those two alike, since both mean it
@@ -174,8 +210,13 @@ namespace ClaudeBuddy
 
         // Runs the plan. Every argument is a seam, so this is the one place the
         // scan spends a subprocess and it can be exercised without spending one.
+        //
+        // teams is what the plan was built from, carried for the UI half to
+        // read: memberships are gathered before the plan, because its viewer
+        // and daemon gates depend on them.
         internal static ScanProbes Gather(
             ScanProbePlan plan,
+            IReadOnlyDictionary<int, AgentTeam.Membership> teams,
             Func<IReadOnlyList<SessionStatus>, IReadOnlyDictionary<TmuxPaneKey, string?>> paneOwners,
             Func<Dictionary<string, string>?> jobListing,
             Func<HashSet<string>?> attachClients,
@@ -192,7 +233,8 @@ namespace ClaudeBuddy
                 owners,
                 plan.AskTheDaemon ? jobListing() : null,
                 plan.AskAttachClients ? attachClients() : null,
-                viewers);
+                viewers,
+                teams);
         }
     }
 }

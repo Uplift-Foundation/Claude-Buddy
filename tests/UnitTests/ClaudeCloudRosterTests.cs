@@ -283,7 +283,14 @@ public class ClaudeCloudRosterTests
 
     // --- the state -----------------------------------------------------------
 
+    // **"running" in session_status is measured**: 2026-09-28, CB-199's gate,
+    // on a fresh cloud session's /v2 row sampled through a running turn, which
+    // read "running"/"working"; idle it read "idle"/"blocked". Those two pairs
+    // are the first two rows. "running" as a *bucket* was never seen — the
+    // bucket says "working" — and is kept only because StateFor accepts it.
     [Theory]
+    [InlineData("running", "working", "generating")]
+    [InlineData("idle", "blocked", "waiting")]
     [InlineData("running", "", "generating")]
     [InlineData("", "running", "generating")]
     [InlineData("blocked", "", "waiting")]
@@ -712,7 +719,7 @@ public class ClaudeCloudRosterTests
     public void AKeptRowBecomesASessionTheOrbLayerCanDraw()
     {
         var row = ClaudeCloudRoster.ParseSession(Row("session_a", "anthropic_cloud", "running",
-            bucket: "running", title: "a title", updated: "2026-09-19T10:00:00Z",
+            bucket: "working", title: "a title", updated: "2026-09-19T10:00:00Z",
             extra: ",\"external_metadata\":{\"model\":\"claude-opus-5\","
                    + "\"post_turn_summary\":{\"needs_action\":false,"
                    + "\"status_detail\":\"running the tests\","
@@ -725,11 +732,123 @@ public class ClaudeCloudRosterTests
         Assert.Equal("a title", session.Title);
         Assert.Equal("generating", session.State);
         Assert.Equal("https://claude.ai/code/session_a", session.Url);
-        Assert.Equal("running", session.StatusBucket);
+        Assert.Equal("working", session.StatusBucket);
         Assert.False(session.NeedsAction);
         Assert.Equal("claude-opus-5", session.Model);
         Assert.Equal("running the tests", session.StatusDetail);
         Assert.Equal("edited a file", session.RecentAction);
         Assert.Equal(new DateTime(2026, 9, 19, 10, 0, 0, DateTimeKind.Utc), session.LastActivity);
+    }
+
+    // --- the id rule (CB-199) --------------------------------------------------
+
+    // One rule, three callers: the link, the write path and the probe. The bad
+    // cases are the same list UrlFor refuses above, asserted here against the
+    // predicate itself so that a second copy of the rule cannot drift from it
+    // without one of these two theories noticing.
+    [Theory]
+    [InlineData("session_01ABCdef-_123")]
+    [InlineData("session_a")]
+    [InlineData("session_01FixtureOnly2")]
+    public void AWellFormedIdIsTheCliRule(string id)
+    {
+        Assert.True(ClaudeCloudRoster.IsWellFormedId(id));
+        Assert.Equal("https://claude.ai/code/" + id, ClaudeCloudRoster.UrlFor(id));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("session_")]
+    [InlineData("sess_01ABC")]
+    [InlineData("Session_01ABC")]
+    [InlineData(" session_01ABC")]
+    [InlineData("session_01ABC/../admin")]
+    [InlineData("session_01ABC?x=1")]
+    [InlineData("session_01ABC%2F")]
+    [InlineData("session_01ABC\nx")]
+    [InlineData("session_01ABCé")]
+    public void AnIdThatIsNotShapedLikeOneIsRefused(string? id)
+    {
+        Assert.False(ClaudeCloudRoster.IsWellFormedId(id));
+    }
+
+    // --- connection status (CB-199) --------------------------------------------
+
+    // `worker_status` rides along in the same row and is deliberately not read:
+    // the /v2 row was measured not to carry it (2026-09-28, CB-199 gate), so a
+    // Row field for it would only ever be null.
+    [Fact]
+    public void ConnectionStatusIsReadOffTheRowAndCarriedToTheSession()
+    {
+        var row = ClaudeCloudRoster.ParseSession(Row("session_a", "anthropic_cloud", "running",
+            bucket: "working",
+            extra: ",\"worker_status\":\"running\",\"connection_status\":\"connected\""))!;
+
+        Assert.Equal("connected", row.ConnectionStatus);
+        Assert.Equal("connected", ClaudeCloudRoster.ToSession(row)!.ConnectionStatus);
+    }
+
+    // Absent, or not a string, is null rather than a default. A row without
+    // it is ordinary rather than a shape change.
+    [Theory]
+    [InlineData("")]
+    [InlineData(",\"connection_status\":null")]
+    [InlineData(",\"connection_status\":7")]
+    public void AMissingConnectionStatusIsNullAndTheRowStillParses(string extra)
+    {
+        var row = ClaudeCloudRoster.ParseSession(Row("session_a", "anthropic_cloud", "idle",
+            extra: extra));
+
+        Assert.NotNull(row);
+        Assert.Null(row!.ConnectionStatus);
+    }
+
+    // --- busy (CB-199) ---------------------------------------------------------
+
+    // **Measured on 2026-09-28 by CB-199's gate**, on the /v2 row mid-turn and
+    // idle: "running"/"working" throughout a running turn, "idle"/"blocked"
+    // after. The last two rows are the other post-turn buckets the gate read off
+    // /v1, which shares the bucket vocabulary.
+    [Theory]
+    [InlineData("running", "working", true)]
+    [InlineData("idle", "blocked", false)]
+    [InlineData("idle", "review_ready", false)]
+    [InlineData("idle", "completed", false)]
+    public void BusyFollowsTheMeasuredRow(string status, string bucket, bool busy)
+    {
+        var session = new ClaudeCloudSessions.Session("session_a", "t",
+            ClaudeCloudRoster.StateFor(status, bucket), DateTime.MinValue,
+            "https://claude.ai/code/session_a", bucket, false, null, null, null, null,
+            "connected");
+
+        Assert.Equal(busy, ClaudeCloudRoster.IsBusy(session));
+    }
+
+    // Either half is enough on its own, so a row that loses one of them still
+    // reads as busy — and one with neither does not.
+    [Fact]
+    public void EitherHalfOfTheRuleIsEnough()
+    {
+        Assert.True(ClaudeCloudRoster.IsBusy("idle", "working"));
+        Assert.False(ClaudeCloudRoster.IsBusy("idle", "completed"));
+        Assert.False(ClaudeCloudRoster.IsBusy("idle", null));
+    }
+
+    // One busy rule, not two: anything StateFor already pulses as generating is
+    // busy too, whatever the bucket says.
+    [Fact]
+    public void WhatTheOrbPulsesForIsBusy()
+    {
+        Assert.True(ClaudeCloudRoster.IsBusy("generating", null));
+        Assert.True(ClaudeCloudRoster.IsBusy(ClaudeCloudRoster.StateFor("running", ""), ""));
+    }
+
+    [Fact]
+    public void TheWorkingBucketIsMatchedRegardlessOfCase()
+    {
+        Assert.True(ClaudeCloudRoster.IsBusy("idle", "Working"));
+        Assert.Equal("working", ClaudeCloudRoster.WorkingBucket);
     }
 }

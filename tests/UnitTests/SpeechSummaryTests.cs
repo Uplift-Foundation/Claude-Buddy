@@ -120,24 +120,21 @@ public class SpeechSummaryTextTests
     // exists because the alternative is spoken aloud: a preamble is wasted
     // audio, markdown is read as punctuation.
     [Fact]
-    public void ThePromptCarriesTheReplyAndAsksForSpeakableProse()
+    public void TheInstructionAsksForSpeakableProse()
     {
-        var prompt = SpeechSummary.Prompt("the assistant said something");
+        var instruction = SpeechSummary.Instruction();
 
-        Assert.Contains("the assistant said something", prompt);
-        Assert.Contains("two or three sentences", prompt);
-        Assert.Contains("read aloud", prompt);
-        Assert.Contains("No preamble", prompt);
+        Assert.Contains("two or three sentences", instruction);
+        Assert.Contains("read aloud", instruction);
+        Assert.Contains("No preamble", instruction);
+        Assert.Contains("standard input", instruction);
     }
 
-    // Reply is the default kind, so the two-argument call above and this one
-    // stay indistinguishable — the negative control for the variant below.
+    // Reply is the default kind — the negative control for the variant below.
     [Fact]
-    public void ThePromptDefaultsToTheReplyKind()
+    public void TheInstructionDefaultsToTheReplyKind()
     {
-        Assert.Equal(
-            SpeechSummary.Prompt("some reply"),
-            SpeechSummary.Prompt("some reply", SpeechSummaryKind.Reply));
+        Assert.Equal(SpeechSummary.Instruction(), SpeechSummary.Instruction(SpeechSummaryKind.Reply));
     }
 
     // CB-167's vibe summary: a different question from the reply summary
@@ -146,26 +143,54 @@ public class SpeechSummaryTextTests
     // whether to come back is the whole reason to prefer it over a Glass
     // sound.
     [Fact]
-    public void TheTurnFinishedPromptAsksWhatWasDoneAndWhatsNext()
+    public void TheTurnFinishedInstructionAsksWhatWasDoneAndWhatsNext()
     {
-        var prompt = SpeechSummary.Prompt("the assistant did something", SpeechSummaryKind.TurnFinished);
+        var instruction = SpeechSummary.Instruction(SpeechSummaryKind.TurnFinished);
 
-        Assert.Contains("the assistant did something", prompt);
-        Assert.Contains("what's next", prompt);
-        Assert.Contains("one to three", prompt);
-        Assert.Contains("read aloud", prompt);
-        Assert.Contains("No preamble", prompt);
+        Assert.Contains("what's next", instruction);
+        Assert.Contains("one to three", instruction);
+        Assert.Contains("read aloud", instruction);
+        Assert.Contains("No preamble", instruction);
     }
 
-    // The two kinds ask different questions, not the same question worded
-    // differently — this is what would fail if TurnFinished silently reused
-    // the Reply instruction with the kind parameter ignored.
+    // The two kinds ask different questions — what would fail if TurnFinished
+    // silently reused the Reply instruction with the kind ignored.
     [Fact]
-    public void TheTwoKindsProduceDifferentPrompts()
+    public void TheTwoKindsProduceDifferentInstructions()
     {
         Assert.NotEqual(
-            SpeechSummary.Prompt("a reply", SpeechSummaryKind.Reply),
-            SpeechSummary.Prompt("a reply", SpeechSummaryKind.TurnFinished));
+            SpeechSummary.Instruction(SpeechSummaryKind.Reply),
+            SpeechSummary.Instruction(SpeechSummaryKind.TurnFinished));
+    }
+
+    // It travels as a command-line argument, so it stays on one line: a
+    // newline in an argument is the one thing whose handling differs between
+    // a direct exec and a Windows command shim.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TheInstructionIsOneLine(bool turnFinished)
+    {
+        var kind = turnFinished ? SpeechSummaryKind.TurnFinished : SpeechSummaryKind.Reply;
+
+        Assert.DoesNotContain('\n', SpeechSummary.Instruction(kind));
+    }
+
+    // The truncation is mid-sentence by design, so the model is told it may
+    // be — told nothing, it asked the user instead of summarising.
+    [Fact]
+    public void TheInstructionSaysTheTextMayBeCutOff()
+    {
+        Assert.Contains("ends abruptly", SpeechSummary.Instruction());
+    }
+
+    // What goes on stdin is the reply and nothing else. The regression this
+    // pins was the instruction riding along on stdin, where Claude Code frames
+    // it as pasted content the model should not obey.
+    [Fact]
+    public void TheSourceIsTheReplyAloneWithNoInstructionInIt()
+    {
+        Assert.Equal("the assistant said something", SpeechSummary.Source("the assistant said something"));
     }
 
     // A very long reply is exactly what this mode is for, but its tail adds
@@ -175,20 +200,17 @@ public class SpeechSummaryTextTests
     {
         var huge = new string('y', SpeechSummary.MaxSourceChars * 2);
 
-        var prompt = SpeechSummary.Prompt(huge);
-
-        Assert.True(prompt.Length < huge.Length);
-        Assert.Contains(new string('y', 100), prompt);
+        Assert.Equal(SpeechSummary.MaxSourceChars, SpeechSummary.Source(huge).Length);
     }
 
     // The negative control for the case above: a reply under the bound is sent
-    // whole. Without this, a Prompt that truncated everything would pass.
+    // whole. Without this, a Source that truncated everything would pass.
     [Fact]
     public void AReplyUnderTheBoundIsSentWhole()
     {
         var reply = new string('y', SpeechSummary.MaxSourceChars - 1);
 
-        Assert.Contains(reply, SpeechSummary.Prompt(reply));
+        Assert.Equal(reply, SpeechSummary.Source(reply));
     }
 
     // --- cleaning the answer ---
@@ -313,6 +335,29 @@ public class SpeechSummaryOutcomeTests : IDisposable
         Answer(_ => Task.FromResult(answer));
 
         Assert.Equal(SpeechSummary.Unavailable, await SpeechSummary.SummarizeOrSayWhyAsync("reply"));
+    }
+
+    // The CLI's own words for an account over its spend limit, as captured
+    // from a real run, alongside a failure that names nothing — the negative
+    // control, without which a FailureSentence that always matched would pass.
+    [Theory]
+    [InlineData("You've hit your org's monthly spend limit · run /usage-credits to raise it, or visit claude.ai/admin-settings/usage · your weekly limit resets 10pm (America/Los_Angeles)", SpeechSummary.SpendLimitReached)]
+    [InlineData("\nSPEND LIMIT exceeded", SpeechSummary.SpendLimitReached)]
+    [InlineData("Error: connection refused", null)]
+    [InlineData(null, null)]
+    public void AFailedRunIsNamedOnlyWhenItSaysWhy(string? output, string? expected)
+    {
+        Assert.Equal(expected, SpeechSummary.FailureSentence(output));
+    }
+
+    // A failure that already knows its sentence is spoken as that sentence,
+    // not collapsed into Unavailable with every other failure.
+    [Fact]
+    public async Task ASpendLimitIsSaidAsSuch()
+    {
+        Answer(_ => throw new SpeechSummary.SpokenFailureException(SpeechSummary.SpendLimitReached));
+
+        Assert.Equal(SpeechSummary.SpendLimitReached, await SpeechSummary.SummarizeOrSayWhyAsync("reply"));
     }
 
     // A summariser that threw. Same answer as any other failure, and critically

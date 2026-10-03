@@ -175,10 +175,10 @@ public class MirrorProtocolTests
     }
 
     // Standard base64 rather than the url alphabet, and this is why: `_` would
-    // let a payload spell `msg_id`, which is the exact string
-    // RemoteControlBridge waits for to decide a send has been receipted. A frame
-    // that happened to contain it would satisfy somebody else's request and
-    // derail the relay.
+    // let a payload spell `msg_id`, which is the exact string the relay
+    // (deleted in 937de9ec) waited for to decide a send had been receipted. A
+    // frame that happened to contain it would have satisfied somebody else's
+    // request and derailed it.
     [Fact]
     public void APayloadCannotSpellTheReceiptTheRelayWaitsFor()
     {

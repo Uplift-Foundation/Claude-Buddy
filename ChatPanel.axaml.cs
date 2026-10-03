@@ -204,6 +204,12 @@ namespace ClaudeBuddy
         {
             InitializeComponent();
 
+            // Drawn rather than typed — see SymbolMarks. The same gear the
+            // background-job badge wears, which is the whole point of this
+            // button's mark.
+            AttachMark.Data = StreamGeometry.Parse(SymbolMarks.Gear);
+            HeartChipMark.Data = StreamGeometry.Parse(SymbolMarks.Heart);
+
             _defaultWidth = Width;
             _defaultHeight = Height;
 
@@ -221,6 +227,14 @@ namespace ClaudeBuddy
                 ReadOnlyLink.TextDecorations = TextDecorations.Underline;
             ReadOnlyLink.PointerExited += (_, _) =>
                 ReadOnlyLink.TextDecorations = null;
+
+            // SessionLink is the live-session twin of ReadOnlyLink and opens the
+            // same address, so it shares the handler and the one link look.
+            SessionLink.PointerPressed += OnReadOnlyLinkPressed;
+            SessionLink.PointerEntered += (_, _) =>
+                SessionLink.TextDecorations = TextDecorations.Underline;
+            SessionLink.PointerExited += (_, _) =>
+                SessionLink.TextDecorations = null;
 
             // Bubbles size themselves off Scroll's actual width (see
             // TurnView.MaxBubbleWidth) rather than a fixed pixel cap, since
@@ -289,6 +303,17 @@ namespace ClaudeBuddy
                     AvatarBox.Bounds.Y + centre.Y)));
             };
             SendButton.PointerPressed += (_, e) => { e.Handled = true; Send(); };
+
+            // The click asks the same question the button's visibility does
+            // (StopOffered), so a press that races a state change — or one that
+            // arrives with nothing bound — reaches no Cancel. What an interrupt
+            // means, and CanInterrupt going false on the click itself, stay the
+            // session's job.
+            StopButton.PointerPressed += (_, e) =>
+            {
+                e.Handled = true;
+                if (StopOffered(_session)) _session!.Cancel();
+            };
 
             // Fire and forget, like the click on the orb it shares its
             // implementation with. Nothing is awaited and nothing about the panel
@@ -640,22 +665,28 @@ namespace ClaudeBuddy
             if (_session is IRemoteChatFetchWait waited) waited.WaitChanged -= OnWaitChanged;
             HideWait();
 
+            // CB-199. The panel is reused across orbs, so a session left
+            // subscribed would go on redrawing the composer of whichever
+            // conversation is open next — a refusal from one cloud session
+            // taking the box away from an unrelated one.
+            if (_session is IRemoteChatReadOnly wasReadOnly) wasReadOnly.ReadOnlyChanged -= OnReadOnlyChanged;
+            if (_session is IRemoteChatInterrupt wasInterruptible) wasInterruptible.InterruptChanged -= OnInterruptChanged;
+
+            // Nobody is looking any more, so its live loop stops.
+            // It does not stop a turn: closing a window should not cancel work
+            // somebody asked for. Concrete type, following the RemoteControl
+            // precedent below — one caller does not earn an interface.
+            if (_session is ClaudeCloudChatSession previousCloud) previousCloud.PanelClosed();
+
             if (_session is IRemoteChatMachine wasNamed) wasNamed.MachineChanged -= OnMachineChanged;
 
-            // A remote session can take a turn back — its "working…" line comes
-            // off once the answer lands. Subscribed on the concrete type rather
-            // than through an interface: nothing else in this app has ever needed
-            // to remove a turn, and inventing IRemoteChatRemovable for one caller
-            // would be ceremony. See RemoteControlChatSession.Removed.
             if (_session is RemoteControlChatSession previousRemote)
             {
-                previousRemote.Removed -= OnTurnRemoved;
-
                 // A live view is the one thing here that costs something while
                 // nobody is looking: it holds a subscription on the other
-                // machine's Buddy, which keeps that relay — a real Claude Code
-                // session on the user's own account — from idling out. So the
-                // panel closing says so, rather than leaving it to lapse.
+                // machine's Buddy, which keeps it watching that session's
+                // transcript. So the panel closing says so, rather than leaving
+                // it to lapse.
                 //
                 // Told on the panel rather than in Dispose because these
                 // sessions are deliberately never disposed: a remote
@@ -736,8 +767,6 @@ namespace ClaudeBuddy
 
             if (session is RemoteControlChatSession remote)
             {
-                remote.Removed += OnTurnRemoved;
-
                 // Re-opens the live view if this panel closed it earlier. Cheap
                 // when it is already open and nothing at all in messaging mode.
                 remote.PanelOpened();
@@ -773,6 +802,18 @@ namespace ClaudeBuddy
             // does.
             if (session is IRemoteChatMachine named) named.MachineChanged += OnMachineChanged;
 
+            // CB-199: whether the box is there, and whether Stop is, can both
+            // change while the panel is open — a cloud session turns read-only
+            // the moment the server refuses it, and a reply starts and ends on
+            // the roster's schedule rather than the panel's. Both are re-read by
+            // ApplyComposerAffordances below for the initial state.
+            if (session is IRemoteChatReadOnly readOnlyNow) readOnlyNow.ReadOnlyChanged += OnReadOnlyChanged;
+            if (session is IRemoteChatInterrupt interruptible) interruptible.InterruptChanged += OnInterruptChanged;
+
+            // Somebody is looking, which is what licenses the one transcript read
+            // the session makes when a turn finishes (busy to idle on the roster).
+            if (session is ClaudeCloudChatSession cloud) cloud.PanelOpened();
+
             // "Nova — wtvamp" is built as name plus place, so it splits back
             // into the two lines the header now has. A name with no place (an
             // agent's own main session) simply leaves the second line empty.
@@ -798,8 +839,7 @@ namespace ClaudeBuddy
             // one of those is badged — and a chip that made room for the
             // impossible case would be a claim about this app that is not true.
             KindChip.IsVisible = kind is not null;
-            KindChipText.Text = KindChipLabel(
-                orb.KindGlyphText, kind, presence,
+            ApplyKindChip(orb.KindGlyphText, orb.KindMarkData, kind, presence,
                 (_session as IRemoteChatMachine)?.MachineName);
 
             ApplyHeartbeat(orb.IsHeartbeat);
@@ -881,13 +921,16 @@ namespace ClaudeBuddy
             // entirely, and gets a sentence where it was.
             //
             // **Hidden, not disabled** — the opposite of what the watermark
-            // above does for a session that merely cannot be typed into *yet*,
-            // and the difference is measured rather than aesthetic. A cloud
-            // session has no input route at any address: `/input`, `/messages`,
-            // `/turns` and `/conversation` are all 404. A box that accepts a
-            // paragraph and only then admits the transport never had anywhere to
-            // put it has already lost the paragraph, which is CB-59's rule at
-            // its sharpest.
+            // above does for a session that merely cannot be typed into *yet*.
+            // A cloud session is written to through
+            // POST /v1/code/sessions/{id}/events (measured 2026-09-28), so a
+            // live one keeps its box; it turns read-only only once it has ended,
+            // been deleted, or refused this login, and none of those will take
+            // a reply later. A box that accepts a paragraph and only then admits
+            // there is nowhere for it to go has already lost the paragraph,
+            // which is CB-59's rule at its sharpest. That can now happen *while
+            // the panel is open*, which is why this also runs on
+            // ReadOnlyChanged rather than only at bind.
             //
             // The hint is kept rather than dropped with the box, because it says
             // where the session *can* be replied to. Hiding the box and
@@ -906,13 +949,52 @@ namespace ClaudeBuddy
             _readOnlyUrl = readOnly ? (session as IRemoteChatReadOnly)?.ReplyUrl : null;
             ReadOnlyLink.IsVisible = _readOnlyUrl is not null;
             ReadOnlyLink.Text = _readOnlyUrl is null ? "" : "Open in your browser";
+
+            // A live session has the same address and needs the same way to it
+            // (CB-199 hid the link along with the box). One link at a time: this
+            // one while the composer is up, ReadOnlyLink's while it is not.
+            _sessionUrl = SessionLinkUrl(session);
+            SessionLink.IsVisible = _sessionUrl is not null;
+            SessionLink.Text = _sessionUrl is null ? "" : "Open in your browser";
+
+            ApplyStop(session);
         }
+
+        // Stop is shown only while the session says pressing it would stop
+        // something, and never over a read-only one. Hidden rather than
+        // disabled, for CB-59's reason: a greyed Stop over an idle session reads
+        // as "stuck". The read-only half is already true of the row it sits in;
+        // it is stated here too so the button's own visibility says the true
+        // thing rather than relying on its parent to hide a lie.
+        private void ApplyStop(IRemoteChatSession? session) => StopButton.IsVisible = StopOffered(session);
+
+        // The one rule for both the button and its click. Static and pure, so
+        // each arm is a unit case rather than a panel to build — including the
+        // ones no real transport produces today, like an interruptible session
+        // that is not read-only-capable at all.
+        internal static bool StopOffered(IRemoteChatSession? session) =>
+            session is IRemoteChatInterrupt { CanInterrupt: true }
+            && session is not IRemoteChatReadOnly { IsReadOnly: true };
+
+        // Raised on the UI thread by contract (see IRemoteChatReadOnly), and only
+        // by the session currently bound: Unbind takes both subscriptions off.
+        private void OnReadOnlyChanged() => ApplyComposerAffordances(_session);
+
+        private void OnInterruptChanged() => ApplyStop(_session);
 
         // Where the read-only link goes. Held rather than read back off the
         // TextBlock, because what is *shown* is a label and what is opened is an
         // address, and putting a URL on screen to have somewhere to keep it is
         // how the two come to disagree.
         private string? _readOnlyUrl;
+        private string? _sessionUrl;
+
+        // The address for the live-session link: the session's own, whenever it
+        // has one and is not read-only. Pure so each arm is a unit case. A
+        // session that is not IRemoteChatReadOnly has no address to offer, and a
+        // read-only one gets its link from the read-only box instead.
+        internal static string? SessionLinkUrl(IRemoteChatSession? session) =>
+            session is IRemoteChatReadOnly { IsReadOnly: false, ReplyUrl: { Length: > 0 } url } ? url : null;
 
         // Excluded from coverage: the guard is reachable and asserted through
         // ReadOnlyLink's visibility, and the half behind it launches a real
@@ -921,9 +1003,12 @@ namespace ClaudeBuddy
         [ExcludeFromCodeCoverage]
         private void OnReadOnlyLinkPressed(object? sender, PointerPressedEventArgs e)
         {
-            if (_readOnlyUrl is null) return;
+            // At most one of the two is set: SessionLinkUrl is null for a
+            // read-only session and _readOnlyUrl is null for a live one.
+            var url = _readOnlyUrl ?? _sessionUrl;
+            if (url is null) return;
 
-            CloudSessionLink.Open(_readOnlyUrl);
+            CloudSessionLink.Open(url);
         }
 
         // The same decoded frames the orb draws, at a size worth looking at.
@@ -2332,12 +2417,12 @@ namespace ClaudeBuddy
                 _ => IdleFill
             };
 
-            SpeakGlyph.Text = state switch
-            {
-                TextToSpeech.SpeakState.Speaking => "⏹",
-                TextToSpeech.SpeakState.Preparing => "⏳",
-                _ => "\U0001F508"
-            };
+            var (glyph, mark) = SymbolMarks.SpeakLook(state);
+
+            SpeakGlyph.Text = glyph;
+            SpeakGlyph.IsVisible = glyph is not null;
+            SpeakStopMark.Data = mark is null ? null : StreamGeometry.Parse(mark);
+            SpeakStopMark.IsVisible = mark is not null;
         }
 
         private bool _loadingOlder;
@@ -2392,20 +2477,6 @@ namespace ClaudeBuddy
             for (var i = 0; i < count && i < _session.History.Count; i++)
             {
                 _turns.Insert(i, new TurnView(_session.History[i], _defaultBubble, _soleSpeaker, Adopt, _textScale));
-            }
-        }
-
-        // Drops the row for a turn the session has retracted. Matched by
-        // reference through the view wrapper, because the text is not unique —
-        // two "working…" lines would be identical strings.
-        private void OnTurnRemoved(ChatTurn turn)
-        {
-            for (var i = 0; i < _turns.Count; i++)
-            {
-                if (!ReferenceEquals(_turns[i].Source, turn)) continue;
-
-                _turns.RemoveAt(i);
-                return;
             }
         }
 
@@ -2476,8 +2547,7 @@ namespace ClaudeBuddy
         {
             if (_owner is null) return;
 
-            KindChipText.Text = KindChipLabel(
-                _owner.KindGlyphText, _owner.KindLabel, _owner.PresenceLabel,
+            ApplyKindChip(_owner.KindGlyphText, _owner.KindMarkData, _owner.KindLabel, _owner.PresenceLabel,
                 (_session as IRemoteChatMachine)?.MachineName);
 
             // The same answer arriving changes the meta line too, and it is the
@@ -2504,16 +2574,31 @@ namespace ClaudeBuddy
         //
         // Pure and static so the wording is a unit test rather than a
         // screenshot. See CB-59.
+        //
+        // A null glyph means the kind's mark is drawn beside the text instead
+        // (see ApplyKindChip), so the words stand alone rather than behind a
+        // gap where a character used to be.
         internal static string KindChipLabel(
-            string glyph, string? kind, string? presence, string? machine)
+            string? glyph, string? kind, string? presence, string? machine)
         {
             if (kind is null) return "";
 
             var what = string.IsNullOrWhiteSpace(machine) ? kind : machine;
+            var words = presence is null ? what : $"{what} · {presence}";
 
-            return presence is null
-                ? $"{glyph}  {what}"
-                : $"{glyph}  {what} · {presence}";
+            return glyph is null ? words : $"{glyph}  {words}";
+        }
+
+        // The chip wears the orb's own either-or: the drawn mark when the kind
+        // has one, the typed character when it does not (@, #). Typing ⏱ or ☁
+        // here is the CB-173 defect in a second place — on Windows they fall
+        // back to Segoe UI Emoji and ignore the chip's ink entirely.
+        private void ApplyKindChip(
+            string? glyph, string? mark, string? kind, string? presence, string? machine)
+        {
+            KindChipMark.Data = mark is null ? null : StreamGeometry.Parse(mark);
+            KindChipMark.IsVisible = mark is not null;
+            KindChipText.Text = KindChipLabel(mark is null ? glyph : null, kind, presence, machine);
         }
 
 

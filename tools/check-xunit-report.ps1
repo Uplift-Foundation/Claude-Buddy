@@ -10,14 +10,14 @@
     *cleanup* throws InvalidOperationException inside
     Avalonia.Headless.HeadlessUnitTestSession.EnsureIsolatedApplication().
     xUnit v3 files that as an assembly error rather than a test failure, and
-    it REPLACES the test's own result — so the assembly's XML carries
+    it REPLACES the test's own result -- so the assembly's XML carries
     errors="1" and the total test count drops by one, but "Failed" stays 0
     and the process exit code stays 0. That is unsurfaced, not invisible:
     the runner writes it to the report; nothing prints it to the console.
 
     This script is that surfacing. It reads the plain xUnit XML report
-    (`--report-xunit`, not `--report-xunit-trx` — the assembly-level
-    `errors`/`total` attributes and the `<error type=… name=…>` elements
+    (`--report-xunit`, not `--report-xunit-trx` -- the assembly-level
+    `errors`/`total` attributes and the `<error type=... name=...>` elements
     are direct, undocumented-schema-free reads off that format; the TRX
     schema buries the same information behind a `Counters` node with no
     per-error name at all) and fails loudly on two independent conditions:
@@ -25,15 +25,15 @@
     CB-84 reproduced the same symptom (a short, exit-0 run) from a second,
     distinct cause: an exception thrown while EnsureIsolatedApplication
     builds the NEXT test's Compositor, rather than while the PREVIOUS test's
-    cleanup runs — a Dispatcher.VerifyAccess ownership mismatch inside
+    cleanup runs -- a Dispatcher.VerifyAccess ownership mismatch inside
     Avalonia.Rendering.DefaultRenderLoop.Add. xUnit v3 files this the same
     way as the case above (an assembly error, not a test failure), so it
-    needed no change here — see ci.yml's UI tests step comment for the full
+    needed no change here -- see ci.yml's UI tests step comment for the full
     diagnosis, including why an Avalonia patch bump did not fix it.
 
-      1. `errors != "0"` on any <assembly> — the primary check. A direct
+      1. `errors != "0"` on any <assembly> -- the primary check. A direct
          read of a signal the runner already emits, no upkeep required.
-      2. total tests below -MinimumExpectedTests — the secondary belt.
+      2. total tests below -MinimumExpectedTests -- the secondary belt.
          Deliberately set BELOW the real current total by whoever calls
          this script (see the callers in ci.yml for the current numbers and
          why they're not pinned exactly), so it catches a large accidental
@@ -41,7 +41,7 @@
 
     ci.yml wraps the UI suites in a 3-attempt retry loop, and critically,
     `dotnet test`'s own exit code is 0 for the exact failure this guards
-    against — so the retry loop's existing `$LASTEXITCODE -eq 0` check
+    against -- so the retry loop's existing `$LASTEXITCODE -eq 0` check
     cannot be the thing that decides whether to retry. This script's exit
     code is what the loop must check instead: 0 only when the report is
     clean AND at/above the floor. On every attempt (not just the last) it
@@ -69,7 +69,7 @@
 .OUTPUTS
     Exit code 0 when the report is healthy (errors="0" and total >=
     MinimumExpectedTests); exit code 1 otherwise. Never throws for a
-    well-formed report — a missing or unparsable report is itself reported
+    well-formed report -- a missing or unparsable report is itself reported
     as unhealthy rather than crashing the build with a stack trace.
 #>
 [CmdletBinding()]
@@ -92,7 +92,7 @@ param(
 
 $isFinal = $Attempt -ge $MaxAttempts
 $levelPrefix = if ($isFinal) { '::error::' } else { '::warning::' }
-$fateSuffix = if ($isFinal) { ' — failing the step' } else { ' — retrying' }
+$fateSuffix = if ($isFinal) { ' -- failing the step' } else { ' -- retrying' }
 
 function Write-Problem {
     param([string]$Message)
@@ -100,7 +100,7 @@ function Write-Problem {
 }
 
 if (-not (Test-Path -LiteralPath $ReportPath)) {
-    Write-Problem "produced no xUnit report at $ReportPath — treating as a short run"
+    Write-Problem "produced no xUnit report at $ReportPath -- treating as a short run"
     exit 1
 }
 
@@ -115,7 +115,7 @@ catch {
 # SelectNodes, not $report.assemblies.assembly: PowerShell's XML adapter
 # turns both attributes AND child elements into dot-properties, and this
 # schema has both an `errors` ATTRIBUTE on <assembly> (the count) and an
-# `errors` CHILD ELEMENT on <assembly> (the container for <error> details) —
+# `errors` CHILD ELEMENT on <assembly> (the container for <error> details) --
 # the same collision exists for the assemblies/assembly relationship in
 # principle, so every read below goes through XmlElement's own
 # GetAttribute()/SelectNodes() rather than a dot-property, which silently
@@ -141,7 +141,7 @@ foreach ($assembly in $assemblies) {
         $errorNodes = @($assembly.SelectNodes('errors/error'))
         if ($errorNodes.Count -eq 0) {
             # errors="N" with no <error> children would itself be a report
-            # shape we've never seen — name that rather than saying nothing.
+            # shape we've never seen -- name that rather than saying nothing.
             $problems += "reported errors=$assemblyErrors with no <error> element naming them"
         }
         else {
@@ -159,7 +159,7 @@ if ($totalTests -lt $MinimumExpectedTests) {
 }
 
 if ($problems.Count -eq 0) {
-    Write-Host "$SuiteName report healthy — total=$totalTests, errors=$totalErrors (attempt $Attempt of $MaxAttempts)"
+    Write-Host "$SuiteName report healthy -- total=$totalTests, errors=$totalErrors (attempt $Attempt of $MaxAttempts)"
     exit 0
 }
 

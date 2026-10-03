@@ -53,6 +53,14 @@ namespace ClaudeBuddy
         [JsonIgnore]
         public string Agent { get; set; } = "";
 
+        // The colour Claude Code assigned this team member, kept beside Color
+        // rather than folded into it so a peer can be told both (CB-223): the
+        // session's own /color and the team's assignment are different facts,
+        // and the near machine applies the same precedence the local scan
+        // does. Empty for everything that isn't a team member.
+        [JsonIgnore]
+        public string AgentColor { get; set; } = "";
+
         // Which CLI wrote this file, in its own words: "codex", or absent for
         // Claude Code.
         //
@@ -250,8 +258,8 @@ namespace ClaudeBuddy
         Grok,
         OpenClaw,
 
-        // A Claude Code session on another machine, seen through the bridge (see
-        // RemoteControlBridge). Its own CLI is Claude Code, but it is not local
+        // A session on another machine, served over the direct link by the
+        // Claude Buddy running there (see PeerSessions). It is not local
         // and there is no terminal here to focus, which is the distinction
         // IsLocalCli draws and the only one the rest of the app cares about.
         RemoteControl,
@@ -394,7 +402,9 @@ namespace ClaudeBuddy
             Func<int, SessionDependents.Verdict>? dependents = null,
             bool? onWindows = null,
             Func<IReadOnlyList<SessionStatus>, IReadOnlyDictionary<TmuxPaneKey, string?>>? paneOwners = null,
-            Func<string, AgentViewer?>? agentViewer = null)
+            Func<string, AgentViewer?>? agentViewer = null,
+            Func<IReadOnlyList<int>, IReadOnlyDictionary<int, AgentTeam.Membership>>? teams = null,
+            Action<int, SessionDependents.Verdict>? terminate = null)
         {
             _statusDir = statusDir;
             _jobListing = jobListing ?? BackgroundJobs.SnapshotForScan;
@@ -416,6 +426,13 @@ namespace ClaudeBuddy
             _onWindows = onWindows ?? OperatingSystem.IsWindows();
             _paneOwners = paneOwners ?? TerminalFocuser.TmuxPaneOwners;
             _agentViewer = agentViewer ?? AgentTeamViewer.For;
+            _teams = teams ?? AgentTeam.OfAll;
+            _terminate = terminate ?? SessionTerminator.Terminate;
+
+            // AccountOrbs starts out visible, and nothing used to tell it
+            // otherwise until a switch was flipped — so launching with every
+            // orb hidden still put the usage orbs up on the first poll.
+            _accountOrbs.SetVisible(UsageOrbsVisible);
         }
 
         // Who is running in each claimed tmux pane, and which `claude agents`
@@ -426,6 +443,18 @@ namespace ClaudeBuddy
         // answer them.
         private readonly Func<IReadOnlyList<SessionStatus>, IReadOnlyDictionary<TmuxPaneKey, string?>> _paneOwners;
         private readonly Func<string, AgentViewer?> _agentViewer;
+
+        // Which agent team each pid is in, read off its command line — a WMI
+        // query on Windows (CB-212). A seam for the same reason as the two
+        // above, and so the scan suites can prove it is asked on the background
+        // half only: the UI half reads the answer out of ScanProbes.TeamOf.
+        private readonly Func<IReadOnlyList<int>, IReadOnlyDictionary<int, AgentTeam.Membership>> _teams;
+
+        // What ends a session's process once EndSession has decided it may
+        // (CB-228). A seam so the scan suites can prove the kill runs off the
+        // UI thread and that a refused session is never handed to it, without
+        // a test signalling anything real.
+        private readonly Action<int, SessionDependents.Verdict> _terminate;
 
         // Every subprocess question this pass needs, asked. Runs on
         // ScheduleScan's background thread in production, and inline for
@@ -439,9 +468,13 @@ namespace ClaudeBuddy
         {
             BackgroundJobs.NoteLiveTranscripts(ClaudeTranscripts(found));
 
+            // CB-212: every pid's team first, in one read, because the plan's
+            // gates need the leads and the UI half needs the rest.
+            var teams = _teams(ScanProbePlan.TeamPids(found));
+
             return ScanProbes.Gather(
-                ScanProbePlan.For(found, AgentTeam.LeadOf),
-                _paneOwners, _jobListing, _attachClients, _agentViewer);
+                ScanProbePlan.For(found, pid => teams.TryGetValue(pid, out var m) ? m.Lead : ""),
+                teams, _paneOwners, _jobListing, _attachClients, _agentViewer);
         }
 
         internal static IEnumerable<string?> ClaudeTranscripts(IEnumerable<ScanEntry> found) =>
@@ -530,7 +563,16 @@ namespace ClaudeBuddy
         // either way, so the tray icon and its menu stay accurate.
         public bool OrbsVisible { get; private set; } = ClaudeBuddySettings.ShowOrbs;
 
-        private FileSystemWatcher? _watcher;
+        // The account orbs' own switch (CB-220), independent of OrbsVisible:
+        // they can be hidden while the session orbs stay, and shown while the
+        // session orbs are hidden. SetOrbsVisible still moves both.
+        public bool UsageOrbsVisible { get; private set; } = ClaudeBuddySettings.ShowUsageOrbs;
+
+        // For tests that need to put account orbs on screen without a real
+        // usage poll behind them.
+        internal AccountOrbs AccountOrbsForTests => _accountOrbs;
+
+        private DeferredWatcher? _watcher;
         private readonly DispatcherTimer _pollTimer = new() { Interval = TimeSpan.FromSeconds(2) };
         private readonly DispatcherTimer _debounce = new() { Interval = TimeSpan.FromMilliseconds(150) };
 
@@ -626,19 +668,6 @@ namespace ClaudeBuddy
             // where it starts now, for why a machine that stays locked can no
             // longer leave it never called at all (CB-130).
 
-            // Subscribed unconditionally, unlike OpenClawSessions.Restart in
-            // serveOnLaunch:
-            // this only wires up an event, and starting the bridge is a separate,
-            // deliberate act because it costs the user's quota. Nothing fires
-            // here until something asks for it.
-            //
-            // Routed centrally rather than each chat session subscribing for
-            // itself, because there is one bridge feeding all of them and a
-            // message names only who it came from — so the fan-out belongs
-            // wherever the sessions are already indexed by name, which is here.
-            RemoteControlSessions.MessageReceived += OnRemoteMessage;
-            RemoteControlSessions.WorkingChanged += OnRemoteWorkingChanged;
-
 
             _debounce.Tick += (_, _) =>
             {
@@ -656,21 +685,23 @@ namespace ClaudeBuddy
         [ExcludeFromCodeCoverage]
         private void StartWatching()
         {
-            try
-            {
-                _watcher = new FileSystemWatcher(_statusDir, "*.txt")
+            // Off this thread: Start() runs on the UI thread at launch, and on
+            // macOS turning a watcher on can wait on a machine-wide disk flush
+            // (see DeferredWatcher, CB-234). The poll timer covers us until it
+            // arrives, or for good if it never does.
+            _watcher = new DeferredWatcher(
+                () => new FileSystemWatcher(_statusDir, "*.txt")
                 {
                     NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.CreationTime | NotifyFilters.FileName,
                     EnableRaisingEvents = true
-                };
-                _watcher.Changed += (_, _) => Dispatcher.UIThread.Post(RestartDebounce);
-                _watcher.Created += (_, _) => Dispatcher.UIThread.Post(RestartDebounce);
-                _watcher.Deleted += (_, _) => Dispatcher.UIThread.Post(RestartDebounce);
-            }
-            catch
-            {
-                // If the watcher can't be set up for some reason, the poll timer still covers us.
-            }
+                },
+                watcher =>
+                {
+                    watcher.Changed += (_, _) => Dispatcher.UIThread.Post(RestartDebounce);
+                    watcher.Created += (_, _) => Dispatcher.UIThread.Post(RestartDebounce);
+                    watcher.Deleted += (_, _) => Dispatcher.UIThread.Post(RestartDebounce);
+                },
+                "SessionManager.StatusWatcher");
         }
 
         // Excluded from coverage: restarts an Avalonia timer, and is only ever
@@ -1217,7 +1248,8 @@ namespace ClaudeBuddy
             Func<int, bool>? isRunning = null,
             DateTime? nowUtc = null,
             bool honourOrbLifetime = true,
-            bool? onWindows = null)
+            bool? onWindows = null,
+            Func<IReadOnlyList<int>, IReadOnlyDictionary<int, AgentTeam.Membership>>? teams = null)
         {
             statusDir ??= StatusDirectory.Path();
             var windows = onWindows ?? OperatingSystem.IsWindows();
@@ -1409,7 +1441,47 @@ namespace ClaudeBuddy
 
             MirrorLog.SayOnce("headless-kept", $"found={found.Count} kept={kept.Count}");
 
+            // CB-223: which of these are agent-team members, and whose. The
+            // live scan has always known (ScanProbes.TeamOf, read off each
+            // process's command line); this snapshot is what a peer is served
+            // from, and without it a member's team was unknowable over the
+            // link. One batched read for every Claude Code pid kept, the same
+            // read the live scan's background half makes — and none at all
+            // when nothing kept is Claude Code.
+            var claudePids = kept
+                .Where(k => k.Item2.Source == SessionSource.ClaudeCode && k.Item2.SessionPid > 0)
+                .Select(k => k.Item2.SessionPid)
+                .Distinct()
+                .ToList();
+
+            // A direct call, not `(teams ?? AgentTeam.OfAll)(pids)`: that form
+            // makes the compiler cache a delegate for the method group, which
+            // is an allocation for nothing and, to one of the two coverage
+            // engines, two more branch arcs on a line no UI suite runs.
+            if (claudePids.Count > 0)
+                ApplyTeams(kept, teams is null ? AgentTeam.OfAll(claudePids) : teams(claudePids));
+
             return kept;
+        }
+
+        // Team membership onto snapshot statuses, by the live scan's own rule
+        // (see the block that sets Lead and Agent in the scan): a process whose
+        // lead is itself is the lead, not a member, and a member's name is
+        // kept only while it has a lead. Claude Code only — a gateway session
+        // has no process to ask and uses Lead for its room.
+        internal static void ApplyTeams(IEnumerable<(string SessionId, SessionStatus Status)> sessions,
+            IReadOnlyDictionary<int, AgentTeam.Membership> teams)
+        {
+            foreach (var (sessionId, status) in sessions)
+            {
+                if (status.Source != SessionSource.ClaudeCode) continue;
+
+                var membership = teams.TryGetValue(status.SessionPid, out var m) ? m : AgentTeam.None;
+                status.Lead = membership.Lead == sessionId ? "" : membership.Lead;
+                var member = !string.IsNullOrEmpty(status.Lead);
+                status.Agent = member ? membership.Name : "";
+                status.AgentColor = member ? membership.Color : "";
+            }
         }
 
         // Whether this session is one of the shapes that is watched through a
@@ -1966,9 +2038,9 @@ namespace ClaudeBuddy
                 // Suppressing the orb further down would have left a session the
                 // menu could still be pointed at.
                 //
-                // The same prefix test the bridge and the mirror already key on —
-                // see RemoteControlBridge.IsOwnRelayCwd for why it is the prefix
-                // and not the live tag, and why the cwd rather than argv.
+                // The prefix test that recognises a relay this app once started —
+                // see MachineNames.LooksLikeALeftoverRelay for why it is the
+                // prefix and not the live tag, and why the cwd rather than argv.
                 if (MachineNames.LooksLikeALeftoverRelay(status.Cwd)) continue;
 
                 // A CLI this app started for its own purposes — the throwaway
@@ -2149,10 +2221,14 @@ namespace ClaudeBuddy
             // asked for the bridge — see RemoteControlSessions.EnsureStarted for
             // why merely enabling it isn't enough.
             //
-            // Much simpler than the gateway branch above, and for a reason worth
-            // stating: there are no rooms, no leads and no colour pool here. A
-            // remote session is one Claude Code session on one machine, so the
-            // only thing being invented is the namespaced id.
+            // Simpler than the gateway branch above: there are no rooms and no
+            // colour pool here. There are leads, since CB-223 — a far Buddy
+            // says which of its sessions are agent-team members and whose, and
+            // offers a member only alongside its lead, so the lead's key here
+            // is the namespaced key of an orb this scan is drawing too. That is
+            // what lets TeamLinks pair them on the dictionary key, exactly as
+            // it pairs a local team, with nothing translated. A relay-only far
+            // machine sends no team shape, and its rows stay flat.
             foreach (var remote in RemoteControlSessions.Snapshot())
             {
                 // Received data only. A remote cwd is intentionally absent
@@ -2190,7 +2266,19 @@ namespace ClaudeBuddy
                         // at home — better than every remote orb being identical
                         // while the answer is still in flight, or if it never
                         // comes.
-                        Color = remote.Color ?? OpenClawSessions.ColourForAgent(remote.Name),
+                        //
+                        // A team member with no colour of its own wears the one
+                        // Claude Code assigned it, the precedence the local scan
+                        // uses (a /color inside the agent outranks the team's).
+                        Color = remote.Color ?? remote.AgentColor ?? OpenClawSessions.ColourForAgent(remote.Name),
+
+                        // CB-223. Lead is the lead's own orb key, Agent the
+                        // member's name in its team — which everything
+                        // user-facing prefers over the title every member
+                        // inherits from its lead.
+                        Lead = remote.LeadKey ?? "",
+                        Agent = remote.LeadKey is null ? "" : remote.Agent ?? "",
+                        AgentColor = remote.LeadKey is null ? "" : remote.AgentColor ?? "",
 
                         Kind = SessionKind.Remote,
                     },
@@ -2376,7 +2464,9 @@ namespace ClaudeBuddy
 
                 presentIds.Add(entry.SessionId);
 
-                var agentLead = AgentTeam.LeadOf(entry.Status.SessionPid);
+                // From the background half's read, never AgentTeam itself: on
+                // Windows that is a WMI query (CB-212, see ScanProbes.TeamOf).
+                var agentLead = probes.LeadOf(entry.Status.SessionPid);
                 if (!string.IsNullOrEmpty(agentLead) && agentLead != entry.SessionId)
                 {
                     leadsWithLiveAgents.Add(agentLead);
@@ -2511,11 +2601,11 @@ namespace ClaudeBuddy
                 seen.Add(sessionId);
 
                 // Whether this session is an agent-team member, and whose. Read
-                // from its process rather than its status file — see AgentTeam.
-                // Asked after the liveness rules above so a dead session never
-                // costs a lookup.
+                // from its process rather than its status file — see AgentTeam
+                // — by the background half, which asked about every pid in the
+                // pass in one read (CB-212). This only looks the answer up.
                 var membership = status.Source == SessionSource.ClaudeCode
-                    ? AgentTeam.Of(status.SessionPid)
+                    ? probes.TeamOf(status.SessionPid)
                     : AgentTeam.None;
 
                 // Guarded, where it used to run for everything. A gateway
@@ -2624,6 +2714,11 @@ namespace ClaudeBuddy
                 // that state arrives.
                 if (_chats.TryGetValue(sessionId, out var chat)) chat.UpdateStatus(status);
 
+                // The same push for an open cloud panel, from the roster row the
+                // orb was drawn from — so Stop and the composer follow the
+                // session's real state without the panel spending a request.
+                if (_cloudChats.TryGetValue(sessionId, out var cloudChat)) PushCloudStatus(cloudChat, sessionId);
+
                 // After UpdateFrom, so the window is already showing something
                 // if the position turns out to be unusable. Before the reflow
                 // below, which steps over whatever this pins.
@@ -2649,6 +2744,11 @@ namespace ClaudeBuddy
                 // transcript that will never grow again, and a FileSystemWatcher
                 // per dead session is a handle leak measured in days.
                 if (_chats.Remove(id, out var chat)) chat.Dispose();
+
+                // A cloud panel is kept (see _cloudChats), but it hears that its
+                // row has gone — the orb can go for reasons of its own, so the
+                // roster is asked directly rather than the orb's absence trusted.
+                if (_cloudChats.TryGetValue(id, out var goneCloud)) PushCloudStatus(goneCloud, id);
 
                 // Same argument for the persona, one size up: a decoded portrait
                 // is a Bitmap per frame, held by a process-wide cache that has
@@ -2987,6 +3087,24 @@ namespace ClaudeBuddy
                     // ticker available here is the two-second scan, and pointing
                     // a rate-limited events endpoint at it would spend the
                     // account's budget on a window nobody is looking at.
+                    //
+                    // CB-199 narrowed that gap without closing it: while a turn
+                    // runs in an open panel — one sent from it, or one the roster
+                    // reports — the session watches it live for a bounded time,
+                    // and the scan's push below (PushCloudStatus) triggers one
+                    // read when a turn ends. An idle panel still reads only on
+                    // open.
+                    //
+                    // And re-pointed at the login that owns the session *now*:
+                    // ownership can move between polls (see MergeAccounts), and
+                    // a panel cached under the old owner would otherwise keep
+                    // reading, and later sending, with the wrong account.
+                    if (row is not null) existingCloud.UseCredentials(CloudChatCredentialsFor(row.OwnerRoot));
+
+                    // The row is re-read too, so a session that was archived or
+                    // deleted while its panel was shut opens read-only rather than
+                    // offering a box the server will refuse.
+                    PushCloudStatus(existingCloud, sessionId);
                     StartCloudLoad(existingCloud);
                     return existingCloud;
                 }
@@ -2995,7 +3113,10 @@ namespace ClaudeBuddy
                 // the orb is on its way out, and there is nothing to read.
                 if (row is null) return null;
 
-                var cloud = new ClaudeCloudChatSession(row, CloudChatApi, CloudChatCredentials);
+                var cloud = new ClaudeCloudChatSession(row, CloudChatApi, CloudChatCredentialsFor(row.OwnerRoot))
+                {
+                    Stream = CloudChatStream,
+                };
                 _cloudChats[sessionId] = cloud;
                 StartCloudLoad(cloud);
                 return cloud;
@@ -3053,30 +3174,77 @@ namespace ClaudeBuddy
         [ExcludeFromCodeCoverage]
         private ICloudApi CloudChatApi => _cloudChatApi ??= new HttpCloudApi();
 
+        // One live-event stream client for every cloud panel, for CloudChatApi's
+        // reason: it owns an HttpClient. Each open panel holds one connection on
+        // it, and only while it is open (CB-199). A test that goes through the
+        // seam below has chosen its stream, a null one included, so no test can
+        // reach this real one by forgetting to.
         [ExcludeFromCodeCoverage]
-        private ICloudCredentialSource CloudChatCredentials =>
-            _cloudChatCredentials ??= ClaudeCliCredentials.SourceFor(
-                OperatingSystem.IsMacOS(),
-                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+        private ICloudEventStream? CloudChatStream
+        {
+            get
+            {
+                if (!_cloudChatStreamChosen)
+                {
+                    _cloudChatStream = new HttpCloudEventStream();
+                    _cloudChatStreamChosen = true;
+                }
+
+                return _cloudChatStream;
+            }
+        }
+
+        private ICloudEventStream? _cloudChatStream;
+        private bool _cloudChatStreamChosen;
+
+        // The credential for a session's *owner*. Several accounts can be
+        // listed, and a cloud session belongs to whichever one created it: sending
+        // with another's login is at best refused and at worst reads a
+        // conversation as the wrong person. The instances come from CloudAccounts,
+        // the same ones the poll loop uses.
+        private ICloudCredentialSource CloudChatCredentialsFor(string? ownerRoot) =>
+            _cloudChatCredentialsFor(ownerRoot);
 
         private ICloudApi? _cloudChatApi;
-        private ICloudCredentialSource? _cloudChatCredentials;
+        private Func<string?, ICloudCredentialSource> _cloudChatCredentialsFor = CloudAccounts.SourceFor;
 
         // The only way into RemoteChatFor's ClaudeCloud arm from a test.
         //
-        // Both properties above build the real thing on first use: an HttpClient
-        // pointed at claude.ai, and — on this platform — a Keychain query that
-        // puts a consent dialog in front of whoever is running the suite. Neither
-        // is something a headless run may do, so the arm that constructs a cloud
-        // session was unreachable and therefore uncovered, which is what this
-        // seam is for. It sets the same two fields the properties memoise into,
+        // The properties above build the real thing on first use: HttpClients
+        // pointed at api.anthropic.com — one of them holding a live event stream
+        // open — and, on this platform, a Keychain query that puts a consent
+        // dialog in front of whoever is running the suite. None is something a
+        // headless run may do, so the arm that constructs a cloud session was
+        // unreachable and therefore uncovered, which is what this seam is for.
+        // It sets the same fields the properties memoise into,
         // so production still builds each of them exactly once and nothing about
         // the app's behaviour changes when nobody calls this.
         internal void UseCloudChatDependenciesForTests(
-            ICloudApi api, ICloudCredentialSource credentials)
+            ICloudApi api, ICloudCredentialSource credentials, ICloudEventStream? stream = null)
+        {
+            UseCloudChatDependenciesForTests(api, _ => credentials, stream);
+        }
+
+        internal void UseCloudChatDependenciesForTests(
+            ICloudApi api, Func<string?, ICloudCredentialSource> credentialsFor, ICloudEventStream? stream = null)
         {
             _cloudChatApi = api;
-            _cloudChatCredentials = credentials;
+            _cloudChatCredentialsFor = credentialsFor;
+            _cloudChatStream = stream;
+            _cloudChatStreamChosen = true;
+        }
+
+        // Hand an open cloud panel what the roster says about its session now.
+        //
+        // Skipped while the feature is off, because the snapshot is then empty
+        // by construction and a missing row would read as a deleted session —
+        // a false sentence in the one place that explains why the box went.
+        private static void PushCloudStatus(ClaudeCloudChatSession chat, string sessionId)
+        {
+            if (!ClaudeBuddySettings.ClaudeCloudEnabled) return;
+
+            chat.UpdateStatus(ClaudeCloudSessions.Snapshot()
+                .FirstOrDefault(s => "cloud:" + s.Id == sessionId));
         }
 
         // Kick off the read and walk away.
@@ -3110,34 +3278,6 @@ namespace ClaudeBuddy
         {
             var dash = sessionTitle.IndexOf(" — ", StringComparison.Ordinal);
             return dash > 0 ? sessionTitle[(dash + 3)..].Trim() : sessionTitle;
-        }
-
-        // A message from a session on another machine, handed to the one
-        // conversation it belongs to.
-        //
-        // Delivered only to an already-open conversation, and that is the right
-        // shape rather than a gap: this channel is a reply to something someone
-        // typed here, so an inbound message with no panel behind it would be a
-        // reply to nothing. A remote session cannot start a conversation.
-        private void OnRemoteMessage(BridgeProtocol.InboundMessage message)
-        {
-            // Keyed the way the scan mints ids, so this is a lookup rather than
-            // a walk — and it means a remote session named the same as a local
-            // one cannot be delivered to the local one's panel.
-            // Offered to every open remote conversation and filtered by each.
-            // A direct dictionary hit would need the exact key, and the peer
-            // list's casing is upstream's to change — so the sessions decide,
-            // each checking both the name and the account it belongs to.
-            foreach (var candidate in _remoteChats.Values) candidate.OnInbound(message);
-        }
-
-        // A remote session started or stopped working. The orb learns this from
-        // the snapshot on the next scan; this is for the panel, which has no scan
-        // to wait on and would otherwise show a sent message and nothing else
-        // for however long the other machine takes.
-        private void OnRemoteWorkingChanged(string sessionKey, bool working)
-        {
-            if (_remoteChats.TryGetValue(sessionKey, out var chat)) chat.SetWorking(working);
         }
 
         public SessionStatus? StatusFor(string? sessionId) =>
@@ -3265,6 +3405,12 @@ namespace ClaudeBuddy
 
         public void SetOrbsVisible(bool visible)
         {
+            // "Show orbs" means all of them, usage orbs included — and it says
+            // so even when the session orbs are already where they were asked
+            // to be, since the usage orbs may not be. Hence before the early
+            // return rather than after it.
+            SetUsageOrbsVisible(visible);
+
             if (OrbsVisible == visible) return;
             OrbsVisible = visible;
             ClaudeBuddySettings.ShowOrbs = visible;
@@ -3279,12 +3425,21 @@ namespace ClaudeBuddy
             // visible arrow is a line from nowhere to nowhere.
             TeamLinks.SetVisible(visible);
 
-            // "Show orbs" means all of them. An account orb left floating over a
-            // cleared desktop would be the one thing the switch failed to turn
-            // off, which is worse than it never having been covered.
-            _accountOrbs.SetVisible(visible);
-
             if (visible) ReflowPositions();
+            UpdateTray();
+        }
+
+        // The account orbs alone. An account orb left floating over a desktop
+        // somebody cleared with "Show orbs" would be the one thing that switch
+        // failed to turn off, which is why SetOrbsVisible still calls this —
+        // but hiding only these is its own switch, so the session orbs are
+        // left exactly as they are.
+        public void SetUsageOrbsVisible(bool visible)
+        {
+            if (UsageOrbsVisible == visible) return;
+            UsageOrbsVisible = visible;
+            ClaudeBuddySettings.ShowUsageOrbs = visible;
+            _accountOrbs.SetVisible(visible);
             UpdateTray();
         }
 
@@ -3312,7 +3467,7 @@ namespace ClaudeBuddy
         // change. The decision about which CLI's orbs stay lives in
         // AccountOrbs.SyncToSettings; this used to look only at the Claude Code
         // flag, which is how turning Grok usage on could close the orbs instead.
-        public void ReapplyAccountOrbs() => _accountOrbs.SyncToSettings(OrbsVisible);
+        public void ReapplyAccountOrbs() => _accountOrbs.SyncToSettings(UsageOrbsVisible);
 
         // Same shape as ReapplyStateColors, for the "Two-letter initials"
         // toggle: a cosmetic setting change isn't a session change, so
@@ -4058,24 +4213,96 @@ namespace ClaudeBuddy
         // the same shape ResetIdleItem already uses for a session it cannot
         // serve. This guard is what makes that row's promise true, because a
         // menu can be read from a snapshot taken a moment before the click.
-        public void EndSession(string sessionId)
+        //
+        // The status is read here, on the UI thread that owns _statuses, and
+        // everything after it runs on a pool thread (CB-228). Both halves of
+        // what follows read the machine: the guard is a full process-table read
+        // — a WMI query on Windows, measured at 218-273 ms on the Windows PC —
+        // and Windows' tree kill walks the table again. Neither belongs on the
+        // thread that draws every orb. The guard moves with the kill rather
+        // than staying behind on the UI thread, because the order is the whole
+        // point of it: ask, then refuse or act, on one reading.
+        //
+        // Three hops rather than one: read on a pool thread, back to the UI
+        // thread to check the session is still the one that was clicked, then
+        // the kill on a pool thread. The middle check is new with the move.
+        // While the read runs — a quarter of a second on Windows — a scan can
+        // drop the session or hand its id a new pid, and a kill aimed at the
+        // pid the click saw would then land on whatever holds it now.
+        //
+        // A read that throws ends the task with nothing signalled: the
+        // exception escapes before the kill is reached, which is the direction
+        // an irreversible action should fail in.
+        //
+        // Returned so a test can wait for the outcome; the click handler
+        // discards it, since the orb going away on the next scan is the only
+        // feedback this gesture has ever had.
+        //
+        // One end per session at a time. The synchronous version serialised two
+        // clicks by blocking; this one would have let a second click start its
+        // own read while the first was still reading, and both pass
+        // StillEndable — the status stays in _statuses until the next scan —
+        // so the kill ran twice. QA found it with a test. A second call while
+        // one is in flight now does nothing: the first is already doing what
+        // it asked. UI-thread state, like _statuses, and released in a finally
+        // that also runs on the UI thread, because every await above it
+        // resumes there.
+        public async Task EndSession(string sessionId)
         {
             if (!_statuses.TryGetValue(sessionId, out var status)) return;
             if (!SessionPresence.CanEndSession(status)) return;
+            if (!_ending.Add(sessionId)) return;
 
-            var dependents = _dependents(status.SessionPid);
-            if (SessionDependents.BlocksTermination(dependents)) return;
+            try
+            {
+                var pid = status.SessionPid;
+                var read = _dependents;
 
-            SessionTerminator.Terminate(status.SessionPid, dependents);
+                var dependents = await Task.Run(() => read(pid));
+                if (SessionDependents.BlocksTermination(dependents)) return;
+                if (!StillEndable(sessionId, pid)) return;
+
+                var terminate = _terminate;
+                await Task.Run(() => terminate(pid, dependents));
+            }
+            finally
+            {
+                _ending.Remove(sessionId);
+            }
         }
 
+        private readonly HashSet<string> _ending = new(StringComparer.Ordinal);
+
+        // Whether the session a click named is still there, still on the pid
+        // the read was about, and still endable.
+        private bool StillEndable(string sessionId, int pid) =>
+            _statuses.TryGetValue(sessionId, out var now)
+            && now.SessionPid == pid
+            && SessionPresence.CanEndSession(now);
+
         // What the orb's menu asks before it draws "End this session", so the
-        // row and this method's refusal come from one reading of the machine
-        // rather than two. See OrbWindow.SessionMenu_Opening.
-        internal SessionDependents.Verdict DependentsOf(string sessionId) =>
-            _statuses.TryGetValue(sessionId, out var status) && SessionPresence.CanEndSession(status)
-                ? _dependents(status.SessionPid)
-                : SessionDependents.Nothing;
+        // row and EndSession's refusal apply one rule to the same machine. See
+        // OrbWindow.RefreshEndSessionGuardAsync.
+        //
+        // Asynchronous because the answer is a process-table read (CB-228): the
+        // pid is looked up here on the UI thread and the read itself runs on a
+        // pool thread, so a right-click never waits on WMI. There is
+        // deliberately no synchronous version beside it — one would be the
+        // easy thing for the next caller on the UI thread to reach for.
+        //
+        // A session the menu does not offer the row for is answered without a
+        // read, and without a thread hop, so the cost a gateway orb's menu
+        // pays is nothing at all.
+        internal Task<SessionDependents.Verdict> DependentsOfAsync(string sessionId)
+        {
+            if (!_statuses.TryGetValue(sessionId, out var status) || !SessionPresence.CanEndSession(status))
+                return Task.FromResult(SessionDependents.Nothing);
+
+            var pid = status.SessionPid;
+            var read = _dependents;
+
+            return Task.Run(() => read(pid));
+        }
 
         public void ResetAllSessionsToIdle()
         {

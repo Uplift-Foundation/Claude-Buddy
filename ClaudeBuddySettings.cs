@@ -74,7 +74,7 @@ namespace ClaudeBuddy
         // being written properly, which JsonObject rejects as a duplicate.
         private static readonly HashSet<string> KnownKeys = new(StringComparer.Ordinal)
         {
-            "version", "showOrbs", "tintActiveWindow", "orbLifetimeMinutes",
+            "version", "showOrbs", "showUsageOrbs", "tintActiveWindow", "orbLifetimeMinutes",
             "voiceInputEnabled", "twoLetterGlyphs", "accountUsageEnabled",
             "arrangeShape", "arrangeSpacing",
             "speakVoice", "neuralVoiceEnabled", "neuralVoice",
@@ -86,6 +86,7 @@ namespace ClaudeBuddy
             "collapsedSettingsSections",
             "chatPanelSizes", "pinnedChatPanels", "arrangeAnchor", "chatTextScale",
             "orbSize", "orbSizes",
+            "speechVolume", "alertVolume",
             "openclawEnabled", "openclawHost", "openclawPort", "openclawFingerprint",
             "openclawReplyEnabled", "openclawActiveWithinMinutes",
             "claudeCloudEnabled",
@@ -105,11 +106,12 @@ namespace ClaudeBuddy
             "remoteControlIdleMinutes", "remoteControlServeOnLaunch",
             "peerLinkEnabled", "peerLinkPort",
             "newChatRecentFolders", "newChatLastCli", "newChatLastProfile",
-            // Both hotkey overrides. toggleOrbsHotkey was missing from this
+            "newChatLastProfiles",
+            // Every hotkey override. toggleOrbsHotkey was missing from this
             // list from CB-155 until the new-chat hotkey was added beside it;
             // Save's ContainsKey guard kept that from throwing, but it meant
             // the value was carried in _unknownKeys as well as the model.
-            "toggleOrbsHotkey", "newChatHotkey"
+            "toggleOrbsHotkey", "newChatHotkey", "toggleUsageOrbsHotkey"
         };
 
         // JsonNode.ToJsonString(options) needs a TypeInfoResolver on the
@@ -226,6 +228,15 @@ namespace ClaudeBuddy
         private sealed class Model
         {
             public bool ShowOrbs { get; set; } = true;
+
+            // Whether the account (usage) orbs are shown, apart from the
+            // session orbs (CB-220). Null until someone has set it, and null
+            // means "whatever ShowOrbs says": a user upgrading with every orb
+            // hidden must not have the usage orbs reappear just because they
+            // grew a switch of their own. Written back as null, not as a copy,
+            // so that stays true until one of the two switches is flipped.
+            public bool? ShowUsageOrbs { get; set; }
+
             public bool TintActiveWindow { get; set; } = true;
 
             // On by default, because with more than one profile the alternative
@@ -421,7 +432,8 @@ namespace ClaudeBuddy
             // Control on. Off by default, and deliberately more than a display
             // switch: turning it on is what permits Buddy to start a real
             // Claude Code session of its own, which costs the user's quota.
-            // See RemoteControlBridge for why a bridge is the only way in.
+            // The bridge was deleted in 937de9ec; the direct link below is the
+            // only way remote sessions arrive now.
             public bool RemoteControlEnabled { get; set; }
 
             // Talking directly to another machine running Claude Buddy, rather
@@ -454,6 +466,10 @@ namespace ClaudeBuddy
             // set it, because the toggle's override has no settings-window
             // control either.
             public string? NewChatHotkey { get; set; }
+
+            // Overrides HotkeyRegistry.Default(ToggleUsageOrbsVisible), on the
+            // same terms again: null or unparseable means Ctrl+Alt+U.
+            public string? ToggleUsageOrbsHotkey { get; set; }
 
             // Which port to listen on. Zero means "let the operating system
             // choose", which is the sensible default because discovery
@@ -709,7 +725,16 @@ namespace ClaudeBuddy
             // "never chosen" or "Default was chosen" — both read the same way
             // downstream, since Default is what the dialog falls back to
             // anyway when nothing else applies.
-            public string? NewChatLastProfile { get; set; }
+            //
+            // Per CLI since CB-203, keyed by NewChatCli's name: the three
+            // account lists name different kinds of directory, so a Codex pick
+            // restored onto Claude Code's picker would match nothing at best,
+            // and a same-named directory would start the wrong CLI under it at
+            // worst. Saved as "newChatLastProfiles"; the pre-CB-203 single key
+            // "newChatLastProfile" is read as the Claude Code entry when the
+            // map has none, and is still written from it, so neither an upgrade
+            // nor a downgrade loses a saved pick.
+            public Dictionary<string, string> NewChatLastProfiles { get; init; } = new(StringComparer.Ordinal);
 
             // Auto-organize: which shape and how much space between orbs.
             public string ArrangeShape { get; set; } = DefaultArrangeShape;
@@ -723,6 +748,15 @@ namespace ClaudeBuddy
             // shipped 56-DIP orb — see OrbSizing. An orb's own entry in
             // OrbSizes wins over this.
             public double OrbSize { get; set; } = OrbSizing.Default;
+
+            // CB-200's two volume levels, each a multiplier from 0 to 1 — see
+            // AudioVolume. Separate keys, not one, because they answer
+            // different questions: how loud a reply is read aloud, and how
+            // loud a turn-sound chime is. Someone who wants chimes as a quiet
+            // background cue still wants to hear the voice, and the other way
+            // round.
+            public double SpeechVolume { get; set; } = AudioVolume.Default;
+            public double AlertVolume { get; set; } = AudioVolume.Default;
 
             // Where the arranged shape is centred on screen — physical pixels,
             // same space as OrbPlacement above. Null means "never arranged
@@ -738,6 +772,23 @@ namespace ClaudeBuddy
         {
             get { Load(); lock (Gate) return _model.ShowOrbs; }
             set { Load(); lock (Gate) _model.ShowOrbs = value; Save(); }
+        }
+
+        // The effective answer — the stored flag, or ShowOrbs while nobody has
+        // set one. See Model.ShowUsageOrbs for why it inherits.
+        public static bool ShowUsageOrbs
+        {
+            get { Load(); lock (Gate) return _model.ShowUsageOrbs ?? _model.ShowOrbs; }
+            set { Load(); lock (Gate) _model.ShowUsageOrbs = value; Save(); }
+        }
+
+        // The stored flag itself, null included. Only tests need it: saving
+        // and restoring ShowUsageOrbs through the getter above would turn an
+        // inherited value into an explicit one and leak it into the next test.
+        internal static bool? ShowUsageOrbsStored
+        {
+            get { Load(); lock (Gate) return _model.ShowUsageOrbs; }
+            set { Load(); lock (Gate) _model.ShowUsageOrbs = value; Save(); }
         }
 
         public static bool TintActiveWindow
@@ -1150,26 +1201,27 @@ namespace ClaudeBuddy
             Save();
         }
 
-        // The account last chosen in the "New chat…" dialog (CB-201). Null
-        // means never chosen, or Default — the dialog treats both the same.
-        public static string? NewChatLastProfile
-        {
-            get
-            {
-                Load();
-                lock (Gate)
-                {
-                    return _model.NewChatLastProfile;
-                }
-            }
-        }
-
-        public static void SetNewChatLastProfile(string? profileDir)
+        // The account last chosen in the "New chat…" dialog for one CLI
+        // (CB-201, per CLI since CB-203). Null means never chosen, or Default
+        // — the dialog treats both the same.
+        internal static string? NewChatLastProfileFor(NewChatCli cli)
         {
             Load();
             lock (Gate)
             {
-                _model.NewChatLastProfile = string.IsNullOrWhiteSpace(profileDir) ? null : profileDir;
+                return _model.NewChatLastProfiles.TryGetValue(cli.ToString(), out var dir) ? dir : null;
+            }
+        }
+
+        internal static void SetNewChatLastProfile(NewChatCli cli, string? profileDir)
+        {
+            var value = string.IsNullOrWhiteSpace(profileDir) ? null : profileDir;
+
+            Load();
+            lock (Gate)
+            {
+                if (value is null) _model.NewChatLastProfiles.Remove(cli.ToString());
+                else _model.NewChatLastProfiles[cli.ToString()] = value;
             }
 
             Save();
@@ -1207,6 +1259,12 @@ namespace ClaudeBuddy
         {
             get { Load(); lock (Gate) return _model.NewChatHotkey; }
             set { Load(); lock (Gate) _model.NewChatHotkey = value; Save(); }
+        }
+
+        public static string? ToggleUsageOrbsHotkey
+        {
+            get { Load(); lock (Gate) return _model.ToggleUsageOrbsHotkey; }
+            set { Load(); lock (Gate) _model.ToggleUsageOrbsHotkey = value; Save(); }
         }
 
         // The port to listen on, with 0 meaning "the one everybody expects".
@@ -1414,6 +1472,23 @@ namespace ClaudeBuddy
         {
             get { Load(); lock (Gate) return OrbSizing.Clamp(_model.OrbSize); }
             set { Load(); lock (Gate) _model.OrbSize = OrbSizing.Clamp(value); Save(); }
+        }
+
+        // CB-200: how loud spoken replies are, 0 to 1. Clamped both ways,
+        // like OrbSize, so neither a hand edit nor a caller can hand a backend
+        // a level it would reject — SAPI throws on anything past 100.
+        public static double SpeechVolume
+        {
+            get { Load(); lock (Gate) return AudioVolume.Clamp(_model.SpeechVolume); }
+            set { Load(); lock (Gate) _model.SpeechVolume = AudioVolume.Clamp(value); Save(); }
+        }
+
+        // CB-200: how loud turn-sound chimes are, 0 to 1 — every chime,
+        // previews included, since they all go through ChimePlayer.
+        public static double AlertVolume
+        {
+            get { Load(); lock (Gate) return AudioVolume.Clamp(_model.AlertVolume); }
+            set { Load(); lock (Gate) _model.AlertVolume = AudioVolume.Clamp(value); Save(); }
         }
 
         public static OrbPlacement? ArrangeAnchor
@@ -1790,6 +1865,7 @@ namespace ClaudeBuddy
                     var model = new Model
                     {
                         ShowOrbs = root["showOrbs"]?.GetValue<bool>() ?? true,
+                        ShowUsageOrbs = root["showUsageOrbs"]?.GetValue<bool>(),
                         TintActiveWindow = root["tintActiveWindow"]?.GetValue<bool>() ?? true,
                         RouteClaudeUrls = root["routeClaudeUrls"]?.GetValue<bool>() ?? true,
                         PreviousClaudeUrlHandler = Text(root["previousClaudeUrlHandler"]) ?? "",
@@ -1821,6 +1897,7 @@ namespace ClaudeBuddy
                         PeerLinkPort = root["peerLinkPort"]?.GetValue<int>() ?? 0,
                         ToggleOrbsHotkey = Text(root["toggleOrbsHotkey"]),
                         NewChatHotkey = Text(root["newChatHotkey"]),
+                        ToggleUsageOrbsHotkey = Text(root["toggleUsageOrbsHotkey"]),
                         ClaudeCodeChatEnabled = root["claudeCodeChatEnabled"]?.GetValue<bool>() ?? true,
                         ClaudeCodeReplyEnabled = root["claudeCodeReplyEnabled"]?.GetValue<bool>() ?? false,
                         CodexChatEnabled = root["codexChatEnabled"]?.GetValue<bool>() ?? true,
@@ -1856,6 +1933,13 @@ namespace ClaudeBuddy
                         // ChatTextScale's reason just above.
                         OrbSize = OrbSizing.Clamp(Number(root["orbSize"]) ?? OrbSizing.Default),
 
+                        // Number() and a clamp for orbSize's reasons: a
+                        // hand-edited "loud" costs this one level and nothing
+                        // else, and a 40 is full volume rather than a
+                        // multiplier nothing downstream expects.
+                        SpeechVolume = AudioVolume.Clamp(Number(root["speechVolume"]) ?? AudioVolume.Default),
+                        AlertVolume = AudioVolume.Clamp(Number(root["alertVolume"]) ?? AudioVolume.Default),
+
                         // speakVoice was declared on the model and written by its
                         // property from the start, but never read here and never
                         // written by Save — so every voice anyone picked was
@@ -1875,9 +1959,30 @@ namespace ClaudeBuddy
                         TurnSoundsEnabled = Bool(root["turnSoundsEnabled"], true),
                         TurnFinishedSound = Text(root["turnFinishedSound"]),
                         NeedsAttentionSound = Text(root["needsAttentionSound"]),
-                        NewChatLastCli = Text(root["newChatLastCli"]),
-                        NewChatLastProfile = Text(root["newChatLastProfile"])
+                        NewChatLastCli = Text(root["newChatLastCli"])
                     };
+
+                    // CB-203's per-CLI map, then the pre-CB-203 single key as
+                    // Claude Code's entry if the map did not already name one.
+                    // Only real CLI names are kept, so a hand-edited key cannot
+                    // sit in the model forever with nothing able to read it.
+                    if (root["newChatLastProfiles"] is JsonObject lastProfiles)
+                    {
+                        foreach (var (cliName, node) in lastProfiles)
+                        {
+                            if (Enum.TryParse<NewChatCli>(cliName, out var parsedCli)
+                                && parsedCli.ToString() == cliName
+                                && Text(node) is { } profileDir)
+                            {
+                                model.NewChatLastProfiles[cliName] = profileDir;
+                            }
+                        }
+                    }
+
+                    if (Text(root["newChatLastProfile"]) is { } legacyProfile)
+                    {
+                        model.NewChatLastProfiles.TryAdd(nameof(NewChatCli.ClaudeCode), legacyProfile);
+                    }
 
                     // Same shape as claudeCodeProfileDirs below: read as an array
                     // and skipped entirely when absent, so an older settings file
@@ -2145,6 +2250,15 @@ namespace ClaudeBuddy
         //
         // Deliberately doesn't check that the string is a *colour*: that's
         // OrbColors' job, since it holds the default to fall back to.
+        // Sorted, so the file does not reorder itself from one save to the
+        // next depending on which CLI was picked first.
+        private static JsonObject NewChatLastProfilesNode(Dictionary<string, string> profiles)
+        {
+            var node = new JsonObject();
+            foreach (var (cliName, dir) in profiles.OrderBy(p => p.Key, StringComparer.Ordinal)) node[cliName] = dir;
+            return node;
+        }
+
         private static string? Text(JsonNode? node) =>
             node is JsonValue value
             && value.TryGetValue<string>(out var text)
@@ -2344,6 +2458,7 @@ namespace ClaudeBuddy
                     {
                         ["version"] = CurrentVersion,
                         ["showOrbs"] = _model.ShowOrbs,
+                        ["showUsageOrbs"] = _model.ShowUsageOrbs,
                         ["tintActiveWindow"] = _model.TintActiveWindow,
                         ["routeClaudeUrls"] = _model.RouteClaudeUrls,
                         ["previousClaudeUrlHandler"] = _model.PreviousClaudeUrlHandler,
@@ -2375,6 +2490,7 @@ namespace ClaudeBuddy
                         ["peerLinkPort"] = _model.PeerLinkPort,
                         ["toggleOrbsHotkey"] = _model.ToggleOrbsHotkey,
                         ["newChatHotkey"] = _model.NewChatHotkey,
+                        ["toggleUsageOrbsHotkey"] = _model.ToggleUsageOrbsHotkey,
                         // Null when never chosen rather than a copy of the
                         // current default, the same as speakVoice below — so
                         // changing which profile ships as the default still
@@ -2405,6 +2521,8 @@ namespace ClaudeBuddy
                         ["arrangeSpacing"] = _model.ArrangeSpacing,
                         ["chatTextScale"] = _model.ChatTextScale,
                         ["orbSize"] = _model.OrbSize,
+                        ["speechVolume"] = _model.SpeechVolume,
+                        ["alertVolume"] = _model.AlertVolume,
                         // Null when never chosen, like the colours below rather
                         // than a copy of the current default — so changing which
                         // voice ships as the default still reaches everyone who
@@ -2424,7 +2542,12 @@ namespace ClaudeBuddy
                         ["needsAttentionSound"] = _model.NeedsAttentionSound,
                         ["newChatRecentFolders"] = newChatRecentFolders,
                         ["newChatLastCli"] = _model.NewChatLastCli,
-                        ["newChatLastProfile"] = _model.NewChatLastProfile,
+                        // Still written, from the map's Claude Code entry, so
+                        // a build from before CB-203 reading this file keeps
+                        // its remembered account.
+                        ["newChatLastProfile"] = _model.NewChatLastProfiles.TryGetValue(
+                            nameof(NewChatCli.ClaudeCode), out var claudeLastProfile) ? claudeLastProfile : null,
+                        ["newChatLastProfiles"] = NewChatLastProfilesNode(_model.NewChatLastProfiles),
                         // Grouped rather than three top-level keys: it reads as
                         // one setting in the file the way it reads as one card in
                         // the window. A null entry — which is what a colour left

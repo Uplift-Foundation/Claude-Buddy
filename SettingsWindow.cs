@@ -123,6 +123,13 @@ namespace ClaudeBuddy
             // nothing here holds uncommitted state — each control writes its
             // setting as it changes.
             ActualThemeVariantChanged += (_, _) => Rebuild();
+
+            // A voice preview belongs to this window: closing it stops the preview
+            // (and only a preview — VoicePreview leaves a read-aloud it did not
+            // start alone). Subscribed here rather than in Toggle()'s Closed
+            // handler, which is excluded from coverage and which tests never
+            // reach, since they construct the window directly.
+            Closed += (_, _) => VoicePreview.StopIfLive();
         }
 
         // Split out from the KeyDown handler above so the decision is testable
@@ -1472,14 +1479,23 @@ namespace ClaudeBuddy
                     // mistake in a more precise costume, and the status line
                     // below is what tells the user where the read actually got
                     // to on this machine today.
+                    //
+                    // CB-199: the same switch now lets the panel *send*, and the
+                    // copy says so because a toggle labelled "show" that also
+                    // writes into a session would be a surprise. No second
+                    // setting, by decision. "As the account that owns it" is the
+                    // true half of the multi-account story: a send uses the login
+                    // the session was listed under, never whichever is current.
                     "Shows an orb for each Claude Code session running in Anthropic's cloud. "
                     + "Reads the login the Claude Code CLI already stores on this machine, so "
                     + "there is nothing to sign in to — macOS will ask permission to read that "
                     + "item from your Keychain. Choose \u201CAlways Allow\u201D so you are not "
                     + "asked every time; Claude Code refreshing its own login can bring the "
-                    + "prompt back. If no orbs appear, the line below says how far the read "
-                    + "got. Read-only: clicking one opens it in your browser, which is the "
-                    + "only place a cloud session can be typed into.")
+                    + "prompt back. Every Claude Code account directory you have listed is read "
+                    + "(one prompt per account), and a prompt you decline is not asked again until that login changes or you press Retry; directories not listed are not seen. If no orbs appear, the line below says how far the read "
+                    + "got. Its chat panel can also send into the session, and its right-click "
+                    + "menu can archive or delete it, as the account that owns it, using that "
+                    + "same login.")
             };
 
             // Progressive disclosure, the same as every other section here: off
@@ -1743,7 +1759,6 @@ namespace ClaudeBuddy
 
         private TextBlock? _openClawStatus;
         private TextBlock? _claudeCloudStatus;
-        private TextBlock? _remoteControlStatus;
         private DispatcherTimer? _openClawStatusTimer;
 
         // Read by the tests that drive OnStatusTick. Internal rather than
@@ -1751,7 +1766,6 @@ namespace ClaudeBuddy
         // the fields are private only so that nothing outside assigns them.
         internal string? OpenClawStatusText => _openClawStatus?.Text;
         internal string? ClaudeCloudStatusText => _claudeCloudStatus?.Text;
-        internal string? RemoteControlStatusText => _remoteControlStatus?.Text;
         internal string? PeerLinkStatusText => _peerLinkStatus?.Text;
 
         // Excluded from coverage: starts a real one-second Avalonia timer. The
@@ -1786,16 +1800,6 @@ namespace ClaudeBuddy
                 // window knows about.
                 var cloud = ClaudeCloudSessions.StatusText;
                 if (_claudeCloudStatus.Text != cloud) _claudeCloudStatus.Text = cloud;
-            }
-
-            if (_remoteControlStatus is not null)
-            {
-                // The relay changes state while you are looking at it — it takes
-                // a few seconds to start, and it stops itself when idle — so a
-                // line that was only true when the window opened would be worse
-                // than none.
-                var relay = RemoteControlSessions.StatusText;
-                if (_remoteControlStatus.Text != relay) _remoteControlStatus.Text = relay;
             }
 
             if (_peerLinkStatus is not null)
@@ -2258,15 +2262,6 @@ namespace ClaudeBuddy
             OnDownloadVoicesLinkClicked();
         }
 
-        private static readonly (string Label, int Minutes)[] RemoteIdleChoices =
-        {
-            ("2 minutes", 2),
-            ("10 minutes", ClaudeBuddySettings.DefaultRemoteControlIdle),
-            ("30 minutes", 30),
-            ("1 hour", 60),
-            ("Never", ClaudeBuddySettings.RemoteControlIdleNever)
-        };
-
         internal Control[] VoiceRows()
         {
             var rows = new List<Control>();
@@ -2295,7 +2290,15 @@ namespace ClaudeBuddy
                 "Which voice the speaker button on the orb flyout uses to read the latest "
                 + "assistant turn aloud. Marked (system) for the ones Windows or macOS "
                 + "provides, (Kokoro) for the high-quality engine above, and (custom) for "
-                + "anything your own speakCommand lists."));
+                + "anything your own speakCommand lists. Press the play button beside it "
+                + "to hear the voice first. It previews this global voice; an orb whose "
+                + "persona sets its own voice speaks that one instead."));
+
+            rows.Add(Row("Speech volume", SpeechVolumeControl(),
+                "How loud replies are read aloud — the system voices, the high-quality "
+                + "voice, and orbs with voices of their own. A custom speak command is "
+                + "sent the level and decides what to do with it. How much quieter a "
+                + "given step sounds depends on the voice."));
 
             rows.Add(Row("Speaks", SpeakScopePicker(),
                 "What the speaker reads. The full response is everything the assistant "
@@ -2363,10 +2366,247 @@ namespace ClaudeBuddy
 
             List<TextToSpeech.VoiceOption>? options = null;
 
-            combo.DropDownOpened += (_, _) => options = FillVoiceList(combo, options);
-            combo.SelectionChanged += (_, _) => ChooseVoice(combo, options);
+            // FillVoiceList replaces the placeholder and sets the selection, which
+            // raises SelectionChanged for what is the scan arriving and not a
+            // choice. Only a choice should stop a live preview (a preview of the
+            // voice that was showing is no longer a preview of the one that is),
+            // so the scan is fenced off.
+            var filling = false;
 
-            return combo;
+            combo.DropDownOpened += (_, _) =>
+            {
+                filling = true;
+                try { options = FillVoiceList(combo, options); }
+                finally { filling = false; }
+            };
+            combo.SelectionChanged += (_, _) =>
+            {
+                if (!filling) VoicePreview.StopIfLive();
+                ChooseVoice(combo, options);
+
+                // Choosing a voice can change the engine, and the engine is
+                // what decides what the Speech row's note has to say.
+                RefreshSpeechVolumeNote();
+            };
+
+            // The button previews whatever the picker shows; null while it still
+            // shows the unscanned placeholder, which VoicePreview resolves off the
+            // UI thread the way a real read-aloud would.
+            return new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Spacing = 6,
+                Children =
+                {
+                    combo,
+                    VoicePreviewButton(
+                        () => VoicePreview.PreviewTarget(options, combo.SelectedIndex), combo)
+                }
+            };
+        }
+
+        // What the preview button shows for each state: its tooltip, and the fill
+        // the flyout's own speaker button uses for the same state (amber while the
+        // engine is working towards its first sound, blue while audio plays), or
+        // null for the theme's ordinary button. The same colours on purpose, so
+        // "preparing" and "playing" mean the same thing wherever they appear.
+        internal static (string Tip, IBrush? Fill) VoicePreviewLook(TextToSpeech.SpeakState state) =>
+            state switch
+            {
+                TextToSpeech.SpeakState.Speaking => ("Stop", OrbFlyout.SpeakActiveFill),
+                TextToSpeech.SpeakState.Preparing => ("Preparing…", OrbFlyout.SpeakPreparingFill),
+                _ => ("Preview voice", null)
+            };
+
+        // Drawn geometry, not "▶"/"⏹"/"⏳" — CB-173, see PlayGlyph. White on the
+        // coloured states, since the amber and blue are the same on both themes.
+        private static Control FilledGlyph(string data, double width, double height) =>
+            new Shapes.Path
+            {
+                Data = Geometry.Parse(data),
+                Fill = Brushes.White,
+                Width = width,
+                Height = height,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+
+        // internal: a test drives it directly, like PreviewButton. Lives as long as
+        // its row, which Rebuild() replaces wholesale, so it listens to
+        // VoicePreview only while attached: a subscription made at construction
+        // would leak one handler per rebuild and keep every dead button alive.
+        internal Button VoicePreviewButton(
+            Func<TextToSpeech.VoiceOption?> target, ComboBox picker)
+        {
+            var button = new Button
+            {
+                Padding = new Thickness(9, 5),
+                VerticalAlignment = VerticalAlignment.Center,
+                IsEnabled = picker.IsEnabled
+            };
+
+            void Apply()
+            {
+                var state = VoicePreview.Look;
+                var (tip, fill) = VoicePreviewLook(state);
+
+                button.Content = state switch
+                {
+                    TextToSpeech.SpeakState.Speaking => FilledGlyph("M 0,0 L 7,0 L 7,7 L 0,7 Z", 7, 7),
+                    TextToSpeech.SpeakState.Preparing => FilledGlyph("M 0,0 L 8,0 L 4,4.5 Z M 4,4.5 L 8,9 L 0,9 Z", 8, 9),
+                    _ => PlayGlyph()
+                };
+
+                if (fill is null) button.ClearValue(BackgroundProperty);
+                else button.Background = fill;
+
+                ToolTip.SetTip(button, tip);
+            }
+
+            Apply();
+
+            button.AttachedToVisualTree += (_, _) =>
+            {
+                VoicePreview.Changed += Apply;
+                Apply();   // it may have moved while this button did not exist
+            };
+            button.DetachedFromVisualTree += (_, _) => VoicePreview.Changed -= Apply;
+
+            // FillVoiceList disables the picker when there are no voices, and a
+            // preview button beside a dead picker would have nothing to say.
+            picker.PropertyChanged += (_, e) =>
+            {
+                if (e.Property == IsEnabledProperty) button.IsEnabled = picker.IsEnabled;
+            };
+
+            button.Click += (_, _) => _ = VoicePreview.Toggle(target());
+            return button;
+        }
+
+        // CB-200's Speech slider and the note under it for the cases where
+        // telling an engine the level is not the same as hearing it. Kept as
+        // fields so choosing a different voice can change the note without
+        // rebuilding the window.
+        internal Slider? SpeechVolumeSlider { get; private set; }
+        internal TextBlock? SpeechVolumeNote { get; private set; }
+
+        internal TextBlock? SpeechVolumeReadout { get; private set; }
+
+        internal Control SpeechVolumeControl()
+        {
+            SpeechVolumeReadout = VolumeReadout();
+            SpeechVolumeSlider = VolumeSlider(ClaudeBuddySettings.SpeechVolume,
+                level => ClaudeBuddySettings.SpeechVolume = level, SpeechVolumeReadout);
+
+            // Under the slider rather than beside it, and wrapped: every
+            // note is a sentence or two, and beside a 160px slider it
+            // would squeeze the row's label into a clip on Windows — the same
+            // failure the Sounds rows had.
+            SpeechVolumeNote = new TextBlock
+            {
+                FontSize = 11,
+                Opacity = 0.7,
+                MaxWidth = 240,
+                TextWrapping = TextWrapping.Wrap,
+                TextAlignment = TextAlignment.Right,
+                HorizontalAlignment = HorizontalAlignment.Right
+            };
+
+            RefreshSpeechVolumeNote();
+
+            return new StackPanel
+            {
+                Orientation = Orientation.Vertical,
+                Spacing = 4,
+                Children = { WithReadout(SpeechVolumeSlider, SpeechVolumeReadout), SpeechVolumeNote }
+            };
+        }
+
+        // The slider is never disabled: every engine is told the level
+        // (AudioVolume.SpeechVolumeNote says what is and is not promised).
+        // This decides only the note, from the saved engine and from the
+        // engines orbs' own voices resolve to — CB-200's second review found
+        // an orb's persona speaking through a custom command while the row,
+        // reading the global engine alone, said nothing. No voice is
+        // enumerated to find out, for the reason SavedVoiceNameForPlaceholder
+        // gives; the orbs' engines come from the voice list only if something
+        // has already built it.
+        //
+        // No null guard: the constructor builds every row, and VoiceRows
+        // builds this note before anything that could call here can fire —
+        // the picker's SelectionChanged only follows a user's choice.
+        internal void RefreshSpeechVolumeNote()
+        {
+            // The engine that will speak, not merely the one named: a stale
+            // "custom" with no command behind it speaks with a system voice.
+            var engine = TextToSpeech.EngineThatWillSpeak(
+                ClaudeBuddySettings.SpeakEngine, TextToSpeech.CustomCommandConfigured);
+            var note = AudioVolume.SpeechVolumeNote(engine, NeuralSpeech.EngineIgnoresVolume,
+                SessionIdentity.OrbEngines(SessionIdentity.PersonaVoiceRequests(), TextToSpeech.CachedVoiceOptions));
+
+            SpeechVolumeNote!.Text = note;
+            SpeechVolumeNote.IsVisible = note is not null;
+        }
+
+        // CB-200's Alert slider — every chime, whichever engine speaks.
+        internal Slider? AlertVolumeSlider { get; private set; }
+        internal TextBlock? AlertVolumeReadout { get; private set; }
+
+        internal Control AlertVolumeControl()
+        {
+            AlertVolumeReadout = VolumeReadout();
+            AlertVolumeSlider = VolumeSlider(ClaudeBuddySettings.AlertVolume,
+                level => ClaudeBuddySettings.AlertVolume = level, AlertVolumeReadout);
+            return WithReadout(AlertVolumeSlider, AlertVolumeReadout);
+        }
+
+        // The percentage beside each slider (CB-200 QA): a tooltip is a
+        // number nobody sees without hovering, and "how loud is it now" is the
+        // first thing anyone asks of a volume control. Fixed width, right
+        // aligned, so the slider does not shift as 5% becomes 100%.
+        private static TextBlock VolumeReadout() => new()
+        {
+            FontSize = 12,
+            Width = 36,
+            TextAlignment = TextAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+
+        private static Control WithReadout(Slider slider, TextBlock readout) => new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Children = { slider, readout }
+        };
+
+        // Both volume sliders are the same control over AudioVolume's range,
+        // with the percentage in a readout beside it and as a tooltip. The
+        // other sliders in this window read their range from the class that
+        // owns the rule; this one does too.
+        internal static Slider VolumeSlider(double value, Action<double> write, TextBlock readout)
+        {
+            var slider = new Slider
+            {
+                Minimum = AudioVolume.Min,
+                Maximum = AudioVolume.Max,
+                Value = value,
+                MinWidth = 160,
+                SmallChange = AudioVolume.Step,
+                LargeChange = 0.25,
+                TickFrequency = AudioVolume.Step,
+                IsSnapToTickEnabled = true
+            };
+            ToolTip.SetTip(slider, AudioVolume.Percent(value));
+            readout.Text = AudioVolume.Percent(value);
+
+            slider.PropertyChanged += (_, e) =>
+            {
+                if (e.Property != Slider.ValueProperty) return;
+                write(slider.Value);
+                ToolTip.SetTip(slider, AudioVolume.Percent(slider.Value));
+                readout.Text = AudioVolume.Percent(slider.Value);
+            };
+            return slider;
         }
 
         // Two named modes rather than a switch, because "off" is not what Full
@@ -3098,7 +3338,12 @@ namespace ClaudeBuddy
                 + "the state that most needs your attention, so it always wins over a "
                 + "turn finishing elsewhere on the same scan. Set an individual orb's "
                 + "sound from its right-click menu; that override beats this default for "
-                + "that orb alone.")
+                + "that orb alone."),
+
+            // CB-200. Last rather than beside the master switch, so it reads
+            // as applying to both sounds above it — and a preview is how a
+            // level is judged, so it sits under the buttons that play one.
+            Row("Alert volume", AlertVolumeControl(), AudioVolume.AlertVolumeHelp(OperatingSystem.IsWindows()))
         };
 
         // --- Mac-ish chrome ---------------------------------------------------
@@ -3311,10 +3556,18 @@ namespace ClaudeBuddy
                 SearchText = SettingsFilter.TextOf(label, help)
             };
 
+            // Wrapped, with a gap before the control: the label sits in the
+            // star column, so a wide control takes its width. Unwrapped, a
+            // label longer than what was left was cut off mid-word and ran
+            // under the control — "When a session need" beside Windows'
+            // wider combo box (CB-200 review). Wrapping only happens when the
+            // line would not fit anyway, so a row that fit before is unchanged.
             var text = new TextBlock
             {
                 Text = label,
                 FontSize = 13,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 0, 12, 0),
                 VerticalAlignment = VerticalAlignment.Center
             };
             grid.Children.Add(text);
@@ -3326,14 +3579,7 @@ namespace ClaudeBuddy
 
             if (help is not null)
             {
-                var hint = new TextBlock
-                {
-                    Text = help,
-                    FontSize = 11,
-                    Opacity = 0.55,
-                    TextWrapping = TextWrapping.Wrap,
-                    Margin = new Thickness(0, 6, 0, 0)
-                };
+                var hint = HelpText(help);
                 Grid.SetRow(hint, 1);
                 Grid.SetColumnSpan(hint, 2);
                 grid.Children.Add(hint);
@@ -3341,6 +3587,43 @@ namespace ClaudeBuddy
 
             return grid;
         }
+
+        // A row's help, one wrapped TextBlock per paragraph rather than one
+        // TextBlock holding a blank line.
+        //
+        // Not cosmetic. Avalonia 12.1.1's TextFormatter never advances past an
+        // empty line in wrapped text laid out with the headless platform's
+        // stub font (BareMinimum.ttf): "a\n\nb" under TextWrapping.Wrap
+        // produces zero-length lines until memory runs out, while NoWrap, a
+        // single "\n", and the same text under real Skia all terminate. Under
+        // tests/UiTests that hung any test that showed this window after
+        // something had left Grok usage switched on, because the Grok
+        // auto-refresh help was the one help text with a paragraph break in
+        // it. Installed builds lay out with Skia and never hit it, so this
+        // keeps a wrapped TextBlock from ever being handed that input.
+        // SettingsHelpTextTests pins both halves.
+        //
+        // A help text with no paragraph break is the single TextBlock it
+        // always was, so every other row's tree is exactly what it was before.
+        internal static Control HelpText(string help)
+        {
+            var paragraphs = help.Split("\n\n");
+            var margin = new Thickness(0, 6, 0, 0);
+            if (paragraphs.Length == 1) return HintBlock(help, margin);
+
+            var panel = new StackPanel { Spacing = 6, Margin = margin };
+            foreach (var paragraph in paragraphs) panel.Children.Add(HintBlock(paragraph, default));
+            return panel;
+        }
+
+        private static TextBlock HintBlock(string text, Thickness margin) => new()
+        {
+            Text = text,
+            FontSize = 11,
+            Opacity = 0.55,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = margin
+        };
 
         // One row per state, seeded from the stored colour and written on change
         // with no commit step — the same read-seed-then-write shape as

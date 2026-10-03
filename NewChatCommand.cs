@@ -44,24 +44,41 @@ namespace ClaudeBuddy
         // quoted, with no verb — `claude attach <id>` names a session to
         // rejoin, and starting a new chat names nothing, it just runs the CLI.
         //
-        // No leading "exec" here: TerminalScripts.ShellCommandLine and
-        // TerminalLauncher's callers add "exec " themselves where a shell
-        // script needs the terminal's own shell to become the CLI rather than
-        // wait behind it — see AgentTeamViewer.AttachSession for the pattern
-        // this follows.
-        //
-        // configDir null (the default account, or any CLI but Claude Code —
-        // see NewChatLauncher.ConfigDirFor) leaves the command exactly as it
-        // was: no assignment prefix at all, never one that names the default
+        // configDir null (the default account — see
+        // NewChatLauncher.ConfigDirFor) leaves the command exactly as it was:
+        // the quoted binary alone, never anything that names the default
         // directory (CB-42's whole point). Set, it becomes
-        // `CLAUDE_CONFIG_DIR='<dir>' '<binary>'`, a plain POSIX variable
-        // assignment ahead of the command it applies to — the shell scopes it
-        // to that one invocation without this needing `export` or a subshell.
+        // `env <VAR>='<dir>' '<binary>'` — CLAUDE_CONFIG_DIR, CODEX_HOME or
+        // GROK_HOME, whichever NewChatAccountHome says this CLI reads (CB-203).
+        //
+        // **Always a program first, never a variable assignment** (CB-232).
+        // This used to be `CLAUDE_CONFIG_DIR='<dir>' '<binary>'`, a POSIX
+        // prefix assignment — fine on its own, but RealLaunch prefixed it with
+        // "exec ", and `exec CLAUDE_CONFIG_DIR=… claude` hands the assignment
+        // to exec as the program name. Every named-account launch on macOS
+        // died at once: exit 127 in zsh, dash and ksh, 126 in sh and bash,
+        // measured on this repo's MacBook, while the default account (no
+        // assignment) worked, which is why it shipped. `env` keeps the first
+        // word a program whatever is put in front of it, and it does not
+        // depend on how a given shell exports an assignment written before
+        // the `exec` builtin. Both forms were measured working in sh, bash,
+        // zsh, dash and ksh; this one was chosen for not having a grammar to
+        // get wrong. env then execs the CLI itself, so the process a terminal
+        // ends up running is the CLI, the same as the default account's.
         internal static string For(NewChatCli cli, string binaryPath, string? configDir = null) =>
             configDir is null
                 ? TerminalScripts.ShellQuote(binaryPath)
-                : "CLAUDE_CONFIG_DIR=" + TerminalScripts.ShellQuote(configDir)
+                : "env " + NewChatAccountHome.For(cli).EnvVar + "=" + TerminalScripts.ShellQuote(configDir)
                     + " " + TerminalScripts.ShellQuote(binaryPath);
+
+        // The line a terminal or tmux window actually runs: For's command with
+        // "exec " in front, so the terminal's own shell becomes the CLI rather
+        // than waiting behind it — see AgentTeamViewer.AttachSession for the
+        // pattern. The one place a new chat's `exec` is written (CB-232):
+        // RealLaunch used to add it itself, out of sight of the tests that
+        // pinned For, which is how an assignment ended up after it.
+        internal static string ExecLine(NewChatCli cli, string binaryPath, string? configDir = null) =>
+            "exec " + For(cli, binaryPath, configDir);
 
         // The general Windows launch shape: wt.exe when it's installed
         // (`-d <cwd> cmd.exe /k <exe> [args...]`, which gives the CLI an
@@ -115,7 +132,8 @@ namespace ClaudeBuddy
         //
         // configDir null reproduces the general builder's output byte for
         // byte. Set, the start info additionally switches to
-        // UseShellExecute = false and carries CLAUDE_CONFIG_DIR on
+        // UseShellExecute = false and carries the CLI's own account variable
+        // (NewChatAccountHome — CLAUDE_CONFIG_DIR, CODEX_HOME or GROK_HOME) on
         // Environment — true, wt.exe/cmd.exe's shared default, launches
         // through ShellExecuteEx and ignores ProcessStartInfo.Environment
         // entirely, so the variable would silently never leave this process.
@@ -149,7 +167,7 @@ namespace ClaudeBuddy
             if (start is not null && configDir is not null)
             {
                 start.UseShellExecute = false;
-                start.Environment["CLAUDE_CONFIG_DIR"] = configDir;
+                start.Environment[NewChatAccountHome.For(cli).EnvVar] = configDir;
             }
 
             return start;

@@ -1068,8 +1068,8 @@ namespace ClaudeBuddy.Tests
         // answers about the wrong session without erroring — on a server whose
         // sessions are tmux's default "0" and "1", asking about "1" answered
         // "0:1". The trailing colon makes it a pane target and "=" makes the match
-        // exact, which is what RemoteControlBridge.TmuxNames already builds and
-        // explains for the same two reasons.
+        // exact, which is what the relay's tmux naming built and explained for
+        // the same two reasons (deleted with it in 937de9ec).
         [Fact]
         public void ASessionIsNamedAsAPaneTargetNotABareName()
         {

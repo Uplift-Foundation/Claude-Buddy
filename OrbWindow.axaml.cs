@@ -197,6 +197,7 @@ namespace ClaudeBuddy
 
             // Centred, so the beat grows the heart in place rather than pushing
             // it towards the orb's rim.
+            HeartGlyph.Data = StreamGeometry.Parse(SymbolMarks.Heart);
             HeartGlyph.RenderTransform = _heartScale;
             HeartGlyph.RenderTransformOrigin = RelativePoint.Center;
 
@@ -431,6 +432,15 @@ namespace ClaudeBuddy
             // it; the menu closing is what puts the plain wording back.
             if (!_openClawRowsHeld) RestoreOpenClawRows();
 
+            // CB-225. Asked of CloudOrbActions rather than decided here, for
+            // the reason the lifecycle rows above give, and held exactly as
+            // the OpenClaw rows are: an armed row or an answer survives the
+            // two-second refresh, and the menu closing puts the words back.
+            var cloud = CloudOrbActions.Offer(status.Source, SessionId, ClaudeBuddySettings.ClaudeCloudEnabled);
+            ArchiveCloudItem.IsVisible = cloud.Archive;
+            DeleteCloudItem.IsVisible = cloud.Delete;
+            if (!_cloudRowsHeld) RestoreCloudRows();
+
             // CB-168: a local-CLI orb pre-fills the dialog with its own cwd
             // and CLI; an OpenClaw orb pre-fills the dialog's agent picker
             // with its own agent (NewChatPrefillFor, via
@@ -446,7 +456,11 @@ namespace ClaudeBuddy
             // ordinary — a stale sentence being the one failure mode a menu
             // written at open-time can still have. SessionMenu_Opening puts the
             // real answer back a moment before anyone can read it.
-            ApplyEndSessionGuard(SessionDependents.Nothing);
+            //
+            // Except while the menu is open (CB-228): the answer on screen then
+            // is the one the user is reading, and RefreshEndSessionGuardAsync
+            // owns it until SessionMenu_Closed lets go.
+            if (!_endGuardHeld) ApplyEndSessionGuard(SessionDependents.Nothing);
             var resetIdleExplanation = status.Source switch
             {
                 SessionSource.OpenClaw => (
@@ -743,6 +757,12 @@ namespace ClaudeBuddy
 
         private const double BadgeGlyphSize = 13;
 
+        // The drawn heart's square, a little under the badge glyph size: the
+        // outline fills its box edge to edge where a font's heart sits inside
+        // an em with room around it, and 11 is what matches the macOS glyph
+        // the heart was designed against, measured off the osx-arm64 capture.
+        private const double HeartMarkSize = 11;
+
         // What the CLI mark shows, so a test can assert on the disc a person
         // would have seen without reading a brush back off the control.
         internal string? CliMarkName { get; private set; }
@@ -791,7 +811,7 @@ namespace ClaudeBuddy
         // things, so they need no learning. The clock is the odd one out and
         // has to be: a cron session is the one kind with nobody on the other
         // end, which is the distinction most worth seeing from across a screen.
-        private static (string Glyph, string Label)? BadgeFor(SessionKind kind) => kind switch
+        internal static (string Glyph, string Label)? BadgeFor(SessionKind kind) => kind switch
         {
             SessionKind.Cron => ("\u23F1", "cron"),
             SessionKind.Direct => ("@", "direct message"),
@@ -832,38 +852,29 @@ namespace ClaudeBuddy
         };
 
         // The kinds whose badge is drawn rather than typed, as SVG path data
-        // in a 16x16 box — the same shape CliMark's marks take, and stretched
-        // uniformly into the badge the same way.
+        // in a 16x16 box — see SymbolMarks for the marks themselves and for
+        // the measurements behind drawing them at all.
         //
-        // Only the cloud so far, and the test for whether a glyph belongs here
-        // is not "is it in the font". U+2601 *is* reachable on both platforms:
-        // asked directly, the font manager resolves it to Hiragino Sans on
-        // macOS and to Segoe UI Emoji on Windows, so this was never a tofu
-        // box. It is that neither face draws a cloud at 13px. The macOS one
-        // collapses to an undifferentiated white lump; the Windows one is a
-        // colour-emoji glyph, which means it arrives at its own size and in
-        // its own colours — it overflows the 22px disc and comes out lavender
-        // against a badge whose whole design is one white mark on near-black.
+        // Every non-ASCII badge is here, and the test for whether a glyph
+        // belongs here is not "is it in the font". U+2601 *is* reachable on
+        // both platforms (Hiragino Sans on macOS, Segoe UI Emoji on Windows)
+        // and neither face draws a cloud at 13px: the macOS one is a white
+        // lump and the Windows one is a colour-emoji glyph, which arrives at
+        // its own size and in its own colours. The clock, gear and arrows
+        // were the same defect on Windows (CB-173) — legible, but lavender and
+        // oversized against a badge whose whole design is one white mark on
+        // near-black, so the same orb wore a different badge per platform.
         //
         // @ and # stay as text deliberately. They are ASCII, every font has
-        // them, they are the characters the surfaces themselves use, and
-        // redrawing them as paths would be worse at every size.
-        //
-        // The clock, gear and arrows are the open question this does not
-        // answer: they resolve to colour-emoji faces on Windows too, so they
-        // are legible but wrong-coloured there. Left alone here because a
-        // hand-drawn stopwatch or gear is a design decision, not a bug fix,
-        // and a bad one reads worse than a mis-coloured emoji. Worth its own
-        // ticket, with the Windows captures as the evidence.
+        // them, no emoji face is ever involved, they are the characters the
+        // surfaces themselves use, and redrawing them as paths would be worse
+        // at every size.
         internal static string? KindMarkFor(SessionKind kind) => kind switch
         {
-            // Three lobes and a flat base. Deliberately fat and simple: at
-            // 13px a cloud with fine edges is the lump this replaces, so the
-            // lobes are large enough to survive two or three pixels each.
-            SessionKind.Cloud =>
-                "M4.6,13 C2.3,13 0.5,11.3 0.5,9.2 C0.5,7.4 1.8,5.9 3.5,5.5 "
-                + "C4.0,3.5 5.9,2 8.2,2 C10.4,2 12.2,3.4 12.8,5.3 "
-                + "C14.3,5.7 15.5,7.1 15.5,8.8 C15.5,11.1 13.7,13 11.4,13 Z",
+            SessionKind.Cron => SymbolMarks.Stopwatch,
+            SessionKind.Remote => SymbolMarks.Arrows,
+            SessionKind.Background => SymbolMarks.Gear,
+            SessionKind.Cloud => SymbolMarks.Cloud,
             _ => null
         };
 
@@ -872,6 +883,12 @@ namespace ClaudeBuddy
         public string? KindLabel => BadgeFor(_lastStatus?.Kind ?? SessionKind.Unknown)?.Label;
 
         public string? KindGlyphText => BadgeFor(_lastStatus?.Kind ?? SessionKind.Unknown)?.Glyph;
+
+        // The drawn form of the same badge, for the chat panel's kind chip.
+        // Null where the badge is typed (@, #) or absent, and then the chip
+        // types KindGlyphText instead — the same either-or ApplyKind makes, so
+        // the orb and its panel cannot disagree about which kinds are drawn.
+        public string? KindMarkData => KindMarkFor(_lastStatus?.Kind ?? SessionKind.Unknown);
 
         private void ApplyKind(SessionKind kind)
         {
@@ -1050,7 +1067,7 @@ namespace ClaudeBuddy
             // same reason the kind badge does.
             HeartBadge.Width = HeartBadge.Height = BadgeSize * scale;
             HeartBadge.CornerRadius = new CornerRadius(BadgeSize * scale / 2);
-            HeartGlyph.FontSize = BadgeGlyphSize * scale;
+            HeartGlyph.Width = HeartGlyph.Height = HeartMarkSize * scale;
             HeartBadge.Margin = new Thickness(0, Math.Max(0, inset), Math.Max(0, inset), 0);
 
             // And mirrored once more into the corner this one lives in. Same sum
@@ -2838,7 +2855,29 @@ namespace ClaudeBuddy
 
         internal void EndSession_Click(object? sender, RoutedEventArgs e)
         {
-            SessionManager.Instance?.EndSession(SessionId);
+            _ = EndSessionRecordingFailureAsync();
+        }
+
+        // The click's task, observed (CB-228). EndSession fails closed — a read
+        // or a kill that throws ends nothing — but it now fails on a pool
+        // thread, into a task the click used to discard, so a failure left no
+        // trace at all. It goes to crash.log, the one log every user has, under
+        // a source naming the gesture. There is still nothing to show on screen:
+        // the app has no dialog vocabulary, and the orb staying put is what the
+        // user sees.
+        internal async Task EndSessionRecordingFailureAsync()
+        {
+            var manager = CurrentManager();
+            if (manager is null) return;
+
+            try
+            {
+                await manager.EndSession(SessionId);
+            }
+            catch (Exception error)
+            {
+                CrashLog.Record("End this session", error);
+            }
         }
 
         // --- CB-170: an OpenClaw conversation's Interrupt and End rows -------
@@ -2978,6 +3017,14 @@ namespace ClaudeBuddy
         // its answer releases them when it lands.
         internal void SessionMenu_Closed(object? sender, RoutedEventArgs e)
         {
+            // CB-228: an End-row read still in flight writes nothing now, and
+            // the next scan's UpdateFrom is free to put the plain wording back.
+            _endGuardRequests.Retire();
+            _endGuardHeld = false;
+
+            if (_cloudBusy) _cloudReleaseWhenDone = true;
+            else ReleaseCloudRows();
+
             if (_openClawBusy)
             {
                 _openClawReleaseWhenDone = true;
@@ -2993,6 +3040,146 @@ namespace ClaudeBuddy
             _openClawRowsHeld = false;
             _openClawReleaseWhenDone = false;
             RestoreOpenClawRows();
+        }
+
+        // --- a cloud session's Archive and Delete (CB-225) -----------------------
+
+        // The request itself. Settable so a test can answer it without
+        // api.anthropic.com or a Keychain; production asks as the session's
+        // owner and tombstones the orb on success (ClaudeCloudSessions).
+        internal Func<CloudLifecycleAction, string, CancellationToken, Task<CloudLifecycleResult>>
+            CloudAction { get; set; } = (action, key, ct) => ClaudeCloudSessions.RunLifecycleAsync(action, key, ct);
+
+        // How long an armed row waits for its second click: the six seconds
+        // EndDisarmAfter gives, for the same reason. Settable only so a test
+        // can watch the timer fire.
+        internal TimeSpan CloudDisarmAfter { get; set; } = TimeSpan.FromSeconds(6);
+
+        // Separate from the OpenClaw rows' state on purpose. An orb is never
+        // both kinds today, but sharing one "busy" between two transports
+        // would let one's answer release the other's rows — the kind of
+        // coupling that only shows itself the day something changes.
+        private bool _cloudRowsHeld;
+        private bool _cloudBusy;
+        private bool _cloudReleaseWhenDone;
+        private DispatcherTimer? _cloudDisarm;
+        private CloudLifecycleAction? _cloudArmed;
+
+        // What each row said when its action succeeded. **A success is never
+        // released.** The orb is about to go — its session is tombstoned — but
+        // until the next scan takes it the menu can still be opened, and a
+        // row restored to its plain, enabled words would offer to archive or
+        // delete again what has just been archived or deleted. Hana found the
+        // way there: a success answered after the menu had closed went through
+        // the release path and came back enabled. One orb is one session, so
+        // nothing ever needs to clear this.
+        private readonly Dictionary<CloudLifecycleAction, string> _cloudDone = new();
+
+        internal CloudLifecycleAction? CloudArmed => _cloudArmed;
+
+        private MenuItem CloudRow(CloudLifecycleAction action) =>
+            action == CloudLifecycleAction.Archive ? ArchiveCloudItem : DeleteCloudItem;
+
+        internal void RestoreCloudRows()
+        {
+            foreach (var action in new[] { CloudLifecycleAction.Archive, CloudLifecycleAction.Delete })
+            {
+                if (_cloudDone.TryGetValue(action, out var done))
+                    SetRow(CloudRow(action), done, done, enabled: false);
+                else
+                    SetRow(CloudRow(action), CloudActionText.Header(action), CloudActionText.Tip(action), enabled: true);
+            }
+        }
+
+        internal async void ArchiveCloud_Click(object? sender, RoutedEventArgs e) =>
+            await CloudActionClickAsync(CloudLifecycleAction.Archive);
+
+        internal async void DeleteCloud_Click(object? sender, RoutedEventArgs e) =>
+            await CloudActionClickAsync(CloudLifecycleAction.Delete);
+
+        // First click arms, second click acts — for Archive as well as Delete.
+        // Archive is not permanent, but it disconnects the session and takes
+        // an orb away, which is more than one stray click should do. Arming one
+        // row disarms the other, so a second click can only ever act on the row
+        // that says "Click again". A click while a request is out does nothing:
+        // two fast clicks after arming send one request.
+        internal async Task CloudActionClickAsync(CloudLifecycleAction action)
+        {
+            // A disabled row ignores the click in code as well as on screen:
+            // a row that has just said "Archived" must not re-arm because a
+            // click raced the disable, and Avalonia gives no promise that a
+            // click already dispatched checks IsEnabled again.
+            if (_cloudBusy || !CloudRow(action).IsEnabled) return;
+
+            if (_cloudArmed != action)
+            {
+                // Only the other *armed* row goes back to its plain words; an
+                // answer showing on it is still worth reading.
+                DisarmCloud();
+                _cloudRowsHeld = true;
+                _cloudArmed = action;
+                CloudRow(action).Header = CloudActionText.Armed(action);
+
+                _cloudDisarm = new DispatcherTimer { Interval = CloudDisarmAfter };
+                _cloudDisarm.Tick += (_, _) => DisarmCloud();
+                _cloudDisarm.Start();
+                return;
+            }
+
+            StopCloudDisarm();
+            _cloudBusy = true;
+            var row = CloudRow(action);
+            SetRow(row, CloudActionText.Working(action), CloudActionText.Tip(action), enabled: false);
+
+            CloudLifecycleResult result;
+            try
+            {
+                result = await CloudAction(action, SessionId, CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                // An async void handler that throws takes the app with it. The
+                // action layer turns every answer into a result, so this is for
+                // the one thing it cannot: something nobody anticipated.
+                result = new CloudLifecycleResult(CloudLifecycleVerdict.Refused, ex.Message);
+            }
+
+            _cloudBusy = false;
+
+            // A success stays disabled, on this pass and every later restore:
+            // the orb is about to go, and the row must not offer to do again
+            // what has just been done.
+            var text = CloudActionText.For(action, result);
+            if (result.Succeeded) _cloudDone[action] = text;
+
+            if (_cloudReleaseWhenDone)
+            {
+                ReleaseCloudRows();
+                return;
+            }
+
+            SetRow(row, text, text, enabled: !result.Succeeded);
+        }
+
+        internal void DisarmCloud()
+        {
+            if (_cloudArmed is { } armed) CloudRow(armed).Header = CloudActionText.Header(armed);
+            StopCloudDisarm();
+        }
+
+        private void StopCloudDisarm()
+        {
+            _cloudDisarm?.Stop();
+            _cloudDisarm = null;
+            _cloudArmed = null;
+        }
+
+        private void ReleaseCloudRows()
+        {
+            StopCloudDisarm();
+            _cloudRowsHeld = false;
+            _cloudReleaseWhenDone = false;
+            RestoreCloudRows();
         }
 
         // What this orb would pre-fill the "New chat…" dialog with, or null
@@ -3039,25 +3226,89 @@ namespace ClaudeBuddy
         // is cached for two seconds either side of it, so the click that follows
         // shares this read rather than paying for a second one.
         //
-        // Excluded from coverage: reads the live process table by way of
-        // SessionManager.Instance, which this suite never sets — the same reason
-        // TryOpenRemoteChat below carries the attribute. What it decides is
-        // ApplyEndSessionGuard, which is internal and driven directly.
-        [ExcludeFromCodeCoverage]
+        // The manager comes through CurrentManager, so a test can open the menu
+        // against a manager it built without making it the process-wide one.
         internal void SessionMenu_Opening(object? sender, System.ComponentModel.CancelEventArgs e)
         {
             // Ahead of the manager-null guard below, and unconditionally —
-            // the Sound submenus have nothing to do with DependentsOf and
+            // the Sound submenus have nothing to do with DependentsOfAsync and
             // should still populate for a test or a standalone window that
             // never made a SessionManager current.
             RebuildSoundSubmenus();
             RebuildSizeSubmenu();
 
-            var manager = SessionManager.Instance;
+            var manager = CurrentManager();
             if (manager is null) return;
 
-            ApplyEndSessionGuard(manager.DependentsOf(SessionId));
+            _ = RefreshEndSessionGuardAsync(manager.DependentsOfAsync);
         }
+
+        // The End row's answer, read off the UI thread (CB-228).
+        //
+        // This used to be a synchronous call from the Opening handler, and on
+        // Windows the read under it is a WMI query over the whole process
+        // table — 218-273 ms per read on the Windows PC, which the menu waited
+        // for before it appeared. Now the menu opens straight away with the row
+        // disabled and saying it is checking (SessionDependents.CheckingHeader
+        // has why it starts refused rather than plain), and the answer replaces
+        // that when it arrives. The continuation after the await is back on the
+        // UI thread, so the row is only ever touched there.
+        //
+        // Asked only when the row is offered: an orb whose row is hidden
+        // (gateway, remote, pid-less) has nothing to check, and the manager
+        // would answer Nothing without reading anyway.
+        //
+        // A read that throws, or has not answered by ReadTimeout, leaves the
+        // row disabled and saying it could not check — never enabled.
+        // SessionDependents.UnknownHeader has why that is not the fail-open
+        // direction Nothing takes.
+        //
+        // Held while the menu is open, so UpdateFrom's reset to the plain
+        // wording — which runs for this orb every scan — cannot overwrite the
+        // answer the user is reading. Before this, a scan landing while the
+        // menu was open put a husk's row back to an enabled "End this session"
+        // under the cursor; the click was still refused, but the row had stopped
+        // telling the truth about it.
+        internal async Task RefreshEndSessionGuardAsync(
+            Func<string, Task<SessionDependents.Verdict>> read, TimeSpan? timeout = null)
+        {
+            if (!EndSessionItem.IsVisible) return;
+
+            var ticket = _endGuardRequests.Begin();
+            _endGuardHeld = true;
+
+            EndSessionItem.IsEnabled = false;
+            EndSessionItem.Header = SessionDependents.CheckingHeader;
+            ToolTip.SetTip(EndSessionItem, SessionDependents.CheckingTip);
+
+            SessionDependents.Verdict verdict;
+            try
+            {
+                verdict = await read(SessionId).WaitAsync(timeout ?? SessionDependents.ReadTimeout);
+            }
+            catch
+            {
+                if (!_endGuardRequests.IsCurrent(ticket)) return;
+
+                EndSessionItem.IsEnabled = false;
+                EndSessionItem.Header = SessionDependents.UnknownHeader;
+                ToolTip.SetTip(EndSessionItem, SessionDependents.UnknownTip);
+                return;
+            }
+
+            if (!_endGuardRequests.IsCurrent(ticket)) return;
+
+            ApplyEndSessionGuard(verdict);
+        }
+
+        // Which manager this orb's menu asks (CB-228). The process-wide one in
+        // the app; a test sets its own, so the Opening and End-click paths can
+        // be driven without SessionManager.Start() and its watcher, timer and
+        // tray icon.
+        internal Func<SessionManager?> CurrentManager { get; set; } = () => SessionManager.Instance;
+
+        private readonly SessionDependents.GuardRequests _endGuardRequests = new();
+        private bool _endGuardHeld;
 
         // internal so a test can drive it directly rather than through the
         // real ContextMenu.Opening event, which needs a shown window with a

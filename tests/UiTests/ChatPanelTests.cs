@@ -1260,7 +1260,7 @@ public class ChatPanelTests : IDisposable
         // And the hint, which is the half that stops an ordinary wait reading
         // as a fault.
         var hint = RenderedText(panel.FindControl<TextBlock>("FetchWaitHint")!);
-        Assert.Contains("minutes", hint);
+        Assert.Equal(RemoteControlChatSession.WaitHint, hint);
     }
 
     // It has to go away again, and on every ending rather than only the happy
@@ -1326,4 +1326,14 @@ public class ChatPanelTests : IDisposable
     [Fact]
     public void NoKindMeansNoChipEvenWithAMachine() =>
         Assert.Equal("", ChatPanel.KindChipLabel("\u21C4", null, null, "avatar"));
+
+    // CB-173. A kind with a drawn mark passes no glyph, because the mark is
+    // drawn beside the words instead — and then the words stand alone, with no
+    // two-space gap in front of them where a character used to be.
+    [Theory]
+    [InlineData(null, "another machine")]
+    [InlineData("needs input", "another machine \u00B7 needs input")]
+    public void ADrawnKindsChipIsJustTheWords(string? presence, string expected) =>
+        Assert.Equal(expected, ChatPanel.KindChipLabel(
+            null, "another machine", presence, machine: null));
 }

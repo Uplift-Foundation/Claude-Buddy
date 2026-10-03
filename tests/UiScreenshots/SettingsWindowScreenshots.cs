@@ -192,6 +192,68 @@ public class SettingsWindowScreenshots
         }
     }
 
+    // CB-222's preview button beside the Speak voice picker, in the two states
+    // worth a reviewer's eye: idle (a drawn triangle) and playing (blue, a drawn
+    // stop square). The glyphs are drawn geometry precisely because a text
+    // glyph renders as a colour emoji on Windows (CB-173), and only a real Skia
+    // capture on the Windows rid can show that they did not.
+    //
+    // The same Voice group as settings-speak-scope.png, which changes with it:
+    // the row now carries the button.
+    private static void CaptureVoicePreview(bool playing, string fileName)
+    {
+        VoicePreview.ResetForTests();
+        VoicePreview.SpeakForTests = (_, _) =>
+        {
+            TextToSpeech.Cancel();
+            TextToSpeech.Enter(TextToSpeech.SpeakState.Speaking);
+        };
+        VoicePreview.CancelForTests = () => { };
+        VoicePreview.ResolveSavedForTests = () => new TextToSpeech.VoiceOption(
+            TextToSpeech.SpeakEngine.System, "Voice", "Voice (system)");
+
+        try
+        {
+            var ctor = typeof(SettingsWindow).GetConstructor(
+                BindingFlags.NonPublic | BindingFlags.Instance,
+                types: Type.EmptyTypes)
+                ?? throw new MissingMethodException("SettingsWindow", ".ctor()");
+
+            var window = (Avalonia.Controls.Window)ctor.Invoke(null);
+            window.Show();
+            ScreenshotHelper.Flush();
+
+            if (playing)
+            {
+                // Through the real click path, so the capture is of what a click
+                // produces and not of a look set by hand.
+                var label = window.GetLogicalDescendants().OfType<TextBlock>()
+                    .First(t => t.Text == "Speak voice");
+                var button = label.GetLogicalParent()!.GetLogicalDescendants()
+                    .OfType<Button>().Single();
+                button.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+                VoicePreview.Drained().GetAwaiter().GetResult();
+                ScreenshotHelper.Flush();
+            }
+
+            CaptureGroup(window, "Speak voice", "Voice", fileName);
+        }
+        finally
+        {
+            VoicePreview.ResetForTests();
+            TextToSpeech.Cancel();
+            TextToSpeech.Enter(TextToSpeech.SpeakState.Idle);
+        }
+    }
+
+    [AvaloniaFact]
+    public void VoiceGroupShowsThePreviewButtonIdle() =>
+        CaptureVoicePreview(playing: false, "settings-voice-preview-idle.png");
+
+    [AvaloniaFact]
+    public void VoiceGroupShowsThePreviewButtonPlaying() =>
+        CaptureVoicePreview(playing: true, "settings-voice-preview-playing.png");
+
     // CB-167's Sounds group, captured with a non-default value saved so the
     // capture shows the picker holding a real choice rather than its initial
     // "Default (…)" state — the same reason SpeechGroupShowsTheSpeakScopePicker
@@ -226,6 +288,130 @@ public class SettingsWindowScreenshots
         finally
         {
             ClaudeBuddySettings.TurnFinishedSound = wasFinished;
+        }
+    }
+
+    // CB-200's two volume sliders, each captured holding a saved non-default
+    // level so a broken round trip would show as a thumb back at the right
+    // edge. No platform gate: every engine that speaks on either platform
+    // honours a level, so both rids should show the same enabled slider.
+    [AvaloniaFact]
+    public void SpeechVolumeSliderHoldsASavedLevel() =>
+        WithVolumes("system", speech: 0.4, alert: 1.0, () =>
+            CaptureGroup(ShownSettings(), "Speech volume", "Voice", "settings-speech-volume.png"));
+
+    // A custom speak command is told the level through
+    // CLAUDEBUDDY_SPEECH_VOLUME (CB-200 second review), so the slider is live;
+    // the note under it says the command has to read it.
+    [AvaloniaFact]
+    public void SpeechVolumeIsGreyedAndLabelledForACustomCommand() =>
+        WithVolumes("custom", speech: 0.4, alert: 1.0, () =>
+            CaptureGroup(ShownSettings(), "Speech volume", "Voice", "settings-speech-volume-custom.png"));
+
+    // And the Alert slider, which no engine choice affects — captured with
+    // the custom engine selected on purpose, so this one shows it enabled in
+    // exactly the state that greys the Speech one.
+    [AvaloniaFact]
+    public void AlertVolumeSliderHoldsASavedLevel() =>
+        WithVolumes("custom", speech: 1.0, alert: 0.3, () =>
+            CaptureGroup(ShownSettings(), "Alert volume", "Sounds", "settings-alert-volume.png"));
+
+    // CB-200 review: Kokoro selected while only an older engine is on disk —
+    // just after an upgrade, or a dev build whose engine was never published.
+    // The older engine ignores the level, so the row carries a note under a
+    // slider that stays enabled. Look for the note, and for the "Speech
+    // volume" label still whole beside it.
+    [AvaloniaFact]
+    public void SpeechVolumeIsNotedWhileAnOlderEngineSpeaks() =>
+        WithVolumes("neural", speech: 0.4, alert: 1.0, () =>
+            WithOlderEngineOnly(() =>
+                CaptureGroup(ShownSettings(), "Speech volume", "Voice", "settings-speech-volume-fallback.png")));
+
+    // CB-200 second review, Warren's defect: the global engine is a system
+    // voice, but an orb's persona speaks through a custom command. The note
+    // under the live slider is the one for orbs with their own custom-command
+    // voice — before this, the row said nothing at all.
+    [AvaloniaFact]
+    public void SpeechVolumeIsNotedForAnOrbOnACustomCommand() =>
+        WithVolumes("system", speech: 0.4, alert: 1.0, () =>
+        {
+            LocalPersonas.SetForTests(new Dictionary<string, LocalPersona.Persona>
+            {
+                ["orb-1"] = new("Jennifer", "female_03", null, null, null, Array.Empty<string>())
+            });
+            TextToSpeech.SetVoiceOptionsForTests(new()
+            {
+                new(TextToSpeech.SpeakEngine.System, "Samantha", "Samantha (system)"),
+                new(TextToSpeech.SpeakEngine.Custom, "female_03", "female_03 (custom)"),
+            });
+            try
+            {
+                CaptureGroup(ShownSettings(), "Speech volume", "Voice", "settings-speech-volume-orb-custom.png");
+            }
+            finally
+            {
+                LocalPersonas.SetForTests(new Dictionary<string, LocalPersona.Persona>());
+                TextToSpeech.InvalidateVoiceCache();
+            }
+        });
+
+    private static void WithOlderEngineOnly(Action capture)
+    {
+        var wasEnabled = ClaudeBuddySettings.NeuralVoiceEnabled;
+        var directory = System.IO.Path.Combine(NeuralSpeech.Root, "0.0.1-older");
+        var modelExisted = System.IO.File.Exists(NeuralSpeech.ModelPath);
+        System.IO.Directory.CreateDirectory(directory);
+        System.IO.File.WriteAllBytes(System.IO.Path.Combine(directory, NeuralSpeech.EngineExeName), Array.Empty<byte>());
+        if (!modelExisted) System.IO.File.WriteAllBytes(NeuralSpeech.ModelPath, Array.Empty<byte>());
+        try
+        {
+            ClaudeBuddySettings.NeuralVoiceEnabled = true;
+            capture();
+        }
+        finally
+        {
+            ClaudeBuddySettings.NeuralVoiceEnabled = wasEnabled;
+            System.IO.Directory.Delete(directory, recursive: true);
+            if (!modelExisted) System.IO.File.Delete(NeuralSpeech.ModelPath);
+        }
+    }
+
+    private static Avalonia.Controls.Window ShownSettings()
+    {
+        var ctor = typeof(SettingsWindow).GetConstructor(
+            BindingFlags.NonPublic | BindingFlags.Instance,
+            types: Type.EmptyTypes)
+            ?? throw new MissingMethodException("SettingsWindow", ".ctor()");
+
+        var window = (Avalonia.Controls.Window)ctor.Invoke(null);
+        window.Show();
+        ScreenshotHelper.Flush();
+        return window;
+    }
+
+    private static void WithVolumes(string engine, double speech, double alert, Action capture)
+    {
+        var wasEngine = ClaudeBuddySettings.SpeakEngine;
+        var wasSpeech = ClaudeBuddySettings.SpeechVolume;
+        var wasAlert = ClaudeBuddySettings.AlertVolume;
+        var wasCommand = ClaudeBuddySettings.SpeakCommand;
+        try
+        {
+            ClaudeBuddySettings.SpeakEngine = engine;
+            ClaudeBuddySettings.SpeechVolume = speech;
+            ClaudeBuddySettings.AlertVolume = alert;
+            // A command that exists, so "custom" is the engine that will
+            // really speak and the greyed state is the honest one. Never run:
+            // nothing here opens the voice picker.
+            ClaudeBuddySettings.SpeakCommand = "my-own-tts";
+            capture();
+        }
+        finally
+        {
+            ClaudeBuddySettings.SpeakEngine = wasEngine;
+            ClaudeBuddySettings.SpeechVolume = wasSpeech;
+            ClaudeBuddySettings.AlertVolume = wasAlert;
+            ClaudeBuddySettings.SpeakCommand = wasCommand;
         }
     }
 

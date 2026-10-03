@@ -68,6 +68,236 @@ public class RemoteScanTests
     // which is still a real question and may acquire a new answer.
     private static bool Supported => true;
 
+    // --- CB-223: a team on the far machine, over the direct link --------------
+
+    private static bool IsTeamMember(OrbWindow orb) =>
+        (bool)typeof(OrbWindow).GetField("_isTeamMember", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .GetValue(orb)!;
+
+    private static List<(OrbWindow Member, OrbWindow Lead)> LinkPairs() =>
+        (List<(OrbWindow Member, OrbWindow Lead)>)typeof(SessionManager).Assembly.GetType("ClaudeBuddy.TeamLinks")!
+            .GetField("Pairs", BindingFlags.NonPublic | BindingFlags.Static)!.GetValue(null)!;
+
+    private static SessionStatus StatusOf(SessionManager manager, string key) =>
+        ((Dictionary<string, SessionStatus>)typeof(SessionManager)
+            .GetField("_statuses", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(manager)!)[key];
+
+    // The near half of the round trip: rows a far Buddy sent with team shape
+    // become a lead orb and member orbs — members drawn as members, wearing
+    // their own agent names and team colours, and linked to their lead by
+    // the same TeamLinks pairing a local team gets, with nothing translated.
+    [AvaloniaFact]
+    public void AFarTeamDrawsMembersLinkedToTheirLead()
+    {
+        using var scratch = new Scratch();
+        try
+        {
+            Publish(
+                new RemoteControlSessions.Remote("backlog status check", "far-mac", "running", DateTime.UtcNow,
+                    ".claude", Route: "sid:lead"),
+                new RemoteControlSessions.Remote("backlog status check", "far-mac", "idle", DateTime.UtcNow,
+                    ".claude", Route: "sid:a", LeadRoute: "sid:lead", Agent: "wren-asare", AgentColor: "blue"),
+                new RemoteControlSessions.Remote("backlog status check", "far-mac", "idle", DateTime.UtcNow,
+                    ".claude", Color: "green", Route: "sid:b", LeadRoute: "sid:lead", Agent: "hana-moriyama",
+                    AgentColor: "purple"));
+
+            var manager = Manager(scratch.Dir);
+            manager.ScanAndUpdate();
+
+            var orbs = Orbs(manager);
+            const string lead = "rc:.claude:sid:lead", a = "rc:.claude:sid:a", b = "rc:.claude:sid:b";
+            Assert.Contains(lead, orbs.Keys);
+
+            Assert.False(IsTeamMember(orbs[lead]));
+            Assert.True(IsTeamMember(orbs[a]));
+            Assert.True(IsTeamMember(orbs[b]));
+
+            Assert.Equal(lead, StatusOf(manager, a).Lead);
+            Assert.Equal("wren-asare", StatusOf(manager, a).Agent);
+
+            // The team colour fills in where the session has none of its own;
+            // a session's own colour outranks it, as it does locally.
+            Assert.Equal("blue", StatusOf(manager, a).Color);
+            Assert.Equal("green", StatusOf(manager, b).Color);
+
+            var pairs = LinkPairs();
+            Assert.Contains(pairs, p => p.Member == orbs[a] && p.Lead == orbs[lead]);
+            Assert.Contains(pairs, p => p.Member == orbs[b] && p.Lead == orbs[lead]);
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
+    // Hana's world: a local team and two remote teams, every one titled the
+    // same and the two remote ones using the very same routes, in one scan.
+    // Keys are `<session id>` locally and `rc:<account>:<route>` remotely, so a
+    // collision looks impossible by construction — this is what makes it a
+    // measurement: all six orbs draw, and each member links only to its own
+    // team's lead.
+    [AvaloniaFact]
+    public async Task SameNamedTeamsHereAndOnTwoPeersEachLinkOnlyWithinThemselves()
+    {
+        using var scratch = new Scratch();
+
+        // A second live process for the local member: two status files on one
+        // pid would be one session to the scan (Superseded), not two.
+        using var child = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = OperatingSystem.IsWindows() ? "ping" : "sleep",
+            Arguments = OperatingSystem.IsWindows() ? "-n 120 127.0.0.1" : "120",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+        })!;
+
+        try
+        {
+            void Local(string id, int pid) => File.WriteAllText(Path.Combine(scratch.Dir, id + ".txt"),
+                System.Text.Json.JsonSerializer.Serialize(new SessionStatus
+                {
+                    State = "idle", Title = "backlog status check", Cwd = "/Users/user/project",
+                    SessionPid = pid, TermProgram = "iTerm.app", Tty = "/dev/ttys004",
+                }));
+            Local("lead", Environment.ProcessId);
+            Local("a", child.Id);
+
+            ClaudeBuddySettings.ClaudeCodeEnabled = true;
+            Publish(
+                new RemoteControlSessions.Remote("backlog status check", "peer-1", "idle", DateTime.UtcNow,
+                    ".claude", Route: "sid:lead"),
+                new RemoteControlSessions.Remote("backlog status check", "peer-1", "idle", DateTime.UtcNow,
+                    ".claude", Route: "sid:a", LeadRoute: "sid:lead", Agent: "wren-asare"),
+                new RemoteControlSessions.Remote("backlog status check", "peer-2", "idle", DateTime.UtcNow,
+                    ".claude-board", Route: "sid:lead"),
+                new RemoteControlSessions.Remote("backlog status check", "peer-2", "idle", DateTime.UtcNow,
+                    ".claude-board", Route: "sid:a", LeadRoute: "sid:lead", Agent: "hana-moriyama"));
+
+            var manager = new SessionManager(
+                scratch.Dir,
+                () => new Dictionary<string, string>(StringComparer.Ordinal),
+                () => new HashSet<string>(StringComparer.Ordinal),
+                dependents: _ => SessionDependents.Nothing,
+                paneOwners: claims => claims.ToDictionary(TmuxPaneKey.Of, _ => (string?)null),
+                agentViewer: _ => null,
+                teams: pids => pids.ToDictionary(p => p, p => p == Environment.ProcessId
+                    ? new AgentTeam.Membership("lead", "red", "boss")
+                    : new AgentTeam.Membership("lead", "blue", "local-member")));
+
+            await manager.ScheduleScan();
+
+            var orbs = Orbs(manager);
+            string[] keys = { "lead", "a", "rc:.claude:sid:lead", "rc:.claude:sid:a",
+                "rc:.claude-board:sid:lead", "rc:.claude-board:sid:a" };
+            Assert.All(keys, k => Assert.Contains(k, orbs.Keys));
+            Assert.Equal(keys.Length, keys.Select(k => orbs[k]).Distinct().Count());
+
+            var pairs = LinkPairs();
+            Assert.Contains(pairs, p => p.Member == orbs["a"] && p.Lead == orbs["lead"]);
+            Assert.Contains(pairs, p => p.Member == orbs["rc:.claude:sid:a"] && p.Lead == orbs["rc:.claude:sid:lead"]);
+            Assert.Contains(pairs, p => p.Member == orbs["rc:.claude-board:sid:a"] && p.Lead == orbs["rc:.claude-board:sid:lead"]);
+            Assert.Equal(3, pairs.Count(p => keys.Select(k => orbs[k]).Contains(p.Member)));
+        }
+        finally
+        {
+            try { child.Kill(); } catch { }
+            PublishNothing();
+        }
+    }
+
+    // A lead cycle among remote rows — not something AgentTeam produces
+    // locally, but a far machine is not this one — draws both, links both,
+    // and returns: neither the pairing nor the arrangement follows a chain.
+    [AvaloniaFact]
+    public void ARemoteLeadCycleDrawsAndReturns()
+    {
+        using var scratch = new Scratch();
+        try
+        {
+            Publish(
+                new RemoteControlSessions.Remote("x", "far-mac", "idle", DateTime.UtcNow, ".claude",
+                    Route: "sid:x", LeadRoute: "sid:y", Agent: "x"),
+                new RemoteControlSessions.Remote("y", "far-mac", "idle", DateTime.UtcNow, ".claude",
+                    Route: "sid:y", LeadRoute: "sid:x", Agent: "y"));
+
+            var manager = Manager(scratch.Dir);
+            manager.ScanAndUpdate();
+            manager.ScanAndUpdate();
+
+            var orbs = Orbs(manager);
+            Assert.True(IsTeamMember(orbs["rc:.claude:sid:x"]));
+            Assert.True(IsTeamMember(orbs["rc:.claude:sid:y"]));
+            var pairs = LinkPairs();
+            Assert.Contains(pairs, p => p.Member == orbs["rc:.claude:sid:x"] && p.Lead == orbs["rc:.claude:sid:y"]);
+            Assert.Contains(pairs, p => p.Member == orbs["rc:.claude:sid:y"] && p.Lead == orbs["rc:.claude:sid:x"]);
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
+    // Every member wears its lead's title, so nothing may find a member's
+    // session by name. A member orb's chat panel is built from its key, which
+    // for a direct-link row is the route — so it asks for `sid:a`, never for
+    // the title three orbs share.
+    [AvaloniaFact]
+    public void AMemberOrbsPanelAddressesItsSessionByRouteNotTitle()
+    {
+        using var scratch = new Scratch();
+        try
+        {
+            Publish(
+                new RemoteControlSessions.Remote("backlog status check", "far-mac", "idle", DateTime.UtcNow,
+                    ".claude", Route: "sid:lead"),
+                new RemoteControlSessions.Remote("backlog status check", "far-mac", "idle", DateTime.UtcNow,
+                    ".claude", Route: "sid:a", LeadRoute: "sid:lead", Agent: "wren-asare"));
+
+            var manager = Manager(scratch.Dir);
+            manager.ScanAndUpdate();
+
+            var chat = manager.RemoteChatFor("rc:.claude:sid:a");
+            Assert.NotNull(chat);
+            var addressed = (string)chat!.GetType()
+                .GetField("_remoteName", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(chat)!;
+            Assert.Equal("sid:a", addressed);
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
+    // The control: the same rows with no team shape — an older far Buddy, or
+    // a relay-only far machine — are flat orbs with no links between them.
+    [AvaloniaFact]
+    public void TheSameRowsWithoutTeamShapeAreFlatAndUnlinked()
+    {
+        using var scratch = new Scratch();
+        try
+        {
+            Publish(
+                new RemoteControlSessions.Remote("backlog status check", "far-mac", "running", DateTime.UtcNow,
+                    ".claude", Route: "sid:lead"),
+                new RemoteControlSessions.Remote("backlog status check", "far-mac", "idle", DateTime.UtcNow,
+                    ".claude", Route: "sid:a", Agent: "wren-asare", AgentColor: "blue"));
+
+            var manager = Manager(scratch.Dir);
+            manager.ScanAndUpdate();
+
+            var orbs = Orbs(manager);
+            Assert.False(IsTeamMember(orbs["rc:.claude:sid:a"]));
+            Assert.Equal("", StatusOf(manager, "rc:.claude:sid:a").Lead);
+            Assert.Equal("", StatusOf(manager, "rc:.claude:sid:a").Agent);
+            Assert.DoesNotContain(LinkPairs(), p => p.Member == orbs["rc:.claude:sid:a"]);
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
     [AvaloniaFact]
     public void ARemoteSessionGetsAnOrb()
     {
@@ -428,107 +658,4 @@ public class RemoteScanTests
         Assert.Equal("fallback-name", chat!.DisplayName);
     }
 
-    // OnRemoteMessage and OnRemoteWorkingChanged are what SessionManager.Start
-    // wires RemoteControlSessions' two events to — reached here directly
-    // because Start is excluded (it also creates a tray icon and a live
-    // FileSystemWatcher, neither of which this is about). Delivery is only to
-    // an already-open conversation, which is the behaviour under test: an
-    // inbound message with no panel behind it is a reply to nothing.
-    private static void InvokeOnRemoteMessage(SessionManager manager, BridgeProtocol.InboundMessage message) =>
-        typeof(SessionManager).GetMethod("OnRemoteMessage", BindingFlags.NonPublic | BindingFlags.Instance)!
-            .Invoke(manager, new object[] { message });
-
-    private static void InvokeOnRemoteWorkingChanged(SessionManager manager, string sessionKey, bool working) =>
-        typeof(SessionManager).GetMethod("OnRemoteWorkingChanged", BindingFlags.NonPublic | BindingFlags.Instance)!
-            .Invoke(manager, new object[] { sessionKey, working });
-
-    [AvaloniaFact]
-    public void AnInboundMessageIsDeliveredToTheMatchingOpenConversation()
-    {
-        if (!Supported) return;
-
-        using var scratch = new Scratch();
-        try
-        {
-            Publish(Remote("mac-mini", account: ".claude"));
-            var manager = Manager(scratch.Dir);
-            manager.ScanAndUpdate();
-
-            var chat = manager.RemoteChatFor("rc:.claude:mac-mini")!;
-
-            InvokeOnRemoteMessage(manager,
-                new BridgeProtocol.InboundMessage("mac-mini", "bridge:session_01", "prompting", "hello back", ".claude"));
-
-            Assert.Contains(chat.History, t => t.Text == "hello back");
-        }
-        finally
-        {
-            PublishNothing();
-        }
-    }
-
-    // A remote session named the same as one on a different account must not
-    // receive a reply meant for the other — matched on both name and account.
-    [AvaloniaFact]
-    public void AnInboundMessageForADifferentAccountIsNotDelivered()
-    {
-        if (!Supported) return;
-
-        using var scratch = new Scratch();
-        try
-        {
-            Publish(Remote("mac-mini", account: ".claude"));
-            var manager = Manager(scratch.Dir);
-            manager.ScanAndUpdate();
-
-            var chat = manager.RemoteChatFor("rc:.claude:mac-mini")!;
-            var before = chat.History.Count;
-
-            InvokeOnRemoteMessage(manager,
-                new BridgeProtocol.InboundMessage("mac-mini", "bridge:session_02", "prompting", "not for you", ".claude-work"));
-
-            Assert.Equal(before, chat.History.Count);
-        }
-        finally
-        {
-            PublishNothing();
-        }
-    }
-
-    [AvaloniaFact]
-    public void WorkingChangedTogglesTheMatchingCachedConversation()
-    {
-        if (!Supported) return;
-
-        using var scratch = new Scratch();
-        try
-        {
-            Publish(Remote("mac-mini", account: ".claude"));
-            var manager = Manager(scratch.Dir);
-            manager.ScanAndUpdate();
-
-            var chat = manager.RemoteChatFor("rc:.claude:mac-mini")!;
-
-            InvokeOnRemoteWorkingChanged(manager, "rc:.claude:mac-mini", true);
-
-            Assert.Contains(chat.History, t => t.Text.Contains("is working", StringComparison.Ordinal));
-        }
-        finally
-        {
-            PublishNothing();
-        }
-    }
-
-    // A key with no open conversation behind it is simply not found — this is
-    // what "delivered only to an already-open conversation" means in practice.
-    [AvaloniaFact]
-    public void WorkingChangedForASessionWithNoOpenConversationDoesNothing()
-    {
-        if (!Supported) return;
-
-        using var scratch = new Scratch();
-        var manager = Manager(scratch.Dir);
-
-        InvokeOnRemoteWorkingChanged(manager, "rc:.claude:never-opened", true);
-    }
 }

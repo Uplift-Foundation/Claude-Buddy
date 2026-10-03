@@ -27,10 +27,10 @@ namespace ClaudeBuddy
     //    setting, the same one a local panel obeys. A person who has turned
     //    replying off has said something about this machine, and a request
     //    arriving over a wire does not change it.
-    //  * **Requests are only served to a Buddy relay**, matched on the name
-    //    prefix RemoteControlBridge builds. It is a weak check on its own — the
-    //    account is shared, so anything on it could wear the name — and it is
-    //    named as such in the PR rather than presented as a boundary.
+    //  * **Requests are only served to a peer the link allows** — see
+    //    Seams.PeerAllowed below. Over the relay this was a name-prefix match, a
+    //    weak check since the account is shared; the relay is gone (937de9ec)
+    //    and the link's answer is a pinned TLS certificate.
     internal sealed class RemoteMirrorServer
     {
         // Everything this needs from the world outside itself.
@@ -65,8 +65,8 @@ namespace ClaudeBuddy
             //
             // **A seam because the answer depends on the transport, and the
             // hard-coded version was a second copy of a string.** Over the relay
-            // it meant "the name starts with the prefix RemoteControlBridge
-            // builds" — a guard rather than a boundary, since the account is
+            // it meant "the name starts with the relay prefix" (MachineNames)
+            // — a guard rather than a boundary, since the account is
             // shared and anything on it could wear that name. Over a direct link
             // it means something much stronger: this peer completed a TLS
             // handshake presenting a certificate we pinned when a person typed a
@@ -478,6 +478,36 @@ namespace ClaudeBuddy
                 }
             }
 
+            // CB-223: agent-team members. Claude Code's agent registry does not
+            // list a team's members — measured: fifteen live member processes,
+            // one registry row, and that a background daemon — so the loop
+            // above, which walks the registry, never offered one. They have
+            // status files like any session, and the snapshot now knows whose
+            // team each is in, so they are offered from there, on the complete
+            // roster only (as Codex and Grok are), and **only when their lead
+            // is itself offered**. That keeps the visibility rule this method
+            // opens with: a member of a team whose lead this peer cannot see
+            // is not made visible by the back door.
+            if (everything)
+            {
+                var offeredRoutes = entries.Where(e => e.Route is not null).Select(e => e.Route!).ToList();
+                foreach (var (sessionId, status) in TeamMembersToOffer(offeredRoutes, sessions,
+                             s => !(HasTranscript(s) && !LivelyEnough(s))))
+                {
+                    var name = string.IsNullOrWhiteSpace(status.Title)
+                        ? (string.IsNullOrWhiteSpace(status.Cwd) ? MirrorProtocol.CliFor(status.Source) : Path.GetFileName(status.Cwd))
+                        : status.Title;
+                    entries.Add(new MirrorProtocol.MirrorRosterEntry(name, MirrorProtocol.CliFor(status.Source),
+                        HasTranscript(status), _seams.CanType(status),
+                        string.IsNullOrWhiteSpace(status.Color) ? null : status.Color,
+                        Commands(status), status.State, _seams.CanDeliver?.Invoke(status), RouteFor(sessionId),
+                        ResolvePeerPersona(status, picturesById)));
+                }
+            }
+
+            // Every entry, offered by either path, says whose team it is in.
+            entries = WithTeamFields(entries, sessions);
+
             // CB-216: hashed before it is compressed, so an asker holding this
             // exact roster is told so with a bare OK and no roster at all. See
             // MirrorProtocol.RosterHashField for what that saved and why it is
@@ -659,6 +689,85 @@ namespace ClaudeBuddy
 
         internal const string RoutePrefix = "sid:";
         internal static string RouteFor(string sessionId) => RoutePrefix + sessionId;
+
+        private static bool HasTranscript(SessionStatus status) =>
+            !string.IsNullOrEmpty(status.TranscriptPath) && File.Exists(status.TranscriptPath);
+
+        // CB-223: the team members to add to a roster that already offers
+        // `offeredRoutes`, in the order to add them.
+        //
+        // A member is added only once its lead is offered — and adding it can
+        // make *its* members eligible, because a member can lead a team of its
+        // own, so this runs to a fixpoint rather than one pass. It terminates
+        // because the offered set only grows and is bounded by the sessions, so
+        // a lead cycle (A leads B leads A, which a scan can produce mid-change)
+        // adds nothing that neither half already had. `eligible` is the
+        // caller's liveness rule, asked before a member counts as offered, so a
+        // member dropped as abandoned cannot sponsor members of its own.
+        //
+        // Claude Code only: agent teams are a Claude Code concept, and a
+        // gateway session uses Lead for its room.
+        internal static IReadOnlyList<(string SessionId, SessionStatus Status)> TeamMembersToOffer(
+            IEnumerable<string> offeredRoutes,
+            IReadOnlyList<(string SessionId, SessionStatus Status)> sessions,
+            Func<SessionStatus, bool> eligible)
+        {
+            var offered = new HashSet<string>(offeredRoutes, StringComparer.Ordinal);
+            var added = new List<(string, SessionStatus)>();
+
+            bool grew;
+            do
+            {
+                grew = false;
+                foreach (var (sessionId, status) in sessions)
+                {
+                    if (status.Source != SessionSource.ClaudeCode || string.IsNullOrEmpty(status.Lead)) continue;
+
+                    var route = RouteFor(sessionId);
+                    if (offered.Contains(route) || !offered.Contains(RouteFor(status.Lead))) continue;
+                    if (!eligible(status)) continue;
+
+                    offered.Add(route);
+                    added.Add((sessionId, status));
+                    grew = true;
+                }
+            }
+            while (grew);
+
+            return added;
+        }
+
+        // CB-223: each entry with its team fields, from the session it was
+        // built from. Lead is the lead's route, and only when that route is in
+        // this same roster — a near machine must never be pointed at an orb it
+        // was not offered. An entry with no team, or whose lead is not here,
+        // is returned unchanged, so a roster with no teams serialises (and
+        // hashes) exactly as it did before.
+        internal static List<MirrorProtocol.MirrorRosterEntry> WithTeamFields(
+            List<MirrorProtocol.MirrorRosterEntry> entries,
+            IReadOnlyList<(string SessionId, SessionStatus Status)> sessions)
+        {
+            var offered = new HashSet<string>(entries.Where(e => e.Route is not null).Select(e => e.Route!),
+                StringComparer.Ordinal);
+            var byRoute = new Dictionary<string, SessionStatus>(StringComparer.Ordinal);
+            foreach (var (sessionId, status) in sessions) byRoute[RouteFor(sessionId)] = status;
+
+            return entries.Select(entry =>
+            {
+                if (entry.Route is null || !byRoute.TryGetValue(entry.Route, out var status)) return entry;
+                if (status.Source != SessionSource.ClaudeCode || string.IsNullOrEmpty(status.Lead)) return entry;
+
+                var leadRoute = RouteFor(status.Lead);
+                if (!offered.Contains(leadRoute) || leadRoute == entry.Route) return entry;
+
+                return entry with
+                {
+                    Lead = leadRoute,
+                    Agent = string.IsNullOrWhiteSpace(status.Agent) ? null : status.Agent,
+                    AgentColor = string.IsNullOrWhiteSpace(status.AgentColor) ? null : status.AgentColor,
+                };
+            }).ToList();
+        }
 
         // Every session worth offering, and what to call each one.
         //

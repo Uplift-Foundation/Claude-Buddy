@@ -185,12 +185,15 @@ public class ClaudeCliCredentialsParseTests
     }
 
     [Fact]
-    public void AnEmptyAccessTokenIsMalformed()
+    public void ABlankedEntryIsNotLoggedInBecauseTheCliSignedItOut()
     {
+        // What the CLI writes when its refresh token dies.
         var read = ClaudeCliCredentials.ParseCredentials(
-            """{"claudeAiOauth":{"accessToken":""}}""", Now);
+            """{"claudeAiOauth":{"accessToken":"","refreshToken":"","expiresAt":0}}""", Now);
 
-        Assert.Equal(CredentialOutcome.Malformed, read.Outcome);
+        Assert.Equal(CredentialOutcome.NotLoggedIn, read.Outcome);
+        Assert.Null(read.AccessToken);
+        Assert.Contains("signed this login out", read.Detail);
     }
 
     [Fact]

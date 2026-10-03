@@ -5,7 +5,7 @@ Wires Claude Buddy into every agent CLI on this machine.
 .DESCRIPTION
 The one thing an install should run, and the Windows twin of
 tools/install-hooks.sh. Orbs appear because a CLI calls the hook, so an app with
-no hooks wired doesn't error — it sits there showing nothing — and asking
+no hooks wired doesn't error -- it sits there showing nothing -- and asking
 someone to know which of two installers to run for which CLI is a way of
 arranging for that to happen.
 
@@ -17,13 +17,13 @@ Only -Uninstall is accepted, because it is the only flag both sub-installers
 understand. The Claude Code one takes -SettingsPath and -ProfileDir, the Codex
 one takes -CodexHome; forwarding either to the other makes it fail partway
 through a run that has already changed something. For those, run the
-sub-installer directly — that is what they are still there for.
+sub-installer directly -- that is what they are still there for.
 
 CB-49's crash keep-alive (a Scheduled Task that restarts the app after a
 crash, gated on "Serve on launch") is deliberately NOT wired in here, unlike
 its macOS twin in install-hooks.sh. On macOS this script is the only thing
 every install path already runs, because a DMG has no real installer. Windows
-already has one — tools/ClaudeBuddy.iss — with a real install/uninstall
+already has one -- tools/ClaudeBuddy.iss -- with a real install/uninstall
 lifecycle ([Code]'s CurStepChanged and [UninstallRun]), which is the natural
 place for OS-level task registration and its matching teardown. Putting it
 here too would tie a Scheduled Task's lifecycle to a script people also run by

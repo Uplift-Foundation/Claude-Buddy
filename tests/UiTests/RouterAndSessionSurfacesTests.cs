@@ -17,14 +17,14 @@ namespace ClaudeBuddy.UiTests;
 // nothing has ever evaluated is a property nobody has checked compiles into
 // something sensible.
 //
-// In the Settings collection: OnMessage below writes the process-wide relay
-// tables, and the local-session scan is memoised in a process-wide static.
+// In the Settings collection: the local-session scan is memoised in a
+// process-wide static.
 [Collection("Settings")]
 public class RouterAndSessionSurfacesTests : IDisposable
 {
-    public RouterAndSessionSurfacesTests() => RemoteControlSessions.ClearRelaysForTests();
+    public RouterAndSessionSurfacesTests() => RemoteControlSessions.ResetForTests();
 
-    public void Dispose() => RemoteControlSessions.ClearRelaysForTests();
+    public void Dispose() => RemoteControlSessions.ResetForTests();
 
     // ---- what the settings window reads off the router ----------------------
 
@@ -121,28 +121,6 @@ public class RouterAndSessionSurfacesTests : IDisposable
     }
 
     // ---- a frame this version does not recognise ---------------------------
-
-    // Frames whose kind is not one the client answers go to the server, and that
-    // is the default arm rather than a listed one on purpose: a far Buddy on a
-    // newer version will send kinds this one has never heard of, and the server
-    // is what answers with "unsupported" rather than the frame vanishing.
-    //
-    // With no server for the account the arm still has to be harmless, which is
-    // the state every machine is in until someone opens a live view.
-    [AvaloniaFact]
-    public void AFrameOfAnUnknownKindWithNoServerRunningIsHarmless()
-    {
-        RemoteControlSessions.SetRelayForTests("work@example.com", "1 session");
-
-        var frame = MirrorProtocol.BuildFrame(
-            "something-this-version-has-never-heard-of", "x-1",
-            new Dictionary<string, string>());
-
-        // Does not throw, and does not need a server to be running.
-        RemoteControlSessions.OnMessage("work@example.com",
-            new BridgeProtocol.InboundMessage(
-                FromName: "nova", From: "bridge:session_01", Mode: "prompting", Body: frame));
-    }
 
     // ---- reaching the UI thread from the poll thread -----------------------
 

@@ -13,13 +13,20 @@
          edit here plus a matching tag.
 
          Keep the "-beta" style suffix on Version only: AssemblyVersion and
-         FileVersion must be plain four-part numbers, so they are set
-         explicitly from the numeric part. Version flows into
-         AssemblyInformationalVersion, which is what actually shows the
-         prerelease label. -->
-    <Version>0.5.9-beta</Version>
-    <AssemblyVersion>0.4.1.0</AssemblyVersion>
-    <FileVersion>0.4.1.0</FileVersion>
+         FileVersion must be plain four-part numbers, so they are derived
+         below from the part of Version before the first hyphen, plus ".0"
+         (0.5.9-beta -> 0.5.9.0, 1.0.0 -> 1.0.0.0). They were once typed in
+         by hand and sat at 0.4.1.0 through five releases, so the installed
+         exe's Details tab disagreed with its own ProductVersion (CB-205);
+         tests/UnitTests/AssemblyVersionTests.cs fails if that comes back.
+         It is the same cut tools/build-macos-app.sh makes for
+         CFBundleVersion and tools/ClaudeBuddy.iss for VersionInfoVersion.
+         Version flows into AssemblyInformationalVersion, which is what
+         actually shows the prerelease label. Version must stay a literal
+         element here: the packaging scripts and release.yml parse it. -->
+    <Version>0.5.10-beta</Version>
+    <AssemblyVersion>$(Version.Split('-')[0]).0</AssemblyVersion>
+    <FileVersion>$(Version.Split('-')[0]).0</FileVersion>
     <Product>Claude Buddy</Product>
     <Authors>Kawika Miller, Repo Owner</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
@@ -52,6 +59,10 @@
          separate downloadable process exists to avoid. Harmless until tools/
          gained its first .cs file, which is exactly why it is easy to miss. -->
     <Compile Remove="tools\**" />
+    <!-- ...except the one file the app shares with the side-car engine: the
+         names of their contract, compiled into both so they cannot drift
+         (CB-200). -->
+    <Compile Include="tools\ClaudeBuddySpeech\SpeechEngineContract.cs" Link="SpeechEngineContract.cs" />
 
     <!-- Same trap, second door: tests/ has its own project with its own entry
          point, and the SDK's default glob would compile it into the app. It is

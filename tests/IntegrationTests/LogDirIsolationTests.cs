@@ -115,6 +115,60 @@ public class LogDirIsolationTests : IDisposable
         Assert.True(Directory.Exists(mine));
     }
 
+    // CB-214. The directory was isolated, and the line still went missing,
+    // because the *dedupe* in front of the write was not: it is process-wide,
+    // keyed on the message alone, and a rejection message names the picture as
+    // it was written in markdown rather than where it was found. So a stranger
+    // on another flow refusing a picture with the same written name and size —
+    // LocalPersonaFilesTests' own over-cap case does exactly that, in a
+    // collection that runs alongside this one — said the identical sentence
+    // first, and the write into this flow's private directory was skipped as a
+    // repeat of a line this file had never held.
+    [Fact]
+    public void A_writer_on_another_flow_cannot_silence_a_line_by_saying_it_first()
+    {
+        var mine = Path.Combine(_root, "scoped");
+        var theirs = Path.Combine(_root, "env");
+        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_LOG_DIR", theirs);
+
+        const string Sentence = "persona picture ignored: \"same-name.png\" (too large)";
+
+        OnAnUnrelatedFlow(() => PersonaLog.Record(Sentence));
+
+        using (CrashLog.ScopeForTests(mine))
+        {
+            PersonaLog.Record(Sentence);
+
+            Assert.Single(File.ReadAllLines(PersonaLog.Path_), line => line.EndsWith(Sentence, StringComparison.Ordinal));
+        }
+
+        // The stranger's line went where the stranger was pointed, so the pair
+        // above is two writes into two files and not one write seen twice.
+        Assert.Single(File.ReadAllLines(Path.Combine(theirs, "persona.log")),
+            line => line.EndsWith(Sentence, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void The_same_line_twice_into_one_directory_is_still_said_once()
+    {
+        // The control for the case above: the dedupe still does its job inside
+        // one file, whichever flow says it. Without this, the case above is
+        // equally consistent with the dedupe having been switched off.
+        var mine = Path.Combine(_root, "published");
+        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_LOG_DIR", mine);
+
+        const string Sentence = "persona picture ignored: \"repeated.png\" (too large)";
+
+        PersonaLog.Record(Sentence);
+        OnAnUnrelatedFlow(() => PersonaLog.Record(Sentence));
+
+        // This sentence's lines, not the whole file: the directory is published
+        // through the process-wide variable, so any class refusing a picture in
+        // parallel lands its own line here too — the race this class exists to
+        // document. Counting the whole file failed once on Windows that way.
+        Assert.Single(File.ReadAllLines(PersonaLog.Path_), line => line.EndsWith(Sentence, StringComparison.Ordinal));
+    }
+
     [Fact]
     public void A_scope_wins_over_the_variable_and_puts_it_back_afterwards()
     {

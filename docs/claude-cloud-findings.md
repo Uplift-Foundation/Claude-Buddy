@@ -21,6 +21,7 @@ The second-order lesson is in `tests/UnitTests/ClaudeCloudRequestTests.cs`, whic
 3. **The roster is overwhelmingly not cloud sessions.** 573 of 578 rows are the user's own local sessions, registered for remote control. The filter is the feature.
 4. **There is no server-side filtering.** Five different query parameters were sent and all five were *silently ignored*.
 5. Per-session reads and a per-session transcript exist, and the transcript is Claude Code's own format.
+6. **Writing works, on a different prefix** (CB-199): `POST /v1/code/sessions/<id>/events` with the same token and the same two headers plus `Content-Type`. Reads stay on `/v2`.
 
 ## The endpoint
 
@@ -60,7 +61,103 @@ The control is a nonsense subpath, which 404s — so the 200s below are real ans
 
 The events rows carry `type` (`user`/`assistant`/`system`/`result`/`control_request`/…), a `message` with a `role` and content blocks of `text`/`thinking`/`tool_use`/`tool_result`, plus `usage`, `model`, `stop_reason`, `uuid` and `parent_tool_use_id`. That is what `ChatTranscript` already reads, so `ClaudeCloudEvents` parses the envelope and hands the rows to that parser rather than writing a second one — two parsers over one format is how a panel comes to show something a terminal does not.
 
-**There is no input route, and that is why the panel shows no composer for a cloud session.** Every plausible write path 404s.
+**There is no input route on `/v2`, and CB-164 was wrong to conclude from that that there is none at all.** Every plausible write path under `/v2/ccr-sessions` 404s — that measurement stands. What it did not ask is where the CLI itself writes, and the answer is a different prefix: `POST /v1/code/sessions/<id>/events` on the same host. `/v2/ccr-sessions` is the in-container ingress; `/v1/code` is the client-facing API. See **Writing (CB-199)** below. It is the "what else knows about this" failure the correction at the top of this file warns about, one prefix over: every control was sound and the frame was one path too narrow.
+
+## Writing (CB-199)
+
+Measured 2026-09-28 from a real Mac against a throwaway session made with `claude --cloud` for the purpose, never a real one, with `tools/claude-cloud-probe`. The request shapes were read out of the Claude Code CLI 2.1.284 binary as strings; the binary was never executed for this.
+
+### Measured
+
+**The write.** `POST https://api.anthropic.com/v1/code/sessions/<id>/events` with a body of `{"events":[{"payload":{uuid, session_id, type:"user", parent_tool_use_id:null, message:{role:"user", content}}}]}`.
+
+| request | result |
+| --- | --- |
+| real token, `Authorization: Bearer` + `anthropic-version` + `Content-Type` only | 200, `results[0]` = `{duplicate:false, sequence_num, event_id}`, with `event_id` equal to the uuid we sent. `sequence_num` is a string |
+| the same event again, same uuid | 200, `duplicate:true` — so a retry with the same uuid is safe |
+| no `anthropic-version` | 400 |
+| no `Authorization` | 401, "Authentication failed" |
+| bogus Bearer | 401, "OAuth access token is invalid." |
+| `{"events":[]}` with a real token | 400 |
+| `{"events":[]}` with a bogus token | 400 — identical, so an empty POST **cannot** serve as a pre-flight for "may this login write"; the first real send is what finds out |
+
+No beta header and no `x-organization-uuid` are needed for either the send or the interrupt, so the app has no organisation-uuid reader to grow.
+
+**Where the sent turn lands.** It appears in the `/v2/ccr-sessions/<id>/events` history as one `user` row carrying our uuid about 10 s after the send. At 3 s it was not there yet. So history stays on `/v2`, and the panel reconciles its own bubble against the echo by uuid rather than drawing a second one.
+
+**Sending while a turn is running** → 200, queued; it lands after the current turn. So a busy session is sendable.
+
+**The interrupt.** The same endpoint, event `{type:"control_request", request_id, request:{subtype:"interrupt", cancel_queued:true}, uuid}`. Mid-turn the session went running → idle within about 1 s, and the interrupted turn ended with result `error_during_execution`; the session's earlier turns ended `success`, which is the control that says the result is the interrupt's doing. Sent while idle it is harmless.
+
+**Turn state, read two ways.**
+
+| source | mid-turn | idle |
+| --- | --- | --- |
+| `/v2` row | `session_status` "running", `status_bucket` "working", no `worker_status` field | `session_status` "idle", `status_bucket` "blocked" |
+| `/v1/code/sessions/<id>` | `status_bucket` "working", `worker_status` "running" **or** "WORKER_STATUS_UNSPECIFIED" | — |
+
+So busy is `status_bucket == "working"`. `worker_status` is not a reliable busy signal even where it exists.
+
+**A deleted session.** `GET /v1/code/sessions/<id>` answers 404 `not_found_error`, and `GET /v2/ccr-sessions/<id>/events` answers 404 too.
+
+**Rate.** Ten back-to-back `/v2` reads drew no 429. That is ten reads on one afternoon, not a statement about a day's polling.
+
+### Not measured
+
+- ~~**409 `session_inactive` for an archived session.**~~ **Measured by CB-225** (below): 409, and the error type is `session_not_active` — the binary's `session_inactive` was its own name for the case, not the wire string.
+- **413** (too large). Also from the binary only.
+- **A device-bound 403.** The CLI re-sends with `device_attestation`, which Buddy cannot do. No session that demands it was available, so the 403 split stays two-way (edge block / account refusal).
+- **Sending while the session is waiting on a permission prompt** (`requires_action`).
+- **Sending to a deleted session.** The probe's own guard refused to send to anything but its throwaway session, and the throwaway was not deleted before the send was tried.
+
+### Which login a send uses (CB-221)
+
+A cloud session is listed under the account whose login found it, and a send goes out as that account — never as whichever login happens to be current. Every Claude Code account directory the user has listed is read (PR #121).
+
+On the Mac this was measured on, those logins turned out to live in the plaintext `<config dir>/.credentials.json` rather than in the Keychain. The hypothesis is that the CLI's own Keychain writes fail when it runs over SSH and it falls back to the file; that is consistent with the Keychain entries' last-written dates, which predate the file's by weeks, and it is not demonstrated. Either way the reader has to look in both places, which it does.
+
+## Archive and delete (CB-225)
+
+Measured 2026-10-02 on the MacBook against three throwaway sessions made with `claude --cloud` (interactive only — `--cloud` refuses `--print`) on the default account, every one deleted afterwards, with `tools/claude-cloud-probe`'s `archive`, `delete`, `route` and `v2-session` verbs. `lifecycle.sh` is the sequence. No real session was archived or deleted. The routes were read out of the Claude Code CLI 2.1.288 binary as strings; the binary was not run against the API.
+
+### What the CLI does, read from the binary
+
+The fleet view's `archiveRemote` calls `archiveRemoteSession`, which posts `{}` to `/v1/code/sessions/<id>/archive` with the same header set as a send (User-Agent, Bearer, `anthropic-version`, and `X-Trusted-Device-Token` only when device identity is on), and counts **200 or 409** as archived. **The CLI has no delete.** Every `/v1/code/sessions/<id>/…` path in the binary was enumerated and none is sent with DELETE or PATCH; its only DELETE anywhere is `/v1/environments/bridge/<id>`. `PUT /v1/code/sessions/<id>` with `{title}` exists and is a rename.
+
+### Measured
+
+| request | result |
+| --- | --- |
+| `POST …/archive`, body `{}`, real token | **200**, `{"session":{… "status":"archived" …}}` — the whole session object |
+| the same archive again | **200** again, not 409. Idempotent in practice; the CLI's tolerance of 409 was never exercised |
+| archive with no `anthropic-version` | 400, "anthropic-version: header is required" |
+| archive with a bogus Bearer | 401, "OAuth access token is invalid." |
+| archive with no `Authorization` | 401, "Authentication failed" |
+| after archive, `GET /v1/code/sessions/<id>` | 200, `status` "archived", `connection_status` "disconnected" |
+| after archive, the `/v2/ccr-sessions/<id>` row | 200, `session_status` **"archived"**, `connection_status` "disconnected" |
+| after archive, the roster | the session is gone from the app's own roster count (3 → 2 on that account): `ClaudeCloudRoster.Keep`'s archived filter drops it with no change |
+| after archive, `/v2/…/events` | 200 — the history stays readable |
+| after archive, `POST …/events` (a send) | **409**, error type `session_not_active`, "Session <id> is not active" |
+| `DELETE /v1/code/sessions/<id>` on an archived session | **200**, body `{}` |
+| `DELETE` on an active, never-archived session | **200** — no archive needed first |
+| `DELETE` with no `anthropic-version` / bogus Bearer / no `Authorization` | 400 / 401 OAuth / 401 "Authentication failed", as for archive |
+| after delete, `GET /v1/code/sessions/<id>` | 404 JSON, `not_found_error`, "Session <id> not found" |
+| after delete, `/v2/…/events` | 404 → the shipped `SessionGone` |
+| the confirming `GET` made the instant `DELETE` returned, through the app's own `RunAsync` and `HttpCloudApi` (`lifecycle-run`) | 404 `not_found_error`, both times it was run (+347 ms and +259 ms from the start of the exchange, no delay between the two). So no read-after-delete lag was seen — a two-sample observation, not a property, and the app does not depend on it: the 2xx DELETE is the success, and a read that still finds the session only changes the row to "Deleted — not yet confirmed" |
+
+**The controls that make the two routes real.** A nonsense sub-route (`…/<id>/cb225-no-such-route`) on the same live id with the same token answers **404 `text/plain` "404 page not found"** — the router. Archive and DELETE aimed at an id whose GET has just answered 404 answer **404 JSON `not_found_error`** — a handler. So both routes exist as handlers, and a 404 from either comes in two kinds that mean different things: a JSON `not_found_error` is "no such session", and a plain-text 404 is "no such route". `CloudOutcomes.OutcomeFor` cannot tell those apart and reads both as `SessionGone`, which is why the lifecycle code (`ClaudeCloudLifecycle`) does not use a 404 as evidence of success.
+
+**What the app is handed is not what the endpoint sent.** HttpCloudApi returns a body only on a 2xx (`HttpCloudApi.ResultFor`), so the handler-or-router question has to be answered where the body is still in hand — `OutcomeFor` records it as `CloudOutcome.SessionNotFound` — and carried on the outcome. The first version read the body in the lifecycle code, every 404 arrived there as null, and every successful delete said "couldn't confirm"; `lifecycle-run`, which drives the shipped code through the shipped client, reproduced that before the fix and showed "Deleted" after it.
+
+An invented id is not a usable control: the API validates tagged ids before looking them up and answers **400** "invalid session ID: must be a cse_… or session_… tagged ID". The probe's `--absent-id` therefore accepts only an id whose GET answered 404 — a real id that has been deleted.
+
+### Not measured
+
+- **Another account's token on this id.** The board account's Keychain entry did not answer from the shell the probe ran in, so the cross-account refusal (403 or 404?) is not known.
+- **A device-bound 403.** The throwaways succeeded with no `X-Trusted-Device-Token`; a session that demands one was not available.
+- **Archive or delete while a turn is running.**
+- **How long a deleted session's id keeps answering 404**, or whether a deleted id can ever be reused.
+- **That DELETE stays.** It is the one route here the CLI does not itself call, so it is the likeliest to move. A route that moves answers the router's plain-text 404, which the app shows as a refusal rather than a success.
 
 ## The roster, measured across 578 rows
 
@@ -165,6 +262,8 @@ dotnet run --project tools/claude-cloud-probe -- stamp
 dotnet run --project tools/claude-cloud-probe -- read --keys-only
 dotnet run --project tools/claude-cloud-probe -- list --shape
 dotnet run --project tools/claude-cloud-probe -- roster
+tools/claude-cloud-probe/lifecycle.sh <throwaway id>   # CB-225: archives and DELETES it
+dotnet run --project tools/claude-cloud-probe -- lifecycle-run <throwaway id> archive|delete --throwaway
 ```
 
 It references the app rather than building its own request, so its answer is the app's answer rather than a second opinion. `stamp` prompts for nothing. `read` prints a length and a four-character prefix and has no mode that prints a token. `list --shape` prints field names and JSON types with every value stripped, so a fixture can be designed without a single session title. `roster` prints the `environment_kind` histogram and the status sentence — **the cheapest available check that the filter still matches something**, and much cheaper than diagnosing it from a screenshot of missing orbs.
@@ -189,7 +288,7 @@ On macOS `read`, `list` and `roster` raise a Keychain consent prompt naming *thi
 
 **Rate limits or terms on calling this endpoint from a third-party desktop client.** Not investigated. `Backoff` is written to be a well-behaved guest — a 60-second floor on any 429 whatever `Retry-After` says — but that is caution, not knowledge.
 
-**Whether a 404 on a per-session read means the session ended.** Treated as "no news" and left for the next deep walk to resolve, because the alternative would drop an orb on one unlucky request.
+**Whether every 404 on a per-session read means the session is gone.** A deleted session was measured to answer 404 on both prefixes (CB-199), and a per-session 404 is now read as gone (`CloudOutcome.SessionGone`); the roster listing, where a 404 would mean the collection moved, undoes that itself. That a 404 is never transient — an edge hiccup, a session briefly unrouted — is assumed, not shown.
 
 **Why the Keychain data query blocks with no window server session.** Reproducible and fixed around; the cause is open. See the section above for the two stories that fit the evidence equally well, and for the lower-level fix that is not being applied until one of them is ruled out.
 

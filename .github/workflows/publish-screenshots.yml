@@ -104,7 +104,10 @@ jobs:
           set -e
           repo="${{ github.repository }}"
           branch="screenshots"
-          remote_url="https://x-access-token:${GH_TOKEN}@github.com/${repo}.git"
+          # SCREENSHOTS_REMOTE_URL exists only so tools/test-publish-screenshots.py
+          # can run this exact step against a local bare repository; the
+          # workflow never sets it.
+          remote_url="${SCREENSHOTS_REMOTE_URL:-https://x-access-token:${GH_TOKEN}@github.com/${repo}.git}"
           # Absolute, deliberately: everything below cd's into a sibling
           # clone directory, and a relative "../downloaded" would then
           # resolve against THAT directory's parent, not the workspace
@@ -160,6 +163,15 @@ jobs:
               git rebase --quiet "origin/$branch"
             done
           fi
+
+          # The commit this run's images are in, read AFTER the push that
+          # succeeded, and on the nothing-to-commit path too. Not before: the
+          # retry loop above rebases onto whatever another run pushed in the
+          # meantime, which gives the commit a new sha, and a link to the
+          # pre-rebase one would name a commit that never reached the remote.
+          # On the nothing-to-commit path the files already in the tip are
+          # identical to this run's, so the tip is the right commit to name.
+          pushed_sha="$(git rev-parse HEAD)"
           cd -
 
           if [ "$pushed" -ne 1 ]; then
@@ -175,7 +187,13 @@ jobs:
             for file in "$dir"*.png; do
               [ -e "$file" ] || continue
               name="$(basename "$file" .png)"
-              raw_url="https://github.com/${repo}/raw/refs/heads/${branch}/${rid}/$(basename "$file")"
+              # Pinned to the commit this run pushed (CB-237), not to the
+              # branch. Every run writes the same <rid>/<name>.png paths, so a
+              # link to the branch tip shows whichever run pushed last, from
+              # any PR: #135's captures were replaced seven seconds later by
+              # #139's. The branch is only ever appended to, so the commit
+              # stays reachable. Still a github.com URL, for CB-118's reason.
+              raw_url="https://github.com/${repo}/raw/${pushed_sha}/${rid}/$(basename "$file")"
               body+="**${name} (${rid})**"$'\n\n'
               body+="![${name}](${raw_url})"$'\n\n'
             done

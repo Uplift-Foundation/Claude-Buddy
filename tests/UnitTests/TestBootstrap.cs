@@ -19,6 +19,16 @@ internal static class TestBootstrap
         var dir = Path.Combine(Path.GetTempPath(), "cb-unittests-" + Guid.NewGuid());
         Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
 
+        // Where LocalPersona's walk up from a session's directory stops. The
+        // scratch projects these tests build live under the temp directory,
+        // which on Windows is inside the developer's home, so an unbounded walk
+        // reaches the real home CLAUDE.md and the persona it imports — and
+        // every test expecting "no persona", or its own fixture's, gets the
+        // developer's instead. Ceilinged at the temp directory itself: the walk
+        // still climbs through every scratch ancestor a test builds.
+        Environment.SetEnvironmentVariable(
+            "CLAUDE_BUDDY_PERSONA_WALK_CEILING", Path.GetTempPath());
+
         // No test in this assembly asks the OS for a credential. On macOS the
         // cloud arm's credential lives in the login Keychain, and reading it from
         // another application raises a consent dialog — which, headless, nobody

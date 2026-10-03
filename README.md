@@ -349,7 +349,12 @@ can tell which is which. The menu is also the app's only permanent control
 surface, since with zero sessions there are no orbs to right-click:
 - **Show orbs** — hide the orbs and run status-bar-only. Sessions keep being
   tracked, so the icon and menu stay live. Remembered across relaunches, along
-  with everything else in the settings window.
+  with everything else in the settings window. This means every orb, the
+  account usage orbs included.
+- **Show usage orbs** — hide or show only the account usage orbs, leaving the
+  session orbs where they are. Also remembered across relaunches, as
+  `showUsageOrbs` in `settings.json`; until you flip it, it follows **Show
+  orbs**, so upgrading with your orbs hidden doesn't bring the usage orbs back.
 - **Reset all sessions to idle** — the bulk version of an orb's
   right-click reset, for an orb whose process is alive but whose colour is
   stuck. It used to be the tool for clearing up after Ctrl+C'd sessions as
@@ -530,6 +535,19 @@ marked `(custom)` — the system voices are marked `(system)` and the neural one
 `(Kokoro)`. Picking a voice is what selects the engine, so all three are
 available at once rather than one hiding the others.
 
+The play button beside the picker lets you hear a voice before choosing it. It
+speaks one fixed sentence in the voice the picker is showing, on that voice's
+own engine — and if you haven't opened the list yet, in the voice a real
+read-aloud would use. A Kokoro voice takes a few seconds to start, so the button
+turns amber with an hourglass until audio begins, then blue with a stop square;
+pressing it in either state stops the preview. Choosing a different voice or
+closing the window stops it too, and starting a read-aloud from an orb replaces
+it, since only one voice ever speaks at a time. With a custom command, the
+preview runs your command exactly as a read-aloud would (the voice in
+`CLAUDEBUDDY_VOICE`, the sentence on stdin); if it fails the button just goes
+back to idle, and no system voice is substituted. The preview uses this global
+voice: an orb whose persona sets its own voice speaks that one instead.
+
 The whole contract:
 
 - The text arrives on **stdin as UTF-8**. Not as an argument — an assistant turn
@@ -543,6 +561,7 @@ The whole contract:
 - Optionally, print `speaking` on stdout the moment audio actually starts, and
   the button will show an hourglass until then instead. Skip it and the button
   simply shows stop for the whole run.
+- Optionally, honour the **Speech volume** slider: the level arrives in the environment variable `CLAUDEBUDDY_SPEECH_VOLUME`, a decimal from `0` (silent) to `1` (full), always written with a dot (`0.5`, never `0,5`) and always set, `1` included. Ignore it and your command speaks exactly as before; the settings row says the level only applies if the command reads it. For a command that ends by playing a file on macOS, that can be as little as `afplay -v "${CLAUDEBUDDY_SPEECH_VOLUME:-1}" "$wav"`.
 
 That's it — no plugin API, no manifest, nothing to compile against. A batch file
 that pipes stdin into some other tool is a complete implementation. Arguments go
@@ -1023,30 +1042,33 @@ A local CLI can also be enabled but carry a warning instead: this means the bina
 
 That's the same rule every orb in this app already depends on: an orb is drawn from a status file the CLI's own hook writes, so a CLI running with no hook installed is genuinely running and genuinely invisible to Claude Buddy at the same time.
 
+**An Account picker appears when the selected CLI has a second account configured** — the additional-accounts list in that CLI's own section of Settings. Each CLI offers only its own list, headed by Default. Claude Code launches the chosen account with `CLAUDE_CONFIG_DIR`, Codex with `CODEX_HOME` and Grok with `GROK_HOME`. Default sets none of them, so the CLI uses its usual `~/.claude`, `~/.codex` or `~/.grok`, or whatever the variable already says if Claude Buddy itself was started with one. The dialog remembers the last account per CLI. With no extra accounts configured for a CLI, there is no picker, and the picker never appears for OpenClaw. If the chosen account's folder doesn't exist, a line under the picker says what will happen: Codex refuses to start, Grok creates a fresh, logged-out account there, and Claude Code starts first-run setup. **Start** stays enabled, because a folder you're about to set up on purpose is a fine reason to go ahead.
+
 **OpenClaw is the odd one of the four, because there's no local binary and no terminal to open.** Choosing it replaces the folder combo with a picker over the agents your gateway already knows about, sorted by the name you'd recognise rather than by its config id. **Start** doesn't open a terminal at all — it asks the gateway to create a brand-new conversation with the chosen agent and opens it straight into a chat panel, the same panel every other agent conversation in this app already uses.
 
 OpenClaw shows up disabled, with a reason stated directly under the row rather than only in a tooltip, in the two cases where starting a conversation with it can't work at all: **No gateway configured.**, when there's nothing to ask; and **Turn on "Allow replying to agents" in Settings.**, when there's a gateway but this app isn't allowed to start anything on it. That second reason is the same permission `OpenClawChatSession`'s own reply path already requires — creating a conversation needs the same scope replying to an existing one does, so there is no separate toggle to look for. A local CLI's own disabled/warning text is stated the same way, so all four rows read consistently.
 
 ## Global hotkeys
 
-Two system-wide hotkeys, both working whether or not Claude Buddy has focus:
+Three system-wide hotkeys, all working whether or not Claude Buddy has focus:
 
 | Default | Does | Override key |
 | --- | --- | --- |
-| **Ctrl+Alt+H** | hides or shows every orb — the tray menu's "Show orbs" checkbox | `toggleOrbsHotkey` |
+| **Ctrl+Alt+H** | hides or shows every orb, usage orbs included — the tray menu's "Show orbs" checkbox | `toggleOrbsHotkey` |
 | **Ctrl+Alt+N** | opens **New chat**, or brings the one already open to the front — the tray menu's "New chat…" | `newChatHotkey` |
+| **Ctrl+Alt+U** | hides or shows only the account usage orbs — the tray menu's "Show usage orbs" checkbox | `toggleUsageOrbsHotkey` |
 
 Each is reachable without finding the menu bar icon first. **Ctrl+Alt+N never opens a second New chat window** and never closes the one that's open: pressed again, it un-minimises the dialog if needed and brings it forward, wherever it was opened from.
 
 macOS registers them through Carbon's `RegisterEventHotKey`, which asks the window server for one exact key combination rather than a feed of every keystroke, so — unlike an `NSEvent` global monitor or a `CGEventTap` — it needs no Accessibility or Input Monitoring permission. Windows registers the same combinations with `RegisterHotKey` against a hidden window created for the purpose.
 
-Override either combination in `settings.json`:
+Override any of them in `settings.json`:
 
 ```json
-{ "toggleOrbsHotkey": "Ctrl+Shift+H", "newChatHotkey": "Ctrl+Shift+N" }
+{ "toggleOrbsHotkey": "Ctrl+Shift+H", "newChatHotkey": "Ctrl+Shift+N", "toggleUsageOrbsHotkey": "Ctrl+Shift+U" }
 ```
 
-Modifiers are `Ctrl`/`Control`, `Alt`/`Option`, `Shift`, and `Cmd`/`Command`/`Win`/`Windows`/`Super`/`Meta` (all four spellings mean the same physical key, whichever platform you're on), joined with `+` and ending in one letter or one digit (`Ctrl+Alt+5` is the 5 key). Other keys — `F5`, `Space`, punctuation, a modifier used as the key — are rejected, because neither platform's hook has a code for them yet, and a rejected value falls back like any other. An unparseable value falls back to that hotkey's built-in default rather than leaving it unregistered, so a typo costs you the override, not the feature. If `newChatHotkey` resolves to the orb toggle's combination, however it's spelled, the toggle keeps it and New chat falls back to Ctrl+Alt+N; if the toggle has itself been moved to Ctrl+Alt+N, New chat registers no hotkey at all rather than registering one combination twice. Either way a line saying so goes into `hotkeys.log`, beside `crash.log` in the app's log directory. So does a combination the operating system refuses — usually because another app already holds it — naming the hotkey and the combination it tried, so a hotkey that does nothing always leaves a reason behind. There is no settings-window control for either yet — `settings.json` is the only place to change them.
+Modifiers are `Ctrl`/`Control`, `Alt`/`Option`, `Shift`, and `Cmd`/`Command`/`Win`/`Windows`/`Super`/`Meta` (all four spellings mean the same physical key, whichever platform you're on), joined with `+` and ending in one letter or one digit (`Ctrl+Alt+5` is the 5 key). Other keys — `F5`, `Space`, punctuation, a modifier used as the key — are rejected, because neither platform's hook has a code for them yet, and a rejected value falls back like any other. An unparseable value falls back to that hotkey's built-in default rather than leaving it unregistered, so a typo costs you the override, not the feature. If two overrides resolve to the same combination, however they're spelled, the hotkey listed first in the table above keeps it and the later one falls back to its own default — so if `newChatHotkey` names the orb toggle's combination, New chat falls back to Ctrl+Alt+N, and a `toggleUsageOrbsHotkey` that clashes with either of the other two falls back to Ctrl+Alt+U. If that default is taken too — the toggle moved to Ctrl+Alt+N, say — the later hotkey registers nothing at all rather than registering one combination twice. Either way a line saying so goes into `hotkeys.log`, beside `crash.log` in the app's log directory. So does a combination the operating system refuses — usually because another app already holds it — naming the hotkey and the combination it tried, so a hotkey that does nothing always leaves a reason behind. There is no settings-window control for any of them yet — `settings.json` is the only place to change them.
 
 ## Personas from CLAUDE.md
 
@@ -1772,6 +1794,10 @@ happen once:
    Local Network access and Windows raises a firewall prompt. Both are the
    feature working; a "no" here looks exactly like the network being broken.
 
+**Agent teams on the other machine show as teams.** Over a direct link, a team running on the other machine draws an orb for its lead and one for each member, linked by the same arrows a team on this machine gets, each member wearing its own agent name and team colour rather than the title every member inherits from its lead. A member is shown only when its lead is: a team whose lead has Remote Control off stays hidden, members and all. This needs Claude Buddy on both machines, since it is the Buddy over there that knows which session belongs to which team.
+
+**Remote orbs, and the team shape between them, need Claude Buddy running on the far machine.** Everything this machine draws for another one comes over the direct link from the Buddy running there. The far Buddy knows its own sessions, which agent team each one belongs to, and which session leads it, and it sends all of that. A machine reached only through Remote Control, with no Buddy on it, draws no orbs here at all: not its sessions, not its team, not its lead. Claude Code's own Remote Control peer list does show each team member as a separate row, but Buddy doesn't read that list. Its relay poller was removed in favour of the direct link.
+
 Two situations need a different route in, and both have one.
 
 **A machine with no screen** — a Mac mini serving its sessions unattended — has
@@ -1837,15 +1863,19 @@ The section above is about your Claude Code sessions on machines you own. This o
 
 There is nothing to sign in to. It reads the login the Claude Code CLI already stores on this machine, which means that on macOS the read raises a Keychain prompt naming an item you have probably never looked at. **Choose "Always Allow"**, so you are not asked every time — though Claude Code refreshing its own login can bring the prompt back, so do not be surprised to see it again. Declining it is the one way to make this feature quietly do nothing: the switch stays on, no orb ever appears, and nothing else on screen says why. The status line under the switch is where the real answer goes, so read that first if the orbs do not turn up.
 
-**You can read a cloud session in Claude Buddy's chat panel** — hover the orb and press the keyboard button, the same way you would for any session whose conversation lives somewhere else. It is the same panel every other orb opens — the transcript comes from the session's own events, so it is the same conversation you would see in the browser. What you cannot do is reply there. A cloud session has no input route at any address, so the panel shows no message box at all rather than one that accepts a paragraph and then admits it had nowhere to send it; in its place is a line saying so and a link that opens that exact session in your browser, which is where replying works.
+**You can read and reply to a cloud session in Claude Buddy's chat panel** — hover the orb and press the keyboard button, the same way you would for any session whose conversation lives somewhere else. It is the same panel every other orb opens — the transcript comes from the session's own events, so it is the same conversation you would see in the browser. Type and press Enter to send, and your message goes in as the next turn exactly as if you had typed it at claude.ai/code: sent as the account that owns the session, with that account's Claude Code login, so there is still nothing to sign in to. A message sent while the session is working is queued behind the current turn rather than refused. While a reply is running a **Stop** button (■) sits beside Send, and pressing it interrupts that turn; it is hidden, not greyed, whenever there is nothing to stop.
 
-**Clicking a cloud orb opens the session in your browser** for the same reason. Everything else an orb offers assumes a terminal to jump to or a conversation this app can carry, and a cloud session has neither, so the right-click menu says as much rather than offering a reset that would not reach anything: its state belongs to Anthropic's cloud and not to this machine.
+**You can archive or delete a cloud session from its orb's right-click menu.** *Archive this session* stops it and takes its orb away; claude.ai still lists it under archived, with its history readable. *Delete this session…* removes it from your account, history and all, and cannot be undone. Both ask for a second click before they do anything — the row says *Click again to archive*, or *Click again to delete — this can't be undone*, and gives up on its own after a few seconds — and both go out as the account that owns the session, like a send. The orb goes the moment the request succeeds, and a chat panel open on it turns read-only. If the request is refused, the row says why in the endpoint's own terms and the orb stays. Delete is checked by reading the session back afterwards: "Deleted" on the row means that read found it gone, and "Deleted — not yet confirmed" means the delete was accepted but the read could not say so yet — the orb goes either way, and the next refresh of the list settles it.
+
+**When a send cannot go through, the panel says why and keeps what you typed.** A refused send writes a note in the transcript with the reason — the login was refused (run `claude` once to refresh it), the service could not be reached, the session has ended — and leaves your text in the box to retry or copy. A session that has ended, been deleted, or refused this login for good cannot be replied to from anywhere, so the message box goes away at that point, rather than accepting a paragraph it has nowhere to send. A line saying so takes its place, with a link that opens the session in your browser.
+
+**Clicking a cloud orb opens the session in your browser.** Everything else an orb offers assumes a terminal to jump to or a conversation this app can carry, and a cloud session has neither, so the right-click menu says as much rather than offering a reset that would not reach anything: its state belongs to Anthropic's cloud and not to this machine.
 
 Two things a cloud orb draws that a local one does not. It wears a ring showing how full its context window is, in the same green/amber/red the usage orbs use, so a session close to the end of its window is visible before you open it — and no ring at all when nothing reported a number, which is not the same as a session at zero. And its hover text is the roster's own words for what it is doing, with the last thing it was seen to do beside them, in the slot a local orb spends on its directory.
 
-**"Keep orbs for" does not apply to cloud sessions, and deliberately so.** That setting is about local sessions, where a status file that has gone quiet usually means the process behind it is gone and the orb left over is a husk. A cloud session has no process to have exited — it lives on Anthropic's servers and can be resumed whenever you go back to it — so an orb for one stays until you archive the session, however long ago it was last touched. Archiving is the retention control, in the product that owns those sessions; before CB-182 the lifetime clock was a second one, and a session idle overnight lost its orb until somebody typed into the web UI.
+**"Keep orbs for" does not apply to cloud sessions, and deliberately so.** That setting is about local sessions, where a status file that has gone quiet usually means the process behind it is gone and the orb left over is a husk. A cloud session has no process to have exited — it lives on Anthropic's servers and can be resumed whenever you go back to it — so an orb for one stays until you archive the session — from its right-click menu or in the browser — however long ago it was last touched. Archiving is the retention control, in the product that owns those sessions; before CB-182 the lifetime clock was a second one, and a session idle overnight lost its orb until somebody typed into the web UI.
 
-Like every other source here it is read-only, and off means off: with the switch down the app asks the OS for no credential and opens no connection.
+Off means off: with the switch down the app asks the OS for no credential and opens no connection, and nothing can be sent. The same switch turns on reading, sending, archiving and deleting; there is no separate setting for any of them.
 
 ## 1. Install it
 
@@ -1916,6 +1946,8 @@ open "dist/Claude Buddy.app"      # or: open -a "Claude Buddy"
 
 Nothing appears in the Dock and nothing opens a window — **look for the orb
 in the menu bar**, that's the app running. Quit it from that menu.
+
+`--install` replaces a running copy rather than adding a second one: it stops the Claude Buddy already running from `/Applications`, installs, and leaves exactly one running the new build — started by the crash keep-alive if "Serve on launch" is on, otherwise relaunched for you. Nothing is started if nothing was running. Only one Claude Buddy runs per user however it was launched — a second launch from a terminal, ssh or an agent shell finds the first and exits quietly.
 
 The bundle is worth using over the loose binary for reasons beyond
 double-clickability: it's `LSUIElement`, so macOS itself treats it as a
@@ -2582,3 +2614,6 @@ outside the app (a launchd agent, an installer replacing the bundle) stopped it.
   only, every system sound, or a chosen file); an individual orb can override
   either trigger from its right-click "Sound" submenu, keyed by
   `SessionManager.SoundKeyFor`.
+- **Volume** (CB-200): two independent levels in settings, `speechVolume` and `alertVolume`, each 0 to 1 and defaulting to 1 — at which every backend gets exactly the argv, script and text it got before the sliders existed. `AudioVolume.cs` owns every rule turning a level into a backend's units: `[[volm N]]` embedded in the text for `say` (which has no volume flag), `SpeechSynthesizer.Volume` 0–100 for SAPI, a `CLAUDEBUDDY_SPEECH_VOLUME` environment variable for the Kokoro engine (which hands it to `afplay -v` on macOS and KokoroSharp's own `SetVolume` on Windows), `afplay -v` for macOS chimes, and a sample-scaled cached copy of the WAV for Windows chimes, since `Media.SoundPlayer` has no volume. A custom `speakCommand` gets the same `CLAUDEBUDDY_SPEECH_VOLUME`, always set, and applies it only if it reads it. The slider is never greyed out; a note under it says so whenever the engine that will speak is a custom command — globally, or for any orb whose persona voice resolves to one (`SessionIdentity.OrbEngines`, from the in-memory persona registries and the already-built voice list; if no list has been built yet, the note states both caveats as rules). A `speakEngine` of `custom` with no command configured speaks with a system voice and gets no note; the Alert slider does not depend on the engine.
+  - **What the levels do not promise.** A percentage is a position on the slider, not a decibel figure. `say`'s `[[volm]]` is not linear for every voice: measured by rendering to a file, Ava (Premium) scaled linearly, but Samantha, Karen and Susan (Enhanced) at 50% came out at about 25% amplitude. SAPI applies its own curve too. On Windows, a chime is made quieter by scaling a copy of the WAV's samples, which works for uncompressed PCM and 32-bit float only — every sound under `C:\Windows\Media` qualifies, but a compressed WAV you chose yourself (ADPCM, MP3-in-WAV and the like) plays at full volume, and the Alert volume row says so on Windows. A malformed WAV plays unscaled the same way rather than failing.
+  - **The high-quality voice needs this version's engine.** Kokoro receives the level through `CLAUDEBUDDY_SPEECH_VOLUME`, which engines from before CB-200 ignore — they speak at full volume. Right after an upgrade, until the new engine finishes downloading (and on a development build whose engine was never published), Buddy speaks through the older engine it already has, and the Speech volume row says "Takes effect once the updated voice engine is installed" beneath a slider that still saves the level for when it arrives — and says the same for orbs whose own voice is Kokoro when the global one is not. Which engine can honour it is judged by what the engine *is*, not where it sits: its build writes `engine-contract.txt` beside the executable (from `SpeechEngineContract.ContractVersion`, currently `1` = honours the volume variable), and an engine folder without one — any engine released before CB-200, including one that shares this build's version number and so its folder — is treated as ignoring the level. The variable's name and the stamp's live in `tools/ClaudeBuddySpeech/SpeechEngineContract.cs`, the one file compiled into both the app and the engine.

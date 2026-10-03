@@ -133,6 +133,7 @@ namespace ClaudeBuddy
             var signature = string.Join("|",
                                 sessions.Select(s => $"{s.SessionId}:{s.Status.State}:{s.Status.Cwd}:{s.Status.Title}"))
                             + $"|orbs={SessionManager.Instance?.OrbsVisible}"
+                            + $"|usage={SessionManager.Instance?.UsageOrbsVisible}"
                             + $"|{ClaudeDesktopManager.Digest()}";
             if (signature == _lastSignature) return;
 
@@ -234,6 +235,17 @@ namespace ClaudeBuddy
             orbsItem.Click += (_, _) => ToggleOrbsVisible();
             menu.Add(orbsItem);
 
+            // Beside "Show orbs" rather than under Settings, because it is the
+            // same kind of switch: the account orbs on their own (CB-220),
+            // which "Show orbs" still turns off along with everything else.
+            var usageOrbsItem = new NativeMenuItem("Show usage orbs")
+            {
+                ToggleType = MenuItemToggleType.CheckBox,
+                IsChecked = SessionManager.Instance?.UsageOrbsVisible ?? true
+            };
+            usageOrbsItem.Click += (_, _) => ToggleUsageOrbsVisible();
+            menu.Add(usageOrbsItem);
+
             var resetItem = new NativeMenuItem("Reset all sessions to idle")
             {
                 IsEnabled = sessions.Count > 0
@@ -286,6 +298,10 @@ namespace ClaudeBuddy
         // when there is nothing to show.
         internal static void ToggleOrbsVisible() =>
             SessionManager.Instance?.SetOrbsVisible(!SessionManager.Instance.OrbsVisible);
+
+        // Safe to call for the same reason as ToggleOrbsVisible.
+        internal static void ToggleUsageOrbsVisible() =>
+            SessionManager.Instance?.SetUsageOrbsVisible(!SessionManager.Instance.UsageOrbsVisible);
 
         internal static void ResetAllSessions() =>
             SessionManager.Instance?.ResetAllSessionsToIdle();

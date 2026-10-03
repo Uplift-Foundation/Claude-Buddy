@@ -1,3 +1,4 @@
+using System.Linq;
 using Avalonia.Headless.XUnit;
 
 namespace ClaudeBuddy.Tests;
@@ -103,6 +104,71 @@ public class OrbWindowScreenshots
         orb.UpdateFrom(status);
 
         ScreenshotHelper.Capture(orb, "orb-window-cron-kind-clock-badge.png");
+    }
+
+    // CB-173. With the cron clock above, one capture per drawn kind, so the
+    // win-x64 and osx-arm64 badges can be compared directly: same white mark,
+    // same size, on both. Before this they were Segoe UI Emoji on Windows —
+    // lavender and oversized — and STIX Two Math on macOS.
+    [AvaloniaFact]
+    public void BackgroundKindShowsTheGearBadge()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        var status = PlainStatus();
+        status.Kind = SessionKind.Background;
+        orb.UpdateFrom(status);
+
+        ScreenshotHelper.Capture(orb, "orb-window-background-kind-gear-badge.png");
+    }
+
+    [AvaloniaFact]
+    public void RemoteKindShowsTheArrowsBadge()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        var status = PlainStatus();
+        status.Kind = SessionKind.Remote;
+        orb.UpdateFrom(status);
+
+        ScreenshotHelper.Capture(orb, "orb-window-remote-kind-arrows-badge.png");
+    }
+
+    [AvaloniaFact]
+    public void CloudKindShowsTheCloudBadge()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        var status = PlainStatus();
+        status.Kind = SessionKind.Cloud;
+        orb.UpdateFrom(status);
+
+        ScreenshotHelper.Capture(orb, "orb-window-cloud-kind-cloud-badge.png");
+    }
+
+    // Every badge on one sheet, in BadgeFor's order, so the win-x64 and
+    // osx-arm64 versions of this one image are the whole CB-173 comparison:
+    // six white marks of one size on six identical near-black discs, or not.
+    // The individual captures above stay, since a reader following one
+    // scenario wants that scenario's picture.
+    [AvaloniaFact]
+    public void AllSixBadgesSideBySide()
+    {
+        var kinds = new[]
+        {
+            SessionKind.Cron, SessionKind.Direct, SessionKind.Channel,
+            SessionKind.Remote, SessionKind.Background, SessionKind.Cloud,
+        };
+
+        var orbs = kinds.Select(kind =>
+        {
+            var orb = new OrbWindow(Guid.NewGuid().ToString());
+            var status = PlainStatus();
+            status.Kind = kind;
+            orb.UpdateFrom(status);
+            orb.Show();
+            return orb;
+        }).ToList();
+
+        ScreenshotHelper.Flush();
+        ScreenshotHelper.SideBySide(orbs, "orb-window-all-kind-badges.png");
     }
 
     [AvaloniaFact]

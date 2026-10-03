@@ -116,7 +116,7 @@ public class HeadlessSnapshotTests
         try
         {
             // The own-relay test keys on the *leaf* of the cwd — see
-            // RemoteControlBridge.IsOwnRelayCwd — so any path whose last
+            // MachineNames.LooksLikeALeftoverRelay — so any path whose last
             // segment wears the relay prefix is one.
             WriteStatus(dir, "relay", new SessionStatus
             {
@@ -223,6 +223,168 @@ public class HeadlessSnapshotTests
     // TranscriptHandoffTests, which is where the full fixtures and the reasoning
     // about each field live; what matters here is only that the tail reads as
     // handed off, not why.
+    // CB-223: the snapshot a peer is served from now knows each session's
+    // team, read in one batch for every Claude Code pid it kept.
+    [Fact]
+    public void TheSnapshotReadsTeamsInOneBatchForTheClaudeSessionsItKept()
+    {
+        var dir = NewStatusDir();
+        try
+        {
+            WriteStatus(dir, "lead-1", new SessionStatus { State = "idle", Title = "backlog", Cwd = "/tmp/t", SessionPid = 501 });
+            WriteStatus(dir, "member-1", new SessionStatus { State = "idle", Title = "backlog", Cwd = "/tmp/t", SessionPid = 502 });
+
+            var asked = new List<IReadOnlyList<int>>();
+            var kept = SessionManager.HeadlessSnapshot(dir, NoJobs, isRunning: _ => true, nowUtc: DateTime.UtcNow,
+                teams: pids =>
+                {
+                    asked.Add(pids);
+                    return new Dictionary<int, AgentTeam.Membership>
+                    {
+                        [501] = new("lead-1", "red", "lead"),
+                        [502] = new("lead-1", "blue", "wren"),
+                    };
+                });
+
+            var batch = Assert.Single(asked);
+            Assert.Equal(new[] { 501, 502 }, batch.OrderBy(p => p));
+
+            var member = kept.Single(k => k.SessionId == "member-1").Status;
+            Assert.Equal("lead-1", member.Lead);
+            Assert.Equal("wren", member.Agent);
+            Assert.Equal("blue", member.AgentColor);
+            Assert.Equal("", kept.Single(k => k.SessionId == "lead-1").Status.Lead);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
+    // A team the size of the one this was measured inside — a lead and
+    // fourteen members — is still one read, not fifteen.
+    [Fact]
+    public void AFifteenSessionTeamIsReadInOneBatch()
+    {
+        var dir = NewStatusDir();
+        try
+        {
+            WriteStatus(dir, "lead", new SessionStatus { State = "idle", Title = "backlog", Cwd = "/tmp/t", SessionPid = 600 });
+            for (var i = 1; i <= 14; i++)
+                WriteStatus(dir, "member-" + i, new SessionStatus { State = "idle", Title = "backlog", Cwd = "/tmp/t", SessionPid = 600 + i });
+
+            var calls = 0;
+            var kept = SessionManager.HeadlessSnapshot(dir, NoJobs, isRunning: _ => true, nowUtc: DateTime.UtcNow,
+                teams: pids =>
+                {
+                    calls++;
+                    Assert.Equal(15, pids.Count);
+                    return pids.ToDictionary(p => p, p => p == 600
+                        ? new AgentTeam.Membership("lead", "red", "lead")
+                        : new AgentTeam.Membership("lead", "blue", "agent-" + (p - 600)));
+                });
+
+            Assert.Equal(1, calls);
+            Assert.Equal(14, kept.Count(k => k.Status.Lead == "lead"));
+            Assert.Equal("", kept.Single(k => k.SessionId == "lead").Status.Lead);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
+    // A Claude Code session with no pid has no process to ask: it stays out
+    // of the batch, and it is in no team. The pid-less session is a
+    // background job the daemon still names — the one shape in which the
+    // snapshot keeps a pid-less Claude status at all (see the case above that
+    // pins it, and why its platform is pinned too).
+    [Fact]
+    public void AClaudeSessionWithNoPidIsLeftOutOfTheTeamRead()
+    {
+        var dir = NewStatusDir();
+        try
+        {
+            WriteStatus(dir, "member", new SessionStatus
+                { State = "idle", Title = "backlog", Cwd = "/tmp/t", Source = SessionSource.ClaudeCode, SessionPid = 701 });
+            WriteStatus(dir, "pidless", new SessionStatus
+                { State = "idle", Title = "backlog", Cwd = "/tmp/t", Source = SessionSource.ClaudeCode, SessionPid = 0 });
+            var jobs = new Dictionary<string, string> { ["pidless"] = "blocked" };
+
+            var asked = new List<IReadOnlyList<int>>();
+            var kept = SessionManager.HeadlessSnapshot(dir, () => jobs, isRunning: _ => true, nowUtc: DateTime.UtcNow,
+                honourOrbLifetime: false, onWindows: false,
+                teams: pids =>
+                {
+                    asked.Add(pids);
+                    return new Dictionary<int, AgentTeam.Membership> { [701] = new("lead-x", "blue", "wren") };
+                });
+
+            Assert.Equal(new[] { 701 }, Assert.Single(asked));
+            Assert.Contains(kept, k => k.SessionId == "pidless");
+            Assert.Equal("", kept.Single(k => k.SessionId == "pidless").Status.Lead);
+            Assert.Equal("lead-x", kept.Single(k => k.SessionId == "member").Status.Lead);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
+    // Only Claude Code sessions are asked about: agent teams are Claude Code's,
+    // and a Codex session kept beside a member is left out of the batch.
+    [Fact]
+    public void ACodexSessionIsLeftOutOfTheTeamRead()
+    {
+        var dir = NewStatusDir();
+        var codexWas = ClaudeBuddySettings.CodexEnabled;
+        try
+        {
+            ClaudeBuddySettings.CodexEnabled = true;
+            WriteStatus(dir, "member", new SessionStatus
+                { State = "idle", Title = "backlog", Cwd = "/tmp/t", Source = SessionSource.ClaudeCode, SessionPid = 801 });
+            WriteStatus(dir, "codex", new SessionStatus
+                { State = "idle", Title = "codex", Cwd = "/tmp/t", Cli = "codex", SessionPid = 802 });
+
+            var asked = new List<IReadOnlyList<int>>();
+            var kept = SessionManager.HeadlessSnapshot(dir, NoJobs, isRunning: _ => true, nowUtc: DateTime.UtcNow,
+                teams: pids =>
+                {
+                    asked.Add(pids);
+                    return new Dictionary<int, AgentTeam.Membership>();
+                });
+
+            Assert.Contains(kept, k => k.SessionId == "codex");
+            Assert.Equal(new[] { 801 }, Assert.Single(asked));
+        }
+        finally
+        {
+            ClaudeBuddySettings.CodexEnabled = codexWas;
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
+    // Nothing kept is Claude Code, so nothing is asked — on Windows the team
+    // read is a WMI query, and a snapshot of no sessions should cost none.
+    [Fact]
+    public void WithNoClaudeSessionsKeptTheTeamReadIsNotMade()
+    {
+        var dir = NewStatusDir();
+        try
+        {
+            var asked = 0;
+            var kept = SessionManager.HeadlessSnapshot(dir, NoJobs, isRunning: _ => true, nowUtc: DateTime.UtcNow,
+                teams: _ => { asked++; return new Dictionary<int, AgentTeam.Membership>(); });
+
+            Assert.Empty(kept);
+            Assert.Equal(0, asked);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
     private static string BackgroundingRow(string sessionId) =>
         @"{""type"":""system"",""subtype"":""informational"","
       + @"""content"":""Backgrounding after the current tool finishes…"","

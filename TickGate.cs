@@ -12,7 +12,7 @@ namespace ClaudeBuddy
     // timer does not reach inside a round already running, so the handover is
     // exactly one round wide and both can be in it.
     //
-    // What that costs is not hypothetical. RemoteControlBridge.Pump reads
+    // What that cost was not hypothetical. The relay's pump (deleted in 937de9ec) read
     // _offset under its lock, reads the file outside it, then writes the offset
     // back; two rounds overlapping there both start from the same offset and
     // both route the same lines, so a frame is handled twice and a message can

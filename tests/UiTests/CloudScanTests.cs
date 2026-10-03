@@ -73,7 +73,8 @@ public class CloudScanTests
         int? contextPercent = null,
         bool needsAction = false,
         string? statusDetail = null,
-        string? recentAction = null) =>
+        string? recentAction = null,
+        string? owner = null) =>
         new(
             Id: id,
             Title: "Refactor the parser",
@@ -85,7 +86,8 @@ public class CloudScanTests
             Model: "claude-opus-5",
             ContextPercent: contextPercent,
             StatusDetail: statusDetail,
-            RecentAction: recentAction);
+            RecentAction: recentAction,
+            OwnerRoot: owner);
 
     private static void Publish(params ClaudeCloudSessions.Session[] sessions)
     {
@@ -642,8 +644,13 @@ public class CloudScanTests
 
     private sealed class SilentApi : ICloudApi
     {
-        public Task<CloudApiResult> GetAsync(CloudRequestContext context, CancellationToken token) =>
-            Task.FromResult(new CloudApiResult(CloudOutcomes.OutcomeFor(401, ""), null));
+        internal List<CloudRequestContext> Requests { get; } = new();
+
+        public Task<CloudApiResult> SendAsync(CloudRequestContext context, CancellationToken token)
+        {
+            Requests.Add(context);
+            return Task.FromResult(new CloudApiResult(CloudOutcomes.OutcomeFor(401, ""), null));
+        }
     }
 
     private sealed class NoCredentials : ICloudCredentialSource
@@ -764,6 +771,216 @@ public class CloudScanTests
             ClaudeCloudSessions.SetSnapshotForTests(Array.Empty<ClaudeCloudSessions.Session>());
 
             Assert.Same(first, manager.RemoteChatFor("cloud:session_01abc"));
+
+            // CB-199: kept, but told on reopen that its row has gone, so it opens
+            // without a box the server would refuse.
+            Assert.True(((IRemoteChatReadOnly)first!).IsReadOnly);
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
+    // A stream that is never opened: what is under test is that the manager hands
+    // the one it was given to the session it builds.
+    private sealed class UnopenedStream : ICloudEventStream
+    {
+        public IAsyncEnumerable<CloudStreamEvent> OpenAsync(string accessToken, string sessionId,
+            long? fromSequenceNum, CancellationToken ct) =>
+            throw new InvalidOperationException("no panel is open in this test");
+    }
+
+    [AvaloniaFact]
+    public void ACloudSessionIsBuiltWithTheManagersStream()
+    {
+        using var scratch = new Scratch();
+        try
+        {
+            Publish(Session("session_01abc"));
+
+            var stream = new UnopenedStream();
+            var manager = Manager(scratch.Dir);
+            manager.UseCloudChatDependenciesForTests(new SilentApi(), new NoCredentials(), stream);
+            manager.ScanAndUpdate();
+
+            var chat = (ClaudeCloudChatSession)manager.RemoteChatFor("cloud:session_01abc")!;
+
+            Assert.Same(stream, chat.Stream);
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
+    // --- live state pushed to an open cloud panel (CB-199) ---------------------
+
+    // The scan already walks the roster to draw the orb; an open panel hears the
+    // same row, which is what moves Stop without a request of its own.
+    [AvaloniaFact]
+    public void TheScanTellsAnOpenCloudPanelWhenItsSessionGetsBusy()
+    {
+        using var scratch = new Scratch();
+        try
+        {
+            Publish(Session("session_01abc"));
+
+            var manager = CloudManager(scratch.Dir);
+            manager.ScanAndUpdate();
+
+            var chat = (IRemoteChatInterrupt)manager.RemoteChatFor("cloud:session_01abc")!;
+            Assert.False(chat.CanInterrupt);
+
+            var changes = 0;
+            chat.InterruptChanged += () => changes++;
+
+            Publish(Session("session_01abc", state: "generating"));
+            manager.ScanAndUpdate();
+
+            Assert.True(chat.CanInterrupt);
+            Assert.Equal(1, changes);
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
+    // The orb going is the scan's removal pass, and the panel hears it there.
+    [AvaloniaFact]
+    public void TheScanTellsAnOpenCloudPanelWhenItsRowHasGone()
+    {
+        using var scratch = new Scratch();
+        try
+        {
+            Publish(Session("session_01abc"));
+
+            var manager = CloudManager(scratch.Dir);
+            manager.ScanAndUpdate();
+
+            var chat = (IRemoteChatReadOnly)manager.RemoteChatFor("cloud:session_01abc")!;
+            Assert.False(chat.IsReadOnly);
+
+            ClaudeCloudSessions.SetSnapshotForTests(Array.Empty<ClaudeCloudSessions.Session>());
+            manager.ScanAndUpdate();
+
+            Assert.True(chat.IsReadOnly);
+            Assert.Equal(CloudChatSendability.GoneHint, ((IRemoteChatComposer)chat).ComposerHint);
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
+    // The negative control: with the feature off the snapshot is empty by
+    // construction, and that must not read as the session having been deleted.
+    [AvaloniaFact]
+    public void SwitchingTheFeatureOffDoesNotMakeAnOpenPanelClaimItsSessionIsGone()
+    {
+        using var scratch = new Scratch();
+        try
+        {
+            Publish(Session("session_01abc"));
+
+            var manager = CloudManager(scratch.Dir);
+            manager.ScanAndUpdate();
+
+            var chat = (IRemoteChatReadOnly)manager.RemoteChatFor("cloud:session_01abc")!;
+
+            ClaudeBuddySettings.ClaudeCloudEnabled = false;
+            manager.ScanAndUpdate();
+
+            Assert.False(chat.IsReadOnly);
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
+    // Two accounts' sessions arrive already merged and deduplicated, so the scan
+    // draws one orb per id and the "cloud:" keys are exactly what one account
+    // would have produced: nothing about ownership reaches the orb layer.
+    [AvaloniaFact]
+    public void SessionsFromTwoAccountsAreOneOrbEachWithUnchangedKeys()
+    {
+        using var scratch = new Scratch();
+        try
+        {
+            Publish(Session("session_01abc", owner: "/Users/x/.claude"),
+                Session("session_02def", owner: "/Users/x/.claude-board"));
+
+            var manager = Manager(scratch.Dir);
+            manager.ScanAndUpdate();
+
+            var orbs = Orbs(manager);
+            Assert.Equal(new[] { "cloud:session_01abc", "cloud:session_02def" }, orbs.Keys.OrderBy(k => k));
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
+    // The panel is built with the *owner's* credential: the manager asks for the
+    // login by the row's OwnerRoot, and asks again on reopen so a session whose
+    // ownership moved is not read with the old owner's login.
+    [AvaloniaFact]
+    public void TheChatPanelIsBuiltAndReopenedWithTheOwnersLogin()
+    {
+        using var scratch = new Scratch();
+        try
+        {
+            Publish(Session("session_02def", owner: "/Users/x/.claude-board"));
+            var asked = new System.Collections.Generic.List<string?>();
+
+            var manager = Manager(scratch.Dir);
+            manager.UseCloudChatDependenciesForTests(new SilentApi(), root =>
+            {
+                asked.Add(root);
+                return new NoCredentials();
+            });
+            manager.ScanAndUpdate();
+
+            manager.RemoteChatFor("cloud:session_02def");
+            Publish(Session("session_02def", owner: "/Users/x/.claude"));
+            manager.ScanAndUpdate();
+            manager.RemoteChatFor("cloud:session_02def");
+
+            Assert.Equal(new string?[] { "/Users/x/.claude-board", "/Users/x/.claude" }, asked);
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
+    // A panel already cached whose roster row has since gone: the reopen returns
+    // the cached panel untouched, with no owner to re-point it at.
+    [AvaloniaFact]
+    public void ACachedPanelWhoseRowHasGoneIsReturnedWithoutReasking()
+    {
+        using var scratch = new Scratch();
+        try
+        {
+            Publish(Session("session_01abc", owner: "/Users/x/.claude"));
+            var asked = 0;
+
+            var manager = Manager(scratch.Dir);
+            manager.UseCloudChatDependenciesForTests(new SilentApi(), _ =>
+            {
+                asked++;
+                return new NoCredentials();
+            });
+            manager.ScanAndUpdate();
+            var first = manager.RemoteChatFor("cloud:session_01abc");
+
+            ClaudeCloudSessions.SetSnapshotForTests(Array.Empty<ClaudeCloudSessions.Session>());
+
+            Assert.Same(first, manager.RemoteChatFor("cloud:session_01abc"));
+            Assert.Equal(1, asked);
         }
         finally
         {

@@ -318,6 +318,21 @@ public class OrbFlyoutTests
         return text ?? "";
     }
 
+    // CB-173. The settings gear and the chat keyboard are drawn: U+2699 and
+    // U+2328 both fall back to Segoe UI Emoji on Windows. Compared by bounds
+    // against the mark they should be, so a swapped pair fails.
+    [AvaloniaFact]
+    public void TheSettingsGearAndChatKeyboardAreDrawn()
+    {
+        var flyout = new OrbFlyout();
+
+        var gear = flyout.FindControl<Avalonia.Controls.Shapes.Path>("SettingsMark")!;
+        var keyboard = flyout.FindControl<Avalonia.Controls.Shapes.Path>("ChatMark")!;
+
+        Assert.Equal(Avalonia.Media.StreamGeometry.Parse(SymbolMarks.Gear).Bounds, gear.Data!.Bounds);
+        Assert.Equal(Avalonia.Media.StreamGeometry.Parse(SymbolMarks.Keyboard).Bounds, keyboard.Data!.Bounds);
+    }
+
     [AvaloniaFact]
     public void SpeakingIsBlueWithAStopSquareAndSaysStop()
     {
@@ -326,7 +341,15 @@ public class OrbFlyoutTests
         flyout.SetSpeakState(TextToSpeech.SpeakState.Speaking);
 
         Assert.Equal(Color.Parse("#E04A90D9"), SpeakColorOf(flyout));
-        Assert.Equal("⏹", SpeakGlyphOf(flyout));
+
+        // The square is drawn, not typed (CB-173): U+23F9 is a colour emoji
+        // on Windows. So the glyph goes away entirely rather than sitting
+        // under the mark.
+        var stop = flyout.FindControl<Avalonia.Controls.Shapes.Path>("SpeakStopMark")!;
+        Assert.True(stop.IsVisible);
+        Assert.NotNull(stop.Data);
+        Assert.False(flyout.FindControl<Avalonia.Controls.TextBlock>("SpeakGlyph")!.IsVisible);
+        Assert.Equal("", SpeakGlyphOf(flyout));
         Assert.Equal("Stop", SpeakTipTextOf(flyout));
     }
 
@@ -355,6 +378,11 @@ public class OrbFlyoutTests
 
         Assert.Equal(Color.Parse("#E0202024"), SpeakColorOf(flyout));
         Assert.Equal("\U0001F508", SpeakGlyphOf(flyout));
+
+        // And the stop square that Speaking drew is gone again, not left
+        // showing through the speaker.
+        Assert.False(flyout.FindControl<Avalonia.Controls.Shapes.Path>("SpeakStopMark")!.IsVisible);
+        Assert.True(flyout.FindControl<Avalonia.Controls.TextBlock>("SpeakGlyph")!.IsVisible);
         Assert.Equal("Read aloud", SpeakTipTextOf(flyout));
     }
 

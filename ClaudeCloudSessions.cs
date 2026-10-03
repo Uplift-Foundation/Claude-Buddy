@@ -64,6 +64,11 @@ namespace ClaudeBuddy
         // Url is carried rather than built at the click, because the payload's
         // own `session_url` is empty on every row measured and the id is what
         // the address is actually made of.
+        //
+        // ConnectionStatus is the payload's raw string, added by CB-199 as an
+        // optional trailing field so the many places that build a Session
+        // positionally did not all have to change. Busy is decided by
+        // ClaudeCloudRoster.IsBusy from State and StatusBucket.
         internal sealed record Session(
             string Id,
             string Title,
@@ -75,17 +80,171 @@ namespace ClaudeBuddy
             string? Model,
             int? ContextPercent,
             string? StatusDetail,
-            string? RecentAction);
+            string? RecentAction,
+            string? ConnectionStatus = null,
+            string? OwnerRoot = null);
 
         // The settings gate lives here rather than in SessionManager.EnabledFor,
         // following OpenClaw: off means the app asks the OS for no credential
         // and opens no socket, which is stronger than "draws no orb" and is the
         // promise the settings copy makes.
         public static IReadOnlyList<Session> Snapshot() =>
-            ClaudeBuddySettings.ClaudeCloudEnabled ? _snapshot : Array.Empty<Session>();
+            ClaudeBuddySettings.ClaudeCloudEnabled
+                ? WithoutTombstones(_snapshot, TombstonesNow(DateTime.UtcNow))
+                : Array.Empty<Session>();
+
+        // --- archived or deleted from here (CB-225) ------------------------------
+
+        // Sessions this app has just archived or deleted, each with the moment
+        // it stops being hidden.
+        //
+        // **Why the orb goes at once rather than at the next roster read.** The
+        // roster already drops an archived row (Keep) and a deleted one (it is
+        // simply absent), so the orb would go by itself — after up to a short
+        // cycle, during which a person who has just watched "Archived" appear
+        // on the row is looking at the orb they archived. That reads as the
+        // archive having failed. So a success hides the id here, and the next
+        // roster publish that no longer lists it clears it (Publish).
+        //
+        // **Bounded rather than permanent**, for the case where the roster
+        // still lists it: then something disagrees with the 2xx, and the honest
+        // answer after a while is to show the orb again rather than to hide a
+        // session the account still has. Two minutes is the hold the Claude
+        // Code CLI's own fleet view gives an archived row for the same reason
+        // (read out of the 2.1.288 binary, not measured).
+        private static readonly Dictionary<string, DateTime> _tombstones = new(StringComparer.Ordinal);
+
+        internal static readonly TimeSpan TombstoneHold = TimeSpan.FromMinutes(2);
+
+        internal static void Tombstone(string id, DateTime now)
+        {
+            lock (Gate) _tombstones[id] = now + TombstoneHold;
+        }
+
+        // The ids still hidden at `now`, dropping any whose hold has run out.
+        internal static IReadOnlySet<string> TombstonesNow(DateTime now)
+        {
+            lock (Gate)
+            {
+                foreach (var expired in _tombstones.Where(t => t.Value <= now).Select(t => t.Key).ToList())
+                    _tombstones.Remove(expired);
+
+                return _tombstones.Count == 0
+                    ? EmptyIds
+                    : new HashSet<string>(_tombstones.Keys, StringComparer.Ordinal);
+            }
+        }
+
+        private static readonly IReadOnlySet<string> EmptyIds = new HashSet<string>();
+
+        internal static IReadOnlyList<Session> WithoutTombstones(IReadOnlyList<Session> sessions,
+            IReadOnlySet<string> hidden) =>
+            hidden.Count == 0 ? sessions : sessions.Where(s => !hidden.Contains(s.Id)).ToList();
+
+        // A roster read landing: publish it, and let go of every tombstone the
+        // roster now agrees with — the session is no longer listed, so there is
+        // nothing left to hide.
+        internal static void Publish(IReadOnlyList<Session> sessions)
+        {
+            _snapshot = sessions;
+
+            lock (Gate)
+            {
+                if (_tombstones.Count == 0) return;
+                var listed = new HashSet<string>(sessions.Select(s => s.Id), StringComparer.Ordinal);
+                foreach (var settled in _tombstones.Keys.Where(id => !listed.Contains(id)).ToList())
+                    _tombstones.Remove(settled);
+            }
+        }
+
+        internal static void ClearTombstonesForTests()
+        {
+            lock (Gate) _tombstones.Clear();
+        }
+
+        internal static bool IsTombstoned(string id)
+        {
+            lock (Gate) return _tombstones.ContainsKey(id);
+        }
+
+        // Where the action goes, and as whom. Settable so a test can hand in a
+        // fake endpoint and login instead of api.anthropic.com and the
+        // Keychain; production builds the real client once, on first use.
+        internal static ICloudApi LifecycleApi
+        {
+            get { lock (Gate) return _lifecycleApi ??= new HttpCloudApi(); }
+            set { lock (Gate) _lifecycleApi = value; }
+        }
+
+        private static ICloudApi? _lifecycleApi;
+
+        internal static Func<string?, ICloudCredentialSource> LifecycleCredentials { get; set; } =
+            CloudAccounts.SourceFor;
+
+        internal const string SwitchedOffDetail = "cloud sessions are switched off in Settings";
+        internal const string NotListedDetail = "this session is no longer in the list";
+        internal const string InFlightDetail = "a request for this session is already on its way";
+
+        // Ids with an archive or delete out. The menu already ignores clicks
+        // while its row is working; this is the same promise kept one layer
+        // down, so two callers — two orbs' menus, a menu and anything later —
+        // cannot send two requests for one session, the second of which would
+        // answer 404 and print "not found" on a row that is going away.
+        private static readonly HashSet<string> _inFlight = new(StringComparer.Ordinal);
+
+        // Archive or delete the cloud session behind one orb.
+        //
+        // **As the account that owns it** (CB-221): the row's OwnerRoot picks
+        // the login, never "whichever is first" — a session can only be
+        // archived by its own account, and the default login would be refused.
+        //
+        // On success the orb is hidden at once (Tombstone) and an open chat
+        // panel on it flips read-only on the next scan, which pushes it a
+        // missing row — the Gone path CB-199 built for a vanished session.
+        //
+        // The row is looked up in the unfiltered snapshot, so a session that
+        // has just been tombstoned can still be asked about — deleting one
+        // that was archived a moment ago is a real request. What stops the
+        // same request twice is the in-flight set, not the lookup.
+        internal static async Task<CloudLifecycleResult> RunLifecycleAsync(CloudLifecycleAction action,
+            string? orbKey, CancellationToken ct)
+        {
+            if (!ClaudeBuddySettings.ClaudeCloudEnabled)
+                return new CloudLifecycleResult(CloudLifecycleVerdict.Refused, SwitchedOffDetail);
+
+            var id = CloudOrbActions.IdFromKey(orbKey);
+            var row = id is null ? null : _snapshot.FirstOrDefault(s => s.Id == id);
+            if (row is null)
+                return new CloudLifecycleResult(CloudLifecycleVerdict.Refused, NotListedDetail);
+
+            lock (Gate)
+            {
+                if (!_inFlight.Add(row.Id))
+                    return new CloudLifecycleResult(CloudLifecycleVerdict.Refused, InFlightDetail);
+            }
+
+            try
+            {
+                var result = await ClaudeCloudLifecycle
+                    .RunAsync(LifecycleApi, LifecycleCredentials(row.OwnerRoot), action, row.Id, ct)
+                    .ConfigureAwait(false);
+
+                if (result.Succeeded) Tombstone(row.Id, DateTime.UtcNow);
+                return result;
+            }
+            finally
+            {
+                lock (Gate) _inFlight.Remove(row.Id);
+            }
+        }
 
         // What the settings window shows on its status row.
-        public static string StatusText { get { lock (Gate) return _state; } }
+        public static string StatusText
+        {
+            get { lock (Gate) return _board is { } board ? board.StatusText : _state; }
+        }
+
+        private static CloudAccountBoard? _board;
 
         // The seam every downstream test uses, matching
         // OpenClawSessions.SetSnapshotForTests: the poll loop is the only
@@ -98,7 +257,16 @@ namespace ClaudeBuddy
 
         internal static void SetStateForTests(string state)
         {
-            lock (Gate) _state = state;
+            lock (Gate)
+            {
+                _board = null;
+                _state = state;
+            }
+        }
+
+        internal static void SetBoardForTests(CloudAccountBoard? board)
+        {
+            lock (Gate) _board = board;
         }
 
         // How long a halted arm waits before looking again.
@@ -150,11 +318,15 @@ namespace ClaudeBuddy
         //
         // An empty list, by contrast, is a real answer — "we have access and there
         // is nothing" or "we have no access at all" — and does clear the orbs.
+        //
+        // RateLimited exists for the accounts above this arm: one account's 429
+        // backs all of them off.
         internal sealed record StepResult(
             ArmState Next,
             IReadOnlyList<Session>? Snapshot,
             string Status,
-            TimeSpan Wait);
+            TimeSpan Wait,
+            bool RateLimited = false);
 
         // One tick. Every decision this arm makes is here.
         //
@@ -187,6 +359,10 @@ namespace ClaudeBuddy
             // status on "checking…" and the user with no orbs and no error, which
             // is indistinguishable from having no cloud sessions. The budget is the
             // only thing standing between that measurement and a silent app.
+            //
+            // A gated source (one per account, see CloudAccountSource) is read one
+            // at a time across the whole process, and chooses what to read only
+            // once it holds the gate. That happens inside ReadWithinAsync.
             var read = await ClaudeCliCredentials.ReadWithinAsync(
                 credentials, readBudget ?? ClaudeCliCredentials.UnmeasuredReadBudget, ct)
                 .ConfigureAwait(false);
@@ -194,7 +370,7 @@ namespace ClaudeBuddy
             if (read.Outcome != CredentialOutcome.Found || read.AccessToken is not { } token)
             {
                 var wait = Backoff.Next(read.Outcome, state.Backoff);
-                return Stop(state, stamp, ClaudeCliCredentials.Describe(read.Outcome), wait);
+                return Stop(state, stamp, ClaudeCliCredentials.StatusFor(read), wait);
             }
 
             var plan = ClaudeCloudRoster.PlanFor(state.LastWalkUtc, now, state.Sessions);
@@ -213,7 +389,7 @@ namespace ClaudeBuddy
 
             for (var i = 0; i < CloudRequest.MaxPagesPerWalk; i++)
             {
-                var result = await api.GetAsync(
+                var result = await api.SendAsync(
                     new CloudRequestContext(token, CloudRequest.ListPath(CloudRequest.MaxPageSize, after)),
                     ct).ConfigureAwait(false);
 
@@ -260,7 +436,7 @@ namespace ClaudeBuddy
         private static async Task<StepResult> RefreshAsync(ICloudApi api, ArmState state,
             string? stamp, string token, ClaudeCloudRoster.Plan plan, CancellationToken ct)
         {
-            var first = await api.GetAsync(
+            var first = await api.SendAsync(
                 new CloudRequestContext(token, CloudRequest.ListPath(CloudRequest.MaxPageSize, null)),
                 ct).ConfigureAwait(false);
 
@@ -284,12 +460,26 @@ namespace ClaudeBuddy
             {
                 if (resolved.Contains(id)) continue;
 
-                var one = await api.GetAsync(
+                var one = await api.SendAsync(
                     new CloudRequestContext(token, CloudRequest.SessionPath(id)), ct)
                     .ConfigureAwait(false);
 
                 if (one.Outcome.Kind != CloudOutcomeKind.Ok)
                 {
+                    // A 404 on one session is about that session and nothing
+                    // else, and it is a definite answer: the session has been
+                    // deleted. So it is *resolved* — Merge drops its orb now,
+                    // rather than at the next deep walk up to five minutes on —
+                    // and the cycle carries on. It must not reach the check
+                    // below: Backoff stops on SessionGone, and that would halt
+                    // the whole arm, every cloud orb gone until the credential
+                    // changed, because one session was deleted.
+                    if (one.Outcome.Kind == CloudOutcomeKind.SessionGone)
+                    {
+                        resolved.Add(id);
+                        continue;
+                    }
+
                     // A refusal that would stop the arm stops it here too — there
                     // is no point walking the rest of the list to be refused eight
                     // more times. Anything retryable is treated as **no news about
@@ -350,6 +540,8 @@ namespace ClaudeBuddy
         // retryable leaves the orbs exactly where they are and publishes nothing.
         private static StepResult Failed(ArmState state, string? stamp, CloudOutcome outcome)
         {
+            outcome = RosterView(outcome);
+
             var wait = Backoff.Next(outcome, state.Backoff);
             var status = outcome.Detail ?? $"the endpoint answered {outcome.Status}";
 
@@ -365,8 +557,28 @@ namespace ClaudeBuddy
                 },
                 null,
                 status,
-                wait.Value);
+                wait.Value,
+                RateLimited: outcome.Kind == CloudOutcomeKind.RateLimited);
         }
+
+        // What a failure on a *roster* request means.
+        //
+        // Every request Failed sees is the listing, page one of it, or a single
+        // session read whose refusal would stop the arm — and a 404 on the
+        // listing is the collection having moved, not a session having gone.
+        // OutcomeFor cannot see the path and calls every 404 SessionGone, which
+        // Backoff stops on; left alone, that would halt the arm and put "this
+        // cloud session no longer exists" on the status line for a problem with
+        // the endpoint. So on this path a 404 is what it was before CB-199:
+        // retryable, and described by its status.
+        internal static CloudOutcome RosterView(CloudOutcome outcome) =>
+            outcome.Kind == CloudOutcomeKind.SessionGone
+                ? outcome with
+                {
+                    Kind = CloudOutcomeKind.Unavailable,
+                    Detail = $"the endpoint answered {outcome.Status}",
+                }
+                : outcome;
 
         // A stop, or a retryable credential problem, in one shape.
         private static StepResult Stop(ArmState state, string? stamp, string status, TimeSpan? wait)
@@ -397,20 +609,30 @@ namespace ClaudeBuddy
         // --- the loop ---------------------------------------------------------
 
         // Excluded from coverage: a `while` around StepAsync and a `Task.Delay`.
-        // Everything it would be worth testing is in StepAsync, which is why this
-        // is as short as it is.
+        // Everything it would be worth testing is in StepAsync and
+        // CloudAccountBoard, which is why this is as short as it is. One of these
+        // runs per account, so one account's hung read or refused token never
+        // stalls another's.
         [ExcludeFromCodeCoverage]
-        private static async Task RunAsync(ICloudApi api, ICloudCredentialSource credentials,
-            CancellationToken ct)
+        private static async Task RunAccountAsync(ICloudApi api, CloudAccountBoard board,
+            CloudAccount account, TimeSpan stagger, CancellationToken ct)
         {
             var state = ArmState.Initial;
 
+            try { await Task.Delay(stagger, ct).ConfigureAwait(false); } catch { return; }
+
             while (!ct.IsCancellationRequested)
             {
+                if (board.HoldRemaining(DateTime.UtcNow) is { } hold && hold > TimeSpan.Zero)
+                {
+                    try { await Task.Delay(hold, ct).ConfigureAwait(false); } catch { break; }
+                }
+
                 StepResult step;
                 try
                 {
-                    step = await StepAsync(api, credentials, state, DateTime.UtcNow, ct)
+                    step = await StepAsync(api, CloudAccounts.GatedFor(account),
+                            state, DateTime.UtcNow, ct)
                         .ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -422,24 +644,20 @@ namespace ClaudeBuddy
                     // Nothing below this is allowed to take the app down. The arm
                     // keeps its sessions and says what happened.
                     state = state with { Status = ex.Message, Backoff = Backoff.Cap };
-                    lock (Gate) _state = ex.Message;
+                    board.ApplyError(account.Root, ex.Message);
                     try { await Task.Delay(Backoff.Cap, ct).ConfigureAwait(false); } catch { break; }
                     continue;
                 }
 
                 state = step.Next;
-
-                if (step.Snapshot is { } published) _snapshot = published;
-                lock (Gate) _state = step.Status;
+                Publish(board.Apply(account.Root, step, DateTime.UtcNow));
 
                 try { await Task.Delay(step.Wait, ct).ConfigureAwait(false); } catch { break; }
             }
         }
 
-        // Excluded from coverage: starts the poll loop that talks to the real
+        // Excluded from coverage: starts the poll loops that talk to the real
         // endpoint, and on macOS is the path that can raise a Keychain prompt.
-        // Everything it decides lives in ClaudeCloudRoster and StepAsync, both of
-        // which are pure or driven by fakes and covered.
         [ExcludeFromCodeCoverage]
         public static void Restart()
         {
@@ -447,7 +665,9 @@ namespace ClaudeBuddy
             {
                 _cts?.Cancel();
                 _cts = null;
+                _board = null;
                 _snapshot = Array.Empty<Session>();
+                _tombstones.Clear();
 
                 if (!ClaudeBuddySettings.ClaudeCloudEnabled)
                 {
@@ -461,11 +681,17 @@ namespace ClaudeBuddy
                 _cts = cts;
 
                 var api = new HttpCloudApi();
-                var credentials = ClaudeCliCredentials.SourceFor(
-                    OperatingSystem.IsMacOS(),
-                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+                var accounts = CloudAccounts.Rebuild();
+                var board = new CloudAccountBoard(accounts, CloudAccounts.Coordinator);
+                _board = board;
 
-                _ = Task.Run(() => RunAsync(api, credentials, cts.Token), cts.Token);
+                for (var i = 0; i < accounts.Count; i++)
+                {
+                    var account = accounts[i];
+                    var stagger = TimeSpan.FromSeconds(3 * i);
+                    _ = Task.Run(() => RunAccountAsync(api, board, account, stagger, cts.Token),
+                        cts.Token);
+                }
             }
         }
     }

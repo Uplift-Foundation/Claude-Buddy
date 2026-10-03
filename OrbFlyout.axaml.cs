@@ -26,13 +26,13 @@ namespace ClaudeBuddy
         private static readonly IBrush ArrangeActiveFill = new SolidColorBrush(Color.Parse("#E0B8860B"));
 
         private static readonly IBrush SpeakNormalFill = new SolidColorBrush(Color.Parse("#E0202024"));
-        private static readonly IBrush SpeakActiveFill = new SolidColorBrush(Color.Parse("#E04A90D9"));
+        internal static readonly IBrush SpeakActiveFill = new SolidColorBrush(Color.Parse("#E04A90D9"));
 
         // Amber rather than the speaking blue, so "working on it" and "playing"
         // are told apart at a glance and not only by the glyph. The neural engine
         // takes a few seconds to reach its first sound (see NeuralSpeech), and a
         // stop button sitting over silence reads as a hang.
-        private static readonly IBrush SpeakPreparingFill = new SolidColorBrush(Color.Parse("#E0B8860B"));
+        internal static readonly IBrush SpeakPreparingFill = new SolidColorBrush(Color.Parse("#E0B8860B"));
 
         public event Action? MicClicked;
         public event Action? ArrangeClicked;
@@ -49,6 +49,11 @@ namespace ClaudeBuddy
         public OrbFlyout()
         {
             InitializeComponent();
+
+            // Drawn rather than typed — see SymbolMarks.
+            SettingsMark.Data = StreamGeometry.Parse(SymbolMarks.Gear);
+            ChatMark.Data = StreamGeometry.Parse(SymbolMarks.Keyboard);
+
             LayoutArc();
             LabelButtons();
 
@@ -238,12 +243,12 @@ namespace ClaudeBuddy
                 _ => SpeakNormalFill
             };
 
-            SpeakGlyph.Text = state switch
-            {
-                TextToSpeech.SpeakState.Speaking => "⏹",
-                TextToSpeech.SpeakState.Preparing => "⏳",
-                _ => "\U0001F508"
-            };
+            var (glyph, mark) = SymbolMarks.SpeakLook(state);
+
+            SpeakGlyph.Text = glyph;
+            SpeakGlyph.IsVisible = glyph is not null;
+            SpeakStopMark.Data = mark is null ? null : StreamGeometry.Parse(mark);
+            SpeakStopMark.IsVisible = mark is not null;
 
             // And what it says it is. This button is three things depending on
             // state, and a tooltip fixed at "read aloud" would be wrong on two

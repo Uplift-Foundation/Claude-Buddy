@@ -41,6 +41,7 @@ public class NewChatWindowHeightTests : IDisposable
         NewChatWindow.OpenClawAvailabilityForTests = null;
         NewChatWindow.KnownAgentsForTests = null;
         NewChatWindow.CurrentStatusesForTests = null;
+        NewChatWindow.AccountDirectoryExistsForTests = null;
     }
 
     private static void FreshSettings()
@@ -96,7 +97,108 @@ public class NewChatWindowHeightTests : IDisposable
         };
         NewChatWindow.OpenClawAvailabilityForTests = () => OpenClawNewChatAvailability.Ready;
         NewChatWindow.KnownAgentsForTests = () => new[] { ("id-1", "Alexis") };
+        // Every account directory exists, so no CB-203 warning line is
+        // reserved and the measurements below are the same on a machine that
+        // happens to have ~/.claude-board and a CI runner that does not.
+        NewChatWindow.AccountDirectoryExistsForTests = _ => true;
         return NewWindow();
+    }
+
+    // CB-203: the same shape, but every extra account's directory is missing,
+    // so the warning line under the picker is in play and its lines are
+    // reserved.
+    private static NewChatWindow EverythingAvailableWithMissingHomes()
+    {
+        FreshSettings();
+        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-board");
+        ClaudeBuddySettings.AddCodexHome(".codex-work");
+        ClaudeBuddySettings.AddGrokHome(".grok-work");
+        NewChatWindow.CurrentStatusesForTests = () => new Dictionary<string, SessionStatus>();
+        NewChatAvailability.CurrentForTests = () => new[]
+        {
+            Enabled(NewChatCli.ClaudeCode), Enabled(NewChatCli.Codex), Enabled(NewChatCli.Grok)
+        };
+        NewChatWindow.OpenClawAvailabilityForTests = () => OpenClawNewChatAvailability.Ready;
+        NewChatWindow.KnownAgentsForTests = () => new[] { ("id-1", "Alexis") };
+        NewChatWindow.AccountDirectoryExistsForTests = _ => false;
+        return NewWindow();
+    }
+
+    private static void SelectAccount(NewChatWindow window, int index)
+    {
+        window.AccountCombo.SelectedIndex = index;
+        Flush();
+    }
+
+    [AvaloniaFact]
+    public void TheHeightHoldsAsTheMissingHomeWarningComesAndGoes()
+    {
+        var window = EverythingAvailableWithMissingHomes();
+        var opened = ContentHeight(window);
+        Assert.True(window.AccountWarningGhost.IsVisible);
+
+        foreach (var cli in new object[] { NewChatCli.ClaudeCode, NewChatCli.Codex, NewChatCli.Grok })
+        {
+            Select(window, cli);
+            SelectAccount(window, 1);
+            Assert.True(window.AccountWarning.IsVisible);
+            Assert.Equal(opened, ContentHeight(window));
+
+            SelectAccount(window, 0);
+            Assert.False(window.AccountWarning.IsVisible);
+            Assert.Equal(opened, ContentHeight(window));
+        }
+
+        Select(window, NewChatWindow.OpenClawTag);
+        Assert.Equal(opened, ContentHeight(window));
+    }
+
+    [AvaloniaFact]
+    public void NoWarningLineIsReservedWhenEveryAccountDirectoryExists()
+    {
+        var window = EverythingAvailable();
+        Flush();
+
+        Assert.False(window.AccountWarningGhost.IsVisible);
+        Assert.False(window.AccountWarning.IsVisible);
+    }
+
+    // The warning shown, with its lines reserved, measures exactly like
+    // the ghost that holds its place.
+    [AvaloniaFact]
+    public void TheAccountGhostMeasuresLikeTheSectionShowingAWarning()
+    {
+        var window = EverythingAvailableWithMissingHomes();
+        Select(window, NewChatCli.Codex);
+        SelectAccount(window, 1);
+
+        ContentHeight(window);
+        Assert.Equal(window.AccountSection.DesiredSize.Height, window.AccountGhost.DesiredSize.Height);
+    }
+
+    // Each warning fits the lines reserved for it at the dialog's content
+    // width, in the headless font — the captures show the real one.
+    [AvaloniaTheory]
+    [InlineData("ClaudeCode")]
+    [InlineData("Codex")]
+    [InlineData("Grok")]
+    public void EveryMissingHomeWarningFitsTheReservedLines(string cliName)
+    {
+        var window = EverythingAvailableWithMissingHomes();
+        Flush();
+
+        var unbounded = new TextBlock
+        {
+            Text = NewChatAccountWarning.TextFor(Enum.Parse<NewChatCli>(cliName)),
+            TextWrapping = window.AccountWarning.TextWrapping,
+            LineHeight = window.AccountWarning.LineHeight,
+            FontSize = window.AccountWarning.FontSize,
+            FontFamily = window.AccountWarning.FontFamily
+        };
+        unbounded.Measure(new Size(420 - 40, double.PositiveInfinity));
+
+        Assert.True(unbounded.DesiredSize.Height <= window.AccountWarning.Height,
+            $"{unbounded.DesiredSize.Height} > {window.AccountWarning.Height}");
     }
 
     [AvaloniaFact]

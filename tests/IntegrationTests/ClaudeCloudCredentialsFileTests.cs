@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using Xunit;
 
@@ -283,5 +284,31 @@ public class ClaudeCloudCredentialsFileTests : IDisposable
         }
 
         Assert.Equal(CredentialOutcome.Found, Source().Read().Outcome);
+    }
+
+    // ## CB-221: a login under a custom config root
+
+    [Fact]
+    public void ABlankedDefaultRootFallsThroughToTheLoginUnderACustomRoot()
+    {
+        var defaultRoot = System.IO.Path.Combine(_dir, "default");
+        var boardRoot = System.IO.Path.Combine(_dir, "board");
+        Directory.CreateDirectory(defaultRoot);
+        Directory.CreateDirectory(boardRoot);
+        File.WriteAllText(System.IO.Path.Combine(defaultRoot, ".credentials.json"),
+            """{"claudeAiOauth":{"accessToken":"","refreshToken":"","expiresAt":0}}""");
+        File.WriteAllText(System.IO.Path.Combine(boardRoot, ".credentials.json"), Blob(InAnHour));
+        var multi = new MultiCredentialSource(new (string, ICloudCredentialSource)[]
+        {
+            ("default", new FileCredentialSource(ClaudeCliCredentials.CredentialsFilePath(defaultRoot))),
+            ("board", new FileCredentialSource(ClaudeCliCredentials.CredentialsFilePath(boardRoot))),
+        });
+
+        var read = multi.Read();
+
+        Assert.Equal(CredentialOutcome.Found, read.Outcome);
+        Assert.Equal(FakeAccess, read.AccessToken);
+        Assert.Equal("board", multi.AnsweredBy);
+        Assert.NotNull(multi.Stamp());
     }
 }

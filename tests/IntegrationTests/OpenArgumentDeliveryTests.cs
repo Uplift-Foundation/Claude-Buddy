@@ -33,6 +33,9 @@ public sealed class OpenArgumentDeliveryTests : IDisposable
         Path.Combine(Path.GetTempPath(), "cb-open-" + Guid.NewGuid().ToString("N")[..12]);
 
     private string Bundle => Path.Combine(_root, "Probe.app");
+
+    private const string LsRegister = "/System/Library/Frameworks/CoreServices.framework/Frameworks/"
+        + "LaunchServices.framework/Support/lsregister";
     private string ArgvLog => Path.Combine(_root, "argv.log");
 
     public void Dispose()
@@ -41,6 +44,14 @@ public sealed class OpenArgumentDeliveryTests : IDisposable
         // on this instance's own temp path so a parallel test's probe is never
         // the one that gets killed.
         Run("/usr/bin/pkill", "-f", Bundle);
+
+        // Unregistered before it is deleted (CB-246). StageProbe registers
+        // every bundle with lsregister -f and nothing ever took one back out,
+        // so each run of this class left a LaunchServices record for a temp
+        // bundle that no longer exists — 19,080 `cb-open-` lines in one
+        // developer Mac's database by October 2026. -u works on a path that is
+        // already gone, so it is safe whatever state the probe was left in.
+        Run(LsRegister, "-u", Bundle);
 
         try
         {
@@ -132,7 +143,20 @@ public sealed class OpenArgumentDeliveryTests : IDisposable
         Launch(new[] { "-a", Bundle, "--args", "--user-data-dir=/tmp/one" });
         WaitForArgv();
 
-        Launch(new[] { "-a", Bundle, "--args", "--user-data-dir=/tmp/two" });
+        // Judged by what open(1) *means*, not by its exit code alone (CB-246).
+        // LaunchServices finds the probe running and, without -n, sends it an
+        // activation instead of launching it. The probe is a shell script that
+        // can never receive one, so now and then — under a loaded parallel run,
+        // never on a quiet machine — open(1) reports that delivery as
+        // `… failed for the application … with error -600` (procNotFound) and
+        // exits 1. That is LaunchServices having found the running instance
+        // and declined to start another, which is the property this asserts;
+        // only the activation of a process that cannot be activated failed.
+        // Replayed 112 times eight- and twelve-way concurrent: one -600, and
+        // every one of the 112, that one included, left exactly one instance.
+        var (exit, stderr) = RunCapturing("/usr/bin/open", "-a", Bundle, "--args", "--user-data-dir=/tmp/two");
+        Assert.True(ASecondOpenFoundTheRunningInstance(exit, stderr),
+            $"open(1) refused the second launch for some other reason: exit {exit}: {stderr}");
 
         // Nothing to wait *for* — the assertion is that nothing happens — so
         // this waits for the machine to have had a fair chance to be wrong: the
@@ -210,15 +234,58 @@ public sealed class OpenArgumentDeliveryTests : IDisposable
         // running", which the -n case depends on. `open -a <path>` addresses
         // the bundle by path and does not need it, so a failure here is not
         // worth failing the test over.
-        Run("/System/Library/Frameworks/CoreServices.framework/Frameworks/"
-            + "LaunchServices.framework/Support/lsregister", "-f", Bundle);
+        Run(LsRegister, "-f", Bundle);
     }
 
     private void Launch(IEnumerable<string> arguments)
     {
-        Assert.True(Run("/usr/bin/open", arguments.ToArray()),
-            "open(1) refused the launch");
+        var (exit, stderr) = RunCapturing("/usr/bin/open", arguments.ToArray());
+        Assert.True(exit == 0, $"open(1) refused the launch: exit {exit}: {stderr}");
     }
+
+    // Whether a second `open` without -n, against a bundle already running,
+    // is LaunchServices having found that instance. Exit 0 is the ordinary
+    // answer; error -600 (procNotFound) is the same decision with the
+    // activation undeliverable to a script probe. Anything else is a refusal
+    // with some other cause and stays a failure. Pure, so the rule is pinned by
+    // the cases below rather than by waiting for a loaded run to produce a -600.
+    internal static bool ASecondOpenFoundTheRunningInstance(int exitCode, string stderr) =>
+        exitCode == 0
+        || stderr.Contains("with error -600.", StringComparison.Ordinal);
+
+    [Fact]
+    public void ACleanSecondOpenFoundTheRunningInstance() =>
+        Assert.True(ASecondOpenFoundTheRunningInstance(0, ""));
+
+    [Fact]
+    public void ProcNotFoundOnTheSecondOpenIsTheRunningInstanceUnactivatable() =>
+        // The exact text open(1) printed in the replay that produced it.
+        Assert.True(ASecondOpenFoundTheRunningInstance(1,
+            "_LSOpenURLsWithCompletionHandler() failed for the application /tmp/x/Probe.app with error -600."));
+
+    // The gate on the launching cases above (CB-246): on in CI and on opt-in,
+    // off — with a reason naming the switch — everywhere else.
+    [Theory]
+    [InlineData("true", null)]
+    [InlineData("TRUE", null)]
+    [InlineData(null, "1")]
+    public void LaunchingCasesRunInCiOrOnOptIn(string? ci, string? optIn) =>
+        Assert.Null(MacOpenFactAttribute.LaunchSkipReason(ci, optIn));
+
+    [Theory]
+    [InlineData(null, null)]
+    [InlineData("false", null)]
+    [InlineData(null, "0")]
+    [InlineData(null, "yes")]
+    public void LaunchingCasesSkipOnADevelopersMacAndSayHowToRunThem(string? ci, string? optIn) =>
+        Assert.Contains(MacOpenFactAttribute.LaunchOptIn + "=1", MacOpenFactAttribute.LaunchSkipReason(ci, optIn));
+
+    [Theory]
+    [InlineData("_LSOpenURLsWithCompletionHandler() failed for the application /tmp/x/Probe.app with error -10810.")]
+    [InlineData("The application /tmp/x/Probe.app cannot be opened for an unexpected reason")]
+    [InlineData("")]
+    public void AnyOtherRefusalOfTheSecondOpenIsStillAFailure(string stderr) =>
+        Assert.False(ASecondOpenFoundTheRunningInstance(1, stderr));
 
     // The argv of the first launch, split back into tokens.
     private string[] WaitForArgv()
@@ -261,7 +328,13 @@ public sealed class OpenArgumentDeliveryTests : IDisposable
         }
     }
 
-    private static bool Run(string executable, params string[] arguments)
+    private static bool Run(string executable, params string[] arguments) =>
+        RunCapturing(executable, arguments).Exit == 0;
+
+    // The exit code and stderr, so a refusal says why. The original failure
+    // here read only "open(1) refused the launch", with open's own message
+    // thrown away by a helper that read it and returned a bool.
+    private static (int Exit, string Stderr) RunCapturing(string executable, params string[] arguments)
     {
         try
         {
@@ -274,15 +347,15 @@ public sealed class OpenArgumentDeliveryTests : IDisposable
             foreach (var argument in arguments) startInfo.ArgumentList.Add(argument);
 
             using var process = Process.Start(startInfo);
-            if (process is null) return false;
+            if (process is null) return (-1, "the process did not start");
 
             process.StandardOutput.ReadToEnd();
-            process.StandardError.ReadToEnd();
-            return process.WaitForExit(20_000) && process.ExitCode == 0;
+            var stderr = process.StandardError.ReadToEnd().Trim();
+            return process.WaitForExit(20_000) ? (process.ExitCode, stderr) : (-1, "timed out: " + stderr);
         }
-        catch
+        catch (Exception e)
         {
-            return false;
+            return (-1, e.GetType().Name + ": " + e.Message);
         }
     }
 }

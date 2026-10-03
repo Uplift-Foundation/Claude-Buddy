@@ -1,5 +1,7 @@
 # Remote Control (`/rc`) sessions — spike findings
 
+> **Status (CB-238, Oct 2026): historical record.** The relay these findings were measured for was deleted in `937de9ec` (30 Aug 2026), and CB-238 removed the code it left behind — the `ListAgents` peer-list parser, the relay prompts, the health and stall readers, and the relay table in `RemoteControlSessions`. Remote orbs now come only over the direct link from a Claude Buddy on the far machine; a machine without Buddy shows nothing. The formats below are kept because they are still what Claude Code's Remote Control tools produce, and the section at the end, "The peer-list format, recorded after its parser was deleted", collects what the deleted parser knew.
+
 Everything here was measured on 23 Aug 2026 against two real machines on one
 account: a MacBook at `198.51.100.11` running the bridge, and a Mac mini
 (`avatar.internal`, `198.51.100.10`) running the session being controlled.
@@ -695,3 +697,43 @@ by a model is in the path, the hash still proves the turns arrive exactly as
 that Buddy produced them, and what is displayed is still what a local panel
 would display — the parse simply happens on the side that has the file, which is
 the side that had to be trusted anyway.
+
+## Teams (CB-223)
+
+A team of agents running on another machine used to draw, at most, its lead here. The cause is in two places, and two different sources describe it, both measured on 2026-10-02 on the MacBook, from inside a live 15-member agent team:
+
+| source | what it lists for a team |
+| --- | --- |
+| `claude agents --json` (the agent registry, same `CLAUDE_CONFIG_DIR`) | **no members at all** — one row, a background daemon, while `ps` showed fifteen `claude` processes carrying `--agent-name`, `--team-name` and `--parent-session-id` |
+| the relay's `ListAgents` peer list (Wren Asare's read) | one `Remote Control` row **per member**, every one named with the lead's session title, told apart only by the bracketed ref |
+
+They are not in tension; they answer different questions. The registry is what a far Buddy's direct link builds its roster from (`RemoteMirrorServer.HelloAsync` walks it, then joins each name to a status file), so a far Buddy never offered a member at all — **and that was the whole of the live symptom.** The peer list is what the relay path used to read, but the relay poll was deleted on 30 Aug 2026 (937de9ec, "Delete the relay"): nothing in the app calls `RemotesFrom`, `BridgeProtocol.ParseAgents` or `ListAgentsPrompt` any more (checked against a positive control — the same search finds `RemotesFromRoster`'s live caller), and remote orbs come from the direct link alone. A far machine without Claude Buddy draws no orbs today, team or not. Found by Bryn Kowalczyk while starting the relay half the plan had assumed.
+
+### Direct link (mirror half)
+
+- **The far Buddy knew all along.** Each member is a Claude Code process with its own status file, and `AgentTeam` reads its lead and team name off the process's command line. The live scan has always done this. `SessionManager.HeadlessSnapshot`, which is what a peer is served from, now does too: one batched `AgentTeam.OfAll` for the Claude Code pids it kept, and none when it kept none (on Windows that read is a WMI query; the snapshot runs on the link's read loop, not the UI thread, and is memoised for two seconds).
+- **Members are offered from status files, on the complete roster only, and only when their lead is offered.** Not every team is meant to be visible: `HelloAsync` deliberately does not make visible a session the far machine's own Remote Control setting hides, and a member whose lead is hidden stays hidden. A member that leads its own team makes *its* members eligible, so the rule runs to a fixpoint; a lead cycle adds nothing neither half already had.
+- **Three trailing optional fields on `MirrorRosterEntry`:** `lead` (the lead's **route**, never its title — every member inherits the title, and a route is what the near side keys the lead's orb by), `agent` (the member's name in its team) and `agentColor` (the colour Claude Code assigned it). `lead` is set only when that route is in the same roster. Absent fields serialise as absent, so a roster with no team in it is the same bytes and keeps the same CB-216 hash; an older Buddy reads a new roster as having no teams.
+- **The near side pairs on its own keys.** A member's `Lead` becomes `rc:<account>:<lead route>`, which is exactly the lead orb's key, so `TeamLinks` pairs them through the same rule it uses for a local team and `SetTeamRole` draws the member smaller. Colour follows the local precedence: the session's own `/color`, then the team's assignment, then a hash of the name.
+
+**Measured:** the two sources in the table. **Covered by tests, not run across two machines yet:** the exchange through a real `RemoteMirrorServer` and `RemoteMirrorClient` (members offered with lead routes; a member of a hidden lead not offered; a team-free roster carrying none of the fields), and the near-side scan drawing linked member orbs with an unlinked control.
+
+## The peer-list format, recorded after its parser was deleted (CB-238)
+
+`BridgeProtocol.ParseAgents` and the `RemoteAgent` record were removed in CB-238 because nothing reachable called them after the relay went (`937de9ec`). What they encoded about Claude Code's `ListAgents` output is kept here, as measured fact rather than as code.
+
+**Row shape.** A peer row matched this, and nothing looser:
+
+```
+^\s+(?<name>\S(?:.*?\S)?)\s+\[(?<ref>[^\]]+)\]\s+·\s+(?<kind>[^·]+?)\s+·\s+(?<status>.+?)\s*$
+```
+
+- **Anchored to the leading indent on purpose.** The header line (`This session is <name> [<ref>] — …`) is flush left and carries a name and a ref in exactly the same shape; the indent is the only thing telling a peer row from it.
+- **`status` runs to the end of the line**, so the extra segments rows gained later (`· tmux <session>:@<win>.%<pane>`, `· started 4d ago` — see "Also worth recording" above) landed in `status`. The busy and offline tests were substring tests, so they kept working. Measured again during CB-223 (Hana Moriyama, 2 Oct 2026, against a captured 16-row peer list): a `bg` row parsed as kind `bg` with status `busy · started 22m ago`; a `Remote Control` row with a `· started 5m ago` suffix still read as Remote Control, not offline, and worth an orb; offline rows read as offline with or without the suffix; a `Contains("running")` status test tolerated the suffix.
+- **`kind` is a raw, open label** — `Remote Control`, `interactive`, `bg` have been seen. It was kept as text rather than an enum so that a new label shows up as itself.
+
+**What made a row worth an orb**, when there was a relay to draw from: kind `Remote Control`, and not offline (`status` contains `offline` — a registration outlives its process, so dead sessions linger as offline peers), and not one of Buddy's own relays (`MachineNames.IsRelayName` on the name; that test survives in `MachineNames.LooksLikeALeftoverRelay`, which still hides relays left running from before the upgrade).
+
+**Addressing a peer whose name is not unique.** `SendMessage` accepts `name [ref]` as well as a bare name. Several live sessions can share a name — every member of an agent team lists under its lead's session title (CB-223) — and a bare name then reaches only one of them. The deleted `BridgeProtocol.AddressFor` sent to the bare name when at most one *live* peer had it, and to `name [ref]` (the first live namesake's ref) when two or more did. Offline namesakes did not count, since one live session wearing several stale registrations of its own is the usual way a name looks duplicated.
+
+**Self-exclusion** is the tool's own promise: the session asking is named in the header and "not listed below". Nothing needed filtering out.

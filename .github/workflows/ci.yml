@@ -66,6 +66,23 @@ jobs:
       - name: Unit tests (merge-coverage.py)
         run: python tools/test-merge-coverage.py
 
+      # CB-237: runs publish-screenshots.yml's real publish step against a local
+      # bare repository. Skips itself on Windows -- that workflow runs on ubuntu.
+      - name: Unit tests (publish-screenshots.yml)
+        run: python tools/test-publish-screenshots.py
+
+      # coverage.sh's log-keeping and failing-name extraction (CB-239), run
+      # as the shell that ships. On the Windows leg it uses Git Bash
+      # explicitly, which is where the names had gone missing.
+      - name: Unit tests (coverage.sh functions)
+        run: python tools/test-coverage-sh.py
+
+      # build-macos-app.sh's --install tail must report 0/1/many running
+      # copies instead of exiting 1 when none is running (CB-245, CB-206).
+      # Stubbed pgrep/ps, so it runs on both legs and launches nothing.
+      - name: Unit tests (build-macos-app.sh install tail)
+        run: python tools/test-build-macos-app.py
+
       # Everything added after those three is xUnit, in tests/Tests.sln. Run
       # as separate `dotnet test` invocations rather than one pass over the
       # whole solution, so a red run in one attributes to a suite by its own

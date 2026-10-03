@@ -662,11 +662,12 @@ public class SoundSettingsRowTests : IDisposable
     }
 
     [AvaloniaFact]
-    public void SoundRowsReturnsExactlyThreeRows()
+    public void SoundRowsReturnsExactlyFourRows()
     {
         var window = NewWindow();
 
-        Assert.Equal(3, window.SoundRows().Length);
+        // The switch, the two pickers, and CB-200's Alert volume last.
+        Assert.Equal(4, window.SoundRows().Length);
     }
 
     // SoundRows() wires each row's preview button to a getter closing over

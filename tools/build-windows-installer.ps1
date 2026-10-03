@@ -11,8 +11,8 @@
 #
 # Signing is optional and off unless WINDOWS_CERT_THUMBPRINT names a code
 # signing certificate in the current user's store. Unsigned is workable for a
-# beta — SmartScreen shows a "More info -> Run anyway" warning rather than
-# refusing outright — but signed is obviously better if a certificate exists.
+# beta -- SmartScreen shows a "More info -> Run anyway" warning rather than
+# refusing outright -- but signed is obviously better if a certificate exists.
 
 [CmdletBinding()]
 param(
@@ -105,9 +105,12 @@ try {
 
     $iscc = Get-Command iscc.exe -ErrorAction SilentlyContinue
     if (-not $iscc) {
+        # Inno's own installer defaults to a per-user install (no admin) under
+        # %LOCALAPPDATA%\Programs, which is on neither Program Files path.
         foreach ($candidate in @(
             "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
-            "$env:ProgramFiles\Inno Setup 6\ISCC.exe")) {
+            "$env:ProgramFiles\Inno Setup 6\ISCC.exe",
+            "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe")) {
             if (Test-Path -LiteralPath $candidate) { $iscc = $candidate; break }
         }
     } else {
@@ -129,7 +132,7 @@ try {
         Write-Host "==> Signing installer"
         Invoke-SignTool -Path $setup -Thumbprint $thumbprint
     } else {
-        Write-Host "==> Not signed (WINDOWS_CERT_THUMBPRINT unset) — SmartScreen will warn"
+        Write-Host "==> Not signed (WINDOWS_CERT_THUMBPRINT unset) -- SmartScreen will warn"
     }
 
     Write-Host "==> Built $setup"

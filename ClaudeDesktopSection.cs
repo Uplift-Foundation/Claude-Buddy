@@ -255,9 +255,18 @@ namespace ClaudeBuddy
             // launching Claude from the Dock while a tinted clone of the same
             // profile is already up does it — so the menu has to be able to say
             // so, otherwise nothing ever will.
+            //
+            // "(!)" rather than U+26A0. This is a menu header, which is text
+            // and nothing else, so the warning sign cannot be drawn the way
+            // SymbolMarks draws the orb's marks — and on Windows the tray menu
+            // is Avalonia's own TrayPopupRoot rendering through Skia, where
+            // U+26A0 falls back to Segoe UI Emoji (measured on the Windows box)
+            // and draws in that font's colours, where macOS gives it a
+            // monochrome face (CB-173). ASCII involves no fallback on either
+            // platform.
             if (suffix.Length == 0 && profile.InstanceCount > 1)
             {
-                suffix = $"   ⚠ {profile.InstanceCount} instances — quit one";
+                suffix = $"   (!) {profile.InstanceCount} instances — quit one";
             }
 
             // A window wearing this profile's colour while using Default's
@@ -274,7 +283,7 @@ namespace ClaudeBuddy
             // worse one should be the one on screen.
             if (suffix.Length == 0 && profile.OrphanPid != 0)
             {
-                suffix = "   ⚠ a window is on Default";
+                suffix = "   (!) a window is on Default";
             }
 
             return $"{Truncate(profile.DisplayName)}{suffix}";

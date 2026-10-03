@@ -26,6 +26,18 @@ namespace ClaudeBuddy.Tests;
 // is [ExcludeFromCodeCoverage] and its body is Security.framework interop that
 // cannot run on a runner — but which branch it takes is ours, and that is what is
 // checked here.
+//
+// [Collection("Settings")] since CB-241, for two process-wide things this class
+// touches. SourcesFor reads ClaudeConfigRoots, which adds every profile
+// directory listed in settings (CB-221), and three classes in the Settings
+// collection add ".claude-board" to that list for the length of a test — so
+// run beside one of them, the "single source" below was two, and develop's
+// Windows leg went red at cfc4141c with exactly that. Forced on purpose by
+// holding ".claude-board" while calling the test: the same two roots, the same
+// failure. And two tests here clear CLAUDE_BUDDY_NO_CREDENTIAL_STORE for a
+// moment, which while it lasts lets a class building real credential sources
+// reach the real store; the classes that do are in this collection too.
+[Collection("Settings")]
 public class CredentialStoreDisabledTests
 {
     private const string Variable = "CLAUDE_BUDDY_NO_CREDENTIAL_STORE";
@@ -100,8 +112,14 @@ public class CredentialStoreDisabledTests
     [Fact]
     public void DisablingTheStoreDoesNotChangeWhichSourceAPlatformGets()
     {
-        Assert.IsType<KeychainCredentialSource>(
-            ClaudeCliCredentials.SourceFor(isMacOS: true, home: "/tmp/does-not-matter"));
+        var multi = (MultiCredentialSource)Assert.Single(
+            ClaudeCliCredentials.SourcesFor(isMacOS: true, home: "/tmp/does-not-matter")).Source;
+
+        Assert.Contains(ClaudeCliCredentials.KeychainService, multi.Names);
+        // And the whole walk stays inert: every child's Stamp() is null while
+        // disabled, so nothing is read.
+        Assert.Null(multi.Stamp());
+        Assert.Equal(CredentialOutcome.NotLoggedIn, multi.Read().Outcome);
     }
 
     // The point of the whole change: with the store disabled, a read answers

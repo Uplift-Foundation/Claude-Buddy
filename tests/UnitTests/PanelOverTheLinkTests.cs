@@ -2,8 +2,10 @@ using Xunit;
 
 namespace ClaudeBuddy.UnitTests;
 
-// The rules that decide whether the panel talks over the link or the relay,
-// and whether anything is drawn at all.
+// The rules that decide whether anything remote is drawn at all, and what the
+// panel says when it cannot send. (Which client a panel gets used to be a rule
+// here too, link over relay; the relay is gone — CB-238 — so there is only the
+// link's.)
 //
 // Every one of them used to be an implicit "the relay is the only transport",
 // which is why they are worth pinning: none announced itself as a decision, and
@@ -11,41 +13,34 @@ namespace ClaudeBuddy.UnitTests;
 // switch being consulted about the wrong thing.
 public class PanelOverTheLinkTests
 {
-    private static RemoteMirrorClient Client(string account) =>
-        new(account, new RemoteMirrorClient.Seams((_, _) => Task.FromResult(true)));
 
-    // --- which client a panel gets ------------------------------------------
+    // --- which slash commands a remote panel offers -------------------------
+
+    // The roster is the only source now (CB-238 removed the relay's CB-INFO
+    // answers). Every arm, because an entry with no list is a real case: an
+    // older far Buddy sends no `commands` field at all.
+    private static MirrorProtocol.MirrorRosterEntry Entry(IReadOnlyList<string>? commands) =>
+        new("job-hunter", "claude", HasTranscript: true, HasPane: true, Commands: commands);
 
     [Fact]
-    public void TheDirectLinkWinsWhenBothExist()
+    public void ARosterCommandListBecomesTheOffer()
     {
-        var direct = Client("direct");
-        var relayed = Client("relayed");
+        var offered = RemoteControlSessions.CommandsFrom(Entry(new[] { "/color", "/compact" }));
 
-        Assert.Same(direct, RemoteControlSessions.Prefer(direct, relayed));
+        Assert.Equal(new[] { "/color", "/compact" }, offered.Select(c => c.Name));
     }
 
     [Fact]
-    public void TheRelayIsUsedWhenThereIsNoLink()
-    {
-        var relayed = Client("relayed");
-
-        Assert.Same(relayed, RemoteControlSessions.Prefer(null, relayed));
-    }
+    public void AnEntryWithNoCommandListOffersNothing() =>
+        Assert.Empty(RemoteControlSessions.CommandsFrom(Entry(null)));
 
     [Fact]
-    public void TheLinkIsUsedWhenThereIsNoRelay()
-    {
-        var direct = Client("direct");
-
-        Assert.Same(direct, RemoteControlSessions.Prefer(direct, null));
-    }
+    public void AnEmptyCommandListOffersNothing() =>
+        Assert.Empty(RemoteControlSessions.CommandsFrom(Entry(Array.Empty<string>())));
 
     [Fact]
-    public void NeitherMeansNothing()
-    {
-        Assert.Null(RemoteControlSessions.Prefer(null, null));
-    }
+    public void NoEntryAtAllOffersNothing() =>
+        Assert.Empty(RemoteControlSessions.CommandsFrom(null));
 
     // --- whether remote orbs are drawn at all --------------------------------
 

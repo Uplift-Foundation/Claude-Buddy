@@ -362,9 +362,9 @@ namespace ClaudeBuddy
         // parsed $env:CLAUDEBUDDY_CHIME as one positional argument token,
         // the runtime value is never re-parsed as a flag the way a literal
         // "-something" written directly in the script text could be.
-        // TextToSpeech's own PowerShell voice-name escaping has the
-        // identical smart-quote hole and is deliberately left alone here —
-        // out of scope for this fix, tracked as its own bug.
+        // TextToSpeech's PowerShell escaping had the identical smart-quote
+        // hole; CB-184 fixed it separately the same way (text and voice
+        // now travel in the environment).
         internal static ProcessStartInfo WindowsStartInfoFor(string path)
         {
             var startInfo = new ProcessStartInfo
@@ -623,30 +623,67 @@ namespace ClaudeBuddy
         // (macOS) is asserted on directly; the Windows branch is
         // WindowsStartInfoFor's own tests, and the "no sound on this
         // platform" branch has no real machine to run it on either.
-        internal static Process? BuildProcess(string path)
+        //
+        // CB-200: every chime goes through here, previews and the summary
+        // fallback included, so this is the one place the Alert level is
+        // applied — read per chime, so a slider move is heard on the very
+        // next one, including the preview beside it.
+        internal static Process? BuildProcess(string path) =>
+            BuildProcess(path, ClaudeBuddySettings.AlertVolume);
+
+        internal static Process? BuildProcess(string path, double volume)
         {
             if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
             {
-                return new Process
+                var startInfo = new ProcessStartInfo
                 {
-                    StartInfo = new ProcessStartInfo
-                    {
-                        FileName = "/usr/bin/afplay",
-                        ArgumentList = { path },
-                        UseShellExecute = false,
-                        CreateNoWindow = true,
-                        RedirectStandardOutput = true,
-                        RedirectStandardError = true
-                    }
+                    FileName = "/usr/bin/afplay",
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
                 };
+
+                // Nothing at full volume, so the argv is exactly the one every
+                // earlier build ran.
+                foreach (var argument in AudioVolume.AfplayArguments(volume))
+                {
+                    startInfo.ArgumentList.Add(argument);
+                }
+
+                startInfo.ArgumentList.Add(path);
+                return new Process { StartInfo = startInfo };
             }
 
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             {
-                return new Process { StartInfo = WindowsStartInfoFor(path) };
+                return new Process { StartInfo = WindowsStartInfoFor(WindowsPlayablePath(path, volume)) };
             }
 
             return null;
+        }
+
+        // What Media.SoundPlayer should open for `path` at `volume`: a scaled
+        // copy (see AudioVolume.ScaleWav for why the samples are scaled rather
+        // than the mixer), or the original when no copy could be made.
+        //
+        // Falling back to the original plays that one chime at full volume,
+        // which is the lesser failure: a quieter chime that fails to play at
+        // all is silence, and silence is what a turn sound exists to not be.
+        // It says so on stderr rather than doing it quietly. Only a file
+        // ScaleWav cannot read reaches it — every sound Windows itself ships
+        // is 16-bit PCM, which it can.
+        //
+        // Not platform-gated, so both CI legs run it; only BuildProcess's one
+        // Windows line above is reachable on Windows alone.
+        internal static string WindowsPlayablePath(string path, double volume, string? cacheDirectory = null)
+        {
+            var playable = AudioVolume.ScaledCopy(path, volume, cacheDirectory ?? AudioVolume.ChimeCacheDirectory);
+            if (playable is not null) return playable;
+
+            Console.Error.WriteLine(
+                $"Claude Buddy: {Path.GetFileName(path)} is not a WAV this can make quieter; playing it at full volume");
+            return path;
         }
 
         // Starts `proc` — the one line in this whole class that actually

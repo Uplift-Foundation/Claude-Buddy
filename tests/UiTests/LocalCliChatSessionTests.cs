@@ -608,6 +608,150 @@ public class LocalCliChatSessionTests : IDisposable
         Assert.NotNull(GetField<object?>(session, "_poll"));
     }
 
+    // --- CB-234: turning the watcher on must not hold anything up ---------------
+    //
+    // On macOS StartRaisingEvents is a native FSEvents stream, and under load it
+    // has been seen never to return (a UiTests host at 0% CPU for hours, three
+    // times in a day). Watch() runs on the UI thread, so the claim worth pinning
+    // is not "the watcher starts" but "nothing waits for it".
+
+    private sealed class RaisableWatcher : FileSystemWatcher
+    {
+        public RaisableWatcher(string dir, string name) : base(dir, name) { }
+        public void RaiseChanged() =>
+            OnChanged(new FileSystemEventArgs(WatcherChangeTypes.Changed, Path, "x"));
+    }
+
+    private static LocalCliChatSession SessionWithWatcher(
+        string transcriptPath, Func<string, string, FileSystemWatcher> startWatcher) =>
+        new("s1", new SessionStatus
+        {
+            Source = SessionSource.ClaudeCode,
+            TranscriptPath = transcriptPath,
+            State = "idle",
+            Title = "",
+        }, startWatcher: startWatcher);
+
+    // The negative control is built in. A start that never returns is forced
+    // through the seam; a watchdog releases it after ten seconds and records that
+    // it had to. Before the fix Start() sat inside that call, so it came back
+    // only when the watchdog let it, and the assertion below fails with the
+    // reason. After it, Start() returns at once and the watchdog never fires.
+    // The ten seconds detects a hang -- it is not a tolerance anything waits on.
+    [AvaloniaFact]
+    public void AWatcherThatNeverStartsDoesNotHoldUpStart()
+    {
+        var never = new ManualResetEventSlim(false);
+        var entered = new ManualResetEventSlim(false);
+        var watchdogFired = false;
+        using var watchdog = new Timer(_ => { watchdogFired = true; never.Set(); }, null,
+            TimeSpan.FromSeconds(10), Timeout.InfiniteTimeSpan);
+
+        var session = SessionWithWatcher(Transcript(User("u1", "hello")), (dir, name) =>
+        {
+            entered.Set();
+            never.Wait();
+            throw new IOException("released by the test");
+        });
+
+        session.Start();
+
+        Assert.False(watchdogFired, "Start() waited on the watcher's start instead of returning.");
+        // The poll -- the real backstop -- is already running, with the watcher still stuck.
+        var poll = GetField<DispatcherTimer?>(session, "_poll");
+        Assert.NotNull(poll);
+        Assert.True(poll!.IsEnabled);
+        Assert.True(entered.Wait(TimeSpan.FromSeconds(10)), "the watcher start was never attempted");
+
+        never.Set();
+        session.WatcherStarter!.Join();
+        session.Dispose();
+    }
+
+    // A start that fails outright: the poll is untouched and nothing is held.
+    [AvaloniaFact]
+    public void AWatcherStartThatThrowsLeavesThePollAndNoWatcher()
+    {
+        var session = SessionWithWatcher(Transcript(User("u1", "hello")),
+            (dir, name) => throw new IOException("no fsevents today"));
+
+        session.Start();
+        session.WatcherStarter!.Join();
+
+        Assert.True(GetField<DispatcherTimer?>(session, "_poll")!.IsEnabled);
+        Assert.Null(session.Watcher);
+        session.Dispose();
+    }
+
+    // A start that succeeds is kept, and its Changed event reaches Nudge on the UI
+    // thread -- the wiring the old inline code had, now made on the other thread.
+    [AvaloniaFact]
+    public void ASuccessfulWatcherIsKeptAndItsEventsNudgeTheDebounce()
+    {
+        RaisableWatcher? made = null;
+        var session = SessionWithWatcher(Transcript(User("u1", "hello")), (dir, name) =>
+            made = new RaisableWatcher(dir, name));
+
+        session.Start();
+        session.WatcherStarter!.Join();
+
+        Assert.Same(made, session.Watcher);
+        made!.RaiseChanged();
+        Dispatcher.UIThread.RunJobs();
+        Assert.True(GetField<DispatcherTimer?>(session, "_debounce")!.IsEnabled);
+        session.Dispose();
+    }
+
+    // Disposed while the start was still in flight: whoever finishes it finds no
+    // owner, so it disposes the watcher rather than leaking a live FSEvents stream.
+    [AvaloniaFact]
+    public void AWatcherThatFinishesStartingAfterDisposeIsDisposed()
+    {
+        var release = new ManualResetEventSlim(false);
+        RaisableWatcher? made = null;
+        var session = SessionWithWatcher(Transcript(User("u1", "hello")), (dir, name) =>
+        {
+            release.Wait();
+            return made = new RaisableWatcher(dir, name);
+        });
+
+        session.Start();
+        var starter = session.WatcherStarter!;
+        session.Dispose();
+        release.Set();
+        starter.Join();
+
+        Assert.Null(session.Watcher);
+        Assert.Throws<ObjectDisposedException>(() => made!.EnableRaisingEvents = true);
+    }
+
+    // Read before Start() has run there is no watcher and no thread to join: the
+    // accessors are null-safe rather than assuming Watch() got there first.
+    [AvaloniaFact]
+    public void ASessionThatHasNotStartedHasNoWatcherAndNoStarter()
+    {
+        var session = Session(Transcript(User("u1", "hello")));
+
+        Assert.Null(session.WatcherStarter);
+        Assert.Null(session.Watcher);
+        session.Dispose();
+    }
+
+    // The half of the real start that is safe to call from a test. Turning the
+    // watcher on is deliberately not called here: on macOS that runs the
+    // kernel's global sync(2) and can take minutes on a loaded machine, which
+    // is the dependence on the OS's timing this ticket removes. It runs on the
+    // background thread in every test that takes the default seam.
+    [AvaloniaFact]
+    public void TheRealWatcherIsBuiltForTheFileAndNotYetOn()
+    {
+        using var watcher = LocalCliChatSession.CreateWatcher(_root, "x.jsonl");
+
+        Assert.False(watcher.EnableRaisingEvents);
+        Assert.Equal("x.jsonl", watcher.Filter);
+        Assert.Equal(NotifyFilters.LastWrite | NotifyFilters.Size, watcher.NotifyFilter);
+    }
+
     // A real watcher's Changed event does exactly this: post Nudge to the UI
     // thread, which (re)starts a 150ms debounce that calls Pump once it
     // fires. The real DispatcherTimer that (re)start drives is not something

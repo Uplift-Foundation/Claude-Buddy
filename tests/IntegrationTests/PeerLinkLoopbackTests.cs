@@ -114,6 +114,81 @@ public class PeerLinkLoopbackTests
         Assert.Equal("loopback", await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(10)));
     }
 
+    // The far end going away, rather than this end dropping it. The link's read
+    // pump ends and Forget removes the connection by identity, then raises
+    // PeerDisconnected if anyone is listening. Two cases, one per arm of that
+    // `?.`, each asserting what its arm is for.
+    //
+    // CB-242: neither was asserted, and between them they are why PeerLink.cs's
+    // branch figure moved on identical code (51/62 most runs, 52/62 in 2 of 29
+    // on this Mac). The listened-to arm happened to be reached on every run by
+    // other tests; the unlistened arm was reached only when a Forget beat its
+    // own link's Dispose in some test's teardown — Dispose clears the table, so
+    // a Forget after it finds no name and never gets this far. Measured rather
+    // than reasoned: each case below alone covers one arm of line 474's `?.`,
+    // the two together cover both, and the stability rounds afterwards read
+    // 52/62 every time. The teardown race in PeerMirrorEndToEndTests is still
+    // there; it is now harmless to the figure, because it can only re-reach an
+    // arm these cases always cover.
+    [Fact]
+    public async Task AFarEndThatHangsUpFiresPeerDisconnectedOnThisSide()
+    {
+        var (server, client) = await ConnectedPair();
+        using (server)
+        using (client)
+        {
+            var disconnected = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+            client.PeerDisconnected += machine => disconnected.TrySetResult(machine);
+
+            // The far machine quits. Nothing on this side is told to drop anything.
+            server.Dispose();
+
+            Assert.Equal("loopback", await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(10)));
+            Assert.False(client.IsConnected("loopback"));
+        }
+    }
+
+    // The same departure on a link nobody is listening to — the case where
+    // Forget's `?.` finds no subscriber. Still has to stop listing the far end:
+    // a connection left in the table is one WorthDialling will never redial, so
+    // the machine would read as connected forever. There is no event to wait
+    // on, by construction, so this waits on the state itself, with a backstop
+    // only for a pump that never ends.
+    [Fact]
+    public async Task ALinkNobodyListensToStillForgetsAFarEndThatHangsUp()
+    {
+        var (server, client) = await ConnectedPair();
+        using (server)
+        using (client)
+        {
+            server.Dispose();
+
+            var backstop = System.Diagnostics.Stopwatch.StartNew();
+            while (client.IsConnected("loopback"))
+            {
+                Assert.True(backstop.Elapsed < TimeSpan.FromSeconds(30), "the far end hung up and this side never noticed");
+                await Task.Delay(10);
+            }
+        }
+    }
+
+    // A client dialled into a listening server, both fully greeted.
+    private async Task<(PeerLink Server, PeerLink Client)> ConnectedPair()
+    {
+        var pin = PeerIdentity.PinOf(Cert.Value);
+        var server = Link(new List<PeerProtocol.PeerMessage>(), pin);
+        var client = Link(new List<PeerProtocol.PeerMessage>(), pin);
+        var connected = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        server.PeerConnected += machine => connected.TrySetResult(machine);
+
+        server.Listen(0);
+        Assert.True(
+            await client.ConnectAsync("loopback", "127.0.0.1", server.BoundPort, Timeout(10)),
+            "the client could not complete a TLS handshake against the listener");
+        await connected.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        return (server, client);
+    }
+
     // CB-132: dialing a peer already known by its real name — the ordinary
     // reconnect case, not the provisional by-address one — used to leave the
     // *dialer* with no PeerConnected of its own. Only the accepting side ever

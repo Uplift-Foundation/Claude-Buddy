@@ -293,16 +293,17 @@ namespace ClaudeBuddy
         }
 
         // The mapping CB-164 specified. Denied covers both halves of "the user
-        // said no": an explicit cancel, and an authorisation failure — plus the
-        // case where macOS wanted to prompt and could not, which is what a
-        // background or pre-login context produces and which must not be retried
-        // into a prompt storm.
+        // said no": an explicit cancel, and an authorisation failure. The case
+        // where macOS wanted to prompt and could not — a background or pre-login
+        // context — is CannotPrompt: nobody refused, no dialog exists, and the
+        // failure is instant, so it is neither a decline to latch nor a prompt
+        // storm to fear.
         private static CredentialOutcome OutcomeForStatus(int status) => status switch
         {
             ErrSecItemNotFound => CredentialOutcome.NotLoggedIn,
             ErrSecUserCanceled => CredentialOutcome.Denied,
             ErrSecAuthFailed => CredentialOutcome.Denied,
-            ErrSecInteractionNotAllowed => CredentialOutcome.Denied,
+            ErrSecInteractionNotAllowed => CredentialOutcome.CannotPrompt,
             _ => CredentialOutcome.Unreadable,
         };
 
