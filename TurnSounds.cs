@@ -52,6 +52,14 @@ namespace ClaudeBuddy
 
         private static Timer? _pendingTimer;
 
+        // When the armed timer is due, and whether a live sound has already
+        // pushed this pending sound back once (CB-240). Without the second, a
+        // live scan that keeps beating the re-armed timer could push a pending
+        // sound back every gap for as long as sounds keep arriving. Pushed back
+        // once, it goes first: see Deliver.
+        private static DateTime _pendingPlayAt;
+        private static bool _pendingPushedBack;
+
         // QA (CB-167): playback is chained onto this rather than fired
         // independently per decision. The 2 s rate limit only spaces out
         // when a new sound is *decided*; it says nothing about how long the
@@ -82,6 +90,13 @@ namespace ClaudeBuddy
         // timer left armed from a previous case, without sleeping two real
         // seconds to clear either — the same reason
         // ClaudeBuddySettings.ReloadForTests exists.
+        // The tail of the chime chain as it stands, so a test can await "everything
+        // enqueued so far has played" instead of sleeping.
+        internal static Task ChimesEnqueuedSoFar()
+        {
+            lock (Gate) return _chimeChain;
+        }
+
         internal static void ResetForTests()
         {
             lock (Gate)
@@ -171,6 +186,18 @@ namespace ClaudeBuddy
 
                 if (decision.Kind == SoundActionKind.Silent) return;
 
+                // A pending sound that a live one has already pushed back once
+                // does not yield again: this scan joins it instead of playing
+                // ahead of it, and FirePending ranks the lot as it does for any
+                // scan that lands inside a gap (attention over finished, one
+                // sound per gap). So a pending sound waits at most one extra gap
+                // however many live scans keep arriving (CB-240).
+                if (!decision.IsDeferred && _pendingPushedBack && _pendingEvents.Count > 0)
+                {
+                    SchedulePendingLocked(events, _pendingPlayAt, trySpeakTurnSummary, currentStateFor);
+                    return;
+                }
+
                 if (decision.IsDeferred)
                 {
                     // QA round 3, finding 1: every non-None event from this
@@ -227,6 +254,7 @@ namespace ClaudeBuddy
 
             _pendingSpeak = trySpeakTurnSummary;
             _pendingCurrentStateFor = currentStateFor;
+            _pendingPlayAt = playAt;
 
             var delay = playAt - DateTime.UtcNow;
             if (delay < TimeSpan.Zero) delay = TimeSpan.Zero;
@@ -248,12 +276,15 @@ namespace ClaudeBuddy
             _pendingCurrentStateFor = null;
             _pendingTimer?.Dispose();
             _pendingTimer = null;
+            _pendingPushedBack = false;
         }
 
         // Runs on the timer's own thread-pool callback thread — never the
         // Avalonia UI thread, so Execute below is free to do exactly what it
         // would from a live Deliver call.
-        private static void FirePending()
+        // `now` is the same kind of seam Deliver's is: the timer passes nothing and
+        // gets the real clock, a test passes the logical one it delivered with.
+        internal static void FirePending(DateTime? now = null)
         {
             List<TurnSoundEvent> events;
             Func<string, Task<bool>>? speak;
@@ -345,7 +376,44 @@ namespace ClaudeBuddy
 
             if (best is not { } chosen) return;
 
-            Execute(chosen, DateTime.UtcNow, trySpeak, generation);
+            // The gap, enforced here as well as in Decide (CB-240). Decide only
+            // ever sees a live scan, so a deferred sound's sole protection was
+            // that its timer was armed for lastPlayed + MinimumGap -- and a live
+            // scan that landed after that moment but before this callback ran
+            // (thread-pool latency, which load inflates) found the gap closed,
+            // played at once and stamped, and then this played on top of it:
+            // two sounds milliseconds apart, which is what the limit exists to
+            // prevent. The same hole sat between the first lock above and the
+            // stamp in PlayChimeInBackground, where a live Deliver could slip in.
+            //
+            // So the check and, for a chime, the claim on _lastPlayed happen
+            // under one lock. A summary is not stamped here -- whether anything
+            // is spoken is only known later, in SpeakSummaryOrFallbackAsync --
+            // but it is still held to the gap.
+            var firedAt = now ?? DateTime.UtcNow;
+            lock (Gate)
+            {
+                if (generation != _generation) return;
+
+                var earliest = _lastPlayed + TurnSoundPolicy.MinimumGap;
+                if (firedAt < earliest)
+                {
+                    // Something else played first. What survived waits for its
+                    // own gap again; a session that has a newer pending entry
+                    // by now keeps that one rather than this older one.
+                    var stillOwed = valid.Where(ev => !_pendingEvents.Any(p => p.SessionId == ev.SessionId)).ToList();
+                    if (stillOwed.Count > 0)
+                    {
+                        SchedulePendingLocked(stillOwed, earliest, trySpeak, currentStateFor);
+                        _pendingPushedBack = true;
+                    }
+                    return;
+                }
+
+                if (chosen.Kind == SoundActionKind.Chime) _lastPlayed = firedAt;
+            }
+
+            Execute(chosen, firedAt, trySpeak, generation);
         }
 
         // Carries out a decision that is ready to play right now — never
