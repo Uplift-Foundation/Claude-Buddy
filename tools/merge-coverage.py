@@ -244,17 +244,34 @@ def merge_secondary(lines, branches, more_lines, more_branches, keep):
             if previous is None:
                 if authoritative:
                     continue
-                previous = (0, total)
-            # Max on BOTH halves, not just the numerator. The two engines do
-            # not always agree on how many arcs a line has — the same `if` can
-            # be reported as 2 arcs by one and 4 by the other — and keeping the
-            # last-seen total while maxing the taken count can pair a taken from
-            # the wider reading with a total from the narrower one and print a
-            # line as fully covered when neither suite covered it fully. Taking
-            # the widest denominator anyone reported *for a branch point that
-            # really exists* is the conservative reading.
-            branches[path][number] = (
-                max(previous[0], taken), max(previous[1], total))
+                branches[path][number] = (taken, total)
+                continue
+
+            # A branch point coverlet knows: its total is the total (CB-244).
+            # This used to take max() of both halves, on the worry below, and
+            # that adopted whatever wider arc count the MTP engine reported for
+            # the same line: RemoteControlSessions.cs:211 was 6/6 in coverlet's
+            # unit run and 2/8 in the UI run, and merged to 6/8, a denominator
+            # for arcs coverlet says the line does not have.
+            #
+            # The worry max() answered was real and is still answered: pairing a
+            # taken count from the wider engine with the narrower total can print
+            # a line as fully covered when neither suite covered it. Measured on
+            # one tree, a bare cap (min(taken, coverlet's total)) did exactly
+            # that at 7 points, 13 arcs. The two engines' arcs cannot be paired
+            # up, so an MTP count is only believed where it needs no pairing:
+            #   - the same total: the same arcs, so the larger taken count wins;
+            #   - a wider total that MTP covered completely: every arc it counts
+            #     was taken, so every arc coverlet counts was too (capped at
+            #     coverlet's total);
+            #   - anything else (a wider total covered partly, or a narrower
+            #     one): MTP cannot say which of coverlet's arcs it took, so it
+            #     adds nothing. The pessimistic reading, and an honest one.
+            coverlet_taken, coverlet_total = previous
+            if total == coverlet_total:
+                branches[path][number] = (max(coverlet_taken, taken), coverlet_total)
+            elif total > coverlet_total and taken == total:
+                branches[path][number] = (coverlet_total, coverlet_total)
 
 
 def exclusions(root):

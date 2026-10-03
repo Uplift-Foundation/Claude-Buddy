@@ -68,18 +68,49 @@ class BranchAuthority(unittest.TestCase):
             keep)
         self.assertEqual({10: (2, 2)}, dict(branches["OrbWindow.axaml.cs"]))
 
-    def test_widest_denominator_wins_for_a_real_branch_point(self):
-        # The two engines do not always agree how many arcs one `if` has, and
-        # pairing a taken from the wider reading with a total from the narrower
-        # one prints a line as fully covered when neither suite covered it.
-        keep = {"SessionManager.cs": {42}}
+    def _one(self, coverlet, mtp):
+        keep = {"F.cs": {42}}
         _, branches = merged(
-            {"SessionManager.cs": {42: True}},
-            {"SessionManager.cs": {42: (2, 2)}},
-            {"SessionManager.cs": {42: True}},
-            {"SessionManager.cs": {42: (1, 4)}},
-            keep)
-        self.assertEqual({42: (2, 4)}, dict(branches["SessionManager.cs"]))
+            {"F.cs": {42: True}}, {"F.cs": {42: coverlet}},
+            {"F.cs": {42: True}}, {"F.cs": {42: mtp}}, keep)
+        return branches["F.cs"][42]
+
+    # CB-244. coverlet decides how many arcs a branch point has. The real shape:
+    # RemoteControlSessions.cs:211 was 6/6 in coverlet's unit run and 2/8 in the
+    # UI run, and merged to 6/8, a denominator for arcs coverlet says the line
+    # does not have. Fails on the max-of-both-halves rule this replaced.
+    def test_a_wider_mtp_total_does_not_widen_a_branch_point_coverlet_knows(self):
+        self.assertEqual((6, 6), self._one((6, 6), (2, 8)))
+
+    def test_widened_only_by_a_partial_reading_the_line_is_not_called_covered(self):
+        # The worry the old max() answered, answered the other way now: a bare cap
+        # would turn coverlet 0/2 + MTP 2/4 into 2/2 -- "fully covered" when
+        # neither engine covered it fully. MTP's partial count cannot be paired
+        # with coverlet's arcs, so it adds nothing.
+        self.assertEqual((0, 2), self._one((0, 2), (2, 4)))
+
+    def test_a_wider_mtp_that_covered_everything_it_counts_covers_the_point(self):
+        # Every arc MTP counted was taken, so every arc coverlet counts was too,
+        # capped at coverlet's own total. The control that MTP hits still count.
+        self.assertEqual((2, 2), self._one((0, 2), (4, 4)))
+        self.assertEqual((2, 2), self._one((1, 2), (10, 10)))
+
+    def test_the_same_total_takes_the_larger_taken_count(self):
+        self.assertEqual((2, 2), self._one((1, 2), (2, 2)))
+        self.assertEqual((2, 2), self._one((2, 2), (1, 2)))
+
+    def test_a_narrower_mtp_total_adds_nothing_and_never_shrinks_the_point(self):
+        # Fewer arcs than coverlet counts: which of coverlet's arcs those were is
+        # unknowable, even when MTP took all of its own.
+        self.assertEqual((0, 4), self._one((0, 4), (2, 2)))
+        self.assertEqual((3, 4), self._one((3, 4), (1, 2)))
+
+    def test_an_mtp_only_branch_point_is_still_dropped_where_coverlet_is_the_authority(self):
+        keep = {"F.cs": {42}}
+        _, branches = merged(
+            {"F.cs": {42: True}}, {},
+            {"F.cs": {42: True}}, {"F.cs": {42: (2, 2)}}, keep)
+        self.assertEqual({}, dict(branches["F.cs"]))
 
     def test_file_coverlet_never_reported_keeps_its_mtp_branches(self):
         # No authority to defer to, so the only engine that saw the file is
