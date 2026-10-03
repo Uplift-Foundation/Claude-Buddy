@@ -479,6 +479,16 @@ namespace ClaudeBuddy
             }
         }
 
+        // The two late stamps below are written seconds after the decision they
+        // belong to, and a chime may have stamped in between (a pending one
+        // falling due while the summary was being prepared, CB-240). Writing the
+        // older moment over a newer stamp would reopen a gap that chime had
+        // just closed, so a late stamp only ever moves _lastPlayed forward.
+        private static void StampNoEarlierLocked(DateTime moment)
+        {
+            if (moment > _lastPlayed) _lastPlayed = moment;
+        }
+
         // Off the UI thread for its whole life: trySpeakTurnSummary walks a
         // transcript file and, for a gateway session, awaits a round trip
         // over the wire — neither belongs on the thread ScanAndUpdateCore
@@ -495,7 +505,7 @@ namespace ClaudeBuddy
                 var spoke = await trySpeakTurnSummary(sessionId).ConfigureAwait(false);
                 if (spoke)
                 {
-                    lock (Gate) _lastPlayed = moment;
+                    lock (Gate) StampNoEarlierLocked(moment);
                     return;
                 }
 
@@ -507,7 +517,7 @@ namespace ClaudeBuddy
                 var fallback = Snapshot().ResolveFinishedSound(null);
                 if (fallback is null) return;   // even the platform default is missing on this machine
 
-                lock (Gate) _lastPlayed = moment;
+                lock (Gate) StampNoEarlierLocked(moment);
                 EnqueueChime(fallback, generation);
             }
             catch (Exception ex)

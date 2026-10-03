@@ -1172,4 +1172,81 @@ public class TurnSoundsTests : IDisposable
             Assert.NotEqual(played[0], played[2]);   // b's attention sound, not another finish: it ranks over c2
         }
     }
+
+    // CB-240, the summary half, stated rather than argued. A chime's slot is
+    // claimed the moment it is decided. A summary's is claimed when it is heard
+    // (a summary that finds no text must not spend the rate limit on silence),
+    // so a pending chime that falls due while a live summary is still being
+    // prepared PLAYS: nothing has been heard yet to be inside a gap of. That is
+    // also what a live chime scan does in the same state, and it is the stated
+    // rule, not an accident; the "waits at most one extra gap" guarantee is
+    // about being pushed back by a sound that has been claimed.
+    [Fact]
+    public async Task APendingChimeFiresWhileALiveSummaryIsStillBeingPrepared()
+    {
+        var played = new List<string>();
+        ChimePlayer.PlayForTests = path => { lock (played) played.Add(path); };
+
+        ClaudeBuddySettings.TurnSoundsEnabled = true;
+        ClaudeBuddySettings.TurnFinishedSound = null;
+        ClaudeBuddySettings.NeedsAttentionSound = null;
+
+        var t0 = DateTime.UtcNow;
+        TurnSounds.Deliver(new[] { Finished("key-a", "session-a") }, NoSummary, t0);   // plays, stamps t0
+        TurnSounds.Deliver(
+            new[] { NeedsAttention("key-b", "session-b") }, NoSummary, t0.AddSeconds(0.5),
+            currentStateFor: _ => "waiting");                                          // deferred to t0+2
+
+        // A finished turn whose summary is still being prepared: decided live,
+        // not yet heard, so not yet stamped.
+        ClaudeBuddySettings.TurnFinishedSound = "summary";
+        var preparing = new TaskCompletionSource<bool>();
+        TurnSounds.Deliver(new[] { Finished("key-c", "session-c") }, _ => preparing.Task, t0.AddSeconds(2.05));
+
+        TurnSounds.FirePending(t0.AddSeconds(2.06));   // the pending chime's timer
+        await TurnSounds.ChimesEnqueuedSoFar();
+        lock (played) Assert.Equal(2, played.Count);   // a, and b -- not held back behind an unheard summary
+
+        preparing.SetResult(true);                     // the summary is heard; no extra chime for it
+        await TurnSounds.ChimesEnqueuedSoFar();
+        lock (played) Assert.Equal(2, played.Count);
+    }
+
+    // CB-240. The late summary stamp is written with the moment the summary was
+    // DECIDED. If a chime stamped later in between, that is an older moment, and
+    // writing it back would reopen a gap the chime had just closed: the next
+    // scan, which should have deferred, plays. Forced with a scan 5 ms inside the
+    // chime's gap but past the summary's.
+    [Fact]
+    public async Task ALateSummaryStampDoesNotReopenAGapAChimeJustClosed()
+    {
+        var played = new List<string>();
+        ChimePlayer.PlayForTests = path => { lock (played) played.Add(path); };
+
+        ClaudeBuddySettings.TurnSoundsEnabled = true;
+        ClaudeBuddySettings.TurnFinishedSound = null;
+        ClaudeBuddySettings.NeedsAttentionSound = null;
+
+        var t0 = DateTime.UtcNow;
+        TurnSounds.Deliver(new[] { Finished("key-a", "session-a") }, NoSummary, t0);
+        TurnSounds.Deliver(
+            new[] { NeedsAttention("key-b", "session-b") }, NoSummary, t0.AddSeconds(0.5),
+            currentStateFor: _ => "waiting");
+
+        ClaudeBuddySettings.TurnFinishedSound = "summary";
+        var preparing = new TaskCompletionSource<bool>();
+        TurnSounds.Deliver(new[] { Finished("key-c", "session-c") }, _ => preparing.Task, t0.AddSeconds(2.05));
+        TurnSounds.FirePending(t0.AddSeconds(2.06));   // b plays and stamps t0+2.06
+        await TurnSounds.ChimesEnqueuedSoFar();
+
+        preparing.SetResult(true);                     // the summary's late stamp: t0+2.05, older than b's
+        await TurnSounds.ChimesEnqueuedSoFar();
+
+        // 5 ms short of b's gap closing (t0+4.06), but past t0+2.05's (t0+4.05).
+        ClaudeBuddySettings.TurnFinishedSound = null;
+        TurnSounds.Deliver(new[] { Finished("key-d", "session-d") }, NoSummary, t0.AddSeconds(4.055));
+        await TurnSounds.ChimesEnqueuedSoFar();
+
+        lock (played) Assert.Equal(2, played.Count);   // d is deferred, not played
+    }
 }
