@@ -14,6 +14,13 @@ namespace ClaudeBuddy.Tests
     // Both entry points now take the home directory as a parameter, so these walk
     // a temp tree rather than the developer's own ~/.claude — which would make the
     // result depend on the machine, and on a CI runner would find nothing at all.
+    // In the Settings collection since CB-241: LatestTranscriptForCwd reads the
+    // process-wide Claude Code profile list, which four classes in this
+    // assembly write for the length of a test. Harmless so far only because
+    // this class's private temp home holds nothing but `.claude`, so a listed
+    // `.claude-work` names a folder that is not there — which is luck, not a
+    // guarantee. See SettingsSerialisationPinTests.
+    [Collection("Settings")]
     public class TranscriptDiscoveryTests : IDisposable
     {
         private readonly string _home =

@@ -21,12 +21,23 @@ namespace ClaudeBuddy.Tests;
 //
 // The rule pinned here: every test class in this assembly that **writes** the
 // profile list (AddClaudeCodeProfileDir / RemoveClaudeCodeProfileDir) or
-// **reads** it through SourcesFor or ClaudeConfigRoots is in the Settings
-// collection. Not ConfigDirEnv: that collection serialises CLAUDE_CONFIG_DIR
-// and is a separate collection, which xUnit runs in parallel with Settings, so
-// membership there would not stop this race. Indirect readers (a class that
-// reaches ClaudeConfigRoots three calls down) are out of scope for a text
-// search and are named, not guarded.
+// **reads** it through SourcesFor, ClaudeConfigRoots or
+// TranscriptReader.LatestTranscriptForCwd is in the Settings collection.
+//
+// Not ConfigDirEnv, decided rather than assumed: that collection serialises
+// CLAUDE_CONFIG_DIR, a different input, and is a separate collection, which
+// xUnit runs in parallel with Settings — so a ConfigDirEnv class that read the
+// profile list would race the Settings writers exactly as this one did. The
+// one ConfigDirEnv class here, UsagePollerTests, does not read it: it calls
+// UsagePoller.UsageProcess, which builds a start-info from the config dir it is
+// handed; the settings read is in the poll loop, which it never runs. Nor does
+// BackgroundJobsAccountFilterTests: AccountsToAsk and ClaudeTranscripts are
+// pure and are given their directories. So no merge of the two collections.
+//
+// Collections are per assembly — each suite is its own process — so this
+// guards tests/UnitTests only; tests/IntegrationTests has its own copy. A class
+// that reaches the profile list several calls down, through an API not named
+// above, is out of reach of a text search and is not guarded.
 //
 // In the Settings collection itself, because the reproduction below holds a
 // profile directory.
@@ -37,7 +48,7 @@ public class SettingsSerialisationPinTests
 
     // A call that writes the profile list or reads it the way SourcesFor does.
     private static readonly Regex Touches = new(
-        @"\b(AddClaudeCodeProfileDir|RemoveClaudeCodeProfileDir)\s*\(|\bSourcesFor\s*\(|\bClaudeConfigRoots\.",
+        @"\b(AddClaudeCodeProfileDir|RemoveClaudeCodeProfileDir|LatestTranscriptForCwd)\s*\(|\bSourcesFor\s*\(|\bClaudeConfigRoots\.",
         RegexOptions.Compiled);
 
     private static readonly Regex ClassDeclaration = new(
