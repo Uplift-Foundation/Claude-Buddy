@@ -394,17 +394,23 @@ class SourceStamp(unittest.TestCase):
     def test_the_shell_stamp_coverage_sh_writes_is_the_one_python_computes(self):
         import re, shutil, subprocess
         bash = shutil.which("bash")
-        hasher = shutil.which("shasum") and "shasum" or shutil.which("sha1sum") and "sha1sum"
-        if not bash or not hasher:
-            self.skipTest("no bash or sha1 tool")
-        src = open(os.path.join(os.path.dirname(__file__), "coverage.sh")).read()
+        if not bash:
+            self.skipTest("no bash")
+        with open(os.path.join(os.path.dirname(__file__), "coverage.sh")) as f:
+            src = f.read()
         line = re.search(r'^\{ git rev-parse HEAD;.*> "\$OUT/source-stamp"$', src, re.M).group(0)
+        # The hash tool is chosen by coverage.sh's own line, run by the same bash that runs
+        # the stamp. Looking for it on Python's PATH instead picked a `shasum` bash could not
+        # see on a Windows runner, and the digest line came out empty.
+        pick = re.search(r"^if command -v shasum .*; fi$", src, re.M).group(0)
         os.makedirs(os.path.join(self.tmp, "o"))
         with open(os.path.join(self.repo, "a.cs"), "w") as f:       # a dirty tree and an untracked file
             f.write("class A { int dirty; }\n")
         with open(os.path.join(self.repo, "u.cs"), "w") as f:
             f.write("class U {}\n")
-        subprocess.run([bash, "-c", f'cd "{self.repo}" && OUT="{os.path.join(self.tmp, "o")}" HASHER={hasher}; {line}'],
+        out_dir = os.path.join(self.tmp, "o").replace("\\", "/")
+        repo = self.repo.replace("\\", "/")
+        subprocess.run([bash, "-c", f'cd "{repo}" && OUT="{out_dir}"; {pick}; {line}'],
                        check=True, capture_output=True)
         with open(os.path.join(self.tmp, "o", "source-stamp")) as f:
             self.assertEqual(merge_coverage.source_stamp(self.repo), f.read())
