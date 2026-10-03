@@ -76,9 +76,10 @@ class BranchAuthority(unittest.TestCase):
         return branches["F.cs"][42]
 
     # CB-244. coverlet decides how many arcs a branch point has. The real shape:
-    # RemoteControlSessions.cs:211 was 6/6 in coverlet's unit run and 2/8 in the
-    # UI run, and merged to 6/8, a denominator for arcs coverlet says the line
-    # does not have. Fails on the max-of-both-halves rule this replaced.
+    # ChatMarkdown.cs:179 was 6/6 in coverlet's unit run and 10/12 in the MTP
+    # runs, and merged to 10/12, a denominator for arcs coverlet says the line
+    # does not have (reports and sources both at 95e84ea5). The test below uses
+    # the ticket's shape, 6/6 against 2/8, as a synthetic pair. Fails on the max-of-both-halves rule this replaced.
     def test_a_wider_mtp_total_does_not_widen_a_branch_point_coverlet_knows(self):
         self.assertEqual((6, 6), self._one((6, 6), (2, 8)))
 
@@ -275,6 +276,142 @@ class MissingReportNote(unittest.TestCase):
         src = open(os.path.join(os.path.dirname(__file__), "coverage.sh")).read()
         self.assertIn("note_missing_report unit tests/UnitTests", src)
         self.assertIn("note_missing_report integration tests/IntegrationTests", src)
+
+
+class SourceStamp(unittest.TestCase):
+    """CB-244: reports measured in one checkout must not be merged against another's."""
+
+    def setUp(self):
+        import subprocess, tempfile
+        self.tmp = tempfile.mkdtemp(prefix="cb-stamp-")
+        self.repo = os.path.join(self.tmp, "repo")
+        os.makedirs(self.repo)
+        env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t",
+                   GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
+        self._env = env
+
+        def git(*a):
+            subprocess.run(["git", "-C", self.repo, *a], check=True, capture_output=True, env=env)
+        self.git = git
+        git("init", "-q")
+        with open(os.path.join(self.repo, "a.cs"), "w") as f:
+            f.write("class A {}\n")
+        git("add", "-A")
+        git("commit", "-q", "-m", "one")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _stamp_file(self, content, nested=True):
+        out = os.path.join(self.tmp, "out")
+        report_dir = os.path.join(out, "unit", "guid") if nested else out
+        os.makedirs(report_dir, exist_ok=True)
+        with open(os.path.join(out, merge_coverage.STAMP_NAME), "w") as f:
+            f.write(content)
+        report = os.path.join(report_dir, "coverage.cobertura.xml")
+        open(report, "w").close()
+        return report
+
+    def test_the_stamp_changes_with_the_commit_with_edits_and_with_new_files(self):
+        first = merge_coverage.source_stamp(self.repo)
+        self.assertEqual(first, merge_coverage.source_stamp(self.repo))
+        with open(os.path.join(self.repo, "a.cs"), "w") as f:
+            f.write("class A { int x; }\n")
+        edited = merge_coverage.source_stamp(self.repo)
+        self.assertNotEqual(first, edited)
+        with open(os.path.join(self.repo, "new.cs"), "w") as f:
+            f.write("class B {}\n")
+        self.assertNotEqual(edited, merge_coverage.source_stamp(self.repo))
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "two")
+        self.assertNotEqual(first.split()[0], merge_coverage.source_stamp(self.repo).split()[0])
+
+    def test_reports_from_the_same_checkout_are_accepted(self):
+        report = self._stamp_file(merge_coverage.source_stamp(self.repo))
+        self.assertIsNone(merge_coverage.source_mismatch([report], self.repo))
+
+    def test_reports_measured_at_another_sha_are_refused_with_both_shas(self):
+        measured = merge_coverage.source_stamp(self.repo)
+        report = self._stamp_file(measured)
+        with open(os.path.join(self.repo, "a.cs"), "w") as f:
+            f.write("class A { int changed; }\n")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "two")
+        msg = merge_coverage.source_mismatch([report], self.repo)
+        self.assertIn("REFUSING", msg)
+        self.assertIn(measured.split()[0], msg)
+        self.assertIn(merge_coverage.source_stamp(self.repo).split()[0], msg)
+        self.assertIn("--allow-source-mismatch", msg)
+
+    def test_an_edit_made_after_the_stamp_is_caught_too(self):
+        # The case that bit this ticket's own measurements: same sha, tree edited while the
+        # suites ran.
+        report = self._stamp_file(merge_coverage.source_stamp(self.repo))
+        with open(os.path.join(self.repo, "a.cs"), "w") as f:
+            f.write("class A { int edited; }\n")
+        self.assertIsNotNone(merge_coverage.source_mismatch([report], self.repo))
+
+    def test_reports_with_no_stamp_are_not_second_guessed(self):
+        report = os.path.join(self.tmp, "loose.cobertura.xml")
+        open(report, "w").close()
+        self.assertIsNone(merge_coverage.source_mismatch([report], self.repo))
+
+    def test_main_refuses_and_the_override_goes_through_to_the_next_check(self):
+        import io, contextlib
+        report = self._stamp_file("0" * 40 + "\n" + "0" * 16 + "\n")
+        old_argv, old_cwd = sys.argv, os.getcwd()
+        os.chdir(self.repo)
+        try:
+            sys.argv = ["merge-coverage.py", report]            # one report, stamp wrong
+            with self.assertRaises(SystemExit) as refused:
+                merge_coverage.main()
+            self.assertIn("expected exactly 4", str(refused.exception.code))   # count check comes first
+
+            reports = []
+            for i in range(4):
+                d = os.path.join(self.tmp, "out", f"r{i}")
+                os.makedirs(d, exist_ok=True)
+                reports.append(os.path.join(d, "coverage.cobertura.xml"))
+                open(reports[-1], "w").close()
+            sys.argv = ["merge-coverage.py", *reports]
+            with self.assertRaises(SystemExit) as refused:
+                merge_coverage.main()
+            self.assertIn("different checkout", str(refused.exception.code))
+            self.assertIn("REFUSING", str(refused.exception.code))
+
+            sys.argv = ["merge-coverage.py", *reports, "--allow-source-mismatch"]
+            try:
+                merge_coverage.main()
+            except SystemExit as e:                              # empty reports fail later, not on the stamp
+                self.assertNotIn("different checkout", str(e.code))
+            except Exception:
+                pass
+        finally:
+            sys.argv = old_argv
+            os.chdir(old_cwd)
+
+    def test_the_shell_stamp_coverage_sh_writes_is_the_one_python_computes(self):
+        import re, shutil, subprocess
+        bash = shutil.which("bash")
+        hasher = shutil.which("shasum") and "shasum" or shutil.which("sha1sum") and "sha1sum"
+        if not bash or not hasher:
+            self.skipTest("no bash or sha1 tool")
+        src = open(os.path.join(os.path.dirname(__file__), "coverage.sh")).read()
+        line = re.search(r'^\{ git rev-parse HEAD;.*> "\$OUT/source-stamp"$', src, re.M).group(0)
+        os.makedirs(os.path.join(self.tmp, "o"))
+        with open(os.path.join(self.repo, "a.cs"), "w") as f:       # a dirty tree and an untracked file
+            f.write("class A { int dirty; }\n")
+        with open(os.path.join(self.repo, "u.cs"), "w") as f:
+            f.write("class U {}\n")
+        subprocess.run([bash, "-c", f'cd "{self.repo}" && OUT="{os.path.join(self.tmp, "o")}" HASHER={hasher}; {line}'],
+                       check=True, capture_output=True)
+        with open(os.path.join(self.tmp, "o", "source-stamp")) as f:
+            self.assertEqual(merge_coverage.source_stamp(self.repo), f.read())
+
+    def test_coverage_sh_stamps_before_any_suite_runs(self):
+        src = open(os.path.join(os.path.dirname(__file__), "coverage.sh")).read()
+        self.assertLess(src.index('> "$OUT/source-stamp"'), src.index('echo "==> tests/UnitTests"'))
 
 
 if __name__ == "__main__":

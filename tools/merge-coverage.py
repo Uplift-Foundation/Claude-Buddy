@@ -21,7 +21,9 @@ Usage:
     tools/merge-coverage.py <report.xml> [more.xml ...] [--base <git-ref>] [--expect N]
 
 Exits non-zero without printing a figure unless it finds exactly --expect
-(default 4) reports.
+(default 4) reports, and -- when coverage.sh left a source-stamp beside them --
+unless the checkout it is merging against is the one they were measured in.
+--allow-source-mismatch overrides that, for a deliberate cross-checkout merge.
 
 With --base, also reports coverage restricted to the lines added since that ref
 — which is usually the number you actually want when reviewing a change, since
@@ -36,6 +38,7 @@ the sources and printed next to the number, so the number always ships with the
 size of its own blind spot.
 """
 import glob
+import hashlib
 import io
 import os
 import re
@@ -105,6 +108,62 @@ def refuse_unless_expected(reports, expect):
             f"expected exactly {expect}. A number computed from the wrong set of "
             f"reports is fiction (CLAUDE.md, Coverage). Reports found: "
             f"{', '.join(reports) if reports else 'none'}")
+
+
+STAMP_NAME = "source-stamp"
+
+
+def source_stamp(root):
+    """What the working tree is, as coverage.sh stamps it beside its reports.
+
+    HEAD plus a digest of everything uncommitted (tracked changes by content,
+    untracked files by name). coverage.sh writes exactly this with the same git
+    commands piped through shasum/sha1sum, so the two agree byte for byte. CB-244:
+    reports produced at one sha and merged against another checkout's sources
+    attribute their lines to the wrong code, and `merged 4` plus fresh timestamps
+    cannot see it -- it happened to a real review.
+    """
+    def git(*args):
+        return subprocess.run(["git", "-C", root, *args], capture_output=True, check=True).stdout
+
+    head = git("rev-parse", "HEAD").decode().strip()
+    digest = hashlib.sha1(git("diff", "HEAD") + git("ls-files", "--others", "--exclude-standard")).hexdigest()[:16]
+    return f"{head}\n{digest}\n"
+
+
+def find_stamp(reports):
+    """The nearest source-stamp at or above any report (coverage.sh puts one at the top
+    of its output directory), or None for reports that did not come from coverage.sh."""
+    for report in reports:
+        directory = os.path.dirname(os.path.abspath(report))
+        for _ in range(5):
+            candidate = os.path.join(directory, STAMP_NAME)
+            if os.path.isfile(candidate):
+                return candidate
+            directory = os.path.dirname(directory)
+    return None
+
+
+def source_mismatch(reports, root):
+    """An error message when the reports were measured in a different checkout than
+    the one being merged against, else None. No stamp means a hand-assembled set of
+    reports and nothing to compare."""
+    stamp_path = find_stamp(reports)
+    if stamp_path is None:
+        return None
+    with open(stamp_path) as f:
+        measured = f.read()
+    current = source_stamp(root)
+    if measured == current:
+        return None
+    return ("REFUSING to print a coverage figure: these reports were measured in a different "
+            f"checkout than the one being merged against.\n  measured: {measured.split()[0]} "
+            f"(changes {measured.split()[1]})\n  now:      {current.split()[0]} "
+            f"(changes {current.split()[1]})\n"
+            "Line numbers in the reports belong to the sources they were built from; against "
+            "any others every attribution below would be plausible and wrong. Re-run "
+            "coverage.sh in this checkout, or pass --allow-source-mismatch if the merge is "
+            "deliberately across checkouts.")
 
 
 def repo_root():
@@ -250,9 +309,10 @@ def merge_secondary(lines, branches, more_lines, more_branches, keep):
             # A branch point coverlet knows: its total is the total (CB-244).
             # This used to take max() of both halves, on the worry below, and
             # that adopted whatever wider arc count the MTP engine reported for
-            # the same line: RemoteControlSessions.cs:211 was 6/6 in coverlet's
-            # unit run and 2/8 in the UI run, and merged to 6/8, a denominator
-            # for arcs coverlet says the line does not have.
+            # the same line: ChatMarkdown.cs:179 was 6/6 in coverlet's
+            # unit run and 10/12 in the MTP runs, and merged to 10/12, a
+            # denominator for arcs coverlet says the line does not have
+            # (reports and sources both at 95e84ea5).
             #
             # The worry max() answered was real and is still answered: pairing a
             # taken count from the wider engine with the narrower total can print
@@ -349,12 +409,18 @@ def added_lines(base):
 
 
 def main():
-    base, reports, expect = parse_args(sys.argv[1:])
+    argv = [a for a in sys.argv[1:] if a != "--allow-source-mismatch"]
+    allow_mismatch = len(argv) != len(sys.argv) - 1
+    base, reports, expect = parse_args(argv)
     problem = refuse_unless_expected(reports, expect)
     if problem:
         sys.exit(problem)
 
     root = repo_root()
+    if not allow_mismatch:
+        problem = source_mismatch(reports, root)
+        if problem:
+            sys.exit(problem)
 
     # The two engines do not agree about [ExcludeFromCodeCoverage] on a *method*,
     # and the disagreement is silent. coverlet honours it — an excluded method's

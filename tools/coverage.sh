@@ -55,6 +55,14 @@ OUT="${TMPDIR:-/tmp}/claude-buddy-coverage/$CHECKOUT_KEY"
 rm -rf "$OUT"
 mkdir -p "$OUT"
 
+# What these reports will be measured in (CB-244): HEAD plus a digest of everything
+# uncommitted. merge-coverage.py compares it with the checkout it merges against
+# and refuses on a mismatch -- reports produced at one sha and merged against
+# another's sources attribute their lines to the wrong code, which `merged 4` and
+# fresh timestamps cannot see. Written before any suite runs, so an edit made
+# while they run is caught too.
+{ git rev-parse HEAD; { git diff HEAD; git ls-files --others --exclude-standard; } | $HASHER | cut -c1-16; } > "$OUT/source-stamp"
+
 # A native Windows Python (what `python3` is under Git Bash) does not understand
 # MSYS paths: "/c/Users/..." is a path on the current drive to it, and glob()
 # over that matches nothing, without an error. CB-229: that dropped both
