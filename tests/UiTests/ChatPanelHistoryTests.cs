@@ -191,34 +191,6 @@ public class ChatPanelHistoryTests : IDisposable
 
     // --- a turn retracted by a real RemoteControlChatSession ---
 
-    // FakeChatSession has no way to retract a turn — only the concrete
-    // RemoteControlChatSession raises Removed, and ChatPanel subscribes to it
-    // by type rather than through IRemoteChatSession (see Bind's own comment).
-    // No bridge is started here, the same restraint RemoteControlChatSessionTests
-    // itself documents: SetWorking(true) then SetWorking(false) is exactly the
-    // "answered before going idle" cycle a real conversation goes through.
-    [AvaloniaFact]
-    public void AWorkingNoteThatGoesIdleAgainIsRemovedFromTheTranscript()
-    {
-        var session = new RemoteControlChatSession(
-            "rc:.claude-board:history-test-" + Guid.NewGuid(), ".claude-board", "history-test");
-        _toClean.Add(session.SessionId);
-
-        ChatPanel.OpenFor(NewOrb(), session);
-        FlushRender();
-
-        var panel = ChatPanelTestAccess.Instance!;
-        var before = RenderedRows(panel).Count;
-
-        session.SetWorking(true);
-        FlushRender();
-        Assert.Equal(before + 1, RenderedRows(panel).Count);
-
-        session.SetWorking(false);
-        FlushRender();
-        Assert.Equal(before, RenderedRows(panel).Count);
-    }
-
     // --- the connection-state dot's other colours ---
 
     private static Color ColourOf(Avalonia.Media.IBrush? brush) => ((ISolidColorBrush)brush!).Color;

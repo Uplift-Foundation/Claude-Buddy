@@ -1,5 +1,7 @@
 # Remote Control (`/rc`) sessions — spike findings
 
+> **Status (CB-238, Oct 2026): historical record.** The relay these findings were measured for was deleted in `937de9ec` (30 Aug 2026), and CB-238 removed the code it left behind — the `ListAgents` peer-list parser, the relay prompts, the health and stall readers, and the relay table in `RemoteControlSessions`. Remote orbs now come only over the direct link from a Claude Buddy on the far machine; a machine without Buddy shows nothing. The formats below are kept because they are still what Claude Code's Remote Control tools produce, and the section at the end, "The peer-list format, recorded after its parser was deleted", collects what the deleted parser knew.
+
 Everything here was measured on 23 Aug 2026 against two real machines on one
 account: a MacBook at `198.51.100.11` running the bridge, and a Mac mini
 (`avatar.internal`, `198.51.100.10`) running the session being controlled.
@@ -715,3 +717,23 @@ They are not in tension; they answer different questions. The registry is what a
 - **The near side pairs on its own keys.** A member's `Lead` becomes `rc:<account>:<lead route>`, which is exactly the lead orb's key, so `TeamLinks` pairs them through the same rule it uses for a local team and `SetTeamRole` draws the member smaller. Colour follows the local precedence: the session's own `/color`, then the team's assignment, then a hash of the name.
 
 **Measured:** the two sources in the table. **Covered by tests, not run across two machines yet:** the exchange through a real `RemoteMirrorServer` and `RemoteMirrorClient` (members offered with lead routes; a member of a hidden lead not offered; a team-free roster carrying none of the fields), and the near-side scan drawing linked member orbs with an unlinked control.
+
+## The peer-list format, recorded after its parser was deleted (CB-238)
+
+`BridgeProtocol.ParseAgents` and the `RemoteAgent` record were removed in CB-238 because nothing reachable called them after the relay went (`937de9ec`). What they encoded about Claude Code's `ListAgents` output is kept here, as measured fact rather than as code.
+
+**Row shape.** A peer row matched this, and nothing looser:
+
+```
+^\s+(?<name>\S(?:.*?\S)?)\s+\[(?<ref>[^\]]+)\]\s+·\s+(?<kind>[^·]+?)\s+·\s+(?<status>.+?)\s*$
+```
+
+- **Anchored to the leading indent on purpose.** The header line (`This session is <name> [<ref>] — …`) is flush left and carries a name and a ref in exactly the same shape; the indent is the only thing telling a peer row from it.
+- **`status` runs to the end of the line**, so the extra segments rows gained later (`· tmux <session>:@<win>.%<pane>`, `· started 4d ago` — see "Also worth recording" above) landed in `status`. The busy and offline tests were substring tests, so they kept working. Measured again during CB-223 (Hana Moriyama, 2 Oct 2026, against a captured 16-row peer list): a `bg` row parsed as kind `bg` with status `busy · started 22m ago`; a `Remote Control` row with a `· started 5m ago` suffix still read as Remote Control, not offline, and worth an orb; offline rows read as offline with or without the suffix; a `Contains("running")` status test tolerated the suffix.
+- **`kind` is a raw, open label** — `Remote Control`, `interactive`, `bg` have been seen. It was kept as text rather than an enum so that a new label shows up as itself.
+
+**What made a row worth an orb**, when there was a relay to draw from: kind `Remote Control`, and not offline (`status` contains `offline` — a registration outlives its process, so dead sessions linger as offline peers), and not one of Buddy's own relays (`MachineNames.IsRelayName` on the name; that test survives in `MachineNames.LooksLikeALeftoverRelay`, which still hides relays left running from before the upgrade).
+
+**Addressing a peer whose name is not unique.** `SendMessage` accepts `name [ref]` as well as a bare name. Several live sessions can share a name — every member of an agent team lists under its lead's session title (CB-223) — and a bare name then reaches only one of them. The deleted `BridgeProtocol.AddressFor` sent to the bare name when at most one *live* peer had it, and to `name [ref]` (the first live namesake's ref) when two or more did. Offline namesakes did not count, since one live session wearing several stale registrations of its own is the usual way a name looks duplicated.
+
+**Self-exclusion** is the tool's own promise: the session asking is named in the header and "not listed below". Nothing needed filtering out.

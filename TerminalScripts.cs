@@ -265,8 +265,9 @@ namespace ClaudeBuddy
         //
         // The trailing colon makes it a pane target — "that session's active
         // pane" — and "=" forces an exact match rather than a prefix one. Which
-        // is exactly what RemoteControlBridge.TmuxNames already builds and
-        // explains as its PaneTarget, for the same two measured reasons. This is
+        // is exactly what the relay's own tmux naming built and explained as
+        // its pane target (deleted with it in 937de9ec), for the same two
+        // measured reasons. This is
         // the third call site on this branch found not to be using a rule the
         // codebase had already written down.
         internal static string PaneTargetForSession(string session) => "=" + session + ":";

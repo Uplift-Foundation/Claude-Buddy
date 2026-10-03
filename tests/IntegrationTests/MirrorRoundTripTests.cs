@@ -1331,7 +1331,7 @@ public class MirrorRoundTripTests : IDisposable
 
     // The relay is a tmux pane on another machine and it can go away between one
     // frame and the next. Both sides swallow that rather than letting it out:
-    // the client turns it into "couldn't reach the relay" in the panel, and the
+    // the client turns it into "couldn't reach the other machine" in the panel, and the
     // server simply stops talking to a peer it cannot reach.
     //
     // Asserted because the alternative is an exception on a background task —

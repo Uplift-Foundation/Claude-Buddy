@@ -60,6 +60,14 @@ namespace ClaudeBuddy
             get { lock (_gate) return _client; }
         }
 
+        // Puts a test's client where Serve would have put a real one. Only
+        // PeerSessions.UseClientForTests calls this, on a host whose link is
+        // never started.
+        internal void UseClientForTests(RemoteMirrorClient client)
+        {
+            lock (_gate) _client = client;
+        }
+
         // The serving half, exposed for the same reason as the asking one: both
         // have a TickAsync that has to be driven by a clock rather than by the
         // arrival of bytes, or a deadline never lapses and a watch quietly

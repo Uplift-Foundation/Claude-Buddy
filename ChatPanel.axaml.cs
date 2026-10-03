@@ -680,20 +680,13 @@ namespace ClaudeBuddy
 
             if (_session is IRemoteChatMachine wasNamed) wasNamed.MachineChanged -= OnMachineChanged;
 
-            // A remote session can take a turn back — its "working…" line comes
-            // off once the answer lands. Subscribed on the concrete type rather
-            // than through an interface: nothing else in this app has ever needed
-            // to remove a turn, and inventing IRemoteChatRemovable for one caller
-            // would be ceremony. See RemoteControlChatSession.Removed.
             if (_session is RemoteControlChatSession previousRemote)
             {
-                previousRemote.Removed -= OnTurnRemoved;
-
                 // A live view is the one thing here that costs something while
                 // nobody is looking: it holds a subscription on the other
-                // machine's Buddy, which keeps that relay — a real Claude Code
-                // session on the user's own account — from idling out. So the
-                // panel closing says so, rather than leaving it to lapse.
+                // machine's Buddy, which keeps it watching that session's
+                // transcript. So the panel closing says so, rather than leaving
+                // it to lapse.
                 //
                 // Told on the panel rather than in Dispose because these
                 // sessions are deliberately never disposed: a remote
@@ -774,8 +767,6 @@ namespace ClaudeBuddy
 
             if (session is RemoteControlChatSession remote)
             {
-                remote.Removed += OnTurnRemoved;
-
                 // Re-opens the live view if this panel closed it earlier. Cheap
                 // when it is already open and nothing at all in messaging mode.
                 remote.PanelOpened();
@@ -2486,20 +2477,6 @@ namespace ClaudeBuddy
             for (var i = 0; i < count && i < _session.History.Count; i++)
             {
                 _turns.Insert(i, new TurnView(_session.History[i], _defaultBubble, _soleSpeaker, Adopt, _textScale));
-            }
-        }
-
-        // Drops the row for a turn the session has retracted. Matched by
-        // reference through the view wrapper, because the text is not unique —
-        // two "working…" lines would be identical strings.
-        private void OnTurnRemoved(ChatTurn turn)
-        {
-            for (var i = 0; i < _turns.Count; i++)
-            {
-                if (!ReferenceEquals(_turns[i].Source, turn)) continue;
-
-                _turns.RemoveAt(i);
-                return;
             }
         }
 

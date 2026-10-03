@@ -221,8 +221,8 @@ namespace ClaudeBuddy
 
         // True for anything that claims to be a frame, whether or not it parses.
         //
-        // Separate from TryParseFrame and used before it, exactly the way
-        // BridgeProtocol.IsInfoReply is: a frame that arrives malformed must
+        // Separate from TryParseFrame and used before it, the way the relay's
+        // CB-INFO check was (both deleted in CB-238): a frame that arrives malformed must
         // still be swallowed rather than shown. The person reading the panel did
         // not ask a question, so they should not see a fumbled answer to one —
         // and a wall of base64 in a chat bubble is the worst version of that.
@@ -236,9 +236,9 @@ namespace ClaudeBuddy
         //
         //  * **Payload and free text are standard base64.** Not base64url. The
         //    url alphabet's `_` would let a payload spell `msg_id`, which is the
-        //    exact string RemoteControlBridge.AskAsync waits for to decide a
-        //    send has been receipted — a frame that happened to contain it would
-        //    satisfy somebody else's request and derail the relay. Standard
+        //    exact string the relay (deleted in 937de9ec) waited for to decide a
+        //    send had been receipted — a frame that happened to contain it would
+        //    have satisfied somebody else's request and derailed it. Standard
         //    base64 also cannot contain `<` or `>`, so a frame can never close
         //    the `</cross-session-message>` tag it is travelling inside, which
         //    is the other way this could have gone wrong. The cost is `=`

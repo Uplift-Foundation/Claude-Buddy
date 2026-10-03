@@ -60,7 +60,6 @@ public class SettingsStatusTickTests
         window.OnStatusTick(null, EventArgs.Empty);
 
         Assert.Null(window.OpenClawStatusText);
-        Assert.Null(window.RemoteControlStatusText);
     }
 
     [AvaloniaFact]

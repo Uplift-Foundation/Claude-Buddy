@@ -116,7 +116,7 @@ public class HeadlessSnapshotTests
         try
         {
             // The own-relay test keys on the *leaf* of the cwd — see
-            // RemoteControlBridge.IsOwnRelayCwd — so any path whose last
+            // MachineNames.LooksLikeALeftoverRelay — so any path whose last
             // segment wears the relay prefix is one.
             WriteStatus(dir, "relay", new SessionStatus
             {

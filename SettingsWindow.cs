@@ -1759,7 +1759,6 @@ namespace ClaudeBuddy
 
         private TextBlock? _openClawStatus;
         private TextBlock? _claudeCloudStatus;
-        private TextBlock? _remoteControlStatus;
         private DispatcherTimer? _openClawStatusTimer;
 
         // Read by the tests that drive OnStatusTick. Internal rather than
@@ -1767,7 +1766,6 @@ namespace ClaudeBuddy
         // the fields are private only so that nothing outside assigns them.
         internal string? OpenClawStatusText => _openClawStatus?.Text;
         internal string? ClaudeCloudStatusText => _claudeCloudStatus?.Text;
-        internal string? RemoteControlStatusText => _remoteControlStatus?.Text;
         internal string? PeerLinkStatusText => _peerLinkStatus?.Text;
 
         // Excluded from coverage: starts a real one-second Avalonia timer. The
@@ -1802,16 +1800,6 @@ namespace ClaudeBuddy
                 // window knows about.
                 var cloud = ClaudeCloudSessions.StatusText;
                 if (_claudeCloudStatus.Text != cloud) _claudeCloudStatus.Text = cloud;
-            }
-
-            if (_remoteControlStatus is not null)
-            {
-                // The relay changes state while you are looking at it — it takes
-                // a few seconds to start, and it stops itself when idle — so a
-                // line that was only true when the window opened would be worse
-                // than none.
-                var relay = RemoteControlSessions.StatusText;
-                if (_remoteControlStatus.Text != relay) _remoteControlStatus.Text = relay;
             }
 
             if (_peerLinkStatus is not null)
@@ -2273,15 +2261,6 @@ namespace ClaudeBuddy
             e.Handled = true;
             OnDownloadVoicesLinkClicked();
         }
-
-        private static readonly (string Label, int Minutes)[] RemoteIdleChoices =
-        {
-            ("2 minutes", 2),
-            ("10 minutes", ClaudeBuddySettings.DefaultRemoteControlIdle),
-            ("30 minutes", 30),
-            ("1 hour", 60),
-            ("Never", ClaudeBuddySettings.RemoteControlIdleNever)
-        };
 
         internal Control[] VoiceRows()
         {
