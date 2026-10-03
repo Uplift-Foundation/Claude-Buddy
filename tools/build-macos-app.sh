@@ -276,6 +276,38 @@ echo "==> Built $APP"
 if [[ $INSTALL -eq 1 ]]; then
   INSTALLED_EXE="/Applications/$APP_NAME.app/Contents/MacOS/ClaudeBuddy"
   KEEPALIVE_PLIST="$HOME/Library/LaunchAgents/$BUNDLE_ID.plist"
+  # The pids of Buddies running from the installed path.
+  #
+  # Never fails, and that is load-bearing. It is only ever called inside
+  # `$(...)`, and under `set -euo pipefail` a failing substitution in an
+  # assignment ends the script: `pgrep` exits 1 when nothing matches, and
+  # the loop's last `[[ ]] && echo` returns 1 when the last pid is not ours.
+  # So a fresh install with no Buddy running — the ordinary first install,
+  # or a machine where launchd had not started the new one yet — exited 1
+  # straight after a successful install, before the 0/1/many report below,
+  # whose own "launch it with" arm could therefore never print. (CB-206's
+  # install tail; found installing develop at 0e09981d, fixed under CB-245.)
+  running_installed() {
+    local p
+    for p in $(pgrep -x ClaudeBuddy || true); do
+      if [[ "$(ps -o comm= -p "$p" 2>/dev/null || true)" == "$INSTALLED_EXE" ]]; then
+        echo "$p"
+      fi
+    done
+    return 0
+  }
+
+  # Whether launchd currently has the keep-alive job. Asked rather than
+  # inferred from the plist file, which is there whether or not it loaded.
+  keepalive_loaded() { launchctl list "$BUNDLE_ID" >/dev/null 2>&1; }
+
+  # Recorded before anything is stopped, because the next step can stop it
+  # without stop-installed-buddy.sh ever seeing it: unloading the keep-alive
+  # stops the Buddy launchd is managing. That is the ordinary case on every
+  # machine opted in to the keep-alive, and with only STOPPED to go on the
+  # tail below believed nothing had been running, skipped its wait, and read
+  # RUNNING before launchd had started the new copy (CB-245 / CB-206).
+  WAS_RUNNING="$(running_installed)"
 
   # CB-206: the running Buddy goes before the bundle under it is replaced.
   # The single-instance mutex is one per user since CB-206, so the copy the
@@ -315,30 +347,17 @@ if [[ $INSTALL -eq 1 ]]; then
   # into the app and mislabel every account orb with. Nothing is launched if
   # nothing was running: a first install still leaves starting it to you.
   #
-  # Never fails, and that is load-bearing. It is only ever called inside
-  # `$(...)`, and under `set -euo pipefail` a failing substitution in an
-  # assignment ends the script: `pgrep` exits 1 when nothing matches, and
-  # the loop's last `[[ ]] && echo` returns 1 when the last pid is not ours.
-  # So a fresh install with no Buddy running — the ordinary first install,
-  # or a machine where launchd had not started the new one yet — exited 1
-  # straight after a successful install, before the 0/1/many report below,
-  # whose own "launch it with" arm could therefore never print. (CB-206's
-  # install tail; found installing develop at 0e09981d, fixed under CB-245.)
-  running_installed() {
-    local p
-    for p in $(pgrep -x ClaudeBuddy || true); do
-      if [[ "$(ps -o comm= -p "$p" 2>/dev/null || true)" == "$INSTALLED_EXE" ]]; then
-        echo "$p"
-      fi
-    done
-    return 0
-  }
-  if [[ -n "$STOPPED" ]]; then
+  # Waited for if one was running before this install — whichever of the
+  # keep-alive unload or stop-installed-buddy.sh actually stopped it — or if
+  # the reconcile left the keep-alive loaded, since launchd starts it then
+  # either way. Relaunched by hand only in the first case: nothing is
+  # launched on a machine where nothing was running.
+  if [[ -n "$STOPPED" || -n "$WAS_RUNNING" ]] || keepalive_loaded; then
     for _ in 1 2 3 4 5 6 7 8 9 10; do
       [[ -n "$(running_installed)" ]] && break
       sleep 0.5
     done
-    if [[ -z "$(running_installed)" ]]; then
+    if [[ -z "$(running_installed)" && ( -n "$STOPPED" || -n "$WAS_RUNNING" ) ]]; then
       env -u CLAUDE_CONFIG_DIR open -a "/Applications/$APP_NAME.app"
       sleep 2
     fi
