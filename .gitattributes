@@ -1,0 +1,3 @@
+# These run under Git Bash and macOS; a CRLF checkout on Windows breaks them.
+*.sh text eol=lf
+tools/*.py text eol=lf

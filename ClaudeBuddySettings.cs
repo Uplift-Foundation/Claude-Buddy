@@ -106,6 +106,7 @@ namespace ClaudeBuddy
             "remoteControlIdleMinutes", "remoteControlServeOnLaunch",
             "peerLinkEnabled", "peerLinkPort",
             "newChatRecentFolders", "newChatLastCli", "newChatLastProfile",
+            "newChatLastProfiles",
             // Every hotkey override. toggleOrbsHotkey was missing from this
             // list from CB-155 until the new-chat hotkey was added beside it;
             // Save's ContainsKey guard kept that from throwing, but it meant
@@ -723,7 +724,16 @@ namespace ClaudeBuddy
             // "never chosen" or "Default was chosen" — both read the same way
             // downstream, since Default is what the dialog falls back to
             // anyway when nothing else applies.
-            public string? NewChatLastProfile { get; set; }
+            //
+            // Per CLI since CB-203, keyed by NewChatCli's name: the three
+            // account lists name different kinds of directory, so a Codex pick
+            // restored onto Claude Code's picker would match nothing at best,
+            // and a same-named directory would start the wrong CLI under it at
+            // worst. Saved as "newChatLastProfiles"; the pre-CB-203 single key
+            // "newChatLastProfile" is read as the Claude Code entry when the
+            // map has none, and is still written from it, so neither an upgrade
+            // nor a downgrade loses a saved pick.
+            public Dictionary<string, string> NewChatLastProfiles { get; init; } = new(StringComparer.Ordinal);
 
             // Auto-organize: which shape and how much space between orbs.
             public string ArrangeShape { get; set; } = DefaultArrangeShape;
@@ -1190,26 +1200,27 @@ namespace ClaudeBuddy
             Save();
         }
 
-        // The account last chosen in the "New chat…" dialog (CB-201). Null
-        // means never chosen, or Default — the dialog treats both the same.
-        public static string? NewChatLastProfile
-        {
-            get
-            {
-                Load();
-                lock (Gate)
-                {
-                    return _model.NewChatLastProfile;
-                }
-            }
-        }
-
-        public static void SetNewChatLastProfile(string? profileDir)
+        // The account last chosen in the "New chat…" dialog for one CLI
+        // (CB-201, per CLI since CB-203). Null means never chosen, or Default
+        // — the dialog treats both the same.
+        internal static string? NewChatLastProfileFor(NewChatCli cli)
         {
             Load();
             lock (Gate)
             {
-                _model.NewChatLastProfile = string.IsNullOrWhiteSpace(profileDir) ? null : profileDir;
+                return _model.NewChatLastProfiles.TryGetValue(cli.ToString(), out var dir) ? dir : null;
+            }
+        }
+
+        internal static void SetNewChatLastProfile(NewChatCli cli, string? profileDir)
+        {
+            var value = string.IsNullOrWhiteSpace(profileDir) ? null : profileDir;
+
+            Load();
+            lock (Gate)
+            {
+                if (value is null) _model.NewChatLastProfiles.Remove(cli.ToString());
+                else _model.NewChatLastProfiles[cli.ToString()] = value;
             }
 
             Save();
@@ -1947,9 +1958,30 @@ namespace ClaudeBuddy
                         TurnSoundsEnabled = Bool(root["turnSoundsEnabled"], true),
                         TurnFinishedSound = Text(root["turnFinishedSound"]),
                         NeedsAttentionSound = Text(root["needsAttentionSound"]),
-                        NewChatLastCli = Text(root["newChatLastCli"]),
-                        NewChatLastProfile = Text(root["newChatLastProfile"])
+                        NewChatLastCli = Text(root["newChatLastCli"])
                     };
+
+                    // CB-203's per-CLI map, then the pre-CB-203 single key as
+                    // Claude Code's entry if the map did not already name one.
+                    // Only real CLI names are kept, so a hand-edited key cannot
+                    // sit in the model forever with nothing able to read it.
+                    if (root["newChatLastProfiles"] is JsonObject lastProfiles)
+                    {
+                        foreach (var (cliName, node) in lastProfiles)
+                        {
+                            if (Enum.TryParse<NewChatCli>(cliName, out var parsedCli)
+                                && parsedCli.ToString() == cliName
+                                && Text(node) is { } profileDir)
+                            {
+                                model.NewChatLastProfiles[cliName] = profileDir;
+                            }
+                        }
+                    }
+
+                    if (Text(root["newChatLastProfile"]) is { } legacyProfile)
+                    {
+                        model.NewChatLastProfiles.TryAdd(nameof(NewChatCli.ClaudeCode), legacyProfile);
+                    }
 
                     // Same shape as claudeCodeProfileDirs below: read as an array
                     // and skipped entirely when absent, so an older settings file
@@ -2217,6 +2249,15 @@ namespace ClaudeBuddy
         //
         // Deliberately doesn't check that the string is a *colour*: that's
         // OrbColors' job, since it holds the default to fall back to.
+        // Sorted, so the file does not reorder itself from one save to the
+        // next depending on which CLI was picked first.
+        private static JsonObject NewChatLastProfilesNode(Dictionary<string, string> profiles)
+        {
+            var node = new JsonObject();
+            foreach (var (cliName, dir) in profiles.OrderBy(p => p.Key, StringComparer.Ordinal)) node[cliName] = dir;
+            return node;
+        }
+
         private static string? Text(JsonNode? node) =>
             node is JsonValue value
             && value.TryGetValue<string>(out var text)
@@ -2500,7 +2541,12 @@ namespace ClaudeBuddy
                         ["needsAttentionSound"] = _model.NeedsAttentionSound,
                         ["newChatRecentFolders"] = newChatRecentFolders,
                         ["newChatLastCli"] = _model.NewChatLastCli,
-                        ["newChatLastProfile"] = _model.NewChatLastProfile,
+                        // Still written, from the map's Claude Code entry, so
+                        // a build from before CB-203 reading this file keeps
+                        // its remembered account.
+                        ["newChatLastProfile"] = _model.NewChatLastProfiles.TryGetValue(
+                            nameof(NewChatCli.ClaudeCode), out var claudeLastProfile) ? claudeLastProfile : null,
+                        ["newChatLastProfiles"] = NewChatLastProfilesNode(_model.NewChatLastProfiles),
                         // Grouped rather than three top-level keys: it reads as
                         // one setting in the file the way it reads as one card in
                         // the window. A null entry — which is what a colour left

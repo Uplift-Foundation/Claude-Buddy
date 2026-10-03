@@ -16,6 +16,17 @@ public sealed class UnixFactAttribute : FactAttribute
     }
 }
 
+// The [Theory] twin of UnixFact, for a POSIX-shell seam run once per case
+// (NewChatExecLineShellTests, one row per CLI).
+public sealed class UnixTheoryAttribute : TheoryAttribute
+{
+    public UnixTheoryAttribute()
+    {
+        if (!OperatingSystem.IsMacOS() && !OperatingSystem.IsLinux())
+            Skip = "POSIX shells only run on macOS/Linux";
+    }
+}
+
 public sealed class WindowsFactAttribute : FactAttribute
 {
     public WindowsFactAttribute()
@@ -147,6 +158,25 @@ public sealed class MacFactAttribute : FactAttribute
 // tools/install-hooks.sh, which is bash -- runnable on Linux too, but the
 // feature itself (launchd, ~/Library/LaunchAgents) is macOS-only, so a green
 // run anywhere else would be exercising bash syntax rather than the feature.
+// CB-206: tools/stop-installed-buddy.sh, which `build-macos-app.sh --install`
+// runs. Its tests stand in for Buddy with an ad-hoc re-signed copy of
+// /bin/bash, because a copied platform binary is killed on exec until it is
+// signed again.
+public sealed class MacInstallFactAttribute : FactAttribute
+{
+    public MacInstallFactAttribute()
+    {
+        if (!OperatingSystem.IsMacOS())
+        {
+            Skip = "build-macos-app.sh's install path is macOS-only";
+            return;
+        }
+
+        if (!File.Exists("/usr/bin/codesign"))
+            Skip = "no /usr/bin/codesign to re-sign the stand-in executable";
+    }
+}
+
 public sealed class MacKeepAliveFactAttribute : FactAttribute
 {
     public MacKeepAliveFactAttribute()

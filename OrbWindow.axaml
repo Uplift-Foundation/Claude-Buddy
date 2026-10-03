@@ -71,8 +71,10 @@
                  underneath this session's pid. Not in UpdateFrom, which runs
                  for every orb every couple of seconds: the answer costs a `ps`
                  of the whole process table, and the question only matters at
-                 the instant somebody is aiming at the row. See
-                 OrbWindow.SessionMenu_Opening and SessionDependents. -->
+                 the instant somebody is aiming at the row. The read runs off
+                 the UI thread (CB-228: a WMI query on Windows), so the menu
+                 opens at once and the row fills in. See
+                 OrbWindow.RefreshEndSessionGuardAsync and SessionDependents. -->
             <ContextMenu Opening="SessionMenu_Opening" Closed="SessionMenu_Closed">
                 <!-- Chat name, then its directory. The path row hides itself
                      when there's no name yet, since it'd just repeat. -->
@@ -149,6 +151,23 @@
                           IsVisible="False"
                           StaysOpenOnClick="True"
                           Click="EndConversation_Click"/>
+                <!-- CB-225: a cloud session's two lifecycle verbs, which are
+                     requests to the account API as the session's own login.
+                     Hidden unless the orb is a cloud session with cloud
+                     sessions switched on — CloudOrbActions.Offer, set in
+                     UpdateFrom. Both arm on the first click and act on the
+                     second, CB-170's vocabulary rather than a dialog, and
+                     StaysOpenOnClick so the endpoint's answer is written back
+                     onto the row. Header, tooltip and IsEnabled are set in
+                     code; see OrbWindow.RestoreCloudRows. -->
+                <MenuItem x:Name="ArchiveCloudItem"
+                          IsVisible="False"
+                          StaysOpenOnClick="True"
+                          Click="ArchiveCloud_Click"/>
+                <MenuItem x:Name="DeleteCloudItem"
+                          IsVisible="False"
+                          StaysOpenOnClick="True"
+                          Click="DeleteCloud_Click"/>
                 <!-- The two lifecycle actions, hidden for a session they cannot
                      serve rather than greyed out — see
                      SessionPresence.CanDismiss/CanEndSession, which is also

@@ -45,18 +45,95 @@ namespace ClaudeBuddy.Tests
             Assert.NotEqual("", self.Command);
         }
 
-        // The end-to-end shape, with this process standing in for the husk: its
-        // own children are not a daemon, so the real table answers "nothing
-        // underneath" — which is the answer that has to keep working, since it
-        // is what every ordinary session gets.
+        // The end-to-end shape, on a husk this test owns: an ordinary process
+        // with nothing underneath it, read back out of the real table, answers
+        // "nothing underneath" — the answer every ordinary session gets.
+        //
+        // **Not this process (CB-236).** It used to ask about the testhost
+        // itself, and the testhost is shared: every class running in parallel
+        // hangs its own children off it. HookPidWalkShTests stages a process
+        // titled `claude … daemon run` there on purpose, and while it was alive
+        // the real table quite correctly said this pid had a daemon below it —
+        // a flake about which test happened to be running alongside, forced
+        // deterministically by holding such a child open around the old body.
+        // A husk spawned here has only the children this test gives it.
         [UnixFact]
-        public void ThisProcessHasNoDaemonUnderneathItInTheRealTable()
+        public void AnOrdinaryProcessHasNoDaemonUnderneathItInTheRealTable()
         {
+            using var husk = Husk("sleep 30; :");
+
             var rows = SessionDependents.ParsePs(RunPs());
 
-            Assert.Equal(
-                SessionDependents.Nothing,
-                SessionDependents.Inspect(rows, Environment.ProcessId));
+            Assert.Contains(rows, row => row.Pid == husk.Pid);
+            Assert.Equal(SessionDependents.Nothing, SessionDependents.Inspect(rows, husk.Pid));
+        }
+
+        // The control the case above never had: the same real exchange does
+        // see a daemon when one is there. Without it, an exchange that silently
+        // parsed nothing — the failure this file exists to catch — would pass
+        // "nothing underneath" as easily as a working one.
+        [UnixFact]
+        public void AStagedDaemonUnderAHuskIsSeenInTheRealTable()
+        {
+            var ready = Path.Combine(Path.GetTempPath(), "cb-daemon-" + Guid.NewGuid().ToString("N"));
+
+            // `exec -a` titles the child the way the real binary appears; the
+            // trailing `; :` stops bash exec'ing sleep in its place and losing
+            // the title; and the pid file is written by the titled process
+            // itself, so it exists only once that row is in the table.
+            using var husk = Husk(
+                "(exec -a claude /bin/bash -c 'echo $$ > \"$1\"; sleep 30; :' _ \"$1\" daemon run) & wait",
+                ready);
+
+            try
+            {
+                WaitForFile(ready);
+
+                var verdict = SessionDependents.Inspect(SessionDependents.ParsePs(RunPs()), husk.Pid);
+
+                Assert.True(verdict.DaemonBelow, "the real table did not show the staged daemon under its husk");
+            }
+            finally
+            {
+                File.Delete(ready);
+            }
+        }
+
+        // A bash child of this process, killed with its whole tree on dispose.
+        private sealed class OwnedProcess(Process process) : IDisposable
+        {
+            internal int Pid => process.Id;
+
+            public void Dispose()
+            {
+                try { process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
+                process.Dispose();
+            }
+        }
+
+        private static OwnedProcess Husk(string script, string? arg = null)
+        {
+            var psi = new ProcessStartInfo("/bin/bash") { UseShellExecute = false };
+            psi.ArgumentList.Add("-c");
+            psi.ArgumentList.Add(script);
+            psi.ArgumentList.Add("_");
+            if (arg is not null) psi.ArgumentList.Add(arg);
+
+            var process = Process.Start(psi);
+            Assert.NotNull(process);
+            return new OwnedProcess(process!);
+        }
+
+        // Waits on the signal itself, with a backstop only for a staged process
+        // that never starts — not a tolerance the passing path depends on.
+        private static void WaitForFile(string path)
+        {
+            var backstop = Stopwatch.StartNew();
+            while (!File.Exists(path) || new FileInfo(path).Length == 0)
+            {
+                Assert.True(backstop.Elapsed < TimeSpan.FromMinutes(1), "the staged daemon never wrote its pid file");
+                Thread.Sleep(20);
+            }
         }
 
         // The columns SessionDependents.Snapshot asks for, spelled the same way

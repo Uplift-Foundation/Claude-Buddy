@@ -64,7 +64,7 @@ namespace ClaudeBuddy.Tests
             var command = NewChatCommand.For(
                 NewChatCli.ClaudeCode, "/usr/local/bin/claude", configDir: "/Users/me/.claude-work");
 
-            Assert.Equal("CLAUDE_CONFIG_DIR='/Users/me/.claude-work' '/usr/local/bin/claude'", command);
+            Assert.Equal("env CLAUDE_CONFIG_DIR='/Users/me/.claude-work' '/usr/local/bin/claude'", command);
         }
 
         // A space in the config dir has to survive as one shell word, same
@@ -76,7 +76,7 @@ namespace ClaudeBuddy.Tests
             var command = NewChatCommand.For(
                 NewChatCli.ClaudeCode, "/usr/local/bin/claude", configDir: "/Users/me/My Claude Work");
 
-            Assert.Equal("CLAUDE_CONFIG_DIR='/Users/me/My Claude Work' '/usr/local/bin/claude'", command);
+            Assert.Equal("env CLAUDE_CONFIG_DIR='/Users/me/My Claude Work' '/usr/local/bin/claude'", command);
         }
 
         // An apostrophe in the config dir needs the same shell-safe escaping
@@ -89,7 +89,51 @@ namespace ClaudeBuddy.Tests
                 NewChatCli.ClaudeCode, "/usr/local/bin/claude", configDir: "/Users/o'brien/.claude-work");
 
             Assert.Equal(
-                "CLAUDE_CONFIG_DIR='/Users/o'\\''brien/.claude-work' '/usr/local/bin/claude'", command);
+                "env CLAUDE_CONFIG_DIR='/Users/o'\\''brien/.claude-work' '/usr/local/bin/claude'", command);
+        }
+
+        // --- ExecLine: the one place a new chat's `exec` is written (CB-232) --
+
+        [Fact]
+        public void ExecLineForTheDefaultAccountExecsTheBinary()
+        {
+            Assert.Equal(
+                "exec '/usr/local/bin/claude'",
+                NewChatCommand.ExecLine(NewChatCli.ClaudeCode, "/usr/local/bin/claude", configDir: null));
+        }
+
+        // The CB-232 shape: whatever follows `exec` is a program — env — and
+        // never the variable assignment, which exec would take as the program
+        // name. NewChatExecLineShellTests runs this line in real shells.
+        [Fact]
+        public void ExecLineForANamedAccountNeverPutsTheAssignmentAfterExec()
+        {
+            var line = NewChatCommand.ExecLine(
+                NewChatCli.ClaudeCode, "/usr/local/bin/claude", configDir: "/Users/me/.claude-work");
+
+            Assert.Equal("exec env CLAUDE_CONFIG_DIR='/Users/me/.claude-work' '/usr/local/bin/claude'", line);
+            Assert.DoesNotMatch(@"^exec [A-Z_]+=", line);
+        }
+
+        // CB-203: the macOS prefix names the CLI's own variable.
+        [Theory]
+        [InlineData("Codex", "/opt/bin/codex", "CODEX_HOME")]
+        [InlineData("Grok", "/opt/bin/grok", "GROK_HOME")]
+        public void AConfigDirPrefixesCodexAndGrokWithTheirOwnVariable(string cliName, string binary, string variable)
+        {
+            var cli = Enum.Parse<NewChatCli>(cliName);
+            var command = NewChatCommand.For(cli, binary, configDir: "/Users/me/.work home");
+
+            Assert.Equal("env " + variable + "='/Users/me/.work home' '" + binary + "'", command);
+        }
+
+        [Theory]
+        [InlineData("Codex")]
+        [InlineData("Grok")]
+        public void NoConfigDirLeavesCodexAndGrokUnprefixed(string cliName)
+        {
+            var cli = Enum.Parse<NewChatCli>(cliName);
+            Assert.Equal("'/opt/bin/cli'", NewChatCommand.For(cli, "/opt/bin/cli", configDir: null));
         }
 
         // --- GeneralWindowsStartInfo / WindowsProcessStartInfo ------------
@@ -252,7 +296,36 @@ namespace ClaudeBuddy.Tests
             Assert.NotNull(start);
             Assert.Equal("cmd.exe", start.FileName);
             Assert.False(start.UseShellExecute);
-            Assert.Equal(@"C:\Users\me\.codex-work", start.Environment["CLAUDE_CONFIG_DIR"]);
+            Assert.Equal(@"C:\Users\me\.codex-work", start.Environment["CODEX_HOME"]);
+        }
+
+        // CB-203: each CLI's start info carries its own variable, never
+        // another CLI's. Checked by the value written rather than by the
+        // others' absence — Environment starts out holding whatever this test
+        // process inherited (see NoConfigDirLeavesTheStartInfoUnchanged), so
+        // "not present" is not something a test here can honestly assert;
+        // "not overwritten with this launch's dir" is.
+        [Theory]
+        [InlineData("ClaudeCode", "CLAUDE_CONFIG_DIR")]
+        [InlineData("Codex", "CODEX_HOME")]
+        [InlineData("Grok", "GROK_HOME")]
+        public void EachCliStartInfoCarriesItsOwnAccountVariable(string cliName, string variable)
+        {
+            var cli = Enum.Parse<NewChatCli>(cliName);
+            const string dir = @"C:\Users\me\.account-cb203";
+
+            var start = NewChatCommand.WindowsProcessStartInfo(
+                cli, @"C:\bin\cli.exe", @"C:\work", useWindowsTerminal: true, configDir: dir);
+
+            Assert.NotNull(start);
+            Assert.False(start.UseShellExecute);
+            Assert.Equal(dir, start.Environment[variable]);
+
+            foreach (var other in new[] { "CLAUDE_CONFIG_DIR", "CODEX_HOME", "GROK_HOME" }.Where(v => v != variable))
+            {
+                Assert.True(!start.Environment.TryGetValue(other, out var value) || value != dir,
+                    other + " was set to this launch's dir for " + cli);
+            }
         }
 
         // A config dir on a null binary is still no start info at all — the

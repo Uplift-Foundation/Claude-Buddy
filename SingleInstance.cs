@@ -89,10 +89,9 @@ namespace ClaudeBuddy
         // thrown in either case. `WaitOne(TimeSpan.Zero)` came back `true`
         // instead, which means the real crash-recovery path on this platform
         // is the plain Acquired arm above, not this one. .NET's named
-        // mutexes on Unix are backed by a file under
-        // `/tmp/.dotnet/shm/session<SID>/<name>` (session-scoped, not
-        // literally machine-wide — worth knowing on its own, see MutexName's
-        // comment), and a dead owner's hold on that file is simply gone
+        // mutexes on Unix are backed by a file — under
+        // `/tmp/.dotnet-uid<uid>/shm/global/` since CB-206, see OptionsFor —
+        // and a dead owner's hold on that file is simply gone
         // rather than flagged abandoned, with no sign of the Windows-kernel
         // abandoned-mutex bookkeeping that `AbandonedMutexException`
         // reports.
@@ -128,18 +127,43 @@ namespace ClaudeBuddy
         // renaming it would just make two old and new instances blind to
         // each other.
         //
-        // Not literally machine-wide, whatever the name says: on this
-        // platform it resolves to a file under
-        // `/tmp/.dotnet/shm/session<SID>/ClaudeBuddy_SingleInstance_Mutex`,
-        // scoped to one POSIX login session, not the whole machine. This is
-        // a pre-existing property of the mechanism CB-178 did not introduce
-        // and does not repair — it is only worth naming because CB-178
-        // itself is proof it holds in the one case that matters: a
-        // launchd-spawned duplicate lands in the *same* session as the
-        // login-item instance it duplicates, or it could never have taken
-        // the HeldByAnother branch that made this ticket's bug reproducible
-        // in the first place.
+        // The name is unchanged; its scope on macOS is not (CB-206) — see
+        // OptionsFor below. Claimed with the bare constructor, as it was until
+        // CB-206, it resolved to a file under
+        // `/tmp/.dotnet/shm/session<SID>/`, scoped to one POSIX session, and
+        // that was the bug: a Buddy launched from a terminal, an agent shell,
+        // ssh or `setsid` is in a different session from the login-item copy,
+        // got a mutex of its own, and ran alongside it. Four such files existed
+        // at once on the MacBook on 26 Sep, and every orb was drawn twice.
         internal const string MutexName = "ClaudeBuddy_SingleInstance_Mutex";
+
+        // How the mutex is scoped, per platform (CB-206).
+        //
+        // **macOS (any Unix): one per user, across sessions.** .NET 10's
+        // NamedWaitHandleOptions with CurrentUserOnly and not
+        // CurrentSessionOnly puts the backing file under
+        // `/tmp/.dotnet-uid<uid>/shm/global/` — measured on this MacBook
+        // (macOS 27.0, .NET 10.0.400): a holder in one session and a
+        // challenger started in a new one with setsid(2) answered
+        // HeldByAnother, where the bare name answered Acquired for exactly the
+        // same pair. The uid in the directory is what keeps it per user:
+        // `/tmp` is shared, so a bare `Global\` name would have let the first
+        // user to log in block every other user on the Mac under fast user
+        // switching. Crash recovery was re-measured with these options, three
+        // repeats: a `kill -9`'d holder left the next claim Acquired, as
+        // AbandonedByPreviousOwner's comment records for the old scope.
+        //
+        // **Windows: unchanged**, so null — the bare name, which Windows scopes
+        // to the logon session. No defect is reported there; a Windows logon
+        // session already spans every way the user can launch the app, and
+        // CurrentSessionOnly = false there would mean the `Global\` namespace,
+        // so two users on one PC would block each other.
+        //
+        // Pure, so both arms are tested on both runners.
+        internal static NamedWaitHandleOptions? OptionsFor(bool onWindows) =>
+            onWindows
+                ? null
+                : new NamedWaitHandleOptions { CurrentUserOnly = true, CurrentSessionOnly = false };
 
         // The pure half, and the one CB-178 is actually about: given the
         // outcome of an attempt to claim the named mutex, should this
@@ -182,9 +206,19 @@ namespace ClaudeBuddy
         // duplicate, and holds it in a static field for the process's
         // lifetime otherwise) — this method's job ends at answering which
         // of the three outcomes happened.
-        internal static (SingleInstanceClaim Claim, Mutex Mutex) Claim(string name)
+        //
+        // onWindows picks the scope (see OptionsFor) and is only ever passed by
+        // a test that wants the other platform's arm; the app takes the
+        // default, which is the platform it is running on.
+        internal static (SingleInstanceClaim Claim, Mutex Mutex) Claim(string name, bool? onWindows = null)
         {
-            var mutex = new Mutex(initiallyOwned: false, name);
+            var options = OptionsFor(onWindows ?? OperatingSystem.IsWindows());
+
+            // The options overload has no initiallyOwned parameter and starts
+            // unowned, which is what the bare call below asks for explicitly.
+            var mutex = options is { } scoped
+                ? new Mutex(name, scoped)
+                : new Mutex(initiallyOwned: false, name);
             try
             {
                 return mutex.WaitOne(TimeSpan.Zero)

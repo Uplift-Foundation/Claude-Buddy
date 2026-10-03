@@ -1710,7 +1710,8 @@ public class SessionScanTests
         Func<HashSet<string>?>? attachClients = null,
         Func<int, SessionDependents.Verdict>? dependents = null,
         bool? onWindows = null,
-        Func<string, string?>? transcriptHunt = null)
+        Func<string, string?>? transcriptHunt = null,
+        Action<int, SessionDependents.Verdict>? terminate = null)
     {
         // Both CLIs on, for the reason Scan above states at length.
         ClaudeBuddySettings.ClaudeCodeEnabled = true;
@@ -1729,7 +1730,8 @@ public class SessionScanTests
             attachClients ?? (() => new HashSet<string>(StringComparer.Ordinal)),
             transcriptHunt: transcriptHunt,
             dependents: dependents ?? (_ => SessionDependents.Nothing),
-            onWindows: onWindows);
+            onWindows: onWindows,
+            terminate: terminate);
         if (sweepGrace is not null) manager.SweepGrace = sweepGrace.Value;
         return manager;
     }
@@ -2595,7 +2597,7 @@ public class SessionScanTests
     }
 
     [AvaloniaFact]
-    public void EndingASessionRefusesEveryShapeItCannotEnd()
+    public async Task EndingASessionRefusesEveryShapeItCannotEnd()
     {
         // The one irreversible thing in the app, so what is asserted here is the
         // refusals. An id with no status at all, and a session with no pid
@@ -2611,13 +2613,13 @@ public class SessionScanTests
         statuses["pidless"] = new SessionStatus { Source = SessionSource.ClaudeCode, SessionPid = 0 };
         statuses["gateway"] = new SessionStatus { Source = SessionSource.OpenClaw, SessionPid = 4321 };
 
-        manager.EndSession("never-heard-of-it");
-        manager.EndSession("pidless");
-        manager.EndSession("gateway");
+        await manager.EndSession("never-heard-of-it");
+        await manager.EndSession("pidless");
+        await manager.EndSession("gateway");
     }
 
     [AvaloniaFact]
-    public void EndingASessionSignalsThePidTheStatusNames()
+    public async Task EndingASessionSignalsThePidTheStatusNames()
     {
         // The one path that does reach SessionTerminator, driven with a pid
         // nothing can be behind: 2147483646 is far above any platform's pid_max,
@@ -2642,7 +2644,7 @@ public class SessionScanTests
             SessionPid = NeverAllocatedPid,
         };
 
-        manager.EndSession("ends");
+        await manager.EndSession("ends");
 
         // Nothing is removed from screen by the call itself — the orb goes when
         // the next scan sees the pid stop answering, which is the same path any
@@ -2661,14 +2663,23 @@ public class SessionScanTests
     // makes the case constructible at all: asking the real process table would
     // be asking about whichever daemon happens to be running beside the suite.
     [AvaloniaFact]
-    public void EndingASessionThatIsHostingTheDaemonIsRefused()
+    public async Task EndingASessionThatIsHostingTheDaemonIsRefused()
     {
         using var scratch = new Scratch();
 
+        // Which thread each read ran on, by managed id rather than by asking
+        // Dispatcher.UIThread from the pool — CB-183 is what reading that
+        // property off a stray thread once cost this suite.
+        var uiThread = Environment.CurrentManagedThreadId;
         var asked = new List<int>();
+        var askedOn = new List<int>();
         var manager = Manager(scratch, () => Listing(), dependents: pid =>
         {
-            asked.Add(pid);
+            lock (asked)
+            {
+                asked.Add(pid);
+                askedOn.Add(Environment.CurrentManagedThreadId);
+            }
             return new SessionDependents.Verdict(DaemonBelow: true, JobsBelow: 3);
         });
 
@@ -2682,7 +2693,7 @@ public class SessionScanTests
             SessionPid = NeverAllocatedPid,
         };
 
-        manager.EndSession("husk");
+        await manager.EndSession("husk");
 
         // Asked about the session's own pid, and only that one — the whole
         // point of the rule is that this pid is not the ordinary case, so a
@@ -2690,18 +2701,24 @@ public class SessionScanTests
         // a different question correctly.
         Assert.Equal(new[] { NeverAllocatedPid }, asked);
 
-        // And the menu row for it says so, from the same reading.
-        var verdict = manager.DependentsOf("husk");
+        // And the menu row for it says so, from the same rule.
+        var verdict = await manager.DependentsOfAsync("husk");
         Assert.True(SessionDependents.BlocksTermination(verdict));
         Assert.Equal("Can't end this: it is your view of 3 background jobs",
             SessionDependents.Explain(verdict));
+
+        // CB-228: neither read ran on the UI thread. On Windows each is a WMI
+        // query over the whole process table, 218-273 ms measured, and both the
+        // right-click and the End click used to wait for it here.
+        Assert.Equal(2, askedOn.Count);
+        Assert.DoesNotContain(uiThread, askedOn);
     }
 
     // The other half of the acceptance, and the half the guard is most likely to
     // break: an ordinary session with nothing underneath it still reaches the
     // terminator exactly as it did before.
     [AvaloniaFact]
-    public void EndingAnOrdinarySessionStillAsksAndStillProceeds()
+    public async Task EndingAnOrdinarySessionStillAsksAndStillProceeds()
     {
         using var scratch = new Scratch();
 
@@ -2722,11 +2739,223 @@ public class SessionScanTests
             SessionPid = NeverAllocatedPid,
         };
 
-        manager.EndSession("ordinary");
+        await manager.EndSession("ordinary");
 
         Assert.Equal(new[] { NeverAllocatedPid }, asked);
         Assert.Equal("End this session",
-            SessionDependents.Explain(manager.DependentsOf("ordinary")));
+            SessionDependents.Explain(await manager.DependentsOfAsync("ordinary")));
+    }
+
+    // --- CB-228: the read and the kill run off the UI thread ----------------
+    //
+    // Thread identity is compared by managed id, never by asking
+    // Dispatcher.UIThread from a pool thread — CB-183 is what reading that
+    // property off a stray thread once cost this suite.
+
+    private static Dictionary<string, SessionStatus> StatusesOf(SessionManager manager) =>
+        (Dictionary<string, SessionStatus>)typeof(SessionManager)
+            .GetField("_statuses", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .GetValue(manager)!;
+
+    private static SessionStatus Endable(int pid = NeverAllocatedPid) =>
+        new() { Source = SessionSource.ClaudeCode, SessionPid = pid };
+
+    // End to end from the orb: the End row's click goes through the orb's
+    // manager, the guard reads on a pool thread, and the kill is handed the
+    // pid on a pool thread too. The kill is the seam, so nothing is signalled.
+    [AvaloniaFact]
+    public async Task TheEndClickReadsAndKillsOffTheUiThread()
+    {
+        using var scratch = new Scratch();
+
+        var uiThread = Environment.CurrentManagedThreadId;
+        var readOn = -1;
+        var killed = new TaskCompletionSource<(int Pid, int Thread)>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var manager = Manager(scratch, () => Listing(),
+            dependents: _ =>
+            {
+                readOn = Environment.CurrentManagedThreadId;
+                return SessionDependents.Nothing;
+            },
+            terminate: (pid, _) => killed.TrySetResult((pid, Environment.CurrentManagedThreadId)));
+
+        StatusesOf(manager)["clicked"] = Endable();
+        var orb = new OrbWindow("clicked") { CurrentManager = () => manager };
+
+        orb.EndSession_Click(null, new Avalonia.Interactivity.RoutedEventArgs());
+
+        var (pid, killOn) = await killed.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(NeverAllocatedPid, pid);
+        Assert.NotEqual(uiThread, readOn);
+        Assert.NotEqual(uiThread, killOn);
+    }
+
+    // The husk is still refused after the move — and refused before the kill
+    // is reached, not by the kill's own belt-and-braces check.
+    [AvaloniaFact]
+    public async Task ARefusedSessionIsNeverHandedToTheKill()
+    {
+        using var scratch = new Scratch();
+
+        var kills = 0;
+        var manager = Manager(scratch, () => Listing(),
+            dependents: _ => new SessionDependents.Verdict(DaemonBelow: true, JobsBelow: 2),
+            terminate: (_, _) => Interlocked.Increment(ref kills));
+        StatusesOf(manager)["husk"] = Endable();
+
+        await manager.EndSession("husk");
+
+        Assert.Equal(0, kills);
+    }
+
+    // The re-check the move made necessary. While the read runs, a scan can
+    // drop the session or give its id a new pid; the kill must not then land
+    // on the pid the click saw. The gate holds the read open while the test
+    // changes the status underneath it, on the UI thread, as a scan would.
+    [AvaloniaTheory]
+    [InlineData("dropped")]
+    [InlineData("new pid")]
+    [InlineData("no longer endable")]
+    public async Task ASessionThatChangedDuringTheReadIsNotKilled(string change)
+    {
+        using var scratch = new Scratch();
+
+        using var gate = new ManualResetEventSlim(false);
+        var kills = 0;
+        var manager = Manager(scratch, () => Listing(),
+            dependents: _ =>
+            {
+                Assert.True(gate.Wait(TimeSpan.FromSeconds(10)));
+                return SessionDependents.Nothing;
+            },
+            terminate: (_, _) => Interlocked.Increment(ref kills));
+        var statuses = StatusesOf(manager);
+        statuses["moving"] = Endable();
+
+        var ending = manager.EndSession("moving");
+        Assert.False(ending.IsCompleted);
+
+        switch (change)
+        {
+            case "dropped": statuses.Remove("moving"); break;
+            case "new pid": statuses["moving"] = Endable(NeverAllocatedPid - 1); break;
+            default: statuses["moving"] = new SessionStatus { Source = SessionSource.OpenClaw, SessionPid = NeverAllocatedPid }; break;
+        }
+
+        gate.Set();
+        await ending;
+
+        Assert.Equal(0, kills);
+    }
+
+    // A read that throws signals nothing: the failure escapes before the kill
+    // is reached, the direction an irreversible action should fail in.
+    [AvaloniaFact]
+    public async Task AReadThatThrowsEndsNothing()
+    {
+        using var scratch = new Scratch();
+
+        var kills = 0;
+        var manager = Manager(scratch, () => Listing(),
+            dependents: _ => throw new InvalidOperationException("no WMI"),
+            terminate: (_, _) => Interlocked.Increment(ref kills));
+        StatusesOf(manager)["broken"] = Endable();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => manager.EndSession("broken"));
+        Assert.Equal(0, kills);
+    }
+
+    // QA's finding: two Ends for one session, the second while the first is
+    // still reading, used to both pass StillEndable and kill twice. The second
+    // is now a no-op while the first is in flight.
+    [AvaloniaFact]
+    public async Task ADoubleEndKillsOnce()
+    {
+        using var scratch = new Scratch();
+
+        var kills = 0;
+        var manager = Manager(scratch, () => Listing(),
+            dependents: _ => { Thread.Sleep(150); return SessionDependents.Nothing; },
+            terminate: (_, _) => Interlocked.Increment(ref kills));
+        StatusesOf(manager)["dbl"] = Endable();
+
+        var first = manager.EndSession("dbl");
+        var second = manager.EndSession("dbl");
+        await Task.WhenAll(first, second);
+
+        Assert.Equal(1, kills);
+
+        // And the guard is released once the first finishes: a later End —
+        // the next gesture, not a double click — is not swallowed by it.
+        await manager.EndSession("dbl");
+        Assert.Equal(2, kills);
+    }
+
+    // The click observes its task: a read that throws is written to crash.log
+    // under the gesture's name, rather than vanishing into a discarded task.
+    [AvaloniaFact]
+    public async Task AFailedEndFromTheClickIsWrittenToTheCrashLog()
+    {
+        using var scratch = new Scratch();
+        var logDir = Path.Combine(scratch.Dir, "logs");
+        using var scope = CrashLog.ScopeForTests(logDir);
+
+        var kills = 0;
+        var manager = Manager(scratch, () => Listing(),
+            dependents: _ => throw new InvalidOperationException("WMI said no"),
+            terminate: (_, _) => Interlocked.Increment(ref kills));
+        StatusesOf(manager)["failing"] = Endable();
+        var orb = new OrbWindow("failing") { CurrentManager = () => manager };
+
+        await orb.EndSessionRecordingFailureAsync();
+
+        Assert.Equal(0, kills);
+        var log = File.ReadAllText(CrashLog.Path_);
+        Assert.Contains("End this session", log);
+        Assert.Contains("WMI said no", log);
+    }
+
+    // The menu's real Opening handler, against a manager the orb was given: the
+    // row starts checking, the read is the manager's, on a pool thread, and the
+    // husk's refusal lands on the row once it answers.
+    [AvaloniaFact]
+    public async Task OpeningTheMenuAsksTheManagerOffTheUiThread()
+    {
+        using var scratch = new Scratch();
+
+        var uiThread = Environment.CurrentManagedThreadId;
+        using var gate = new ManualResetEventSlim(false);
+        var readOn = -1;
+        var manager = Manager(scratch, () => Listing(), dependents: _ =>
+        {
+            readOn = Environment.CurrentManagedThreadId;
+            Assert.True(gate.Wait(TimeSpan.FromSeconds(10)));
+            return new SessionDependents.Verdict(DaemonBelow: true, JobsBelow: 2);
+        });
+        StatusesOf(manager)["opened"] = Endable();
+
+        var orb = new OrbWindow("opened") { CurrentManager = () => manager };
+        orb.UpdateFrom(new SessionStatus { Source = SessionSource.ClaudeCode, State = "idle", SessionPid = NeverAllocatedPid });
+        var row = orb.FindControl<MenuItem>("EndSessionItem")!;
+
+        orb.SessionMenu_Opening(null, new System.ComponentModel.CancelEventArgs());
+
+        // The handler has returned, with the read still held open by the gate
+        // — which is only possible because it is not waiting for it.
+        Assert.False(row.IsEnabled);
+        Assert.Equal(SessionDependents.CheckingHeader, row.Header);
+
+        gate.Set();
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (Equals(row.Header, SessionDependents.CheckingHeader) && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(5);
+        }
+
+        Assert.NotEqual(uiThread, readOn);
+        Assert.False(row.IsEnabled);
+        Assert.Equal("Can't end this: it is your view of 2 background jobs", row.Header);
     }
 
     // A session the menu would never offer the row for is not asked about at
@@ -2734,7 +2963,7 @@ public class SessionScanTests
     // process table every time a gateway orb's menu opens, for a row that is
     // not on it.
     [AvaloniaFact]
-    public void ASessionThatCannotBeEndedIsNotAskedWhatIsUnderneathIt()
+    public async Task ASessionThatCannotBeEndedIsNotAskedWhatIsUnderneathIt()
     {
         using var scratch = new Scratch();
 
@@ -2752,12 +2981,12 @@ public class SessionScanTests
         statuses["pidless"] = new SessionStatus { Source = SessionSource.ClaudeCode, SessionPid = 0 };
         statuses["gateway"] = new SessionStatus { Source = SessionSource.OpenClaw, SessionPid = 4321 };
 
-        Assert.Equal(SessionDependents.Nothing, manager.DependentsOf("pidless"));
-        Assert.Equal(SessionDependents.Nothing, manager.DependentsOf("gateway"));
-        Assert.Equal(SessionDependents.Nothing, manager.DependentsOf("never-heard-of-it"));
+        Assert.Equal(SessionDependents.Nothing, await manager.DependentsOfAsync("pidless"));
+        Assert.Equal(SessionDependents.Nothing, await manager.DependentsOfAsync("gateway"));
+        Assert.Equal(SessionDependents.Nothing, await manager.DependentsOfAsync("never-heard-of-it"));
 
-        manager.EndSession("pidless");
-        manager.EndSession("gateway");
+        await manager.EndSession("pidless");
+        await manager.EndSession("gateway");
 
         Assert.Equal(0, asked);
     }

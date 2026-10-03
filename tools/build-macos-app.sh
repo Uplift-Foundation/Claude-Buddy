@@ -274,6 +274,26 @@ rm -rf "$DIST/publish-$RID"
 
 echo "==> Built $APP"
 if [[ $INSTALL -eq 1 ]]; then
+  INSTALLED_EXE="/Applications/$APP_NAME.app/Contents/MacOS/ClaudeBuddy"
+  KEEPALIVE_PLIST="$HOME/Library/LaunchAgents/$BUNDLE_ID.plist"
+
+  # CB-206: the running Buddy goes before the bundle under it is replaced.
+  # The single-instance mutex is one per user since CB-206, so the copy the
+  # keep-alive starts below would find the old one holding it and exit 0 —
+  # and SuccessfulExit=false means launchd would not try again, leaving the
+  # old binary running. Unloading the keep-alive comes first, because it is
+  # launchd's own job that would otherwise restart the old copy the moment
+  # it is stopped; the reconcile below loads it again either way.
+  # tools/stop-installed-buddy.sh has the rest of the reasoning.
+  if [[ -f "$KEEPALIVE_PLIST" ]]; then
+    launchctl unload "$KEEPALIVE_PLIST" >/dev/null 2>&1 || true
+  fi
+  STOPPED="$(tools/stop-installed-buddy.sh "$INSTALLED_EXE")" ||
+    echo "    warning: a running Claude Buddy survived SIGKILL" >&2
+  if [[ -n "$STOPPED" ]]; then
+    echo "==> Stopped the running Claude Buddy ($(echo $STOPPED | tr '\n' ' '))"
+  fi
+
   echo "==> Installing to /Applications"
   rm -rf "/Applications/$APP_NAME.app"
   cp -R "$APP" "/Applications/"
@@ -286,7 +306,33 @@ if [[ $INSTALL -eq 1 ]]; then
   # header explains why this call lives there instead of in this script.
   # Best-effort: a failure here shouldn't fail an otherwise-successful build.
   "/Applications/$APP_NAME.app/Contents/Resources/install-hooks.sh" --keepalive-only || true
-  echo "    Launch it with: open -a \"$APP_NAME\""
+
+  # CB-206: one Buddy, running the new binary, if one was running before.
+  # With the keep-alive registered, launchd has just started it; give that a
+  # moment to show. Otherwise — not opted in to the keep-alive, or its load
+  # failed — relaunch the copy this install stopped, through LaunchServices
+  # and without CLAUDE_CONFIG_DIR, which an agent shell would otherwise leak
+  # into the app and mislabel every account orb with. Nothing is launched if
+  # nothing was running: a first install still leaves starting it to you.
+  running_installed() { pgrep -x ClaudeBuddy | while read -r p; do
+    [[ "$(ps -o comm= -p "$p" 2>/dev/null)" == "$INSTALLED_EXE" ]] && echo "$p"; done; }
+  if [[ -n "$STOPPED" ]]; then
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      [[ -n "$(running_installed)" ]] && break
+      sleep 0.5
+    done
+    if [[ -z "$(running_installed)" ]]; then
+      env -u CLAUDE_CONFIG_DIR open -a "/Applications/$APP_NAME.app"
+      sleep 2
+    fi
+  fi
+
+  RUNNING="$(running_installed)"
+  case "$(printf '%s' "$RUNNING" | grep -c .)" in
+    0) echo "    Launch it with: open -a \"$APP_NAME\"" ;;
+    1) echo "==> Running: pid $RUNNING" ;;
+    *) echo "    warning: more than one Claude Buddy is running: $(echo $RUNNING)" >&2 ;;
+  esac
 else
   echo "    Try it with:    open \"$APP\""
   echo "    Install it with: $0 --install"

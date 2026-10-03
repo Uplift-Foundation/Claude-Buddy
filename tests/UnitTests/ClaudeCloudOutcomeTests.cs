@@ -249,19 +249,22 @@ public class ClaudeCloudOutcomeTests
 
     // --- the write refusals (CB-199) -------------------------------------------
 
-    // **Not measured.** The gate had no ended session to aim at; 409 meaning
-    // `session_inactive` is the CLI binary's reading of this route. So the
-    // detail names whose reading it is rather than stating it as a fact.
-    [Fact]
-    public void AFourOhNineIsASessionNoLongerTakingInput()
+    // **Measured by CB-225**, on a send to a session archived moments
+    // earlier: 409, error type `session_not_active`. The kind follows the
+    // status alone, so CB-199's binary-derived `session_inactive` body maps
+    // the same — pinned too, because a body the API never sends must not be
+    // what this test happens to depend on.
+    [Theory]
+    [InlineData("""{"error":{"message":"Session session_01FixtureOnly is not active","type":"session_not_active"},"request_id":"req_1","type":"error"}""")]
+    [InlineData("""{"type":"error","error":{"type":"session_inactive"},"request_id":"req_1"}""")]
+    public void AFourOhNineIsASessionNoLongerTakingInput(string body)
     {
-        var outcome = CloudOutcomes.OutcomeFor(409,
-            """{"type":"error","error":{"type":"session_inactive"},"request_id":"req_1"}""");
+        var outcome = CloudOutcomes.OutcomeFor(409, body);
 
         Assert.Equal(CloudOutcomeKind.SessionInactive, outcome.Kind);
         Assert.Equal(409, outcome.Status);
         Assert.Equal(CloudOutcomes.SessionInactiveDetail, outcome.Detail);
-        Assert.Contains("Claude Code reads", outcome.Detail!, StringComparison.Ordinal);
+        Assert.Contains("no longer active", outcome.Detail!, StringComparison.Ordinal);
     }
 
     [Fact]

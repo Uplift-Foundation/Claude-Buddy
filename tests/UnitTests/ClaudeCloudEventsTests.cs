@@ -605,13 +605,18 @@ public partial class ClaudeCloudEventsTests
         bool enabled = true, ICloudEventStream? stream = null)
     {
         var tick = clock ?? new FakeClock();
-        return new ClaudeCloudChatSession(session ?? Row(), api, creds ?? new CountingCredentials(),
+        var chat = new ClaudeCloudChatSession(session ?? Row(), api, creds ?? new CountingCredentials(),
             action => action())
         {
             Delay = tick.Delay,
             Enabled = () => enabled,
             Stream = stream,
         };
+
+        // So a wait for the next open can tell "not yet" from "never" by the
+        // run itself rather than by a clock (CB-230).
+        if (stream is FakeStream fake) fake.Run = () => chat.StreamTask;
+        return chat;
     }
 
     private static string PayloadUuid(CloudRequestContext context)

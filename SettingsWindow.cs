@@ -1493,8 +1493,9 @@ namespace ClaudeBuddy
                     + "asked every time; Claude Code refreshing its own login can bring the "
                     + "prompt back. Every Claude Code account directory you have listed is read "
                     + "(one prompt per account), and a prompt you decline is not asked again until that login changes or you press Retry; directories not listed are not seen. If no orbs appear, the line below says how far the read "
-                    + "got. Its chat panel can also send into the session, as the account that "
-                    + "owns it, using that same login.")
+                    + "got. Its chat panel can also send into the session, and its right-click "
+                    + "menu can archive or delete it, as the account that owns it, using that "
+                    + "same login.")
             };
 
             // Progressive disclosure, the same as every other section here: off

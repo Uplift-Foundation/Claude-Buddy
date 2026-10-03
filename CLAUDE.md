@@ -261,6 +261,8 @@ MACOS_SIGNING_IDENTITY="Developer ID Application: UPLIFT FOUNDATION (5AQ4ULRG3Z)
   ./tools/build-macos-app.sh --install
 ```
 
+`--install` stops the Buddy already running from `/Applications` before replacing it, and ends with exactly one running the new binary (launchd's keep-alive starts it if registered, otherwise the script relaunches it with `CLAUDE_CONFIG_DIR` stripped). **Do not relaunch by hand afterwards** — since CB-206 the single-instance mutex is one per user across sessions, so a manual launch just finds the new copy and exits. The script prints the running pid; a warning there is the thing to look at.
+
 macOS ties the Automation (Apple Events) consent to the app's code identity, so an ad-hoc build silently breaks click-to-focus until the user re-approves it in System Settings — and that failure is invisible. Same reason the bundle id is never renamed casually; the comment at the top of `tools/build-macos-app.sh` has the full story.
 
 **Local Network consent works the same way, and breaks on every upgrade.** Replacing `/Applications/Claude Buddy.app` gives the bundle a new CDHash, macOS re-evaluates Local Network access against it, and the grant does not carry over — so anything on the LAN, OpenClaw's gateway most of all, starts failing with `EHOSTUNREACH`. Nothing prompts loudly enough to notice: this is a menu-bar app with no Dock icon and no window.

@@ -19,5 +19,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\ClaudeBuddy.csproj" />
+    <!-- CB-206: a second process to claim the single-instance mutex from. -->
+    <ProjectReference Include="..\SingleInstanceProbe\SingleInstanceProbe.csproj" />
   </ItemGroup>
 </Project>

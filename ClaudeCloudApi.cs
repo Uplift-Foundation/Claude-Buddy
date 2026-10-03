@@ -67,11 +67,12 @@ namespace ClaudeBuddy
         // that is.
         Unavailable,
 
-        // 409, on a write. **Not measured**: CB-199's gate never had an ended
-        // session to aim at, so this is the Claude Code CLI's own reading of the
-        // status — its binary maps a 409 from `/v1/code/sessions/{id}/events` to
-        // `session_inactive` — rather than an answer anybody here has seen. The
-        // detail string says whose reading it is for that reason.
+        // 409, on a write. **Measured by CB-225**: a send to a session archived
+        // moments earlier answered 409 with error type `session_not_active`,
+        // "Session <id> is not active". CB-199 had only the CLI binary's name
+        // for it, `session_inactive`, which turned out to be the CLI's own
+        // label rather than the wire string — so nothing here matches on the
+        // type, only on the status.
         SessionInactive,
 
         // 413. Plain HTTP: the body was bigger than the endpoint takes. The CLI
@@ -95,11 +96,21 @@ namespace ClaudeBuddy
 
     // One attempt's verdict. Status is the HTTP status where there was one and 0
     // where the request never got an answer.
+    //
+    // SessionNotFound (CB-225) is true only for a 404 whose body is the
+    // handler's JSON `not_found_error`. A 404 comes in two kinds that mean
+    // opposite things — that, and the router's plain-text "404 page not
+    // found" for a route that does not exist — and Kind reads both as
+    // SessionGone. The distinction is made here, where the body is in hand,
+    // so it can travel without the body: HttpCloudApi hands a caller the body
+    // only on a 2xx (ResultFor), and archive and delete need the distinction
+    // on a 404.
     internal sealed record CloudOutcome(
         CloudOutcomeKind Kind,
         int Status,
         TimeSpan? RetryAfter = null,
-        string? Detail = null);
+        string? Detail = null,
+        bool SessionNotFound = false);
 
     // A verdict plus the body, for Ok. The body is deliberately a string rather
     // than a parsed roster: parsing belongs to ClaudeCloudRoster, and keeping the
@@ -271,6 +282,14 @@ namespace ClaudeBuddy
                 ? CodeSessionsPath + "/" + Uri.EscapeDataString(id!)
                 : null;
 
+        // A session's archive endpoint (CB-225). **Measured**: `POST` with `{}`
+        // answers 200 and the session back as archived. Refused locally for a
+        // malformed id, for the reason CodeEventsPath gives — this is a write.
+        internal static string? ArchivePath(string? id) =>
+            ClaudeCloudRoster.IsWellFormedId(id)
+                ? CodeSessionsPath + "/" + Uri.EscapeDataString(id!) + "/archive"
+                : null;
+
         // The media type a body goes out as. The only one the gate sent.
         internal const string JsonMediaType = "application/json";
 
@@ -346,13 +365,12 @@ namespace ClaudeBuddy
 
         // The two write refusals, worded for what is actually known.
         //
-        // The 409 sentence names the CLI as the source of its meaning because
-        // that is the evidence: nobody here has had a 409 back, and the CB-164
-        // lesson above is exactly what happens when a detail string states as a
-        // fact something that was only a reading. It is worded so it stays true
-        // if the CLI's reading turns out to be wrong.
+        // The 409 sentence used to name the CLI as the source of its meaning,
+        // because a reading was all there was. CB-225 measured it — the API's
+        // own words are "is not active", on a session that had been archived —
+        // so it now says what the endpoint said.
         internal const string SessionInactiveDetail =
-            "the endpoint answered 409, which Claude Code reads as the session no longer taking input";
+            "the endpoint answered 409: this session is no longer active";
 
         internal const string SessionGoneDetail = "this cloud session no longer exists";
 
@@ -397,6 +415,33 @@ namespace ClaudeBuddy
             }
         }
 
+        // The handler's own word for "no such session". Matched on the parsed
+        // error type, never on the message, which names the session id.
+        internal const string NotFoundErrorType = "not_found_error";
+
+        // Whether a body is the handler's "no such session". Anything that is
+        // not a JSON error object of exactly that type — the router's plain
+        // text, an empty body, some other error — is not.
+        internal static bool IsSessionNotFoundError(string? body)
+        {
+            if (string.IsNullOrWhiteSpace(body)) return false;
+
+            try
+            {
+                using var doc = JsonDocument.Parse(body);
+                return doc.RootElement.ValueKind == JsonValueKind.Object
+                       && doc.RootElement.TryGetProperty("error", out var error)
+                       && error.ValueKind == JsonValueKind.Object
+                       && error.TryGetProperty("type", out var type)
+                       && type.ValueKind == JsonValueKind.String
+                       && type.GetString() == NotFoundErrorType;
+            }
+            catch (JsonException)
+            {
+                return false;
+            }
+        }
+
         internal static CloudOutcome OutcomeFor(int status, string? body,
             TimeSpan? retryAfter = null, bool cfMitigated = false)
         {
@@ -427,7 +472,7 @@ namespace ClaudeBuddy
 
                 case 404:
                     return new CloudOutcome(CloudOutcomeKind.SessionGone, status, null,
-                        SessionGoneDetail);
+                        SessionGoneDetail, IsSessionNotFoundError(body));
 
                 case 409:
                     return new CloudOutcome(CloudOutcomeKind.SessionInactive, status, null,
@@ -594,6 +639,20 @@ namespace ClaudeBuddy
         // still outstanding after half a minute is not going to help the user.
         private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(30) };
 
+        // What a caller is handed: the body on a 2xx, and on anything else
+        // only the verdict. An error body is unvetted text — it can echo ids,
+        // and nothing here has an allow-list for it — so it stops at the
+        // wrapper, and whatever a caller needs from it is decided in OutcomeFor
+        // and carried on the outcome (SessionNotFound is the case CB-225 found).
+        //
+        // Pulled out of SendAsync, which is excluded from coverage, so the rule
+        // is testable, and so a test's fake can apply the same rule instead of
+        // a friendlier one: CB-225's first fakes handed every body back, and
+        // the bug that hid — every delete reading as unconfirmed — was only
+        // found by reading this line.
+        internal static CloudApiResult ResultFor(CloudOutcome outcome, string? body) =>
+            new(outcome, outcome.Kind == CloudOutcomeKind.Ok ? body : null);
+
         public async Task<CloudApiResult> SendAsync(CloudRequestContext context,
             CancellationToken token)
         {
@@ -613,8 +672,7 @@ namespace ClaudeBuddy
                 var outcome = CloudOutcomes.OutcomeFor(
                     (int)response.StatusCode, body, retryAfter, mitigated);
 
-                return new CloudApiResult(outcome,
-                    outcome.Kind == CloudOutcomeKind.Ok ? body : null);
+                return ResultFor(outcome, body);
             }
             catch (OperationCanceledException) when (!token.IsCancellationRequested)
             {
