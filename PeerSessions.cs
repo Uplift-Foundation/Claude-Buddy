@@ -45,9 +45,42 @@ namespace ClaudeBuddy
         // connection per interval, which is nothing.
         internal static readonly TimeSpan ReconnectEvery = TimeSpan.FromSeconds(10);
 
+        // The running link's host, or — only in a test, only when no real one
+        // is running — the stand-in UseClientForTests installed. The real host
+        // always wins, so a test cannot shadow a live link.
         internal static PeerMirrorHost? Host
         {
-            get { lock (Gate) return _host; }
+            get { lock (Gate) return _host ?? _hostForTests; }
+        }
+
+        // A host with no link started, holding a mirror client a test built
+        // over a fake wire. Installed here because this is where every caller in
+        // the app gets its client from (CB-238): a seam anywhere else would let
+        // a test pass through a path production never takes. Never set by the
+        // app.
+        private static PeerMirrorHost? _hostForTests;
+
+        internal static void UseClientForTests(RemoteMirrorClient? client)
+        {
+            PeerMirrorHost? retired = null;
+
+            lock (Gate)
+            {
+                if (client is null)
+                {
+                    retired = _hostForTests;
+                    _hostForTests = null;
+                }
+                else
+                {
+                    _hostForTests ??= new PeerMirrorHost();
+                    _hostForTests.UseClientForTests(client);
+                }
+            }
+
+            // Disposing a host disposes its link, which was never started; the
+            // client belongs to the test and is left alone.
+            retired?.Dispose();
         }
 
         internal static bool Running

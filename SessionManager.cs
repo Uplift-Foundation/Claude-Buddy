@@ -668,19 +668,6 @@ namespace ClaudeBuddy
             // where it starts now, for why a machine that stays locked can no
             // longer leave it never called at all (CB-130).
 
-            // Subscribed unconditionally, unlike OpenClawSessions.Restart in
-            // serveOnLaunch:
-            // this only wires up an event, and starting the bridge is a separate,
-            // deliberate act because it costs the user's quota. Nothing fires
-            // here until something asks for it.
-            //
-            // Routed centrally rather than each chat session subscribing for
-            // itself, because there is one bridge feeding all of them and a
-            // message names only who it came from — so the fan-out belongs
-            // wherever the sessions are already indexed by name, which is here.
-            RemoteControlSessions.MessageReceived += OnRemoteMessage;
-            RemoteControlSessions.WorkingChanged += OnRemoteWorkingChanged;
-
 
             _debounce.Tick += (_, _) =>
             {
@@ -3291,34 +3278,6 @@ namespace ClaudeBuddy
         {
             var dash = sessionTitle.IndexOf(" — ", StringComparison.Ordinal);
             return dash > 0 ? sessionTitle[(dash + 3)..].Trim() : sessionTitle;
-        }
-
-        // A message from a session on another machine, handed to the one
-        // conversation it belongs to.
-        //
-        // Delivered only to an already-open conversation, and that is the right
-        // shape rather than a gap: this channel is a reply to something someone
-        // typed here, so an inbound message with no panel behind it would be a
-        // reply to nothing. A remote session cannot start a conversation.
-        private void OnRemoteMessage(BridgeProtocol.InboundMessage message)
-        {
-            // Keyed the way the scan mints ids, so this is a lookup rather than
-            // a walk — and it means a remote session named the same as a local
-            // one cannot be delivered to the local one's panel.
-            // Offered to every open remote conversation and filtered by each.
-            // A direct dictionary hit would need the exact key, and the peer
-            // list's casing is upstream's to change — so the sessions decide,
-            // each checking both the name and the account it belongs to.
-            foreach (var candidate in _remoteChats.Values) candidate.OnInbound(message);
-        }
-
-        // A remote session started or stopped working. The orb learns this from
-        // the snapshot on the next scan; this is for the panel, which has no scan
-        // to wait on and would otherwise show a sent message and nothing else
-        // for however long the other machine takes.
-        private void OnRemoteWorkingChanged(string sessionKey, bool working)
-        {
-            if (_remoteChats.TryGetValue(sessionKey, out var chat)) chat.SetWorking(working);
         }
 
         public SessionStatus? StatusFor(string? sessionId) =>

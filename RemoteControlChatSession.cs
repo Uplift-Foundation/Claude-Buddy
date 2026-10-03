@@ -458,16 +458,12 @@ namespace ClaudeBuddy
                 // draft is indistinguishable from the real thing once it is on
                 // screen, and quietly substituting one at the exact moment
                 // integrity failed would be the worst possible time to do it.
-                // If the relay is stuck on a prompt, that is the real answer and
-                // it names what to do about it. Saying "try again" to somebody
-                // whose relay is waiting on a keypress sends them round the loop
-                // that produced this.
-                var stall = RemoteControlSessions.StallFor(_account);
-
-                Note(stall is null
-                    ? $"Couldn't verify {_remoteName}'s transcript — {why}. Showing nothing rather "
-                      + "than something altered; close and reopen the panel to try again."
-                    : $"Couldn't reach {_remoteName}: this machine's relay session is {stall}");
+                // There used to be a second wording here, naming the prompt a
+                // stuck relay was waiting on. The relay is gone (CB-238), and
+                // the table it read was never filled by anything else, so it
+                // could not be reached.
+                Note($"Couldn't verify {_remoteName}'s transcript — {why}. Showing nothing rather "
+                     + "than something altered; close and reopen the panel to try again.");
             });
         }
 
@@ -596,6 +592,13 @@ namespace ClaudeBuddy
         // Named so the wording is reachable from a test even though the method
         // that says it is not measured: a refusal that does not name the setting
         // to turn on is a dead end for whoever reads it.
+        internal const string NotConnectedNote =
+            "Not connected to Claude Buddy on the other machine right now. Check the link in "
+          + "Settings, then try again.";
+
+        // Said when the direct link has no client to send through. It named a
+        // relay session until CB-238; there has been no relay since 937de9ec,
+        // and the only thing that can be missing here is the link itself.
         internal const string RemoteControlOffNote =
             "Remote sessions are switched off. Turn on \"Show sessions from other machines\" in Settings.";
 
@@ -609,7 +612,7 @@ namespace ClaudeBuddy
             var client = RemoteControlSessions.MirrorClientFor(_account);
             if (client is null)
             {
-                Note("The relay session isn't running. Try again to start it back up.");
+                Note(NotConnectedNote);
                 return ChatSendOutcome.Failed;
             }
 
@@ -619,8 +622,6 @@ namespace ClaudeBuddy
             _pending = mine;
             _pendingText = text.Trim();
             _pendingAt = DateTimeOffset.Now;
-
-            RemoteControlSessions.Touch();
 
             var outcome = await client.SendInputDetailedAsync(_remoteName, text).ConfigureAwait(true);
 
@@ -835,118 +836,6 @@ namespace ClaudeBuddy
             }
 
             return false;
-        }
-
-        // --- inbound (messaging mode) ---------------------------------------------
-
-        // A message from the other machine. Called on the UI thread by
-        // RemoteControlSessions, which is the contract IRemoteChatSession states.
-        public void OnInbound(BridgeProtocol.InboundMessage message)
-        {
-            // Both halves must match. The name says which session and the
-            // account says whose — and with two accounts in play, a name on its
-            // own can be true of two different machines at once.
-            if (!message.FromName.Equals(_remoteName, StringComparison.OrdinalIgnoreCase)) return;
-            if (message.Account.Length > 0
-                && !message.Account.Equals(_account, StringComparison.Ordinal))
-            {
-                return;
-            }
-            if (string.IsNullOrWhiteSpace(message.Body)) return;
-
-            // In live view the transcript is the source of truth and a peer
-            // message would be a second, differently-worded account of
-            // something already shown. Dropped rather than appended: showing
-            // both is precisely the confusion this feature was built to end.
-            //
-            // Only once it really is showing that transcript, though. Before the
-            // first window lands there is no second account to be confused with
-            // — there is nothing on screen at all — so dropping the message here
-            // makes the panel strictly worse than the messaging channel it
-            // replaced. See _painted.
-            if (_mirroring && _painted) return;
-
-            // The answer supersedes the "working" line, so that comes off first —
-            // leaving it above the reply would read as though it were still going.
-            ClearWorkingNote();
-
-            Add(new ChatTurn
-            {
-                Role = ChatRole.Assistant,
-                Text = message.Body,
-                IsComplete = true
-            });
-        }
-
-        // The waiting indicator, and the reason it is not decorative.
-        //
-        // A reply can be minutes away — the remote session may be running a
-        // whole command — and until it lands the panel is a message you typed
-        // and nothing else. That is indistinguishable from a send that silently
-        // failed, which is the wrong thing to leave someone guessing about.
-        //
-        // Only in messaging mode. A live view shows the work itself: the far
-        // session's own turns arrive as it makes them, so a line claiming it is
-        // working would sit under the evidence that it is.
-        private ChatTurn? _workingNote;
-
-        public void SetWorking(bool working)
-        {
-            // Same rule as OnInbound, for the same reason: the live view only
-            // supersedes the working line once it is actually showing the work.
-            if (_mirroring && _painted) return;
-
-            if (working)
-            {
-                if (_workingNote is not null) return;
-
-                // IsComplete false rather than true: this is a turn still in
-                // progress, which is what the flag means everywhere else, and it
-                // keeps the row from reading as a finished statement.
-                _workingNote = new ChatTurn
-                {
-                    Role = ChatRole.System,
-                    Text = $"{_remoteName} is working…",
-                    IsComplete = false
-                };
-
-                Add(_workingNote);
-                return;
-            }
-
-            // Went idle without answering. The note still comes off — a stale
-            // "working…" is worse than no indicator, because it is a claim rather
-            // than an absence.
-            ClearWorkingNote();
-        }
-
-        private void ClearWorkingNote()
-        {
-            if (_workingNote is null) return;
-
-            var note = _workingNote;
-            _workingNote = null;
-
-            // Removed rather than rewritten. Turning it into "finished" would
-            // leave a line nobody needs in a transcript that is only ever a
-            // handful of turns long.
-            if (_history.Remove(note)) Removed?.Invoke(note);
-        }
-
-        // The panel rebuilds its list from History when this fires. There is no
-        // TurnRemoved on IRemoteChatSession — nothing else has ever needed to
-        // take a turn back — so this is deliberately local to this class and the
-        // panel subscribes only when it recognises the type.
-        public event Action<ChatTurn>? Removed;
-
-        // Said out loud rather than silently dropping the conversation, because
-        // an idle shutdown is invisible from the panel: nothing on screen
-        // changes, and the next message would otherwise be the first hint.
-        public void OnBridgeStopped(string why)
-        {
-            if (State == RemoteChatState.Error) return;
-
-            Note($"The relay session stopped ({why}). Sending again will start it back up.");
         }
 
         public void Cancel()

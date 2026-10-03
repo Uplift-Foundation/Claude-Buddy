@@ -1,5 +1,7 @@
 # Remote Control (`/rc`) sessions — spike findings
 
+> **Status (CB-238, Oct 2026): historical record.** The relay these findings were measured for was deleted in `937de9ec` (30 Aug 2026), and CB-238 removed the code it left behind — the `ListAgents` peer-list parser, the relay prompts, the health and stall readers, and the relay table in `RemoteControlSessions`. Remote orbs now come only over the direct link from a Claude Buddy on the far machine; a machine without Buddy shows nothing. The formats below are kept because they are still what Claude Code's Remote Control tools produce, and the section at the end, "The peer-list format, recorded after its parser was deleted", collects what the deleted parser knew.
+
 Everything here was measured on 23 Aug 2026 against two real machines on one
 account: a MacBook at `198.51.100.11` running the bridge, and a Mac mini
 (`avatar.internal`, `198.51.100.10`) running the session being controlled.

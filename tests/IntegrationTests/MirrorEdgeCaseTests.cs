@@ -408,40 +408,6 @@ public class MirrorEdgeCaseTests : IDisposable
         Assert.Empty(_deltas);
     }
 
-    // --- asking a session what it is ------------------------------------------------
-
-    // Asked once *ever* meant never for anyone whose first ask went unanswered:
-    // that session's autocomplete stayed empty for as long as Buddy ran, with
-    // nothing on screen to say a question had been asked at all.
-    [Fact]
-    public void AnUnansweredCapabilityQuestionIsAskedAgainLaterButNotForever()
-    {
-        var now = new DateTime(2026, 8, 23, 12, 0, 0, DateTimeKind.Utc);
-        RemoteControlSessions.Now = () => now;
-
-        const string key = Account + ":" + Name;
-
-        Assert.True(RemoteControlSessions.ShouldAsk(key));
-
-        // Not again straight away — a poll every twenty seconds must not become
-        // a message every twenty seconds.
-        Assert.False(RemoteControlSessions.ShouldAsk(key));
-
-        now = now.AddMinutes(9);
-        Assert.False(RemoteControlSessions.ShouldAsk(key));
-
-        now = now.AddMinutes(2);
-        Assert.True(RemoteControlSessions.ShouldAsk(key));
-
-        now = now.AddMinutes(11);
-        Assert.True(RemoteControlSessions.ShouldAsk(key));
-
-        // Three is the cap. A session that has ignored three is telling you
-        // something, and each one is a real message into a real session.
-        now = now.AddMinutes(11);
-        Assert.False(RemoteControlSessions.ShouldAsk(key));
-    }
-
     // A far Buddy's roster carries the command list, read off its own disk, so
     // it wins over anything a model recited — and it includes built-ins, which
     // now genuinely run.
