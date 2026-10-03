@@ -1326,4 +1326,14 @@ public class ChatPanelTests : IDisposable
     [Fact]
     public void NoKindMeansNoChipEvenWithAMachine() =>
         Assert.Equal("", ChatPanel.KindChipLabel("\u21C4", null, null, "avatar"));
+
+    // CB-173. A kind with a drawn mark passes no glyph, because the mark is
+    // drawn beside the words instead — and then the words stand alone, with no
+    // two-space gap in front of them where a character used to be.
+    [Theory]
+    [InlineData(null, "another machine")]
+    [InlineData("needs input", "another machine \u00B7 needs input")]
+    public void ADrawnKindsChipIsJustTheWords(string? presence, string expected) =>
+        Assert.Equal(expected, ChatPanel.KindChipLabel(
+            null, "another machine", presence, machine: null));
 }

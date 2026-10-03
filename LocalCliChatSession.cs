@@ -866,7 +866,7 @@ namespace ClaudeBuddy
 
             DeliveryResult.NoRegistryEntry =>
                 $"{name} isn't registered with Claude Code any more — the job may have stopped. "
-                + "Attach it (⚙) to answer it there.",
+                + "Attach it with the gear button to answer it there.",
 
             DeliveryResult.UnsupportedProtocol =>
                 $"{name} speaks a peer protocol Buddy doesn't recognize, so nothing was sent.",
@@ -904,8 +904,12 @@ namespace ClaudeBuddy
             // button beside the box is what does exist, so the note points at it.
             if (shape == LocalSessionShape.Background)
             {
+                // Names the button rather than typing U+2699 at it (CB-173):
+                // in a chat bubble that character is a colour emoji on Windows,
+                // so the sentence would point at a mark that looks nothing like
+                // the drawn gear on the button itself.
                 return "This is a background job with no terminal of its own. "
-                    + "Attach it (⚙ beside the box) to answer it there.";
+                    + "Attach it with the gear button beside the box to answer it there.";
             }
 
             // Locally the reason is knowable, so it is said. TerminalTyping

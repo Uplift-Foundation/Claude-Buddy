@@ -197,6 +197,7 @@ namespace ClaudeBuddy
 
             // Centred, so the beat grows the heart in place rather than pushing
             // it towards the orb's rim.
+            HeartGlyph.Data = StreamGeometry.Parse(SymbolMarks.Heart);
             HeartGlyph.RenderTransform = _heartScale;
             HeartGlyph.RenderTransformOrigin = RelativePoint.Center;
 
@@ -756,6 +757,12 @@ namespace ClaudeBuddy
 
         private const double BadgeGlyphSize = 13;
 
+        // The drawn heart's square, a little under the badge glyph size: the
+        // outline fills its box edge to edge where a font's heart sits inside
+        // an em with room around it, and 11 is what matches the macOS glyph
+        // the heart was designed against, measured off the osx-arm64 capture.
+        private const double HeartMarkSize = 11;
+
         // What the CLI mark shows, so a test can assert on the disc a person
         // would have seen without reading a brush back off the control.
         internal string? CliMarkName { get; private set; }
@@ -804,7 +811,7 @@ namespace ClaudeBuddy
         // things, so they need no learning. The clock is the odd one out and
         // has to be: a cron session is the one kind with nobody on the other
         // end, which is the distinction most worth seeing from across a screen.
-        private static (string Glyph, string Label)? BadgeFor(SessionKind kind) => kind switch
+        internal static (string Glyph, string Label)? BadgeFor(SessionKind kind) => kind switch
         {
             SessionKind.Cron => ("\u23F1", "cron"),
             SessionKind.Direct => ("@", "direct message"),
@@ -845,38 +852,29 @@ namespace ClaudeBuddy
         };
 
         // The kinds whose badge is drawn rather than typed, as SVG path data
-        // in a 16x16 box — the same shape CliMark's marks take, and stretched
-        // uniformly into the badge the same way.
+        // in a 16x16 box — see SymbolMarks for the marks themselves and for
+        // the measurements behind drawing them at all.
         //
-        // Only the cloud so far, and the test for whether a glyph belongs here
-        // is not "is it in the font". U+2601 *is* reachable on both platforms:
-        // asked directly, the font manager resolves it to Hiragino Sans on
-        // macOS and to Segoe UI Emoji on Windows, so this was never a tofu
-        // box. It is that neither face draws a cloud at 13px. The macOS one
-        // collapses to an undifferentiated white lump; the Windows one is a
-        // colour-emoji glyph, which means it arrives at its own size and in
-        // its own colours — it overflows the 22px disc and comes out lavender
-        // against a badge whose whole design is one white mark on near-black.
+        // Every non-ASCII badge is here, and the test for whether a glyph
+        // belongs here is not "is it in the font". U+2601 *is* reachable on
+        // both platforms (Hiragino Sans on macOS, Segoe UI Emoji on Windows)
+        // and neither face draws a cloud at 13px: the macOS one is a white
+        // lump and the Windows one is a colour-emoji glyph, which arrives at
+        // its own size and in its own colours. The clock, gear and arrows
+        // were the same defect on Windows (CB-173) — legible, but lavender and
+        // oversized against a badge whose whole design is one white mark on
+        // near-black, so the same orb wore a different badge per platform.
         //
         // @ and # stay as text deliberately. They are ASCII, every font has
-        // them, they are the characters the surfaces themselves use, and
-        // redrawing them as paths would be worse at every size.
-        //
-        // The clock, gear and arrows are the open question this does not
-        // answer: they resolve to colour-emoji faces on Windows too, so they
-        // are legible but wrong-coloured there. Left alone here because a
-        // hand-drawn stopwatch or gear is a design decision, not a bug fix,
-        // and a bad one reads worse than a mis-coloured emoji. Worth its own
-        // ticket, with the Windows captures as the evidence.
+        // them, no emoji face is ever involved, they are the characters the
+        // surfaces themselves use, and redrawing them as paths would be worse
+        // at every size.
         internal static string? KindMarkFor(SessionKind kind) => kind switch
         {
-            // Three lobes and a flat base. Deliberately fat and simple: at
-            // 13px a cloud with fine edges is the lump this replaces, so the
-            // lobes are large enough to survive two or three pixels each.
-            SessionKind.Cloud =>
-                "M4.6,13 C2.3,13 0.5,11.3 0.5,9.2 C0.5,7.4 1.8,5.9 3.5,5.5 "
-                + "C4.0,3.5 5.9,2 8.2,2 C10.4,2 12.2,3.4 12.8,5.3 "
-                + "C14.3,5.7 15.5,7.1 15.5,8.8 C15.5,11.1 13.7,13 11.4,13 Z",
+            SessionKind.Cron => SymbolMarks.Stopwatch,
+            SessionKind.Remote => SymbolMarks.Arrows,
+            SessionKind.Background => SymbolMarks.Gear,
+            SessionKind.Cloud => SymbolMarks.Cloud,
             _ => null
         };
 
@@ -885,6 +883,12 @@ namespace ClaudeBuddy
         public string? KindLabel => BadgeFor(_lastStatus?.Kind ?? SessionKind.Unknown)?.Label;
 
         public string? KindGlyphText => BadgeFor(_lastStatus?.Kind ?? SessionKind.Unknown)?.Glyph;
+
+        // The drawn form of the same badge, for the chat panel's kind chip.
+        // Null where the badge is typed (@, #) or absent, and then the chip
+        // types KindGlyphText instead — the same either-or ApplyKind makes, so
+        // the orb and its panel cannot disagree about which kinds are drawn.
+        public string? KindMarkData => KindMarkFor(_lastStatus?.Kind ?? SessionKind.Unknown);
 
         private void ApplyKind(SessionKind kind)
         {
@@ -1063,7 +1067,7 @@ namespace ClaudeBuddy
             // same reason the kind badge does.
             HeartBadge.Width = HeartBadge.Height = BadgeSize * scale;
             HeartBadge.CornerRadius = new CornerRadius(BadgeSize * scale / 2);
-            HeartGlyph.FontSize = BadgeGlyphSize * scale;
+            HeartGlyph.Width = HeartGlyph.Height = HeartMarkSize * scale;
             HeartBadge.Margin = new Thickness(0, Math.Max(0, inset), Math.Max(0, inset), 0);
 
             // And mirrored once more into the corner this one lives in. Same sum

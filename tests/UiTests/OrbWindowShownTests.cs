@@ -172,7 +172,7 @@ public class OrbWindowShownTests
         var orbScale = (Avalonia.Media.ScaleTransform)typeof(OrbWindow)
             .GetField("_orbScale", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
             .GetValue(orb)!;
-        var heartGlyph = orb.FindControl<Avalonia.Controls.TextBlock>("HeartGlyph")!;
+        var heartGlyph = orb.FindControl<Avalonia.Controls.Shapes.Path>("HeartGlyph")!;
 
         // A tiny real sleep, not a poll loop: TickPulse computes its phase
         // from Environment.TickCount64 - _pulseStartedAt, so calling it with

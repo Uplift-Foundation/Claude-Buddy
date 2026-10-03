@@ -99,9 +99,24 @@
                                 CornerRadius="4" Padding="4,1"
                                 VerticalAlignment="Center"
                                 Background="#26FFFFFF">
-                            <TextBlock x:Name="KindChipText"
-                                       FontSize="9.5"
-                                       Foreground="#CCFFFFFF"/>
+                            <!-- The kind's mark is drawn here for the same
+                                 reason it is on the orb (see SymbolMarks): as
+                                 text, the clock, gear, arrows and cloud fall
+                                 back to Segoe UI Emoji on Windows and arrive in
+                                 that font's colours instead of the chip's ink.
+                                 @ and # have no mark and stay in the text. -->
+                            <StackPanel Orientation="Horizontal" Spacing="4">
+                                <Path x:Name="KindChipMark"
+                                      Width="9" Height="9"
+                                      IsVisible="False"
+                                      Stretch="Uniform"
+                                      Fill="#CCFFFFFF"
+                                      VerticalAlignment="Center"/>
+                                <TextBlock x:Name="KindChipText"
+                                           FontSize="9.5"
+                                           VerticalAlignment="Center"
+                                           Foreground="#CCFFFFFF"/>
+                            </StackPanel>
                         </Border>
                         <!-- A conversation the gateway's heartbeat wakes on a
                              timer. Its own chip beside the kind rather than a
@@ -118,10 +133,22 @@
                                 CornerRadius="4" Padding="4,1"
                                 VerticalAlignment="Center"
                                 Background="#26FFFFFF">
-                            <TextBlock x:Name="HeartChipText"
-                                       FontSize="9.5"
-                                       Foreground="#FFFF8797"
-                                       Text="&#x2665;  heartbeat"/>
+                            <!-- The heart is drawn (SymbolMarks.Heart, set
+                                 in the constructor) for the same size reason as
+                                 the orb's. The pair beats together, which is
+                                 why the transform sits on this panel. -->
+                            <StackPanel x:Name="HeartChipText"
+                                        Orientation="Horizontal" Spacing="4">
+                                <Path x:Name="HeartChipMark"
+                                      Width="9" Height="9"
+                                      Stretch="Uniform"
+                                      Fill="#FFFF8797"
+                                      VerticalAlignment="Center"/>
+                                <TextBlock FontSize="9.5"
+                                           Foreground="#FFFF8797"
+                                           VerticalAlignment="Center"
+                                           Text="heartbeat"/>
+                            </StackPanel>
                         </Border>
                         <TextBlock x:Name="SubtitleText"
                                    FontSize="11"
@@ -210,6 +237,14 @@
                     <TextBlock x:Name="SpeakGlyph" Text="&#128264;" FontSize="11"
                                HorizontalAlignment="Center" VerticalAlignment="Center"
                                IsHitTestVisible="False"/>
+                    <!-- The stop square while speech plays, drawn rather than
+                         typed for the reason SymbolMarks gives. Shown instead of
+                         SpeakGlyph, never with it; see SpeakLook. -->
+                    <Path x:Name="SpeakStopMark" Width="8" Height="8"
+                          IsVisible="False"
+                          Stretch="Uniform" Fill="#F2FFFFFF"
+                          HorizontalAlignment="Center" VerticalAlignment="Center"
+                          IsHitTestVisible="False"/>
                 </Grid>
                 <Grid x:Name="CloseButton" Grid.Column="4" Width="24" Height="24"
                       VerticalAlignment="Center" Cursor="Hand">
@@ -606,9 +641,12 @@
                           IsVisible="False" Cursor="Hand"
                           ToolTip.Tip="Open the agents view">
                         <Ellipse Fill="#E0202024" Stroke="#80FFFFFF" StrokeThickness="1.5"/>
-                        <TextBlock Text="&#9881;" FontSize="11" Foreground="#DDFFFFFF"
-                                   HorizontalAlignment="Center" VerticalAlignment="Center"
-                                   IsHitTestVisible="False"/>
+                        <!-- Drawn, not typed: SymbolMarks.Gear, set in the
+                             constructor. U+2699 is a colour emoji on Windows. -->
+                        <Path x:Name="AttachMark" Width="11" Height="11"
+                              Stretch="Uniform" Fill="#DDFFFFFF"
+                              HorizontalAlignment="Center" VerticalAlignment="Center"
+                              IsHitTestVisible="False"/>
                     </Grid>
                     <Grid x:Name="MicButton" Grid.Column="2" Width="24" Height="24"
                           IsVisible="False" Cursor="Hand">

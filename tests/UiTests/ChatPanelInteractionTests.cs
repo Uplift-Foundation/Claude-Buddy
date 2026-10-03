@@ -122,6 +122,12 @@ public class ChatPanelInteractionTests : IDisposable
 
         var scale = Assert.IsType<ScaleTransform>(panel.HeartChipText.RenderTransform);
 
+        // CB-173: the heart is drawn, and beats with its word because the
+        // transform is on the panel holding both.
+        var mark = panel.FindControl<Avalonia.Controls.Shapes.Path>("HeartChipMark")!;
+        Assert.Equal(StreamGeometry.Parse(SymbolMarks.Heart).Bounds, mark.Data!.Bounds);
+        Assert.Contains(mark, panel.HeartChipText.GetVisualDescendants());
+
         await PumpUntil(() => scale.ScaleX != 1.0, "the heart to scale on a tick");
     }
 
