@@ -48,14 +48,68 @@ public class StopInstalledBuddyScriptTests : IDisposable
     }
 
     // A stand-in executable at <scratch>/<name>.app/Contents/MacOS/ClaudeBuddy.
+    //
+    // **Written as plain bytes, not File.Copy'd (CB-245).** /bin/bash is stored
+    // with APFS transparent compression (`ls -lO` says `compressed`), and
+    // File.Copy keeps that: the copy is a decmpfs-compressed file. codesign -f
+    // has to rewrite it in place, and under load that rewrite intermittently
+    // fails with "Attribute not found" (ENOATTR). Measured on this Mac by
+    // signing fresh copies 32 at a time: compressed copies failed 170 times in
+    // 5,400, plain copies 0 in 3,900, and plain copies made read-only 0 in
+    // 2,500, so it is the compression and not the mode or the provenance
+    // attribute (which plain copies carry too). The retry in Sign could not
+    // reach it: the run that found this failed all three attempts on the same
+    // file. A plain write is never compressed, so the race has nothing to act
+    // on — `Stand_ins_are_not_compressed` pins that rather than the timing.
     private string StandIn(string name)
+    {
+        var exe = UnsignedStandIn(name);
+        Sign(exe);
+        return exe;
+    }
+
+    // The copy before codesign sees it. Separate because signing rewrites the
+    // file and clears its compression whichever way it was made, so a check
+    // after Sign could not tell a plain write from a compressed clone.
+    private string UnsignedStandIn(string name)
     {
         var macOs = Path.Combine(_dir, name + ".app", "Contents", "MacOS");
         Directory.CreateDirectory(macOs);
         var exe = Path.Combine(macOs, "ClaudeBuddy");
-        File.Copy("/bin/bash", exe);
-        Sign(exe);
+        File.WriteAllBytes(exe, File.ReadAllBytes("/bin/bash"));
+        File.SetUnixFileMode(exe,
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
+            UnixFileMode.GroupRead | UnixFileMode.GroupExecute |
+            UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
         return exe;
+    }
+
+    // The file flags `ls -lO` prints, "-" when there are none.
+    private static string FileFlags(string path)
+    {
+        using var stat = Process.Start(new ProcessStartInfo("/usr/bin/stat")
+        {
+            ArgumentList = { "-f", "%Sf", path },
+            RedirectStandardOutput = true,
+            UseShellExecute = false,
+        })!;
+        var flags = stat.StandardOutput.ReadToEnd().Trim();
+        stat.WaitForExit();
+        return flags;
+    }
+
+    // CB-245's property, asserted directly: the stand-in codesign is handed is
+    // not a compressed file. The control beside it is the source itself, which
+    // is, so a pass here cannot come from `stat` reporting nothing at all. Read
+    // before signing, for the reason UnsignedStandIn gives.
+    [MacInstallFact]
+    public void Stand_ins_are_not_compressed()
+    {
+        Assert.Contains("compressed", FileFlags("/bin/bash"));
+
+        var exe = UnsignedStandIn("Claude Buddy");
+
+        Assert.DoesNotContain("compressed", FileFlags(exe));
     }
 
     // Ad-hoc signs the copy. QA saw codesign exit 1 intermittently, only
