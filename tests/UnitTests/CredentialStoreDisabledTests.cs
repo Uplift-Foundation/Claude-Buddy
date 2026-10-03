@@ -26,6 +26,18 @@ namespace ClaudeBuddy.Tests;
 // is [ExcludeFromCodeCoverage] and its body is Security.framework interop that
 // cannot run on a runner — but which branch it takes is ours, and that is what is
 // checked here.
+//
+// [Collection("Settings")] since CB-241, for two process-wide things this class
+// touches. SourcesFor reads ClaudeConfigRoots, which adds every profile
+// directory listed in settings (CB-221), and three classes in the Settings
+// collection add ".claude-board" to that list for the length of a test — so
+// run beside one of them, the "single source" below was two, and develop's
+// Windows leg went red at cfc4141c with exactly that. Forced on purpose by
+// holding ".claude-board" while calling the test: the same two roots, the same
+// failure. And two tests here clear CLAUDE_BUDDY_NO_CREDENTIAL_STORE for a
+// moment, which while it lasts lets a class building real credential sources
+// reach the real store; the classes that do are in this collection too.
+[Collection("Settings")]
 public class CredentialStoreDisabledTests
 {
     private const string Variable = "CLAUDE_BUDDY_NO_CREDENTIAL_STORE";
