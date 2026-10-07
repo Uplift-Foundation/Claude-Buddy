@@ -412,3 +412,140 @@ public class SpeechSummaryOutcomeTests : IDisposable
             await SpeechSummary.SummarizeOrSayWhyAsync("a very long reply", SpeechSummaryKind.TurnFinished));
     }
 }
+
+// Whose account a summary is billed to (CB-248): the session's own, read off
+// where its transcript lives, and handed to the child as CLAUDE_CONFIG_DIR —
+// named for an extra account, unset for the default one, left alone when
+// nothing could be worked out.
+//
+// Paths are built with Path.Combine rather than written out, so every case
+// means the same thing on both CI legs.
+public class SpeechSummaryAccountTests : IDisposable
+{
+    public void Dispose() => SpeechSummary.AccountSummarizerForTests = null;
+
+    private static readonly string Home = Path.Combine(Path.GetTempPath(), "cb248-home");
+
+    private static string Transcript(string accountDir, params string[] below) =>
+        Path.Combine(new[] { accountDir, "projects", "K--some-project" }.Concat(below).ToArray());
+
+    private static bool Exists(string _) => true;
+
+    // --- AccountDirFor --------------------------------------------------------
+
+    [Fact]
+    public void ATranscriptsAccountIsTheParentOfItsProjectsDirectory()
+    {
+        var account = Path.Combine(Home, ".claude-work");
+        Assert.Equal(account, SpeechSummary.AccountDirFor(Transcript(account, "abc.jsonl"), Exists));
+    }
+
+    // A subagent's transcript sits two levels further down, under the parent
+    // session's own directory; it still belongs to the same account.
+    [Fact]
+    public void ASubagentsTranscriptBelongsToTheSameAccount()
+    {
+        var account = Path.Combine(Home, ".claude");
+        var path = Transcript(account, "abc", "subagents", "agent-1.jsonl");
+        Assert.Equal(account, SpeechSummary.AccountDirFor(path, Exists));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void NoTranscriptMeansNoAccount(string? path) =>
+        Assert.Null(SpeechSummary.AccountDirFor(path, Exists));
+
+    // Codex keeps its rollouts under ~/.codex/sessions, with no `projects`
+    // above them: that is not a Claude account, and must not be guessed at.
+    [Fact]
+    public void ATranscriptWithNoProjectsAboveItIsNotAClaudeAccount()
+    {
+        var path = Path.Combine(Home, ".codex", "sessions", "2026", "10", "06", "rollout-x.jsonl");
+        Assert.Null(SpeechSummary.AccountDirFor(path, Exists));
+    }
+
+    // A WSL session's Linux path seen from Windows names a root that is not
+    // there. Naming it would start the CLI in a fresh, logged-out context.
+    // The paired positive is the first case above, same shape, root present.
+    [Fact]
+    public void ARootThatDoesNotExistOnThisMachineIsNotUsed()
+    {
+        var account = Path.Combine(Home, ".claude-work");
+        Assert.Null(SpeechSummary.AccountDirFor(Transcript(account, "abc.jsonl"), _ => false));
+    }
+
+    // The default is the real filesystem, so a temp tree on disk is enough to
+    // prove the default arm is Directory.Exists and not something looser.
+    [Fact]
+    public void TheDefaultExistenceCheckIsTheRealFilesystem()
+    {
+        var account = Directory.CreateTempSubdirectory("cb248-account-").FullName;
+        try
+        {
+            Assert.Equal(account, SpeechSummary.AccountDirFor(Transcript(account, "abc.jsonl")));
+        }
+        finally
+        {
+            Directory.Delete(account, recursive: true);
+        }
+
+        Assert.Null(SpeechSummary.AccountDirFor(Transcript(account, "abc.jsonl")));
+    }
+
+    // --- StartInfoFor ---------------------------------------------------------
+
+    [Fact]
+    public void AnExtraAccountIsNamedToTheChild()
+    {
+        var account = Path.Combine(Home, ".claude-work");
+        var startInfo = SpeechSummary.StartInfoFor("claude", accountDir: account, home: Home);
+        Assert.Equal(account, startInfo.Environment["CLAUDE_CONFIG_DIR"]);
+    }
+
+    // Unset, not named and not inherited. Named would be CB-42's different
+    // context; inherited would bill whichever account Buddy was launched under.
+    // Where the test run itself has CLAUDE_CONFIG_DIR set — a developer on a
+    // second account — this is also the proof that an inherited value is
+    // actively removed rather than merely not added.
+    [Theory]
+    [InlineData(".claude")]
+    [InlineData(".claude/")]
+    [InlineData(".CLAUDE")]
+    public void TheDefaultAccountIsUnsetEvenWhenSpelledDifferently(string spelling)
+    {
+        var startInfo = SpeechSummary.StartInfoFor(
+            "claude", accountDir: Path.Combine(Home, spelling), home: Home);
+        Assert.False(startInfo.Environment.ContainsKey("CLAUDE_CONFIG_DIR"));
+    }
+
+    // Unknown leaves the child exactly as it was before this ticket.
+    [Fact]
+    public void AnUnknownAccountLeavesTheInheritedEnvironmentAlone()
+    {
+        var startInfo = SpeechSummary.StartInfoFor("claude", accountDir: null, home: Home);
+        Assert.Equal(
+            Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR"),
+            startInfo.Environment.TryGetValue("CLAUDE_CONFIG_DIR", out var value) ? value : null);
+    }
+
+    // --- the seam carries it --------------------------------------------------
+
+    [Fact]
+    public async Task TheAccountReachesTheSummariser()
+    {
+        string? seen = "not called";
+        SpeechSummary.AccountSummarizerForTests = (_, account) =>
+        {
+            seen = account;
+            return Task.FromResult<string?>("Done.");
+        };
+
+        var account = Path.Combine(Home, ".claude-work");
+        var spoken = await SpeechSummary.SummarizeOrSayWhyAsync("a reply", SpeechSummaryKind.Reply, account);
+
+        Assert.Equal("Done.", spoken);
+        Assert.Equal(account, seen);
+    }
+}
