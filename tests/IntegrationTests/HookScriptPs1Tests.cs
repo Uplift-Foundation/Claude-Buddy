@@ -46,7 +46,8 @@ public class HookScriptPs1Tests
         string state,
         string payloadJson,
         string tempDir,
-        IDictionary<string, string>? extraEnv = null)
+        IDictionary<string, string>? extraEnv = null,
+        TimeSpan? deadline = null)
     {
         var psi = new ProcessStartInfo
         {
@@ -93,11 +94,20 @@ public class HookScriptPs1Tests
         process.StandardInput.Write(payloadJson);
         process.StandardInput.Close();
 
-        string stdout = process.StandardOutput.ReadToEnd();
-        string stderr = process.StandardError.ReadToEnd();
-        process.WaitForExit();
+        // Read both streams asynchronously so a deadline can fire while the
+        // hook is still running: a synchronous ReadToEnd would block until it
+        // exits, and the regression a deadline exists for is one that never does.
+        var stdout = process.StandardOutput.ReadToEndAsync();
+        var stderr = process.StandardError.ReadToEndAsync();
 
-        return new HookResult(process.ExitCode, stdout, stderr);
+        if (deadline is { } limit && !process.WaitForExit(limit))
+        {
+            process.Kill(entireProcessTree: true);
+            Assert.Fail($"hook did not exit within {limit.TotalSeconds}s");
+        }
+
+        process.WaitForExit();
+        return new HookResult(process.ExitCode, stdout.Result, stderr.Result);
     }
 
     // Same Codex-safety invariant as the bash twin's own header explains:
@@ -257,6 +267,63 @@ public class HookScriptPs1Tests
             (writeCustomFirst ? "first" : "last") + ". Status file was: " + status);
     }
 
+    // A transcript line can be megabytes long -- an inline image is one JSON
+    // row. Get-Content -Tail walks backwards for line breaks and, on both
+    // 5.1 and 7.6, was still running after 45s on a single 1.5M-character
+    // line, so every hook for such a session hit Claude Code's 30s timeout
+    // (CB-247). The deadline sits well inside that budget; the fixed hook
+    // takes about a second.
+    private static readonly TimeSpan LongLineDeadline = TimeSpan.FromSeconds(20);
+
+    private static string LongLine(int chars) =>
+        "{\"type\":\"user\",\"message\":\"" + new string('a', chars) + "\"}";
+
+    private static void TitleAfterAMegabyteLine_IsReadFromTheTailWithoutHangingCase(string exe)
+    {
+        var tempDir = Directory.CreateTempSubdirectory("cb-hook-ps1-").FullName;
+        var projectDir = Directory.CreateTempSubdirectory("cb-hook-ps1-proj-").FullName;
+        var transcript = Path.Combine(projectDir, "t.jsonl");
+        File.WriteAllLines(transcript, new[]
+        {
+            LongLine(1_500_000),
+            "{\"type\":\"ai-title\",\"aiTitle\":\"after the long line\",\"sessionId\":\"s1\"}",
+        });
+
+        var payload = Payload(new { session_id = "s1", cwd = "C:\\proj", transcript_path = transcript });
+        var result = RunHook(exe, "claude", "idle", payload, tempDir, deadline: LongLineDeadline);
+        AssertSilentSuccess(result);
+
+        var status = File.ReadAllText(StatusFile(tempDir, "s1"));
+        Assert.Contains("\"title\":\"after the long line\"", status, StringComparison.Ordinal);
+    }
+
+    // The records sit before 3MB of one line, so the 256KB tail window holds
+    // none of them and the whole-file fallback has to find them. The file is
+    // held open for writing throughout, as Claude Code holds it mid-append --
+    // File.ReadLines' sharing mode would be refused here. The title carries
+    // non-ASCII so a codepage read on 5.1 would show up as mojibake.
+    private static void RecordsPushedOutOfTheTailWindow_AreFoundByTheFallback_WhileTheFileIsOpenForWritingCase(string exe)
+    {
+        var tempDir = Directory.CreateTempSubdirectory("cb-hook-ps1-").FullName;
+        var projectDir = Directory.CreateTempSubdirectory("cb-hook-ps1-proj-").FullName;
+        var transcript = Path.Combine(projectDir, "t.jsonl");
+        File.WriteAllLines(transcript, new[]
+        {
+            "{\"type\":\"ai-title\",\"aiTitle\":\"café — fallback\",\"sessionId\":\"s1\"}",
+            "{\"type\":\"agent-color\",\"agentColor\":\"teal\",\"sessionId\":\"s1\"}",
+            LongLine(3_000_000),
+        });
+
+        using var writer = new FileStream(transcript, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite);
+        var payload = Payload(new { session_id = "s1", cwd = "C:\\proj", transcript_path = transcript });
+        var result = RunHook(exe, "claude", "idle", payload, tempDir, deadline: LongLineDeadline);
+        AssertSilentSuccess(result);
+
+        using var status = JsonDocument.Parse(File.ReadAllText(StatusFile(tempDir, "s1")));
+        Assert.Equal("café — fallback", status.RootElement.GetProperty("title").GetString());
+        Assert.Equal("teal", status.RootElement.GetProperty("color").GetString());
+    }
+
     private static void AutoColorMarker_AppendsAgentColorRecordMatchingThePortedCksumHashCase(string exe)
     {
         var tempDir = Directory.CreateTempSubdirectory("cb-hook-ps1-").FullName;
@@ -393,6 +460,18 @@ public class HookScriptPs1Tests
 
     [PwshFact]
     public void CustomTitleWinsOverAiTitle_RegardlessOfWhichWasWrittenLast_Pwsh() => CustomTitleWinsOverAiTitle_RegardlessOfWhichWasWrittenLastCase("pwsh");
+
+    [WindowsPowerShellFact]
+    public void TitleAfterAMegabyteLine_IsReadFromTheTailWithoutHanging_Powershell51() => TitleAfterAMegabyteLine_IsReadFromTheTailWithoutHangingCase("powershell");
+
+    [PwshFact]
+    public void TitleAfterAMegabyteLine_IsReadFromTheTailWithoutHanging_Pwsh() => TitleAfterAMegabyteLine_IsReadFromTheTailWithoutHangingCase("pwsh");
+
+    [WindowsPowerShellFact]
+    public void RecordsPushedOutOfTheTailWindow_AreFoundByTheFallback_WhileTheFileIsOpenForWriting_Powershell51() => RecordsPushedOutOfTheTailWindow_AreFoundByTheFallback_WhileTheFileIsOpenForWritingCase("powershell");
+
+    [PwshFact]
+    public void RecordsPushedOutOfTheTailWindow_AreFoundByTheFallback_WhileTheFileIsOpenForWriting_Pwsh() => RecordsPushedOutOfTheTailWindow_AreFoundByTheFallback_WhileTheFileIsOpenForWritingCase("pwsh");
 
     [WindowsPowerShellFact]
     public void AutoColorMarker_AppendsAgentColorRecordMatchingThePortedCksumHash_Powershell51() => AutoColorMarker_AppendsAgentColorRecordMatchingThePortedCksumHashCase("powershell");

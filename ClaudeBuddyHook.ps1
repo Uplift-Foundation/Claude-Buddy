@@ -68,17 +68,39 @@ if ($Agent -eq 'claude' -and $State -ne 'ended' -and $transcript -and (Test-Path
         # Read the tail first: transcripts reach tens of MB and this runs on
         # every tool call. Only scan the whole file when a long run of tool
         # output has pushed all three records out of that window.
-        # -Encoding UTF8 is load-bearing on Windows PowerShell 5.1, which
-        # otherwise reads these UTF-8 transcripts as the ANSI codepage and
-        # turns an accented letter (an e-acute, say) into two garbage characters. PowerShell 7 already defaults
-        # to UTF-8; being explicit is correct on both.
+        #
+        # The tail is the last 256KB by byte offset, the same window the bash
+        # twin takes with `tail -c 262144` -- NOT Get-Content -Tail, which this
+        # used to be. Windows PowerShell 5.1's -Tail walks backwards hunting
+        # for line breaks and goes pathological on long lines: measured on a
+        # real 5.1MB transcript whose longest line was ~1.5M characters (an
+        # inline image), `-Tail 400` was still running after 200 seconds, so
+        # every hook for that session hit Claude Code's 30s timeout. A byte
+        # seek costs the same whatever the lines look like. The partial line
+        # the seek lands in can't start with `{"type":`, so it never matches.
+        #
+        # Explicit UTF-8 is load-bearing on 5.1, which otherwise reads these
+        # transcripts as the ANSI codepage and turns an accented letter (an
+        # e-acute, say) into two garbage characters. PowerShell 7 already
+        # defaults to UTF-8; being explicit is correct on both.
+        #
+        # ReadWrite sharing because Claude Code may hold this file open for
+        # appending; File.ReadLines asks for exclusive-write and can be
+        # refused, which is why the whole-file fallback reuses this stream.
         $pattern = '^\{"type":"(custom-title|ai-title|agent-color)"'
-        $meta = Get-Content -Path $transcript -Tail 400 -Encoding UTF8 |
-            Where-Object { $_ -match $pattern }
-        if (-not $meta) {
-            $meta = Get-Content -Path $transcript -Encoding UTF8 |
-                Where-Object { $_ -match $pattern }
-        }
+        $stream = [System.IO.File]::Open($transcript, 'Open', 'Read', 'ReadWrite')
+        try {
+            [void]$stream.Seek([math]::Max(0, $stream.Length - 262144), 'Begin')
+            $reader = New-Object System.IO.StreamReader($stream, [System.Text.Encoding]::UTF8)
+            $meta = $reader.ReadToEnd() -split "`r?`n" | Where-Object { $_ -match $pattern }
+            if (-not $meta) {
+                [void]$stream.Seek(0, 'Begin')
+                $reader.DiscardBufferedData()
+                $meta = @(while (($l = $reader.ReadLine()) -ne $null) {
+                    if ($l -match $pattern) { $l }
+                })
+            }
+        } finally { $stream.Dispose() }
 
         $newest = {
             param($type)
