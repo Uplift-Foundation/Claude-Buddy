@@ -23,7 +23,9 @@ public class TurnSummarySpeechTests : IDisposable
     {
         ClaudeBuddySettings.SpeakScope = _scopeWas;
         SpeechSummary.SummarizerForTests = null;
+        SpeechSummary.AccountSummarizerForTests = null;
         SpeechRequest.UtteranceForTests = null;
+        SpeechRequest.TranscriptPathForTests = null;
         TextToSpeech.Enter(TextToSpeech.SpeakState.Idle);
     }
 
@@ -341,4 +343,62 @@ public class TurnSummarySpeechTests : IDisposable
             ClaudeBuddySettings.OpenClawEnabled = wasEnabled;
         }
     }
+
+    // --- whose account (CB-248) ----------------------------------------------
+
+    // The user's own scenario: two terminal sessions, one on the default
+    // account and one on a second, each finishing a turn. Each summary has to
+    // run on its own session's account — before this, both ran on whichever
+    // account Buddy itself had inherited. The two roots exist on disk because
+    // AccountDirFor refuses one that does not; a session the scan does not
+    // know is the third case, and keeps the old inheriting behaviour.
+    [AvaloniaFact]
+    public void EachSessionsSummaryRunsOnThatSessionsAccount()
+    {
+        var home = Directory.CreateTempSubdirectory("cb248-ui-").FullName;
+        try
+        {
+            var accountA = Path.Combine(home, ".claude");
+            var accountB = Path.Combine(home, ".claude-b");
+            Directory.CreateDirectory(accountA);
+            Directory.CreateDirectory(accountB);
+
+            var transcripts = new Dictionary<string, string>
+            {
+                ["session-a"] = Path.Combine(accountA, "projects", "proj", "a.jsonl"),
+                ["session-b"] = Path.Combine(accountB, "projects", "proj", "b.jsonl"),
+            };
+            SpeechRequest.TranscriptPathForTests =
+                id => id is not null && transcripts.TryGetValue(id, out var path) ? path : null;
+
+            var billed = new List<(string Reply, string? Account)>();
+            SpeechSummary.AccountSummarizerForTests = (reply, account) =>
+            {
+                billed.Add((reply, account));
+                return Task.FromResult<string?>("Done.");
+            };
+            SpeechRequest.UtteranceForTests = (_, _, _) => { };
+
+            var replyA = "A: " + LongReply();
+            var replyB = "B: " + LongReply();
+            var replyUnknown = "?: " + LongReply();
+            SpeechRequest.SpeakTurnSummary(replyA, "session-a");
+            SpeechRequest.SpeakTurnSummary(replyB, "session-b");
+            SpeechRequest.SpeakTurnSummary(replyUnknown, "session-not-scanned");
+
+            Assert.Equal(
+                new (string, string?)[] { (replyA, accountA), (replyB, accountB), (replyUnknown, null) },
+                billed);
+        }
+        finally
+        {
+            Directory.Delete(home, recursive: true);
+        }
+    }
+
+    // With no seam, the lookup asks the live scan; a test host has none, so
+    // the answer is "unknown" rather than a throw.
+    [AvaloniaFact]
+    public void WithNoScanRunningASessionsTranscriptIsUnknown() =>
+        Assert.Null(SpeechRequest.TranscriptPathOf("session-a"));
 }

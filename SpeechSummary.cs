@@ -269,15 +269,28 @@ namespace ClaudeBuddy
         // ever spawning a CLI; null means the real one.
         internal static Func<string, Task<string?>>? SummarizerForTests;
 
+        // The same seam for a test that is about *whose account* the summary
+        // runs on (CB-248) rather than what comes back: it is handed the
+        // account directory alongside the reply. Checked first, so the many
+        // tests that only care about the text keep the one-argument shape.
+        internal static Func<string, string?, Task<string?>>? AccountSummarizerForTests;
+
         // `kind` only ever changes what RunAsync sends as the prompt — the
         // seam itself stays kind-agnostic, because a test driving it has
         // already decided what comes back and does not need to know which
         // question would have produced it. Reply is the default so every
         // existing caller of the one-argument shape is unchanged.
-        internal static Task<string?> SummarizeAsync(string reply, SpeechSummaryKind kind = SpeechSummaryKind.Reply)
+        //
+        // `accountDir` is the Claude Code config directory of the session being
+        // summarised, from AccountDirFor; null when it is not known.
+        internal static Task<string?> SummarizeAsync(
+            string reply, SpeechSummaryKind kind = SpeechSummaryKind.Reply, string? accountDir = null)
         {
+            var withAccount = AccountSummarizerForTests;
+            if (withAccount is not null) return withAccount(reply, accountDir);
+
             var seam = SummarizerForTests;
-            return seam is not null ? seam(reply) : RunAsync(reply, kind);
+            return seam is not null ? seam(reply) : RunAsync(reply, kind, accountDir);
         }
 
         // Everything the summary leg decides, with the utterance left to the
@@ -292,11 +305,12 @@ namespace ClaudeBuddy
         internal static Task<string> SummarizeOrSayWhyAsync(string reply) =>
             SummarizeOrSayWhyAsync(reply, SpeechSummaryKind.Reply);
 
-        internal static async Task<string> SummarizeOrSayWhyAsync(string reply, SpeechSummaryKind kind)
+        internal static async Task<string> SummarizeOrSayWhyAsync(
+            string reply, SpeechSummaryKind kind, string? accountDir = null)
         {
             try
             {
-                var summary = await SummarizeAsync(reply, kind).ConfigureAwait(true);
+                var summary = await SummarizeAsync(reply, kind, accountDir).ConfigureAwait(true);
                 return string.IsNullOrWhiteSpace(summary) ? Unavailable : summary;
             }
             catch (SpokenFailureException ex)
@@ -338,13 +352,61 @@ namespace ClaudeBuddy
         // ~/.claude/CLAUDE.md was checked and does not colour the output here.
         internal static string NeutralWorkingDirectory => Path.GetTempPath();
 
+        // Which Claude account a summary is billed to: the one the summarised
+        // session runs under (CB-248).
+        //
+        // Before this, the child simply inherited this app's environment, so
+        // every summary ran on whichever account Buddy itself had been launched
+        // under — for a Buddy started from the Start menu or a login item, the
+        // default ~/.claude. With one terminal on the default account and
+        // another on CLAUDE_CONFIG_DIR=~/.claude-<other>, both sessions'
+        // replies were summarised on, and counted against, the default one.
+        // It coupled failures too: measured on a real Windows machine, the
+        // default account's OAuth expired and every summary for *every*
+        // account came back "Summary unavailable.", including the one the user
+        // was actively working in and was logged in fine.
+        //
+        // The account is read off the transcript path, because Claude Code
+        // writes every transcript under its own config root —
+        // `<root>/projects/<slug>/<id>.jsonl`, or deeper for a subagent's — so
+        // the root is the parent of the nearest `projects` above it. Nothing
+        // has to be configured for that to hold, which matters: an account the
+        // user never listed in ClaudeCodeProfileDirs still bills correctly.
+        //
+        // Null — today's behaviour, inheriting — whenever that cannot be
+        // trusted: no transcript (a gateway or cloud session), no `projects`
+        // ancestor (Codex and Grok keep theirs under `sessions`), or a root
+        // that does not exist on this machine (a WSL session's Linux path seen
+        // from Windows). Naming a nonexistent directory would start a CLI in a
+        // fresh, logged-out context, which is the failure this exists to stop.
+        internal static string? AccountDirFor(string? transcriptPath, Func<string, bool>? directoryExists = null)
+        {
+            if (string.IsNullOrWhiteSpace(transcriptPath)) return null;
+
+            var dir = Path.GetDirectoryName(transcriptPath.Trim());
+            while (!string.IsNullOrEmpty(dir))
+            {
+                if (string.Equals(Path.GetFileName(dir), "projects", StringComparison.OrdinalIgnoreCase))
+                {
+                    var root = Path.GetDirectoryName(dir);
+                    return !string.IsNullOrEmpty(root) && (directoryExists ?? Directory.Exists)(root) ? root : null;
+                }
+
+                dir = Path.GetDirectoryName(dir);
+            }
+
+            return null;
+        }
+
         // The invocation, as a value, so a test can assert it without spawning
         // anything. Extracted for the reason OrbWindowSpeakTests gives about
         // Speak: a decision left inside the method that performs the side
         // effect is a decision nothing can assert — which is exactly how CB-174
         // shipped, since the prompt and the cleaning were both covered while
         // the thing actually wrong was never looked at.
-        internal static ProcessStartInfo StartInfoFor(string claude, SpeechSummaryKind kind = SpeechSummaryKind.Reply)
+        internal static ProcessStartInfo StartInfoFor(
+            string claude, SpeechSummaryKind kind = SpeechSummaryKind.Reply,
+            string? accountDir = null, string? home = null)
         {
             var startInfo = new ProcessStartInfo
             {
@@ -373,6 +435,24 @@ namespace ClaudeBuddy
             // the session scan or `claude --resume` to find.
             startInfo.ArgumentList.Add("--no-session-persistence");
 
+            // The session's account, three ways (CB-248). Unknown leaves the
+            // inherited environment alone, as before. An extra account is named.
+            // The default account is *unset* rather than named, for CB-42's
+            // reason (see ClaudeProfile): CLAUDE_CONFIG_DIR=~/.claude is a
+            // different context from no variable at all — and unset rather than
+            // inherited, because a Buddy launched under another account would
+            // otherwise bill that one for a default-account session, which is
+            // this bug pointing the other way.
+            if (accountDir is not null)
+            {
+                home ??= Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+                var configDir = ClaudeProfile.ConfigDirFor(
+                    home, accountDir, ClaudeBuddySettings.DefaultRemoteControlProfileDir);
+
+                if (configDir is null) startInfo.Environment.Remove("CLAUDE_CONFIG_DIR");
+                else startInfo.Environment["CLAUDE_CONFIG_DIR"] = configDir;
+            }
+
             return startInfo;
         }
 
@@ -383,14 +463,14 @@ namespace ClaudeBuddy
         // carries, and running it in a test would make a real billed request on
         // the developer's own account.
         [ExcludeFromCodeCoverage]
-        private static async Task<string?> RunAsync(string reply, SpeechSummaryKind kind)
+        private static async Task<string?> RunAsync(string reply, SpeechSummaryKind kind, string? accountDir)
         {
             var claude = ClaudeBinary.Path;
             if (claude is null) return null;
 
             try
             {
-                var startInfo = StartInfoFor(claude, kind);
+                var startInfo = StartInfoFor(claude, kind, accountDir);
 
                 using var proc = new Process { StartInfo = startInfo };
                 if (!proc.Start()) return null;
