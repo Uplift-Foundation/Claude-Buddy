@@ -85,7 +85,7 @@ namespace ClaudeBuddy
 
         private SettingsWindow()
         {
-            Title = "Claude Buddy Settings";
+            Title = $"{Brand.DisplayName} Settings";
             Width = 520;
             SizeToContent = SizeToContent.Height;
             MinHeight = 240;
@@ -310,7 +310,7 @@ namespace ClaudeBuddy
                     return;
                 }
 
-                Styles.Add(new StyleInclude(new Uri("avares://ClaudeBuddy/"))
+                Styles.Add(new StyleInclude(new Uri($"avares://{Brand.AssemblyName}/"))
                 {
                     Source = new Uri(
                         "avares://Avalonia.Controls.ColorPicker/Themes/Fluent/Fluent.xaml")
@@ -1142,7 +1142,7 @@ namespace ClaudeBuddy
             if (!ClaudeBuddySettings.ClaudeCodeEnabled) return cards.ToArray();
 
             cards.Add(Card(ProfileDirsCard(
-                blurb: "Wire Claude Buddy hooks into additional Claude Code accounts managed "
+                blurb: $"Wire {Brand.DisplayName} hooks into additional Claude Code accounts managed "
                        + "via CLAUDE_CONFIG_DIR, alongside the default ~/.claude.",
                 watermark: ".claude-work",
                 current: () => ClaudeBuddySettings.ClaudeCodeProfileDirs,
@@ -1165,7 +1165,7 @@ namespace ClaudeBuddy
             if (!ClaudeBuddySettings.CodexEnabled) return cards.ToArray();
 
             cards.Add(Card(ProfileDirsCard(
-                blurb: "Wire Claude Buddy hooks into additional Codex accounts managed via "
+                blurb: $"Wire {Brand.DisplayName} hooks into additional Codex accounts managed via "
                        + "CODEX_HOME, alongside the default ~/.codex. Codex asks you to trust "
                        + "hooks the first time it sees them, once per account.",
                 watermark: ".codex-work",
@@ -1184,7 +1184,7 @@ namespace ClaudeBuddy
             if (!ClaudeBuddySettings.GrokEnabled) return cards.ToArray();
 
             cards.Add(Card(ProfileDirsCard(
-                blurb: "Wire Claude Buddy hooks into additional Grok Build accounts managed via "
+                blurb: $"Wire {Brand.DisplayName} hooks into additional Grok Build accounts managed via "
                        + "GROK_HOME, alongside the default ~/.grok.",
                 watermark: ".grok-work",
                 current: () => ClaudeBuddySettings.GrokHomes,
@@ -1559,7 +1559,7 @@ namespace ClaudeBuddy
                 Row("Show OpenClaw agents (experimental)",
                     Switch(ClaudeBuddySettings.OpenClawEnabled, OnOpenClawToggled),
                     "Shows an orb for each recently active session on an OpenClaw gateway, "
-                    + "alongside your Claude Code ones. Read-only: Claude Buddy can see what "
+                    + $"alongside your Claude Code ones. Read-only: {Brand.DisplayName} can see what "
                     + "your agents are doing, and cannot ask them to do anything.")
             };
 
@@ -1578,7 +1578,7 @@ namespace ClaudeBuddy
                 "A gateway remembers every conversation it has ever had, so only recent "
                 + "ones get orbs. Anything currently working shows regardless. Note that "
                 + "the gateway's own idea of \"recent\" lags badly for Discord chats, so "
-                + "Claude Buddy also counts anything it has watched happen since it started."));
+                + $"{Brand.DisplayName} also counts anything it has watched happen since it started."));
 
             rows.Add(Row("Heartbeat sessions", ClusterModePicker(
                     () => ClaudeBuddySettings.OpenClawHeartbeatMode,
@@ -2014,7 +2014,7 @@ namespace ClaudeBuddy
                     // The contrast with the row below is the point, and it is
                     // stated rather than implied: this is the same feature
                     // without the model in the middle.
-                    "Talks straight to Claude Buddy on your other machines over your local "
+                    $"Talks straight to {Brand.DisplayName} on your other machines over your local "
                     + "network. Transcripts arrive in a moment rather than in minutes, and "
                     + "nothing here signs into your Claude account or counts against your "
                     + "usage. Both machines need this switched on, and you pair them once.")
@@ -2052,8 +2052,8 @@ namespace ClaudeBuddy
                     // Says which of the two "nothing here" cases this is. A
                     // machine that is off and a machine that cannot be seen look
                     // identical from here, and the fixes are different.
-                    Text = "No other machines yet. They appear here on their own once Claude "
-                         + "Buddy is running on them with this switched on, and both are on "
+                    Text = $"No other machines yet. They appear here on their own once {Brand.DisplayName} "
+                         + "is running on them with this switched on, and both are on "
                          + "the same network.",
                     FontSize = 11,
                     Opacity = 0.55,
@@ -3327,7 +3327,7 @@ namespace ClaudeBuddy
             // actually about to be heard.
             SoundPickerRow("When a turn finishes", TurnFinishedSoundPicker(),
                 () => ClaudeBuddySettings.TurnFinishedSound, SystemSoundCatalog.DefaultFinishedSoundName,
-                "Plays once a reply is done and Claude Buddy is waiting on you again. "
+                $"Plays once a reply is done and {Brand.DisplayName} is waiting on you again. "
                 + "Vibe summary speaks one to three sentences on what just happened and "
                 + "what's next, in that orb's own voice — if you're already listening to "
                 + "something else, it plays the chime below instead of talking over it."),
@@ -4382,7 +4382,7 @@ namespace ClaudeBuddy
             var content = new StackPanel { Spacing = 8, Margin = new Thickness(14, 10) };
             content.Children.Add(new TextBlock
             {
-                Text = "Wire or unwire Claude Buddy's hooks for Claude Code running inside each WSL distro.",
+                Text = $"Wire or unwire {Brand.DisplayName}'s hooks for Claude Code running inside each WSL distro.",
                 TextWrapping = TextWrapping.Wrap,
                 Opacity = 0.55,
                 FontSize = 11

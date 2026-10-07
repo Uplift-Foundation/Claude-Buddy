@@ -157,7 +157,7 @@ namespace ClaudeBuddy
                 ? scratch
                 : Path.Combine(
                     Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                    "ClaudeBuddy");
+                    Brand.DataDirName);
 
         public static string Path_ => Path.Combine(Directory, "settings.json");
 

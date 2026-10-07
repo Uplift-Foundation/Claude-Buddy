@@ -117,13 +117,13 @@ namespace ClaudeBuddy
             OperatingSystem.IsWindows()
                 ? Path.Combine(
                     Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                    "ClaudeBuddy",
+                    Brand.DataDirName,
                     "Logs")
                 : Path.Combine(
                     Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
                     "Library",
                     "Logs",
-                    "ClaudeBuddy");
+                    Brand.DataDirName);
 
         internal static string Path_ => Path.Combine(Directory, "crash.log");
 

@@ -852,7 +852,7 @@ namespace ClaudeBuddy
             });
         }
 
-        private const string PasteBuffer = "claude-buddy";
+        private const string PasteBuffer = Brand.Slug;
 
         // A named key — "Enter", "Escape", or a bare digit for a numbered
         // dialog. Not -l: these are key names, which is the one case where
@@ -1498,18 +1498,18 @@ namespace ClaudeBuddy
                 || detail.Contains("assistive access", StringComparison.OrdinalIgnoreCase))
             {
                 Console.Error.WriteLine(
-                    "Claude Buddy: the mic transcribed your speech, but typing it into the " +
+                    $"{Brand.DisplayName}: the mic transcribed your speech, but typing it into the " +
                     "terminal failed — macOS has not granted Accessibility permission (this is " +
                     "separate from the Automation permission clicking an orb already uses).\n" +
                     "  Fix: System Settings > Privacy & Security > Accessibility, and enable the " +
-                    "terminal app (or Claude Buddy, if System Events prompts for it there instead).\n" +
+                    $"terminal app (or {Brand.DisplayName}, if System Events prompts for it there instead).\n" +
                     "  If it was granted before a rebuild, the grant may have been invalidated. Run:\n" +
-                    "    tccutil reset Accessibility io.github.wtvamp.claudebuddy\n" +
+                    $"    tccutil reset Accessibility {Brand.MacBundleId}\n" +
                     "  then dictate again and approve the prompt.");
                 return;
             }
 
-            Console.Error.WriteLine($"Claude Buddy: typing the transcribed text failed: {detail}");
+            Console.Error.WriteLine($"{Brand.DisplayName}: typing the transcribed text failed: {detail}");
         }
 
         // Once per app run, not per click: a denied grant fails on every click,
@@ -1528,17 +1528,17 @@ namespace ClaudeBuddy
             if (detail.Contains("-1743") || detail.Contains("Not authorized to send Apple events"))
             {
                 Console.Error.WriteLine(
-                    "Claude Buddy: clicking an orb can't focus your terminal — macOS has not " +
+                    $"{Brand.DisplayName}: clicking an orb can't focus your terminal — macOS has not " +
                     "granted Automation permission.\n" +
                     "  Fix: System Settings > Privacy & Security > Automation, and enable the " +
-                    "terminal under Claude Buddy.\n" +
-                    "  If Claude Buddy isn't listed, its permission was invalidated by a rebuild. Run:\n" +
-                    "    tccutil reset AppleEvents io.github.wtvamp.claudebuddy\n" +
+                    $"terminal under {Brand.DisplayName}.\n" +
+                    $"  If {Brand.DisplayName} isn't listed, its permission was invalidated by a rebuild. Run:\n" +
+                    $"    tccutil reset AppleEvents {Brand.MacBundleId}\n" +
                     "  then click an orb again and approve the prompt.");
                 return;
             }
 
-            Console.Error.WriteLine($"Claude Buddy: focusing the terminal failed: {detail}");
+            Console.Error.WriteLine($"{Brand.DisplayName}: focusing the terminal failed: {detail}");
         }
 
         // --- Windows keystroke injection ---
@@ -1723,15 +1723,15 @@ namespace ClaudeBuddy
             if (error == 5)
             {
                 Console.Error.WriteLine(
-                    "Claude Buddy: the mic transcribed your speech, but Windows blocked typing it " +
+                    $"{Brand.DisplayName}: the mic transcribed your speech, but Windows blocked typing it " +
                     "into the terminal — the terminal is running elevated (as Administrator) and " +
-                    "Claude Buddy is not.\n" +
-                    "  Fix: run the terminal without elevation, or start Claude Buddy elevated too.");
+                    $"{Brand.DisplayName} is not.\n" +
+                    $"  Fix: run the terminal without elevation, or start {Brand.DisplayName} elevated too.");
                 return;
             }
 
             Console.Error.WriteLine(
-                $"Claude Buddy: typing the transcribed text failed — SendInput accepted {sent} of " +
+                $"{Brand.DisplayName}: typing the transcribed text failed — SendInput accepted {sent} of " +
                 $"{expected} events (GetLastError {error}).");
         }
 

@@ -315,7 +315,7 @@ namespace ClaudeBuddy
             }
             catch (SpokenFailureException ex)
             {
-                Console.Error.WriteLine($"Claude Buddy: couldn't summarise for speech: {ex.Message}");
+                Console.Error.WriteLine($"{Brand.DisplayName}: couldn't summarise for speech: {ex.Message}");
                 return ex.Message;
             }
             catch (Exception ex)
@@ -325,7 +325,7 @@ namespace ClaudeBuddy
                 // swallowed, for the same reason the speak command's stderr is:
                 // this is the only explanation anyone gets for why they heard a
                 // sentence instead of their summary.
-                Console.Error.WriteLine($"Claude Buddy: couldn't summarise for speech: {ex.Message}");
+                Console.Error.WriteLine($"{Brand.DisplayName}: couldn't summarise for speech: {ex.Message}");
                 return Unavailable;
             }
         }

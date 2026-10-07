@@ -344,7 +344,7 @@ namespace ClaudeBuddy
         // and the relay is gone (937de9ec). Nothing has timed the direct link,
         // so this now says where the conversation is coming from rather than
         // quoting a duration measured on a transport that no longer exists.
-        internal const string WaitHint = "coming over the link from Claude Buddy on the other machine";
+        internal const string WaitHint = $"coming over the link from {Brand.DisplayName} on the other machine";
 
         // Named for the same reason the refusals are: a line a user reads while
         // nothing appears to be happening has to say that something is.
@@ -358,7 +358,7 @@ namespace ClaudeBuddy
         // number for it would be the same wrong-number bug in the other
         // direction. The WaitLabel counter shows the real elapsed time instead.
         internal static string FetchingNote(string remoteName) =>
-            $"Found a live view of {remoteName} — fetching its conversation from Claude Buddy "
+            $"Found a live view of {remoteName} — fetching its conversation from {Brand.DisplayName} "
           + "on the other machine.";
 
         private void SayNoLiveView()
@@ -376,7 +376,7 @@ namespace ClaudeBuddy
         // Said once, when the far Buddy has answered that it cannot show this
         // session. Named so the wording is a unit test, like FetchingNote.
         internal static string NoLiveViewNote(string remoteName) =>
-            $"No live view: Claude Buddy on the other machine lists {remoteName} but can't show "
+            $"No live view: {Brand.DisplayName} on the other machine lists {remoteName} but can't show "
           + "its conversation, so there's nothing to read or type into here.";
 
         private void OnDelivered(RemoteMirrorClient.MirrorRows rows)
@@ -597,7 +597,7 @@ namespace ClaudeBuddy
         // network, because the fix is on the far machine and this is the only
         // place that will ever say so.
         internal static string NoWayToSendNote(string remoteName) =>
-            $"No live view of {remoteName}, so there is nothing to type into. Claude Buddy can "
+            $"No live view of {remoteName}, so there is nothing to type into. {Brand.DisplayName} can "
           + "show and reply to a session running under tmux on the other machine; this one "
           + "isn't, so it can be listed but not written to.";
 
@@ -605,7 +605,7 @@ namespace ClaudeBuddy
         // that says it is not measured: a refusal that does not name the setting
         // to turn on is a dead end for whoever reads it.
         internal const string NotConnectedNote =
-            "Not connected to Claude Buddy on the other machine right now. Check the link in "
+            $"Not connected to {Brand.DisplayName} on the other machine right now. Check the link in "
           + "Settings, then try again.";
 
         // Said when the direct link has no client to send through. It named a
@@ -689,8 +689,8 @@ namespace ClaudeBuddy
             agentStatus == "working"
                 ? $"Handed to {remoteName}. It's mid-turn and will read this when that turn ends — "
                   + "the message shows here once it has."
-                : $"Handed to {remoteName} for its next turn. It arrives as a message from Claude "
-                  + "Buddy, not keystrokes, so built-in slash commands won't run.";
+                : $"Handed to {remoteName} for its next turn. It arrives as a message from {Brand.DisplayName}, "
+                  + "not keystrokes, so built-in slash commands won't run.";
 
         // What a refused keystroke says, as a function of the code that came
         // back rather than as a switch buried in the send.
@@ -739,11 +739,11 @@ namespace ClaudeBuddy
                 // closed since the status file was written.
                 MirrorProtocol.ErrTypeFailed =>
                     $"{remoteName}'s terminal refused the text. On macOS the other machine may be "
-                    + "waiting for you to allow Claude Buddy to control it — check for a prompt "
+                    + $"waiting for you to allow {Brand.DisplayName} to control it — check for a prompt "
                     + "there — or that terminal window may have been closed.",
 
                 MirrorProtocol.ErrNoSession =>
-                    $"The other machine's Claude Buddy no longer has a session called {remoteName}.",
+                    $"The other machine's {Brand.DisplayName} no longer has a session called {remoteName}.",
 
                 // The messaging fallback tried, and Claude Code's own
                 // registry no longer has an entry for this session — almost

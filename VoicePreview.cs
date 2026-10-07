@@ -46,7 +46,7 @@ namespace ClaudeBuddy
         // Kokoro ids like af_heart and the custom command's empty name read badly
         // aloud.
         internal const string SampleText =
-            "Hello. This is how Claude Buddy will sound when it reads a reply aloud.";
+            $"Hello. This is how {Brand.DisplayName} will sound when it reads a reply aloud.";
 
         private static readonly object Gate = new();
 
@@ -176,7 +176,7 @@ namespace ClaudeBuddy
                         // Enqueue relies on its work catching its own exceptions, and
                         // a Cancel() that throws would otherwise fault the chain and
                         // hand the caller's await an exception nobody observes.
-                        Console.Error.WriteLine($"Claude Buddy: voice preview stop failed: {ex.Message}");
+                        Console.Error.WriteLine($"{Brand.DisplayName}: voice preview stop failed: {ex.Message}");
                     }
                 });
             }
@@ -237,7 +237,7 @@ namespace ClaudeBuddy
             }
             catch (Exception ex)
             {
-                Console.Error.WriteLine($"Claude Buddy: voice preview failed: {ex.Message}");
+                Console.Error.WriteLine($"{Brand.DisplayName}: voice preview failed: {ex.Message}");
                 End(id);
             }
         }

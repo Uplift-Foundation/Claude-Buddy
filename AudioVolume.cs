@@ -73,7 +73,7 @@ namespace ClaudeBuddy
         // Where Windows keeps scaled chime copies. Under the temp directory
         // because every one of them can be rebuilt from its source on demand.
         internal static string ChimeCacheDirectory =>
-            Path.Combine(Path.GetTempPath(), "ClaudeBuddy-chimes");
+            Path.Combine(Path.GetTempPath(), $"{Brand.DataDirName}-chimes");
 
         // NaN is what a corrupt or hand-edited number turns into after
         // arithmetic, and Math.Clamp passes NaN straight through — so it is
@@ -380,7 +380,7 @@ namespace ClaudeBuddy
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                Console.Error.WriteLine($"Claude Buddy: couldn't prepare a quieter copy of a chime: {ex.Message}");
+                Console.Error.WriteLine($"{Brand.DisplayName}: couldn't prepare a quieter copy of a chime: {ex.Message}");
                 return null;
             }
         }

@@ -65,7 +65,7 @@ namespace ClaudeBuddy
         // release, which is how a successful room send came to be drawn twice:
         // once plain from the carrier's own transcript, once prefixed from
         // everybody else's, with nothing matching the two together.
-        public const string MirrorPrefix = "**(via Claude Buddy)** ";
+        public const string MirrorPrefix = $"**(via {Brand.DisplayName})** ";
 
         internal enum SenderKind
         {

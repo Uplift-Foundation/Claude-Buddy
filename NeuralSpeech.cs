@@ -85,7 +85,7 @@ namespace ClaudeBuddy
 
         internal static string EngineUrl =>
             "https://github.com/Uplift-Foundation/Claude-Buddy/releases/download/"
-            + $"v{EngineVersion}/ClaudeBuddySpeech-{EngineVersion}-{EngineRid}.zip";
+            + $"v{EngineVersion}/{Brand.SpeechEngineName}-{EngineVersion}-{EngineRid}.zip";
 
         internal static string Root => Path.Combine(ClaudeBuddySettings.Directory, "speech-engine");
 
@@ -114,7 +114,7 @@ namespace ClaudeBuddy
             Path.Combine(ClaudeBuddySettings.Directory, "voices");
         internal static string ModelPath => Path.Combine(Root, "kokoro-fp16.onnx");
         internal static string EngineExeName =>
-            OperatingSystem.IsWindows() ? "ClaudeBuddySpeech.exe" : "ClaudeBuddySpeech";
+            OperatingSystem.IsWindows() ? $"{Brand.SpeechEngineName}.exe" : Brand.SpeechEngineName;
 
         internal static string EnginePath => Path.Combine(Root, EngineVersion, EngineExeName);
 
@@ -206,7 +206,7 @@ namespace ClaudeBuddy
             {
                 // A directory we cannot enumerate is the same as no fallback:
                 // speaking degrades, it does not fail.
-                Console.Error.WriteLine($"Claude Buddy: couldn't scan for a fallback engine: {ex.Message}");
+                Console.Error.WriteLine($"{Brand.DisplayName}: couldn't scan for a fallback engine: {ex.Message}");
                 return null;
             }
         }
@@ -432,13 +432,13 @@ namespace ClaudeBuddy
                     catch (Exception ex)
                     {
                         Console.Error.WriteLine(
-                            $"Claude Buddy: couldn't remove the old speech engine {name}: {ex.Message}");
+                            $"{Brand.DisplayName}: couldn't remove the old speech engine {name}: {ex.Message}");
                     }
                 }
             }
             catch (Exception ex)
             {
-                Console.Error.WriteLine($"Claude Buddy: couldn't tidy old speech engines: {ex.Message}");
+                Console.Error.WriteLine($"{Brand.DisplayName}: couldn't tidy old speech engines: {ex.Message}");
             }
         }
 
@@ -482,7 +482,7 @@ namespace ClaudeBuddy
                 if (task.IsFaulted)
                 {
                     Console.Error.WriteLine(
-                        "Claude Buddy: couldn't update the speech engine for this version; "
+                        $"{Brand.DisplayName}: couldn't update the speech engine for this version; "
                         + $"still using an older one. {task.Exception?.GetBaseException().Message}");
                 }
             }, TaskScheduler.Default);
@@ -545,7 +545,7 @@ namespace ClaudeBuddy
             }
             catch (Exception ex)
             {
-                Console.Error.WriteLine($"Claude Buddy: couldn't list neural voices: {ex.Message}");
+                Console.Error.WriteLine($"{Brand.DisplayName}: couldn't list neural voices: {ex.Message}");
             }
 
             return voices;
@@ -640,7 +640,7 @@ namespace ClaudeBuddy
             {
                 if (IsWorthReporting(e.Data))
                 {
-                    Console.Error.WriteLine($"Claude Buddy: speech engine: {e.Data}");
+                    Console.Error.WriteLine($"{Brand.DisplayName}: speech engine: {e.Data}");
                 }
             };
 
@@ -656,7 +656,7 @@ namespace ClaudeBuddy
             }
             catch (Exception ex)
             {
-                Console.Error.WriteLine($"Claude Buddy: couldn't start the speech engine: {ex.Message}");
+                Console.Error.WriteLine($"{Brand.DisplayName}: couldn't start the speech engine: {ex.Message}");
                 try { process.Dispose(); } catch { }
                 return null;
             }

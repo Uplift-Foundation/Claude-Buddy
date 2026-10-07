@@ -473,7 +473,7 @@ namespace ClaudeBuddy
                     }
                     catch (Exception ex)
                     {
-                        Console.Error.WriteLine($"Claude Buddy: couldn't play a turn sound: {ex.Message}");
+                        Console.Error.WriteLine($"{Brand.DisplayName}: couldn't play a turn sound: {ex.Message}");
                     }
                 }, TaskScheduler.Default);
             }
@@ -522,7 +522,7 @@ namespace ClaudeBuddy
             }
             catch (Exception ex)
             {
-                Console.Error.WriteLine($"Claude Buddy: couldn't speak a turn summary: {ex.Message}");
+                Console.Error.WriteLine($"{Brand.DisplayName}: couldn't speak a turn summary: {ex.Message}");
             }
         }
 

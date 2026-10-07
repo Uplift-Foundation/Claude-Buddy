@@ -632,7 +632,7 @@ namespace ClaudeBuddy
 
             if (CloudRequest.CodeEventsPath(SessionId) is not { } path)
             {
-                Note("Not sent: this session's id is not in a shape Buddy will write to.");
+                Note($"Not sent: this session's id is not in a shape {Brand.ShortName} will write to.");
                 return ChatSendOutcome.Failed;
             }
 
@@ -779,7 +779,7 @@ namespace ClaudeBuddy
                 var path = CloudRequest.CodeEventsPath(SessionId);
                 if (path is null)
                 {
-                    failure = "this session's id is not in a shape Buddy will write to";
+                    failure = $"this session's id is not in a shape {Brand.ShortName} will write to";
                 }
                 else
                 {

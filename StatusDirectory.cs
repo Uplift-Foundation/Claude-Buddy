@@ -26,7 +26,7 @@ namespace ClaudeBuddy
     // somebody is actually sitting at.
     internal static class StatusDirectory
     {
-        internal const string FolderName = "claude_buddy";
+        internal const string FolderName = Brand.StatusFolderName;
 
         // The name macOS gives the per-user temp directory, and what `TMPDIR`
         // holds in any ordinary shell. Asked of the C library rather than

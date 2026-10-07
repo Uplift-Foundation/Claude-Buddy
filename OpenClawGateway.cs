@@ -780,7 +780,7 @@ namespace ClaudeBuddy
                         // isn't a boolean, a subscriber that threw — used to
                         // take the whole loop down and cost a full TLS 1.3
                         // reconnect. A frame we can't read is a frame we skip.
-                        Console.Error.WriteLine($"Claude Buddy: bad gateway frame: {ex.Message}");
+                        Console.Error.WriteLine($"{Brand.DisplayName}: bad gateway frame: {ex.Message}");
                     }
 
                     message.Clear();

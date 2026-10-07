@@ -169,7 +169,7 @@ namespace ClaudeBuddy
         // bookkeeping is not asked to track a new key every twenty minutes for
         // a cwd nobody will ever open again.
         internal static string ScratchDirectory =>
-            System.IO.Path.Combine(System.IO.Path.GetTempPath(), "claude-buddy-grok-refresh");
+            System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"{Brand.Slug}-grok-refresh");
 
         // The refresh itself. Excluded from coverage for the reason
         // CodexAppServerUsage.Ask is: it starts a real subprocess — here, the

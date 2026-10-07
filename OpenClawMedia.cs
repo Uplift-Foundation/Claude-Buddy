@@ -22,7 +22,7 @@ namespace ClaudeBuddy
         // builds would mean writing a file to prove a Path.Combine.
         [ExcludeFromCodeCoverage]
         private static string Directory_ =>
-            Path.Combine(Path.GetTempPath(), "claude_buddy_media");
+            Path.Combine(Path.GetTempPath(), $"{Brand.StatusFolderName}_media");
 
         // Excluded from coverage: writes the file and hands it to the OS's default
         // viewer; the filename rule is SafeName, which is tested.
