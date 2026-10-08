@@ -1,64 +1,102 @@
 namespace ClaudeBuddy
 {
-    // Whether a CLI's Buddy hook is installed, for CB-168's new-chat dialog:
-    // a CLI launched with no hook wired up never gets an orb, and the dialog
-    // warns about that rather than silently producing a terminal window that
-    // never lights up.
+    // Whether a CLI's hook is installed, for CB-168's new-chat dialog: a CLI
+    // launched with no hook wired up never gets an orb, and the dialog warns
+    // about that rather than silently producing a terminal window that never
+    // lights up.
     //
-    // Every installer (install-macos-hooks.sh, install-codex-hooks.sh,
-    // install-grok-hooks.sh and their Windows equivalents) copies the hook
-    // script to `<cli home>/claude-buddy/ClaudeBuddyHook.{sh,ps1}` before
-    // wiring it into the CLI's own settings file — see each script's own
-    // $INSTALLED/$installed variable. That copy existing is therefore a
+    // Every installer copies the hook script somewhere of its own before
+    // wiring it into the CLI's settings file, and that copy existing is a
     // reliable, install-agnostic signal: it survives whichever settings
     // format a given CLI or OS uses, without this file having to parse
     // ~/.claude/settings.json, a Codex hooks.json or a Grok hooks/*.json to
-    // find the same fact three different ways.
+    // find the same fact three different ways. Where each one puts it — see
+    // each script's own $INSTALLED/$installed variable:
+    //
+    //   - Codex and Grok, both platforms: `<cli home>/<slug>/<script>`, the
+    //     cli home being CODEX_HOME / GROK_HOME when set
+    //     (install-codex-hooks.{sh,ps1}, install-grok-hooks.{sh,ps1}).
+    //   - Claude Code on macOS: `~/.claude/<slug>/<script>`
+    //     (install-macos-hooks.sh).
+    //   - Claude Code on Windows: **`%LOCALAPPDATA%\<data dir>\<script>`**, not
+    //     under ~/.claude at all (install-windows-hooks.ps1's $InstallDir). This
+    //     comment used to say otherwise, the code believed it, and every wired
+    //     Windows machine was told its Claude Code hook was missing (CB-255
+    //     found it; filed against CB-168).
+    //
+    // Two copies count since CB-255 (§1): the Orbweaver one and the legacy
+    // Claude Buddy one. A DMG user who never runs "Install Hooks.command"
+    // again, or a Windows user whose installer has not re-wired yet, is still
+    // wired to the legacy script — the hooks fire, the orbs draw — and must
+    // not be told otherwise.
     internal static class NewChatHookState
     {
         internal static readonly string HookScriptName =
             OperatingSystem.IsWindows() ? Brand.HookScriptPowerShell : Brand.HookScriptShell;
 
-        // Where each CLI keeps its own state, honouring the same environment
-        // override each installer does: CODEX_HOME and GROK_HOME can point a
-        // whole account elsewhere, and the installer wires whichever
-        // directory that variable names. Claude Code has no equivalent
-        // override for hook installation, so it is always `<home>/.claude`.
+        // Every path a working hook copy for this CLI can be at, new first,
+        // legacy second. Pure: the platform, both home directories and the
+        // environment are all parameters, so each CLI on each platform is a
+        // test on either CI leg rather than whichever one the suite happens to
+        // run on — the shape ClaudeBinary and CodexBinary already use their
+        // Locate() overloads for, and for the same reason.
         //
-        // Parameters default to the real environment so a test can substitute
-        // a temp tree and a fake env lookup — the same shape ClaudeBinary and
-        // CodexBinary already use their Locate() overloads for, and for the
-        // same reason: a test that only controlled one input would still see
-        // whatever is really installed on the machine it runs on.
-        internal static string? BaseDirectoryFor(
-            NewChatCli cli, string? userProfile = null, Func<string, string?>? env = null)
+        // An empty override is no override, which is the rule the installers
+        // apply too (`${CODEX_HOME:-…}`, `if ($env:CODEX_HOME)`). Claude Code
+        // has no override for hook installation; CLAUDE_CONFIG_DIR moves its
+        // settings file, not the script copy.
+        //
+        // An undefined CLI has no candidates, so it reads as not installed.
+        internal static IReadOnlyList<string> HookCopyCandidates(
+            NewChatCli cli, bool onWindows, string userProfile, string localAppData,
+            Func<string, string?> env)
         {
-            userProfile ??= Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-            env ??= Environment.GetEnvironmentVariable;
+            var script = onWindows ? Brand.HookScriptPowerShell : Brand.HookScriptShell;
+            var legacyScript = onWindows ? Brand.Legacy.HookScriptPowerShell : Brand.Legacy.HookScriptShell;
 
-            return cli switch
+            if (cli == NewChatCli.ClaudeCode && onWindows)
+            {
+                return new[]
+                {
+                    Path.Combine(localAppData, Brand.DataDirName, script),
+                    Path.Combine(localAppData, Brand.Legacy.DataDirName, legacyScript)
+                };
+            }
+
+            string? home = cli switch
             {
                 NewChatCli.ClaudeCode => Path.Combine(userProfile, ".claude"),
-                NewChatCli.Codex => env("CODEX_HOME") is { Length: > 0 } codexHome
-                    ? codexHome
-                    : Path.Combine(userProfile, ".codex"),
-                NewChatCli.Grok => env("GROK_HOME") is { Length: > 0 } grokHome
-                    ? grokHome
-                    : Path.Combine(userProfile, ".grok"),
+                NewChatCli.Codex => HomeOrDefault(env("CODEX_HOME"), userProfile, ".codex"),
+                NewChatCli.Grok => HomeOrDefault(env("GROK_HOME"), userProfile, ".grok"),
                 _ => null
             };
+
+            return home is null
+                ? Array.Empty<string>()
+                : new[]
+                {
+                    Path.Combine(home, Brand.Slug, script),
+                    Path.Combine(home, Brand.Legacy.Slug, legacyScript)
+                };
         }
 
-        // Whether the hook copy exists under a given base directory. Takes
-        // the script name as a parameter, not just the base directory, so a
-        // test can check the Windows and Unix filenames without depending on
-        // which platform it happens to run on.
-        internal static bool IsInstalled(string baseDirectory, string hookScriptName) =>
-            File.Exists(Path.Combine(baseDirectory, Brand.Slug, hookScriptName));
+        private static string HomeOrDefault(string? overrideDir, string userProfile, string defaultName) =>
+            overrideDir is { Length: > 0 } ? overrideDir : Path.Combine(userProfile, defaultName);
+
+        // Installed means any candidate exists. `exists` is a parameter so the
+        // UI suite can drive the dialog through this exact rule against a temp
+        // tree without it being the real filesystem's File.Exists by accident.
+        internal static bool AnyExists(IEnumerable<string> candidates, Func<string, bool>? exists = null) =>
+            candidates.Any(exists ?? File.Exists);
 
         // The real answer for the running process: real environment, real
-        // filesystem, real platform's hook filename.
+        // filesystem, real platform.
         internal static bool CurrentlyInstalled(NewChatCli cli) =>
-            BaseDirectoryFor(cli) is { } baseDirectory && IsInstalled(baseDirectory, HookScriptName);
+            AnyExists(HookCopyCandidates(
+                cli,
+                OperatingSystem.IsWindows(),
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                Environment.GetEnvironmentVariable));
     }
 }

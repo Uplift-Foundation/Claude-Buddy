@@ -82,33 +82,38 @@ public class BrandCallSiteTests
             NewChatHookState.HookScriptName);
     }
 
-    [Fact]
-    public void AnInstalledHookIsFoundUnderTheShippedFolder()
+    // Both copies, spelled out per CLI on macOS: the new folder and script
+    // first, the legacy pair second (CB-255 §1). Windows Claude Code has its
+    // own pair under %LOCALAPPDATA% and is pinned in NewChatHookStateTests.
+    [Theory]
+    [InlineData("ClaudeCode", ".claude")]
+    [InlineData("Codex", ".codex")]
+    [InlineData("Grok", ".grok")]
+    public void AnInstalledHookIsFoundUnderTheShippedFolder(string cliName, string home)
     {
         var root = Path.Combine(Path.GetTempPath(), "cb250-" + Guid.NewGuid().ToString("N"));
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(root, "orbweaver"));
-            File.WriteAllText(Path.Combine(root, "orbweaver", "OrbweaverHook.sh"), "");
 
-            Assert.True(NewChatHookState.IsInstalled(root, "OrbweaverHook.sh"));
-        }
-        finally
-        {
-            Directory.Delete(root, recursive: true);
-        }
+        Assert.Equal(
+            new[]
+            {
+                Path.Combine(root, home, "orbweaver", "OrbweaverHook.sh"),
+                Path.Combine(root, home, "claude-buddy", "ClaudeBuddyHook.sh")
+            },
+            NewChatHookState.HookCopyCandidates(
+                Enum.Parse<NewChatCli>(cliName), onWindows: false, root, "unused", _ => null));
     }
 
     // A distro is wired if its settings name either script: the new one, or
-    // the legacy one an un-upgraded install wrote (CB-255 §1). The legacy rows
-    // stay true across the flip; only the Orbweaver row inverted.
+    // the legacy one an un-upgraded install wrote (CB-255 §1). Pure, so asked
+    // on both legs rather than only on Windows.
     [Theory]
     [InlineData("\"command\": \"C:\\\\Users\\\\x\\\\.claude\\\\claude-buddy\\\\ClaudeBuddyHook.ps1\"", true)]
     [InlineData("\"command\": \"...\\\\claudebuddyhook.PS1\"", true)]
     [InlineData("\"command\": \"...\\\\OrbweaverHook.ps1\"", true)]
+    [InlineData("\"command\": \"...\\\\orbweaverhook.PS1\"", true)]
+    [InlineData("\"command\": \"...\\\\OrbweaverHook.sh\"", false)]
     public void WslSettingsRecogniseTheShippedHookName(string text, bool expected)
     {
-        if (!OperatingSystem.IsWindows()) return;
         Assert.Equal(expected, WslIntegration.SettingsTextMentionsHook(text));
     }
 
