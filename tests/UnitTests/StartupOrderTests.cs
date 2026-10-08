@@ -34,7 +34,9 @@ public class StartupOrderTests
         Startup.Run(
             installCrashLog: () => order.Add("log"),
             claimSingleInstance: () => { order.Add("single"); return true; },
+            migrateUserData: () => { },
             claimUiThread: () => order.Add("claim"),
+            retireLegacy: () => { },
             serveOnLaunch: () => order.Add("serve"),
             waitForUnlock: () => order.Add("wait"),
             startUi: () => order.Add("ui"));
@@ -53,7 +55,9 @@ public class StartupOrderTests
         Startup.Run(
             installCrashLog: () => { },
             claimSingleInstance: () => true,
+            migrateUserData: () => { },
             claimUiThread: () => order.Add("claim"),
+            retireLegacy: () => { },
             serveOnLaunch: () => order.Add("serve"),
             waitForUnlock: () => { },
             startUi: () => { });
@@ -73,7 +77,9 @@ public class StartupOrderTests
         Startup.Run(
             installCrashLog: () => { },
             claimSingleInstance: () => true,
+            migrateUserData: () => { },
             claimUiThread: () => { },
+            retireLegacy: () => { },
             serveOnLaunch: () => { },
             waitForUnlock: () => order.Add("wait"),
             startUi: () => order.Add("ui"));
@@ -93,7 +99,9 @@ public class StartupOrderTests
         Startup.Run(
             installCrashLog: () => order.Add("log"),
             claimSingleInstance: () => { order.Add("single"); return true; },
+            migrateUserData: () => { },
             claimUiThread: () => order.Add("claim"),
+            retireLegacy: () => { },
             serveOnLaunch: () => { },
             waitForUnlock: () => { },
             startUi: () => order.Add("ui"));
@@ -115,7 +123,9 @@ public class StartupOrderTests
         Startup.Run(
             installCrashLog: () => { },
             claimSingleInstance: () => { order.Add("single"); return true; },
+            migrateUserData: () => { },
             claimUiThread: () => order.Add("claim"),
+            retireLegacy: () => { },
             serveOnLaunch: () => { },
             waitForUnlock: () => { },
             startUi: () => { });
@@ -129,13 +139,16 @@ public class StartupOrderTests
     {
         var counts = new Dictionary<string, int>
         {
-            ["log"] = 0, ["single"] = 0, ["claim"] = 0, ["serve"] = 0, ["wait"] = 0, ["ui"] = 0
+            ["log"] = 0, ["single"] = 0, ["migrate"] = 0, ["claim"] = 0, ["retire"] = 0,
+            ["serve"] = 0, ["wait"] = 0, ["ui"] = 0
         };
 
         Startup.Run(
             installCrashLog: () => counts["log"]++,
             claimSingleInstance: () => { counts["single"]++; return true; },
+            migrateUserData: () => counts["migrate"]++,
             claimUiThread: () => counts["claim"]++,
+            retireLegacy: () => counts["retire"]++,
             serveOnLaunch: () => counts["serve"]++,
             waitForUnlock: () => counts["wait"]++,
             startUi: () => counts["ui"]++);
@@ -156,7 +169,9 @@ public class StartupOrderTests
         Assert.Throws<InvalidOperationException>(() => Startup.Run(
             installCrashLog: () => { },
             claimSingleInstance: () => true,
+            migrateUserData: () => { },
             claimUiThread: () => { },
+            retireLegacy: () => { },
             serveOnLaunch: () => throw new InvalidOperationException("relay"),
             waitForUnlock: () => reached = true,
             startUi: () => reached = true));
@@ -177,7 +192,9 @@ public class StartupOrderTests
         Startup.Run(
             installCrashLog: () => { },
             claimSingleInstance: () => false,
+            migrateUserData: () => reached.Add("migrate"),
             claimUiThread: () => reached.Add("claim"),
+            retireLegacy: () => reached.Add("retire"),
             serveOnLaunch: () => reached.Add("serve"),
             waitForUnlock: () => reached.Add("wait"),
             startUi: () => reached.Add("ui"));
@@ -197,7 +214,9 @@ public class StartupOrderTests
         Startup.Run(
             installCrashLog: () => logged = true,
             claimSingleInstance: () => false,
+            migrateUserData: () => { },
             claimUiThread: () => { },
+            retireLegacy: () => { },
             serveOnLaunch: () => { },
             waitForUnlock: () => { },
             startUi: () => { });
@@ -215,11 +234,73 @@ public class StartupOrderTests
         Startup.Run(
             installCrashLog: () => order.Add("log"),
             claimSingleInstance: () => { order.Add("single"); return true; },
+            migrateUserData: () => order.Add("migrate"),
             claimUiThread: () => order.Add("claim"),
+            retireLegacy: () => order.Add("retire"),
             serveOnLaunch: () => order.Add("serve"),
             waitForUnlock: () => order.Add("wait"),
             startUi: () => order.Add("ui"));
 
-        Assert.Equal(new[] { "log", "single", "claim", "serve", "wait", "ui" }, order);
+        Assert.Equal(
+            new[] { "log", "single", "migrate", "claim", "retire", "serve", "wait", "ui" }, order);
+    }
+
+    // CB-255: the data-folder move sits between the two claims. After the
+    // single-instance one, because two processes moving one folder is the race
+    // that claim prevents; before the UI-thread claim and everything after it,
+    // because serveOnLaunch is the first reader of settings, the peer identity
+    // and the speech engine folder, and each must find the migrated folder.
+    [Fact]
+    public void Migrates_user_data_after_the_single_instance_claim_and_before_anything_reads_it()
+    {
+        var order = new List<string>();
+
+        Startup.Run(
+            installCrashLog: () => { },
+            claimSingleInstance: () => { order.Add("single"); return true; },
+            migrateUserData: () => order.Add("migrate"),
+            claimUiThread: () => order.Add("claim"),
+            retireLegacy: () => { },
+            serveOnLaunch: () => order.Add("serve"),
+            waitForUnlock: () => { },
+            startUi: () => { });
+
+        Assert.Equal(new[] { "single", "migrate", "claim", "serve" }, order);
+    }
+
+    // CB-255: retiring legacy leftovers comes after the migration (the
+    // Windows legacy hook folder also holds the legacy logs, which have to be
+    // moved out first) and after the UI-thread claim, but before anything is
+    // served or shown.
+    [Fact]
+    public void Retires_legacy_leftovers_after_migrating_and_before_serving()
+    {
+        var order = new List<string>();
+
+        Startup.Run(
+            installCrashLog: () => { },
+            claimSingleInstance: () => true,
+            migrateUserData: () => order.Add("migrate"),
+            claimUiThread: () => order.Add("claim"),
+            retireLegacy: () => order.Add("retire"),
+            serveOnLaunch: () => order.Add("serve"),
+            waitForUnlock: () => { },
+            startUi: () => order.Add("ui"));
+
+        Assert.Equal(new[] { "migrate", "claim", "retire", "serve", "ui" }, order);
+    }
+
+    // The interface units B, C and F build against (CB-255 §7): each step's
+    // real body is static, takes nothing and never throws, and under the test
+    // suites' environment overrides (TestBootstrap sets
+    // CLAUDE_BUDDY_SETTINGS_DIR) it does nothing to a real folder. While those
+    // files are still stubs this pins the shape; once each is real it keeps
+    // pinning "no-throw under the test env".
+    [Fact]
+    public void The_migration_and_retirement_steps_are_no_throw_under_the_test_environment()
+    {
+        DataDirMigration.Run();
+        LegacyHookCleanup.Run();
+        MacOSLegacyBundle.Run();
     }
 }

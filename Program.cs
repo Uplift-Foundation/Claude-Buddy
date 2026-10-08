@@ -45,7 +45,7 @@ namespace ClaudeBuddy
         [STAThread]
         public static void Main(string[] args)
         {
-            // The order these five run in is Startup.Run's, and the first two
+            // The order these run in is Startup.Run's, and the first two
             // are the fixes for CB-44 and CB-178 respectively — see
             // Startup.Run's own comment for why claimSingleInstance sits where
             // it does. What each step is *for* is here, next to the thing it
@@ -73,12 +73,28 @@ namespace ClaudeBuddy
                     return true;
                 },
 
+                // Move the user's data and logs from the legacy folder name to
+                // the new one (CB-255). Only the instance that holds both
+                // claims gets here, and nothing has read settings yet.
+                migrateUserData: DataDirMigration.Run,
+
                 // Claim Avalonia's UI thread for this thread while it is
                 // certain to be free, which is the only moment it is:
                 // everything after this line either starts something that
                 // posts to the dispatcher from the thread pool, or holds this
                 // thread for hours while it does.
                 claimUiThread: Startup.ClaimUiThread,
+
+                // Retire what the rename left behind (CB-255): legacy hook
+                // folders the installers have marked superseded long enough
+                // ago, and on macOS a verified-ours Claude Buddy.app beside the
+                // new bundle. Both are no-throw; holding both mutex names is
+                // what proves no old build is running while they act.
+                retireLegacy: () =>
+                {
+                    LegacyHookCleanup.Run();
+                    MacOSLegacyBundle.Run();
+                },
 
                 // The serve path before the screen-lock wait below, because it
                 // needs nothing that wait exists to protect: a relay is tmux,
