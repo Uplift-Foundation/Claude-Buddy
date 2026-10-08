@@ -284,6 +284,11 @@ public class HookInstallerMigrationTests
         ["CODEX_HOME"] = null,
         ["GROK_HOME"] = null,
         ["CLAUDE_CONFIG_DIR"] = null,
+        // TestBootstrap points this at a scratch directory for the whole suite,
+        // and an installer that sees it reads that directory and nothing else
+        // (CB-258). These cases are about the *fallback* from the Orbweaver data
+        // dir to the pre-rename one, which only runs with the variable unset.
+        ["CLAUDE_BUDDY_SETTINGS_DIR"] = null,
     };
 
     private static Result RunPs(string shell, string script, Scratch s, params string[] args)
@@ -596,6 +601,9 @@ public class HookInstallerMigrationTests
             ["CODEX_HOME"] = null,
             ["GROK_HOME"] = null,
             ["CLAUDE_CONFIG_DIR"] = null,
+            // Unset for the reason WindowsEnv gives: with it set, the installer
+            // never reaches the Orbweaver-then-ClaudeBuddy fallback under test.
+            ["CLAUDE_BUDDY_SETTINGS_DIR"] = null,
         });
     }
 
