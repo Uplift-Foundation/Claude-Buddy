@@ -58,7 +58,9 @@ public class StatusFolderMergeTests : IDisposable
             Title = title,
             Cwd = "/tmp/somewhere",
             // One pid per session id, so Superseded — which collapses two
-            // files sharing a pid and a CLI — never decides a case here. Deterministic, unlike GetHashCode.
+            // files sharing a pid and a CLI — never decides a case here.
+            // A character sum rather than GetHashCode, which is randomised
+            // per process and would make a collision a coin toss.
             SessionPid = 4000 + id.Sum(c => c)
         }));
         File.SetLastWriteTimeUtc(path, written);
@@ -256,6 +258,31 @@ public class StatusFolderMergeTests : IDisposable
         File.SetLastWriteTimeUtc(tornPath, T0.AddSeconds(5));
 
         Assert.Equal("whole", Assert.Single(Snapshot(Legacy)).Status.Title);
+    }
+
+    // The production call — no statusDir at all — reads the real legacy
+    // folder too, so a headless machine serving a session that predates the
+    // upgrade does not report it missing. Safe to ask here: every suite's
+    // TestBootstrap points CLAUDE_BUDDY_STATUS_ROOT at a sandbox, so "the
+    // real legacy folder" is a scratch directory of this run's own. The id is
+    // unique, and the file is removed afterwards for whoever reads it next.
+    [Fact]
+    public void TheDefaultCallReadsTheRealLegacyFolderToo()
+    {
+        var id = "legacy-default-" + Guid.NewGuid().ToString("N");
+        var path = Write(StatusDirectory.LegacyPath(), id, "before-upgrade", DateTime.UtcNow);
+        try
+        {
+            var kept = SessionManager.HeadlessSnapshot(
+                jobListing: NoJobs, isRunning: _ => true, nowUtc: DateTime.UtcNow.AddMinutes(1),
+                honourOrbLifetime: false);
+
+            Assert.Contains(kept, k => k.SessionId == id);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
     }
 
     // The default the tests rely on: a statusDir handed in with no legacy
