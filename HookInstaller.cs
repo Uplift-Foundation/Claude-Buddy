@@ -304,12 +304,11 @@ namespace ClaudeBuddy
         internal static bool IsWiredInAny(string profileName, IEnumerable<string> homeDirectories) =>
             homeDirectories.Any(home => IsWiredIn(profileName, home));
 
-        internal static bool IsWiredIn(string profileName, string? homeDirectory)
+        internal static bool IsWiredIn(string profileName, string homeDirectory)
         {
             try
             {
-                var home = homeDirectory ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-                var path = Path.Combine(home, profileName, "settings.json");
+                var path = Path.Combine(homeDirectory, profileName, "settings.json");
                 return File.Exists(path) && File.ReadAllText(path).Contains("ClaudeBuddyHook");
             }
             catch
