@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Packages "Claude Buddy.app" into a distributable, notarized .dmg.
+# Packages "Orbweaver.app" into a distributable, notarized .dmg.
 #
-#   ./tools/build-macos-dmg.sh                  # -> dist/ClaudeBuddy-<ver>-osx-arm64.dmg
+#   ./tools/build-macos-dmg.sh                  # -> dist/Orbweaver-<ver>-osx-arm64.dmg
 #   ./tools/build-macos-dmg.sh --rid osx-x64    # Intel
 #   ./tools/build-macos-dmg.sh --skip-notarize  # sign but don't submit to Apple
 #
@@ -27,8 +27,8 @@
 #   MACOS_NOTARY_PASSWORD    app-specific password (NOT the Apple ID password)
 #   MACOS_NOTARY_TEAM_ID     10-character team ID
 #
-# Why notarize at all: without it, a user who downloads the DMG gets "Claude
-# Buddy is damaged and can't be opened" (quarantine + no notarization ticket),
+# Why notarize at all: without it, a user who downloads the DMG gets
+# "Orbweaver is damaged and can't be opened" (quarantine + no notarization ticket),
 # which reads as a broken download rather than a security prompt. Notarizing
 # and stapling means a plain double-click works.
 
@@ -36,7 +36,8 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-APP_NAME="Claude Buddy"
+# Must match build-macos-app.sh's APP_NAME, whose bundle this stages.
+APP_NAME="Orbweaver"
 DIST="dist"
 SKIP_NOTARIZE=0
 
@@ -59,7 +60,7 @@ VERSION="$(sed -n 's|.*<Version>\(.*\)</Version>.*|\1|p' ClaudeBuddy.csproj | he
 
 SIGN_IDENTITY="${MACOS_SIGNING_IDENTITY:-}"
 APP="$DIST/$APP_NAME.app"
-DMG="$DIST/ClaudeBuddy-$VERSION-$RID.dmg"
+DMG="$DIST/$APP_NAME-$VERSION-$RID.dmg"
 STAGE="$DIST/dmg-stage"
 
 # Build the bundle first; it reads MACOS_SIGNING_IDENTITY from the environment
@@ -80,18 +81,25 @@ ln -s /Applications "$STAGE/Applications"
 # a double-clickable script instead. It resolves the installed app first so it
 # keeps working after the DMG is ejected, which is the normal case: people drag
 # the app across, then run this.
+#
+# Orbweaver.app everywhere it can be — installed, then the copy beside this
+# script on the image — before the pre-CB-255 Claude Buddy.app. The legacy
+# names are last so the command still does something on a Mac that has not
+# been upgraded, and never win over the app this image ships.
 cat > "$STAGE/Install Hooks.command" <<'COMMAND'
 #!/bin/bash
-# Wires the Claude Buddy hook into every agent CLI on this machine — Claude Code,
+# Wires the Orbweaver hook into every agent CLI on this machine — Claude Code,
 # Codex, or both — so their sessions show up as orbs.
 #
 # Re-run this any time to repair it, or after installing a second CLI; it
 # converges rather than duplicating. Pass --uninstall to remove the entries.
 set -euo pipefail
 
-for app in "/Applications/Claude Buddy.app" \
-           "$HOME/Applications/Claude Buddy.app" \
-           "$(cd "$(dirname "$0")" && pwd)/Claude Buddy.app"; do
+for app in "/Applications/Orbweaver.app" \
+           "$HOME/Applications/Orbweaver.app" \
+           "$(cd "$(dirname "$0")" && pwd)/Orbweaver.app" \
+           "/Applications/Claude Buddy.app" \
+           "$HOME/Applications/Claude Buddy.app"; do
   script="$app/Contents/Resources/install-hooks.sh"
   if [[ -x "$script" ]]; then
     echo "Using $app"
@@ -100,21 +108,24 @@ for app in "/Applications/Claude Buddy.app" \
   fi
 done
 
-echo "Couldn't find Claude Buddy.app in /Applications, ~/Applications, or next"
-echo "to this script. Drag Claude Buddy to Applications first, then run this again."
+echo "Couldn't find Orbweaver.app in /Applications, ~/Applications, or next"
+echo "to this script. Drag Orbweaver to Applications first, then run this again."
 exit 1
 COMMAND
 chmod +x "$STAGE/Install Hooks.command"
 
 cat > "$STAGE/Read Me First.txt" <<READ_ME
-Claude Buddy $VERSION
+$APP_NAME $VERSION
 =====================
 
-1. Drag "Claude Buddy" onto the Applications folder in this window.
+Orbweaver was called Claude Buddy until this release. If you are upgrading,
+see "Upgrading from Claude Buddy" at the end.
+
+1. Drag "$APP_NAME" onto the Applications folder in this window.
 
 2. Double-click "Install Hooks.command".
 
-   This step is not optional. Claude Buddy shows an orb per coding-agent
+   This step is not optional. $APP_NAME shows an orb per coding-agent
    session, and it learns about sessions from a hook that the agent runs.
    Until that hook is wired up, the app runs correctly but displays nothing
    at all -- which looks broken but isn't.
@@ -124,19 +135,19 @@ Claude Buddy $VERSION
    rather than duplicating.
 
    Your existing config is backed up first -- to
-   ~/.claude/settings.json.claudebuddy-backup and
-   ~/.codex/hooks.json.claudebuddy-backup respectively.
+   ~/.claude/settings.json.orbweaver-backup and
+   ~/.codex/hooks.json.orbweaver-backup respectively.
 
    Already-running sessions won't produce orbs until you restart them,
    because hooks are read once at session start.
 
    Codex only: Codex will not run a hook it has not been told to trust. The
    first time you start Codex after this, accept the hook review it shows
-   you, or run /hooks inside it and trust the Claude Buddy entries. Until
+   you, or run /hooks inside it and trust the $APP_NAME entries. Until
    you do, no Codex hook fires and no Codex orb appears -- and nothing
    anywhere tells you why.
 
-3. Launch Claude Buddy from Applications.
+3. Launch $APP_NAME from Applications.
 
    Nothing appears in the Dock and no window opens -- that is correct. Look
    for the icon in the menu bar. With no sessions running you should see zero
@@ -150,7 +161,7 @@ Login Items & Extensions.
 
 If you turn on "Serve on launch" (Remote Control) in Settings, the next time
 you run "Install Hooks.command" it also registers a LaunchAgent that brings
-Claude Buddy back after a crash -- not after a deliberate Quit, only a crash.
+$APP_NAME back after a crash -- not after a deliberate Quit, only a crash.
 It's tied to that setting on purpose: a keep-alive agent with no way to
 actually stay quit would be worse than the crash it's meant to survive, and
 this repository ships nothing that persists past a Quit unless you've told a
@@ -161,6 +172,15 @@ Uninstalling: drag the app to the Trash, and run
   "Install Hooks.command" --uninstall
 from a Terminal to take the hook entries back out of every CLI it wired, and
 the LaunchAgent out of ~/Library/LaunchAgents if one was registered.
+
+Upgrading from Claude Buddy: drag $APP_NAME in as above and run
+"Install Hooks.command" again -- it moves your existing hook entries over to
+$APP_NAME. The first time $APP_NAME starts, it moves the old Claude Buddy.app
+to the Trash, so the two can't take turns starting at login, and carries
+your settings over. If Claude Buddy was in your Login Items, add $APP_NAME
+instead (System Settings > General > Login Items). If click-to-focus or
+anything on your LAN stops working afterwards, re-grant Automation and Local
+Network for $APP_NAME in System Settings > Privacy & Security.
 
 Source, issues and docs: https://github.com/Uplift-Foundation/Claude-Buddy
 MIT licensed.

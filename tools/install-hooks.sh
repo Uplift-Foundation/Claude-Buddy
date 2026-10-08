@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Wires Claude Buddy into every agent CLI on this machine.
+# Wires Orbweaver into every agent CLI on this machine.
 #
 # The one thing an install should run. Orbs appear because a CLI calls the hook,
 # so an app with no hooks wired doesn't error — it sits there showing nothing —
@@ -60,16 +60,40 @@ keepalive_launchagents_dir() {
     printf '%s' "${CLAUDE_BUDDY_LAUNCHAGENTS_DIR:-$HOME/Library/LaunchAgents}"
 }
 
+# The settings.json the app will read. CB-255 moved the data folder from
+# Application Support/ClaudeBuddy to Application Support/Orbweaver, and the app
+# moves it on its first launch — so on upgrade day this script can run before
+# that launch ever has, with the user's settings still under the old name.
+# Reading only the new path then would read "no settings", take Serve on
+# launch as off, and tear down a keep-alive the user had opted in to. So: the
+# new folder's file if it exists (it wins, as it does in the app's own
+# migration), the legacy folder's otherwise. The override, when set, is the
+# whole answer — it is a test seam and must never fall through to a real
+# folder.
 keepalive_settings_path() {
-    printf '%s' "${CLAUDE_BUDDY_SETTINGS_DIR:-$HOME/Library/Application Support/ClaudeBuddy}/settings.json"
+    if [[ -n "${CLAUDE_BUDDY_SETTINGS_DIR:-}" ]]; then
+        printf '%s' "$CLAUDE_BUDDY_SETTINGS_DIR/settings.json"
+        return
+    fi
+    local support="$HOME/Library/Application Support"
+    if [[ ! -f "$support/Orbweaver/settings.json" && -f "$support/ClaudeBuddy/settings.json" ]]; then
+        printf '%s' "$support/ClaudeBuddy/settings.json"
+    else
+        printf '%s' "$support/Orbweaver/settings.json"
+    fi
 }
 
 # Colon-separated .app bundles to look for an installed executable in,
 # checked in order. Overridable so tests can point this at a fabricated
 # bundle (or a directory guaranteed not to exist) instead of depending on
 # whatever happens to be installed on the machine running the suite.
+#
+# Orbweaver.app first, then the pre-CB-255 Claude Buddy.app, so a machine
+# that has not been upgraded yet still gets its keep-alive — and one that has
+# both (a DMG drag that left the old bundle behind) points launchd at the new
+# one.
 keepalive_app_candidates() {
-    printf '%s' "${CLAUDE_BUDDY_KEEPALIVE_APP_CANDIDATES:-/Applications/Claude Buddy.app:$HOME/Applications/Claude Buddy.app}"
+    printf '%s' "${CLAUDE_BUDDY_KEEPALIVE_APP_CANDIDATES:-/Applications/Orbweaver.app:$HOME/Applications/Orbweaver.app:/Applications/Claude Buddy.app:$HOME/Applications/Claude Buddy.app}"
 }
 
 # True (via grep's exit code) only when settings.json exists and its
@@ -132,9 +156,9 @@ keepalive_plist_content() {
     <key>ProcessType</key>
     <string>Interactive</string>
     <key>StandardOutPath</key>
-    <string>$HOME/Library/Logs/ClaudeBuddy/keepalive.log</string>
+    <string>$HOME/Library/Logs/Orbweaver/keepalive.log</string>
     <key>StandardErrorPath</key>
-    <string>$HOME/Library/Logs/ClaudeBuddy/keepalive.log</string>
+    <string>$HOME/Library/Logs/Orbweaver/keepalive.log</string>
 </dict>
 </plist>
 PLIST
@@ -177,7 +201,7 @@ reconcile_keepalive() {
 
     local exe
     if ! exe="$(resolve_app_executable)"; then
-        echo "=== Crash keep-alive: couldn't find an installed Claude Buddy.app, skipping."
+        echo "=== Crash keep-alive: couldn't find an installed Orbweaver.app, skipping."
         return 0
     fi
 
@@ -324,7 +348,7 @@ fi
 
 if [[ $wired -eq 0 ]]; then
     echo "Neither Claude Code, Codex, nor Grok Build was found, so nothing was wired."
-    echo "Claude Buddy will show no orbs until one of them is installed."
+    echo "Orbweaver will show no orbs until one of them is installed."
     exit 0
 fi
 
