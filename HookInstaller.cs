@@ -284,7 +284,9 @@ namespace ClaudeBuddy
         // The marker is the hook script's own name, which is what the installers
         // themselves strip and re-add. homeDirectory is a parameter so a test can
         // point at a scratch directory.
-        internal static bool IsWired(string profileName, string? homeDirectory = null)
+        internal static bool IsWired(string profileName) => IsWiredIn(profileName, null);
+
+        internal static bool IsWiredIn(string profileName, string? homeDirectory)
         {
             try
             {

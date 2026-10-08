@@ -286,7 +286,7 @@ public class HookInstallerScriptsTests : IDisposable
 
         Console.Error.WriteLine($"PROBE outcome={result.Outcome} exit={result.ExitCode} stderr=[{result.Error}]");
         Assert.Equal(HookInstallOutcome.Ok, result.Outcome);
-        Assert.True(HookInstaller.IsWired(".claude-cb258-test", _home));
+        Assert.True(HookInstaller.IsWiredIn(".claude-cb258-test", _home));
     }
 
     // The Windows installer's copy of the seam. Not runnable off Windows, and not

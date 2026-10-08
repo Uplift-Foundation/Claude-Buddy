@@ -182,9 +182,15 @@ public class HookInstallerRunTests : IDisposable
             """{"hooks":{"Stop":[{"hooks":[{"command":"bash \"$HOME/.claude/claude-buddy/ClaudeBuddyHook.sh\" idle"}]}]}}""");
         File.WriteAllText(Path.Combine(home, ".bare", "settings.json"), """{"theme":"auto"}""");
 
-        Assert.True(HookInstaller.IsWired(".wired", home));
-        Assert.False(HookInstaller.IsWired(".bare", home));
-        Assert.False(HookInstaller.IsWired(".absent", home));
+        Assert.True(HookInstaller.IsWiredIn(".wired", home));
+        Assert.False(HookInstaller.IsWiredIn(".bare", home));
+        Assert.False(HookInstaller.IsWiredIn(".absent", home));
+    }
+
+    [Fact]
+    public void IsWiredReadsTheRealHomeAndFindsNothingForAProfileThatDoesNotExist()
+    {
+        Assert.False(HookInstaller.IsWired(".cb258-no-such-profile-" + Guid.NewGuid().ToString("N")));
     }
 
     [Fact]
@@ -199,7 +205,7 @@ public class HookInstallerRunTests : IDisposable
         // OS — the shape of a settings file mid-write by Claude Code itself.
         using var hold = new FileStream(settings, FileMode.Open, FileAccess.Read, FileShare.None);
 
-        Assert.False(HookInstaller.IsWired(".locked", home));
+        Assert.False(HookInstaller.IsWiredIn(".locked", home));
     }
 
     [Fact]
