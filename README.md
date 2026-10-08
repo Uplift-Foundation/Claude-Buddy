@@ -2610,7 +2610,7 @@ outside the app (a launchd agent, an installer replacing the bundle) stopped it.
   `TextToSpeech`, so a chime can never cancel speech. `SystemSoundCatalog.cs`
   lists and resolves the platform's own sound drawer — no audio ships with
   the app. Settings live under "Sounds" (master switch, plus a picker per
-  trigger offering Off, a spoken vibe-code summary for the finished trigger
+  trigger offering Off, a spoken vibe-code summary (two or three sentences) for the finished trigger
   only, every system sound, or a chosen file); an individual orb can override
   either trigger from its right-click "Sound" submenu, keyed by
   `SessionManager.SoundKeyFor`.
