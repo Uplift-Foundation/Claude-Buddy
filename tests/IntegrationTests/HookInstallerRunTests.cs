@@ -104,6 +104,28 @@ public class HookInstallerRunTests : IDisposable
         Assert.Contains("done", result.Output);
     }
 
+    // The kill takes the child's tree, but a descendant that has already been
+    // orphaned (reparented away) is outside it and keeps the pipes open, so the
+    // readers never finish. The result must still come back, with empty output
+    // rather than a hang or a throw.
+    [Fact]
+    public void AnOrphanedDescendantHoldingThePipesOpenDoesNotHangTheTimeoutResult()
+    {
+        if (OperatingSystem.IsWindows()) return; // relies on sh reparenting a backgrounded subshell
+
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var result = HookInstaller.Run("/bin/sh", new[] { "-c", "(sleep 6 &); sleep 30" },
+            "fake-installer", timeoutMs: 500);
+
+        // The half-second timeout plus the two-second wait for readers that never
+        // finish: proof the not-completed arm ran, since empty output alone is what
+        // a child that said nothing would give too.
+        Assert.True(clock.Elapsed > TimeSpan.FromSeconds(2), $"returned after {clock.Elapsed}");
+        Assert.Equal(HookInstallOutcome.TimedOut, result.Outcome);
+        Assert.Equal("", result.Output);
+        Assert.Equal("", result.Error);
+    }
+
     [Fact]
     public void AProgramThatCannotBeStartedIsReportedNotThrown()
     {

@@ -263,14 +263,20 @@ namespace ClaudeBuddy
                 HookInstallOutcome.TimedOut => $"the installer did not finish within {TimeoutMs / 1000} seconds",
                 HookInstallOutcome.Failed when result.ExitCode == SavedListUnreadableExit =>
                     "the saved profile list could not be read, so no extra profiles were wired"
-                    + (LastLine(result.Error) is { Length: > 0 } why ? $" ({why})" : ""),
+                    + Detail(result.Error),
                 HookInstallOutcome.Failed => $"the installer exited with code {result.ExitCode}"
-                    + (LastLine(result.Error) is { Length: > 0 } tail ? $" ({tail})" : ""),
+                    + Detail(result.Error),
                 _ => result.Error
             };
 
             return $"Couldn't wire hooks into {profileName}: {reason}. Details: {HookInstallerLog.Path_}";
         }
+
+        // " (last stderr line)", or nothing when stderr said nothing. A method
+        // rather than a pattern-match in each arm above, whose null case could
+        // never happen and so could never be covered.
+        private static string Detail(string error) =>
+            LastLine(error) is var line && line.Length > 0 ? $" ({line})" : "";
 
         // The last non-blank line of an installer's stderr, which is where a
         // script that dies under set -e says what it died on.
