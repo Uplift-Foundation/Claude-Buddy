@@ -605,6 +605,11 @@ jobs:
 
           if ($failures.Count) { $failures | ForEach-Object { Write-Host "::error::$_" }; exit 1 }
           Write-Host 'Upgrade replaced every pre-rename name and re-wired both profiles.'
+          # A step's exit code is the last native command's, and the last one run
+          # above is the probe for the new task, which exits 1 when the task is
+          # not there (a case this step already judges and tolerates). Without
+          # this the step failed after printing success.
+          exit 0
 
       # The installer only reads the pre-rename data folder; moving it is the
       # app's job, on its first launch after the upgrade, right after it claims

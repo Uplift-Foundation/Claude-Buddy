@@ -152,7 +152,7 @@ function run(argv) {
   // Strip our own entries wherever they appear, so re-running repairs rather
   // than duplicating and --uninstall leaves other tools' hooks untouched.
   // Either filename is ours, so the pre-rename ClaudeBuddyHook.sh entries go
-  // in the same pass: that is the whole of the upgrade's re-wire.
+  // in the same pass: that is the whole of the re-wire on an upgraded machine.
   for (const name of Object.keys(hooks)) {
     const groups = [].concat(hooks[name] || []);
     const kept = [];
