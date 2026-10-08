@@ -130,6 +130,9 @@ public class OpenClawRoomSendTests : IDisposable
             Assert.Equal("channel:900", post.GetProperty("to").GetString());
             Assert.Equal(OpenClawSender.MirrorPrefix + "anyone about?",
                 post.GetProperty("message").GetString());
+            // Composed from the current brand, never the legacy one.
+            Assert.Equal("**(via Orbweaver)** anyone about?",
+                post.GetProperty("message").GetString());
         }
     }
 
@@ -201,8 +204,9 @@ public class OpenClawRoomSendTests : IDisposable
             await OpenClawSessions.SendToRoomAsync(
                 Carrier(), "#lobby", "Quill", "anyone about?", CancellationToken.None);
 
-            Assert.DoesNotContain("via Claude Buddy",
-                Sent(socket)[1].Params.GetProperty("message").GetString()!);
+            var message = Sent(socket)[1].Params.GetProperty("message").GetString()!;
+            Assert.DoesNotContain("via Claude Buddy", message);
+            Assert.DoesNotContain("via Orbweaver", message);
         }
     }
 

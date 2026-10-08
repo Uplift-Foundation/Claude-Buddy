@@ -67,6 +67,15 @@ namespace ClaudeBuddy
         // everybody else's, with nothing matching the two together.
         public const string MirrorPrefix = $"**(via {Brand.DisplayName})** ";
 
+        // What builds before the Orbweaver rename wrote, and it must stay
+        // recognised forever: a room's history never expires, so every message
+        // an older build mirrored — here, or from another machine that has not
+        // upgraded yet — still opens with this, and without it those would be
+        // drawn as somebody else's words. Composed from Brand.Legacy so the
+        // string is not a second literal to drift; only ever stripped, never
+        // written. The cleanup after phase 3 must NOT delete this one.
+        public const string LegacyMirrorPrefix = $"**(via {Brand.Legacy.DisplayName})** ";
+
         internal enum SenderKind
         {
             // Nothing said who. Drawn as the room's own voice, with no name and
@@ -116,6 +125,11 @@ namespace ClaudeBuddy
             if (text.StartsWith(MirrorPrefix, StringComparison.Ordinal))
             {
                 return new Sender(SenderKind.Mine, null, text[MirrorPrefix.Length..]);
+            }
+
+            if (text.StartsWith(LegacyMirrorPrefix, StringComparison.Ordinal))
+            {
+                return new Sender(SenderKind.Mine, null, text[LegacyMirrorPrefix.Length..]);
             }
 
             // The gateway's own word for it, and the only one of these that is
