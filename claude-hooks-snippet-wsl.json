@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/mnt/c/WINDOWS/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\<YOUR_USERNAME>\\AppData\\Local\\ClaudeBuddy\\ClaudeBuddyHook.ps1\" -State waiting"
+            "command": "/mnt/c/WINDOWS/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\<YOUR_USERNAME>\\AppData\\Local\\Orbweaver\\OrbweaverHook.ps1\" -State waiting"
           }
         ]
       },
@@ -15,7 +15,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/mnt/c/WINDOWS/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\<YOUR_USERNAME>\\AppData\\Local\\ClaudeBuddy\\ClaudeBuddyHook.ps1\" -State waiting"
+            "command": "/mnt/c/WINDOWS/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\<YOUR_USERNAME>\\AppData\\Local\\Orbweaver\\OrbweaverHook.ps1\" -State waiting"
           }
         ]
       },
@@ -24,7 +24,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/mnt/c/WINDOWS/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\<YOUR_USERNAME>\\AppData\\Local\\ClaudeBuddy\\ClaudeBuddyHook.ps1\" -State generating"
+            "command": "/mnt/c/WINDOWS/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\<YOUR_USERNAME>\\AppData\\Local\\Orbweaver\\OrbweaverHook.ps1\" -State generating"
           }
         ]
       }
@@ -34,7 +34,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/mnt/c/WINDOWS/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\<YOUR_USERNAME>\\AppData\\Local\\ClaudeBuddy\\ClaudeBuddyHook.ps1\" -State idle"
+            "command": "/mnt/c/WINDOWS/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\<YOUR_USERNAME>\\AppData\\Local\\Orbweaver\\OrbweaverHook.ps1\" -State idle"
           }
         ]
       }
@@ -44,7 +44,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/mnt/c/WINDOWS/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\<YOUR_USERNAME>\\AppData\\Local\\ClaudeBuddy\\ClaudeBuddyHook.ps1\" -State generating"
+            "command": "/mnt/c/WINDOWS/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\<YOUR_USERNAME>\\AppData\\Local\\Orbweaver\\OrbweaverHook.ps1\" -State generating"
           }
         ]
       }
@@ -55,7 +55,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/mnt/c/WINDOWS/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\<YOUR_USERNAME>\\AppData\\Local\\ClaudeBuddy\\ClaudeBuddyHook.ps1\" -State generating"
+            "command": "/mnt/c/WINDOWS/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\<YOUR_USERNAME>\\AppData\\Local\\Orbweaver\\OrbweaverHook.ps1\" -State generating"
           }
         ]
       }
@@ -65,7 +65,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/mnt/c/WINDOWS/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\<YOUR_USERNAME>\\AppData\\Local\\ClaudeBuddy\\ClaudeBuddyHook.ps1\" -State idle"
+            "command": "/mnt/c/WINDOWS/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\<YOUR_USERNAME>\\AppData\\Local\\Orbweaver\\OrbweaverHook.ps1\" -State idle"
           }
         ]
       }
@@ -75,7 +75,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/mnt/c/WINDOWS/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\<YOUR_USERNAME>\\AppData\\Local\\ClaudeBuddy\\ClaudeBuddyHook.ps1\" -State ended"
+            "command": "/mnt/c/WINDOWS/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\<YOUR_USERNAME>\\AppData\\Local\\Orbweaver\\OrbweaverHook.ps1\" -State ended"
           }
         ]
       }

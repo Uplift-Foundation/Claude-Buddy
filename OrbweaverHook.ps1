@@ -120,7 +120,7 @@ if ($Agent -eq 'claude' -and $State -ne 'ended' -and $transcript -and (Test-Path
 }
 
 $resolvedTempDir = if ($TempDir) { $TempDir } else { [System.IO.Path]::GetTempPath() }
-$dir = Join-Path $resolvedTempDir 'claude_buddy'
+$dir = Join-Path $resolvedTempDir 'orbweaver'
 if (-not (Test-Path $dir)) {
     New-Item -ItemType Directory -Path $dir | Out-Null
 }

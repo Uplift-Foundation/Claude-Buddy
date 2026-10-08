@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-Wires Claude Buddy into every agent CLI on this machine.
+Wires Orbweaver into every agent CLI on this machine.
 
 .DESCRIPTION
 The one thing an install should run, and the Windows twin of
@@ -123,7 +123,7 @@ if ($failed.Count -gt 0) {
 
 if ($wired -eq 0) {
     Write-Host 'Neither Claude Code nor Codex was found, so nothing was wired.'
-    Write-Host 'Claude Buddy will show no orbs until one of them is installed.'
+    Write-Host 'Orbweaver will show no orbs until one of them is installed.'
     exit 0
 }
 

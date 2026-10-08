@@ -1,9 +1,9 @@
 #!/bin/bash
-# Claude Buddy hook for macOS/Linux — bash twin of ClaudeBuddyHook.ps1.
+# Orbweaver hook for macOS/Linux — bash twin of OrbweaverHook.ps1.
 # Usage (from a Claude Code, Codex, or Grok Build hook):
-#   ClaudeBuddyHook.sh <idle|generating|waiting|ended>
-#   ClaudeBuddyHook.sh codex <idle|generating|waiting|ended>
-#   ClaudeBuddyHook.sh grok <idle|generating|waiting|ended>
+#   OrbweaverHook.sh <idle|generating|waiting|ended>
+#   OrbweaverHook.sh codex <idle|generating|waiting|ended>
+#   OrbweaverHook.sh grok <idle|generating|waiting|ended>
 # Reads the hook payload JSON on stdin for session_id and cwd.
 #
 # One script for the three CLIs rather than three, because almost none of it is
@@ -76,7 +76,7 @@ TRANSCRIPT=$(field transcript_path)
 # ${TMPDIR} is what .NET's Path.GetTempPath() returns on macOS, so the app
 # and this script agree on the folder (both are per-user).
 DIR="${TMPDIR:-/tmp/}"
-DIR="${DIR%/}/claude_buddy"
+DIR="${DIR%/}/orbweaver"
 
 # Whether to give a session a colour when it has none.
 #
