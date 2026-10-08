@@ -22,6 +22,6 @@ public class BrandSettingsWindowTests
 
         var window = (SettingsWindow)ctor.Invoke(null);
 
-        Assert.Equal("Claude Buddy Settings", window.Title);
+        Assert.Equal($"{Brand.DisplayName} Settings", window.Title);
     }
 }

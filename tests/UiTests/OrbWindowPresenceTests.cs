@@ -711,7 +711,7 @@ public class OrbWindowPresenceTests
     [AvaloniaTheory]
     [InlineData(SessionSource.OpenClaw,
         "OpenClaw controls this session's state",
-        "This session is managed by OpenClaw, so Claude Buddy cannot reset its state.")]
+        $"This session is managed by OpenClaw, so {Brand.DisplayName} cannot reset its state.")]
     [InlineData(SessionSource.RemoteControl,
         "This session's state is controlled on its other machine",
         "This session is managed on its other machine, so it must be reset there.")]
