@@ -140,22 +140,39 @@ namespace ClaudeBuddy
         // Excluded from coverage: runs the installer script for every listed
         // distro.
         [ExcludeFromCodeCoverage]
-        public static void ReapplyProfiles()
+        public static HookInstallResult ReapplyProfiles()
         {
-            if (!OperatingSystem.IsWindows()) return;
+            const string label = "install-windows-hooks.ps1";
+            if (!OperatingSystem.IsWindows())
+            {
+                return HookInstaller.Finish(label,
+                    new HookInstallResult(HookInstallOutcome.Threw, label, Error: "Not Windows."));
+            }
 
             var script = ResolveInstallerScriptPath();
-            if (script is null) return;
+            if (script is null) return HookInstaller.Finish(label, HookInstallResult.NotFound(label));
 
             // No -Wsl here on purpose: this call's only job is the native
             // side. Fast — no WSL VM involved — so a short timeout is enough.
-            TryRun(@"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe", 10_000,
-                new[] { "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script });
+            var native = HookInstaller.Run(@"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+                new[] { "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script }, label, 10_000);
 
+            // A distro that would not re-wire is a failure the card has to say,
+            // not a bool this loop used to drop (CB-258). Native's own result
+            // wins when it failed, since that is the more basic problem.
+            var failed = new List<string>();
             foreach (var distro in ListDistros())
             {
-                if (IsWired(distro)) SetWired(distro, true);
+                if (IsWired(distro) && !SetWired(distro, true)) failed.Add(distro);
             }
+
+            if (native.Outcome != HookInstallOutcome.Ok || failed.Count == 0) return native;
+
+            return HookInstaller.Finish(label, native with
+            {
+                Outcome = HookInstallOutcome.Threw,
+                Error = $"WSL distro(s) {string.Join(", ", failed)} could not be re-wired."
+            });
         }
 
         // Deliberately not shared with TerminalFocuser.TryRun or

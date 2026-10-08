@@ -795,6 +795,140 @@ public class SettingsWindowCoverageTests
     // real native folder-picker dialog via TopLevel.StorageProvider, which a
     // headless runner has no window to attach one to.
 
+    private static readonly HookInstallResult Wired =
+        new(HookInstallOutcome.Ok, "install-macos-hooks.sh", 0);
+
+    // Builds a card whose Add runs `reapply`, and clicks Add on ".claude-work".
+    // Returns the pieces a case asserts on, plus the task that completes after
+    // the status line has been written (CB-258).
+    private static (TextBlock Status, Button Add, TextBox Input, Task Done) AddWork(
+        Func<HookInstallResult> reapply, Func<string, bool>? verify = null)
+    {
+        // The Threw case logs the escaped exception, and nothing in this suite
+        // points the log directory anywhere: without this it would write into the
+        // real ~/Library/Logs/ClaudeBuddy. The background task copies the scope
+        // when it is started, so disposing it after the click is safe.
+        using var logScope = CrashLog.ScopeForTests(
+            Path.Combine(Path.GetTempPath(), "cb-ui-hooklog-" + Guid.NewGuid().ToString("N")));
+
+        Task? done = null;
+        var card = (Control)SettingsWindow.ProfileDirsCard(
+            blurb: "blurb", watermark: "watermark",
+            current: () => Array.Empty<string>(),
+            add: _ => { }, remove: _ => { },
+            reapply: reapply, verify: verify);
+
+        var input = card.GetLogicalDescendants().OfType<TextBox>().First();
+        var add = card.GetLogicalDescendants().OfType<Button>().Single(b => (string)b.Content! == "Add");
+        var status = card.GetLogicalDescendants().OfType<TextBlock>().Single(t => t.FontSize == 11 && t.Opacity == 0.7);
+
+        input.Text = ".claude-work";
+        add.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+
+        // The click handler discards the task, as it should; the cases wait on
+        // the status text instead. Awaited on the UI thread rather than a pool
+        // thread, because reading a TextBlock off it throws, and awaiting there
+        // is what lets the dispatcher run the continuation that writes the text.
+        async Task WaitForResult()
+        {
+            for (var i = 0; i < 200 && (status.Text is null or "" or "Wiring hooks…"); i++)
+            {
+                await Task.Delay(25);
+            }
+        }
+
+        done = WaitForResult();
+        return (status, add, input, done);
+    }
+
+    [AvaloniaFact]
+    public async Task AddShowsWiringWhileTheInstallerRunsAndLocksTheControls()
+    {
+        using var release = new ManualResetEventSlim();
+        var (status, add, input, done) = AddWork(() => { release.Wait(); return Wired; });
+
+        Assert.Equal("Wiring hooks…", status.Text);
+        Assert.False(add.IsEnabled);
+        Assert.False(input.IsEnabled);
+
+        release.Set();
+        await done;
+        Assert.Equal("Wired hooks into .claude-work.", status.Text);
+        Assert.True(add.IsEnabled);
+        Assert.True(input.IsEnabled);
+    }
+
+    [AvaloniaFact]
+    public async Task AddReportsAFailedInstallerOnTheStatusLine()
+    {
+        var (status, add, input, done) = AddWork(() =>
+            new HookInstallResult(HookInstallOutcome.Failed, "install-macos-hooks.sh", 4, "", "boom"));
+
+        await done;
+
+        Assert.Contains("Couldn't wire hooks into .claude-work", status.Text);
+        Assert.Contains("exited with code 4 (boom)", status.Text);
+        Assert.True(add.IsEnabled);
+        Assert.True(input.IsEnabled);
+    }
+
+    [AvaloniaFact]
+    public async Task AddReportsAMissingInstallerOnTheStatusLine()
+    {
+        var (status, _, _, done) = AddWork(() => HookInstallResult.NotFound("install-macos-hooks.sh"));
+
+        await done;
+
+        Assert.Contains("install-macos-hooks.sh was not found", status.Text);
+    }
+
+    [AvaloniaFact]
+    public async Task AddReportsAnInstallerThatThrewAndStillReEnablesTheControls()
+    {
+        var (status, add, input, done) = AddWork(() => throw new InvalidOperationException("kaboom"));
+
+        await done;
+
+        Assert.Contains("Couldn't wire hooks into .claude-work: kaboom.", status.Text);
+        Assert.True(add.IsEnabled);
+        Assert.True(input.IsEnabled);
+    }
+
+    [AvaloniaFact]
+    public async Task AddDoesNotClaimSuccessWhenTheProfileHasNoHooksAfterwards()
+    {
+        var checkedNames = new List<string>();
+        var (status, _, _, done) = AddWork(() => Wired, verify: name => { checkedNames.Add(name); return false; });
+
+        await done;
+
+        Assert.Equal(new[] { ".claude-work" }, checkedNames);
+        Assert.StartsWith("The installer ran, but .claude-work still has no", status.Text);
+    }
+
+    [AvaloniaFact]
+    public async Task AddConfirmsWiredWhenTheProfileHasItsHooks()
+    {
+        var (status, _, _, done) = AddWork(() => Wired, verify: _ => true);
+
+        await done;
+
+        Assert.Equal("Wired hooks into .claude-work.", status.Text);
+    }
+
+    [AvaloniaFact]
+    public async Task AddDoesNotVerifyAProfileWhoseInstallerFailed()
+    {
+        var verified = false;
+        var (status, _, _, done) = AddWork(
+            () => HookInstallResult.NotFound("x.sh"), verify: _ => { verified = true; return true; });
+
+        await done;
+
+        Assert.False(verified);
+        Assert.Contains("Couldn't wire hooks", status.Text);
+    }
+
     [AvaloniaFact]
     public void ProfileDirsCardAddsANameAndCallsAddAndReapply()
     {
@@ -809,7 +943,7 @@ public class SettingsWindowCoverageTests
             current: () => current,
             add: name => added.Add(name),
             remove: name => removed.Add(name),
-            reapply: () => Interlocked.Increment(ref reapplyCount));
+            reapply: () => { Interlocked.Increment(ref reapplyCount); return Wired; });
 
         var input = card.GetLogicalDescendants().OfType<TextBox>().First();
         var addButton = card.GetLogicalDescendants().OfType<Button>()
@@ -832,7 +966,7 @@ public class SettingsWindowCoverageTests
             current: () => Array.Empty<string>(),
             add: name => added.Add(name),
             remove: _ => { },
-            reapply: () => { });
+            reapply: () => Wired);
 
         var addButton = card.GetLogicalDescendants().OfType<Button>()
             .Single(b => (string)b.Content! == "Add");
@@ -864,7 +998,7 @@ public class SettingsWindowCoverageTests
         var card = (Control)SettingsWindow.ProfileDirsCard(
             blurb: "blurb", watermark: "watermark",
             current: () => new[] { ".claude-work", ".claude-personal" },
-            add: _ => { }, remove: _ => { }, reapply: () => { });
+            add: _ => { }, remove: _ => { }, reapply: () => Wired);
 
         var labels = card.GetLogicalDescendants().OfType<TextBlock>()
             .Select(t => t.Text).ToList();

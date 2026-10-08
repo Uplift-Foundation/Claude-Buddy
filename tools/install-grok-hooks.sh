@@ -109,8 +109,10 @@ if [[ $NO_PROFILES -eq 1 ]]; then
   exit 0
 fi
 
+# Honours CLAUDE_BUDDY_SETTINGS_DIR like the app does; a failed read is reported
+# on stderr rather than discarded (CB-258).
 saved_profiles() {
-  local settings="$HOME/Library/Application Support/ClaudeBuddy/settings.json"
+  local settings="${CLAUDE_BUDDY_SETTINGS_DIR:-$HOME/Library/Application Support/ClaudeBuddy}/settings.json"
   [[ -f "$settings" ]] || return 0
 
   osascript -l JavaScript -e '
@@ -119,21 +121,41 @@ saved_profiles() {
       const s = $.NSString.stringWithContentsOfFileEncodingError(a[0], $.NSUTF8StringEncoding, null);
       if (s.isNil()) return "";
       let parsed;
-      try { parsed = JSON.parse(ObjC.unwrap(s)); } catch (e) { return ""; }
+      try { parsed = JSON.parse(ObjC.unwrap(s)); } catch (e) { throw new Error("settings.json is not valid JSON"); }
       const dirs = parsed.grokHomes;
       if (!Array.isArray(dirs)) return "";
       return dirs.filter(function (d) { return typeof d === "string" && d.length > 0; }).join("\n");
     }
-  ' "$settings" 2>/dev/null || true
+  ' "$settings" || {
+    echo "warning: could not read the saved profile list from $settings (exit $?); no extra profiles were wired." >&2
+    return 1
+  }
 }
 
 SELF="$HERE/$(basename "$0")"
 [[ -x "$SELF" ]] || SELF="$0"
 
-for name in "${EXTRA_PROFILES[@]+"${EXTRA_PROFILES[@]}"}" $(saved_profiles); do
+LIST_UNREADABLE=0
+saved=$(saved_profiles) || LIST_UNREADABLE=1
+
+for name in "${EXTRA_PROFILES[@]+"${EXTRA_PROFILES[@]}"}" $saved; do
   [[ -n "$name" ]] || continue
   extra="$HOME/$name"
   echo
   echo "=== extra Grok home: $extra"
-  "$SELF" ${UNINSTALL:+--uninstall} --grok-home "$extra" --no-profiles
+  # An array, not ${UNINSTALL:+--uninstall}: UNINSTALL is 0 or 1 and "0" is a
+  # non-empty string, so :+ expanded every time and an *install* unwired every
+  # extra Grok home it was meant to wire (CB-258). install-macos-hooks.sh hit the
+  # same trap and says so beside the same fix.
+  mode=()
+  [[ $UNINSTALL -eq 1 ]] && mode=(--uninstall)
+  "$SELF" "${mode[@]+"${mode[@]}"}" --grok-home "$extra" --no-profiles
 done
+
+# Exit 3 means "the saved profile list could not be read": the default profile was
+# still wired, but any extra ones were not, and the app turns that code into a
+# message of its own (HookInstaller.SavedListUnreadableExit). Exit 0 here used to
+# make an unreadable list indistinguishable from an empty one (CB-258).
+if [[ $LIST_UNREADABLE -eq 1 ]]; then
+  exit 3
+fi
