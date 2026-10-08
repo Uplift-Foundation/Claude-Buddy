@@ -1513,7 +1513,7 @@ namespace ClaudeBuddy
                 // through an in-place write would leave the profile without a
                 // parseable config, taking its oauth token cache with it.
                 // UTF-8 without a BOM, matching what the app itself writes.
-                var temporary = path + ".claude-buddy.tmp";
+                var temporary = path + $".{Brand.Slug}.tmp";
                 File.WriteAllText(temporary, root.ToJsonString(), new UTF8Encoding(false));
 
                 // This file holds the profile's login. Prove the rewrite kept

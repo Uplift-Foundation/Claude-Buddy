@@ -17,7 +17,7 @@ namespace ClaudeBuddy
     internal static class NewChatHookState
     {
         internal static readonly string HookScriptName =
-            OperatingSystem.IsWindows() ? "ClaudeBuddyHook.ps1" : "ClaudeBuddyHook.sh";
+            OperatingSystem.IsWindows() ? Brand.HookScriptPowerShell : Brand.HookScriptShell;
 
         // Where each CLI keeps its own state, honouring the same environment
         // override each installer does: CODEX_HOME and GROK_HOME can point a
@@ -54,7 +54,7 @@ namespace ClaudeBuddy
         // test can check the Windows and Unix filenames without depending on
         // which platform it happens to run on.
         internal static bool IsInstalled(string baseDirectory, string hookScriptName) =>
-            File.Exists(Path.Combine(baseDirectory, "claude-buddy", hookScriptName));
+            File.Exists(Path.Combine(baseDirectory, Brand.Slug, hookScriptName));
 
         // The real answer for the running process: real environment, real
         // filesystem, real platform's hook filename.

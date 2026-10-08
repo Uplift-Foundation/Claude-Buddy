@@ -310,7 +310,7 @@ namespace ClaudeBuddy
         internal const string UnknownHeader = "Couldn't check for background jobs";
 
         internal const string UnknownTip =
-            "Claude Buddy could not read what is running under this session, so it is not "
+            $"{Brand.DisplayName} could not read what is running under this session, so it is not "
             + "offering to end it. Close this menu and open it again to retry.";
 
         // How long the row waits for an answer before saying it has none. Twice

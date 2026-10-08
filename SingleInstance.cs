@@ -135,7 +135,7 @@ namespace ClaudeBuddy
         // ssh or `setsid` is in a different session from the login-item copy,
         // got a mutex of its own, and ran alongside it. Four such files existed
         // at once on the MacBook on 26 Sep, and every orb was drawn twice.
-        internal const string MutexName = "ClaudeBuddy_SingleInstance_Mutex";
+        internal const string MutexName = Brand.SingleInstanceMutexName;
 
         // How the mutex is scoped, per platform (CB-206).
         //

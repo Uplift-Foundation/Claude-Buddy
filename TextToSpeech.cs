@@ -426,7 +426,7 @@ namespace ClaudeBuddy
                 {
                     try { process.Kill(entireProcessTree: true); } catch { }
                     Console.Error.WriteLine(
-                        "Claude Buddy: the speak voices command took too long and was stopped");
+                        $"{Brand.DisplayName}: the speak voices command took too long and was stopped");
                     return found;
                 }
 
@@ -438,7 +438,7 @@ namespace ClaudeBuddy
             }
             catch (Exception ex)
             {
-                Console.Error.WriteLine($"Claude Buddy: couldn't list voices from the speak command: {ex.Message}");
+                Console.Error.WriteLine($"{Brand.DisplayName}: couldn't list voices from the speak command: {ex.Message}");
             }
 
             return found;
@@ -1009,7 +1009,7 @@ namespace ClaudeBuddy
             {
                 if (!string.IsNullOrWhiteSpace(e.Data))
                 {
-                    Console.Error.WriteLine($"Claude Buddy: speak command: {e.Data}");
+                    Console.Error.WriteLine($"{Brand.DisplayName}: speak command: {e.Data}");
                 }
             };
 
@@ -1034,7 +1034,7 @@ namespace ClaudeBuddy
             catch (Exception ex)
             {
                 Console.Error.WriteLine(
-                    $"Claude Buddy: couldn't start the configured speak command '{command}': {ex.Message}");
+                    $"{Brand.DisplayName}: couldn't start the configured speak command '{command}': {ex.Message}");
 
                 lock (Gate) _speaking = null;
                 proc.Dispose();

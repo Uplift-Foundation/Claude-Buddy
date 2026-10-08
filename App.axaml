@@ -1,7 +1,8 @@
 <Application xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="using:ClaudeBuddy"
              x:Class="ClaudeBuddy.App"
-             Name="Claude Buddy">
+             Name="{x:Static local:Brand.DisplayName}">
     <!-- The macOS theme is declared here rather than added from code: added from
          code its control templates render as nothing at all (labels appear, every
          switch, field and pop-up comes out invisible), because the XAML loader is

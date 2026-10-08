@@ -228,7 +228,7 @@ namespace ClaudeBuddy
             : "Click again to delete — this can't be undone";
 
         public static string Tip(CloudLifecycleAction action) => action == CloudLifecycleAction.Archive
-            ? "Archives this cloud session on your Claude account. It stops running and leaves Buddy; claude.ai still lists it under archived."
+            ? $"Archives this cloud session on your Claude account. It stops running and leaves {Brand.ShortName}; claude.ai still lists it under archived."
             : "Deletes this cloud session from your Claude account, history and all. It cannot be restored.";
 
         public static string Working(CloudLifecycleAction action) => action == CloudLifecycleAction.Archive

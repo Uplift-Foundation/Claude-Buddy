@@ -682,7 +682,7 @@ namespace ClaudeBuddy
             if (playable is not null) return playable;
 
             Console.Error.WriteLine(
-                $"Claude Buddy: {Path.GetFileName(path)} is not a WAV this can make quieter; playing it at full volume");
+                $"{Brand.DisplayName}: {Path.GetFileName(path)} is not a WAV this can make quieter; playing it at full volume");
             return path;
         }
 

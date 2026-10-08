@@ -55,7 +55,7 @@ namespace ClaudeBuddy
             Environment.GetEnvironmentVariable("CLAUDE_BUDDY_BUNDLE_ROOT") is { Length: > 0 } scratch
                 ? scratch
                 : Path.Combine(
-                    Home, "Library", "Application Support", "ClaudeBuddy", "bundles");
+                    Home, "Library", "Application Support", Brand.DataDirName, "bundles");
 
         public static string DirectoryFor(string profileFolder) => Path.Combine(Root, profileFolder);
 

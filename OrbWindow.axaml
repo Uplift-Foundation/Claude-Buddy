@@ -1,7 +1,8 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="using:ClaudeBuddy"
         x:Class="ClaudeBuddy.OrbWindow"
-        Title="Claude Buddy"
+        Title="{x:Static local:Brand.DisplayName}"
         Width="56" Height="56"
         SizeToContent="Manual"
         WindowDecorations="None"
@@ -202,7 +203,7 @@
                 <!-- Exit is the whole app, not this session — worth a rule
                      between it and two items that end one thing each. -->
                 <Separator/>
-                <MenuItem Header="Exit Claude Buddy" Click="Exit_Click"/>
+                <MenuItem Header="{x:Static local:OrbWindow.ExitMenuHeader}" Click="Exit_Click"/>
             </ContextMenu>
         </Grid.ContextMenu>
 

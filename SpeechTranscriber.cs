@@ -123,7 +123,7 @@ namespace ClaudeBuddy
             }
             catch (Exception ex)
             {
-                Console.Error.WriteLine($"Claude Buddy: voice transcription failed: {ex.Message}");
+                Console.Error.WriteLine($"{Brand.DisplayName}: voice transcription failed: {ex.Message}");
                 return "";
             }
             finally
@@ -241,7 +241,7 @@ namespace ClaudeBuddy
                     // got interrupted before the rename-over-target above)
                     // must not crash the app — just no transcription until
                     // the user re-downloads it.
-                    Console.Error.WriteLine($"Claude Buddy: couldn't load the voice model: {ex.Message}");
+                    Console.Error.WriteLine($"{Brand.DisplayName}: couldn't load the voice model: {ex.Message}");
                     return null;
                 }
             }

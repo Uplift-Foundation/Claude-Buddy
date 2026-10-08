@@ -90,7 +90,7 @@ namespace ClaudeBuddy
         // that the two surfaces must never disagree about it, and a definition
         // two implementations share is worth a test of its own.
         internal static bool SettingsTextMentionsHook(string text) =>
-            text.Contains("ClaudeBuddyHook.ps1", StringComparison.OrdinalIgnoreCase);
+            text.Contains(Brand.HookScriptPowerShell, StringComparison.OrdinalIgnoreCase);
 
         // Enable or disable hooks for one distro by shelling out to the
         // shipped installer script — same script the installer itself runs,

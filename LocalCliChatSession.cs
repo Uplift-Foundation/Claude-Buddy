@@ -861,7 +861,7 @@ namespace ClaudeBuddy
                 + "the message shows here once it has.",
 
             DeliveryResult.Accepted =>
-                $"Handed to {name} for its next turn. It arrives as a message from Claude Buddy, "
+                $"Handed to {name} for its next turn. It arrives as a message from {Brand.DisplayName}, "
                 + "not keystrokes, so built-in slash commands won't run.",
 
             DeliveryResult.NoRegistryEntry =>
@@ -869,7 +869,7 @@ namespace ClaudeBuddy
                 + "Attach it with the gear button to answer it there.",
 
             DeliveryResult.UnsupportedProtocol =>
-                $"{name} speaks a peer protocol Buddy doesn't recognize, so nothing was sent.",
+                $"{name} speaks a peer protocol {Brand.ShortName} doesn't recognize, so nothing was sent.",
 
             _ => "Claude Code's session socket refused the connection; nothing was sent.",
         };

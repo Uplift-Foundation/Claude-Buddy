@@ -465,7 +465,7 @@ namespace ClaudeBuddy
             {
                 SessionSource.OpenClaw => (
                     "OpenClaw controls this session's state",
-                    "This session is managed by OpenClaw, so Claude Buddy cannot reset its state."),
+                    $"This session is managed by OpenClaw, so {Brand.DisplayName} cannot reset its state."),
                 SessionSource.RemoteControl => (
                     "This session's state is controlled on its other machine",
                     "This session is managed on its other machine, so it must be reset there."),
@@ -2295,7 +2295,7 @@ namespace ClaudeBuddy
                 // No input device, permission denied, device busy — a
                 // convenience feature failing to start is not worth a crash.
                 _recorder = null;
-                Console.Error.WriteLine($"Claude Buddy: couldn't start recording: {ex.Message}");
+                Console.Error.WriteLine($"{Brand.DisplayName}: couldn't start recording: {ex.Message}");
                 return;
             }
 
@@ -3592,6 +3592,13 @@ namespace ClaudeBuddy
             ChatPanel.OpenFor(this, chat);
             return true;
         }
+
+        // The orb menu's own quit item, which OrbWindow.axaml reads with
+        // x:Static. A const rather than a binding with a StringFormat: a const
+        // can't fail to resolve at runtime, and the menu reads the same as the
+        // tray's "Quit" item builds it. Public because x:Static resolves nothing
+        // less.
+        public const string ExitMenuHeader = $"Exit {Brand.DisplayName}";
 
         internal void Exit_Click(object? sender, RoutedEventArgs e) =>
             ShutdownIfDesktop(Application.Current?.ApplicationLifetime);

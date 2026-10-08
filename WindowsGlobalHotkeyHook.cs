@@ -117,7 +117,7 @@ namespace ClaudeBuddy
             if (_hwnd != IntPtr.Zero) return;
 
             _wndProc = WndProc;
-            var className = "ClaudeBuddyGlobalHotkeyWindow";
+            var className = Brand.HotkeyWindowClass;
             var wndClass = new WndClass
             {
                 lpfnWndProc = _wndProc,

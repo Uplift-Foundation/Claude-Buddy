@@ -69,7 +69,7 @@ namespace ClaudeBuddy
             _tray = new TrayIcon
             {
                 Icon = LoadIcon("idle"),
-                ToolTipText = "Claude Buddy",
+                ToolTipText = Brand.DisplayName,
                 IsVisible = true,
                 Menu = _menu
             };
@@ -282,7 +282,7 @@ namespace ClaudeBuddy
             settingsItem.Click += (_, _) => OpenSettings();
             menu.Add(settingsItem);
 
-            var quitItem = new NativeMenuItem("Quit Claude Buddy");
+            var quitItem = new NativeMenuItem($"Quit {Brand.DisplayName}");
             quitItem.Click += (_, _) => QuitApp();
             menu.Add(quitItem);
         }
@@ -374,12 +374,12 @@ namespace ClaudeBuddy
 
         internal static string Summary(int total, int waiting, int generating)
         {
-            if (total == 0) return "Claude Buddy — no sessions";
+            if (total == 0) return $"{Brand.DisplayName} — no sessions";
 
             var parts = new List<string> { total == 1 ? "1 session" : $"{total} sessions" };
             if (waiting > 0) parts.Add($"{waiting} needs you");
             if (generating > 0) parts.Add($"{generating} working");
-            return "Claude Buddy — " + string.Join(", ", parts);
+            return $"{Brand.DisplayName} — " + string.Join(", ", parts);
         }
 
         // An agent's name within its team if it has one, else the chat name if
@@ -436,7 +436,7 @@ namespace ClaudeBuddy
 
             var icon = Tinted(state)
                        ?? new WindowIcon(AssetLoader.Open(
-                           new Uri($"avares://ClaudeBuddy/Assets/tray-{state}.png")));
+                           new Uri($"avares://{Brand.AssemblyName}/Assets/tray-{state}.png")));
             _iconCache[state] = icon;
             return icon;
         }
@@ -472,7 +472,7 @@ namespace ClaudeBuddy
             try
             {
                 using var source = new Bitmap(AssetLoader.Open(
-                    new Uri($"avares://ClaudeBuddy/Assets/tray-{state}.png")));
+                    new Uri($"avares://{Brand.AssemblyName}/Assets/tray-{state}.png")));
 
                 // 64x64, which is what make-icons.py renders so the menu bar has
                 // retina pixels to downsample from.

@@ -262,7 +262,7 @@ namespace ClaudeBuddy
         // of these sentences answers the same question — *why can't I type
         // here* — and a user who has learned to recognise one answer should
         // not have to learn a second because they moved machines.
-        internal const string CantTypePhrase = "isn't a terminal Buddy can type into";
+        internal const string CantTypePhrase = $"isn't a terminal {Brand.ShortName} can type into";
 
         internal static string WhyNot(SessionStatus? status, bool onMacOS, bool onWindows)
         {
@@ -280,7 +280,7 @@ namespace ClaudeBuddy
             // here is a status file with no pid: one written by a hook older
             // than the field, or by a session that had already gone.
             if (onWindows)
-                return $"{program} {CantTypePhrase} — Buddy couldn't find the console this "
+                return $"{program} {CantTypePhrase} — {Brand.ShortName} couldn't find the console this "
                        + "session is running in.";
 
             if (!onMacOS)
