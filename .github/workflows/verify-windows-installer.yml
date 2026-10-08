@@ -698,6 +698,10 @@ jobs:
 
           if ($failures.Count) { $failures | ForEach-Object { Write-Host "::error::$_" }; exit 1 }
           Write-Host 'Uninstall removed both names: tasks, shortcuts and hook wiring.'
+          # The verdict is $failures above. Without this the step inherits the
+          # exit code of the last native probe, a schtasks query for a task that
+          # is meant to be gone, which is 1.
+          exit 0
 
       - name: Collect logs on failure
         if: failure()

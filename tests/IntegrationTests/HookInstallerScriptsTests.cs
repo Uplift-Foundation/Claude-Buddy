@@ -222,8 +222,8 @@ public class HookInstallerScriptsTests : IDisposable
 
         var result = RunInstaller("install-grok-hooks.sh", withSettingsDirVariable: true);
 
-        Assert.DoesNotContain("Removed Claude Buddy hooks", result.Output);
-        Assert.Contains("Wired Claude Buddy hooks", result.Output);
+        Assert.DoesNotContain("Removed Orbweaver hooks", result.Output);
+        Assert.Contains("Wired Orbweaver hooks", result.Output);
     }
 
     // The silent failure this ticket could not rule out: a list that cannot be
