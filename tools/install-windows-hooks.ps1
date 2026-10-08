@@ -104,8 +104,16 @@ $ErrorActionPreference = 'Stop'
 # the Inno installer runs this before the new app has started and moved the
 # folder, and reading only the new path then would wire zero extra profiles.
 function Get-ConfiguredExtraProfileDirs {
-    $path = Join-Path $env:APPDATA 'Orbweaver\settings.json'
-    if (-not (Test-Path -LiteralPath $path)) { $path = Join-Path $env:APPDATA 'ClaudeBuddy\settings.json' }
+    # CLAUDE_BUDDY_SETTINGS_DIR first and alone, as the app and the macOS
+    # installers do, so a test instance pointed at a scratch directory is not
+    # wired from the real list (CB-258). Otherwise Orbweaver's folder, then the
+    # pre-rename ClaudeBuddy one.
+    if ($env:CLAUDE_BUDDY_SETTINGS_DIR) {
+        $path = Join-Path $env:CLAUDE_BUDDY_SETTINGS_DIR 'settings.json'
+    } else {
+        $path = Join-Path $env:APPDATA 'Orbweaver\settings.json'
+        if (-not (Test-Path -LiteralPath $path)) { $path = Join-Path $env:APPDATA 'ClaudeBuddy\settings.json' }
+    }
     if (-not (Test-Path -LiteralPath $path)) { return @() }
 
     try {
@@ -113,6 +121,10 @@ function Get-ConfiguredExtraProfileDirs {
         return @($json.claudeCodeProfileDirs | Where-Object { $_ })
     }
     catch {
+        # Said, not swallowed: an unreadable list used to look exactly like an
+        # empty one (CB-258).
+        Write-Warning "Could not read the saved profile list from $path ($($_.Exception.Message)); no extra profiles will be wired."
+        $script:ProfileListUnreadable = $true
         return @()
     }
 }
@@ -670,3 +682,8 @@ else {
     Write-Host 'Restart any running Claude Code sessions -- hooks are read at session start,'
     Write-Host 'so existing sessions will not produce orbs until they are restarted.'
 }
+
+# Exit 3 means the saved profile list could not be read: the default profile was
+# still wired, but any extra ones were not (HookInstaller.SavedListUnreadableExit,
+# CB-258).
+if ($script:ProfileListUnreadable) { exit 3 }

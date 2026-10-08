@@ -228,17 +228,29 @@ fi
 # A missing or unreadable file is not an error — it just means no extra
 # profiles, which is the common case.
 #
-# Note this file does *not* follow HOME: SpecialFolder.ApplicationData resolves
-# through the OS, so the app reads this exact path whatever HOME says, and so
-# must this.
+# The path is the app's own settings directory, so CLAUDE_BUDDY_SETTINGS_DIR —
+# which the app and install-hooks.sh both honour — moves it here too; without
+# that a test instance pointed at a scratch directory wired the *real* saved
+# list instead (CB-258). It does follow HOME when the variable is unset, which
+# is why a scratch HOME needs its own copy of the file.
 #
-# Orbweaver's folder first, then the pre-rename ClaudeBuddy one: on upgrade day
-# this runs before the new app has started and moved the folder, and reading
-# only the new path then would quietly wire zero extra profiles.
+# A read that fails says so on stderr and carries on with no extra profiles,
+# rather than the old `2>/dev/null`, which made "osascript could not read the
+# list" indistinguishable from "nobody added a profile".
+# With no override, Orbweaver's folder first, then the pre-rename ClaudeBuddy
+# one: on upgrade day this runs before the new app has started and moved the
+# folder, and reading only the new path then would quietly wire zero extra
+# profiles. When CLAUDE_BUDDY_SETTINGS_DIR is set it is the only path read, so a
+# test instance never falls through to the real list.
 saved_profiles() {
-  local support="$HOME/Library/Application Support"
-  local settings="$support/Orbweaver/settings.json"
-  [[ -f "$settings" ]] || settings="$support/ClaudeBuddy/settings.json"
+  local settings
+  if [[ -n "${CLAUDE_BUDDY_SETTINGS_DIR:-}" ]]; then
+    settings="$CLAUDE_BUDDY_SETTINGS_DIR/settings.json"
+  else
+    local support="$HOME/Library/Application Support"
+    settings="$support/Orbweaver/settings.json"
+    [[ -f "$settings" ]] || settings="$support/ClaudeBuddy/settings.json"
+  fi
   [[ -f "$settings" ]] || return 0
 
   osascript -l JavaScript -e '
@@ -247,21 +259,29 @@ saved_profiles() {
       const s = $.NSString.stringWithContentsOfFileEncodingError(a[0], $.NSUTF8StringEncoding, null);
       if (s.isNil()) return "";
       let parsed;
-      try { parsed = JSON.parse(ObjC.unwrap(s)); } catch (e) { return ""; }
+      try { parsed = JSON.parse(ObjC.unwrap(s)); } catch (e) { throw new Error("settings.json is not valid JSON"); }
       const dirs = parsed.claudeCodeProfileDirs;
       if (!Array.isArray(dirs)) return "";
       return dirs.filter(function (d) { return typeof d === "string" && d.length > 0; }).join("\n");
-    }' "$settings" 2>/dev/null
+    }' "$settings" || {
+    echo "warning: could not read the saved profile list from $settings (exit $?); no extra profiles were wired." >&2
+    return 1
+  }
 }
+
+LIST_UNREADABLE=0
 
 if [[ $NO_PROFILES -eq 0 ]]; then
   profiles=()
   if [[ ${#EXTRA_PROFILES[@]} -gt 0 ]]; then
     profiles=("${EXTRA_PROFILES[@]}")
   else
+    # Captured rather than read through process substitution, which would
+    # throw the function's exit status away.
+    saved=$(saved_profiles) || LIST_UNREADABLE=1
     while IFS= read -r line; do
       [[ -n "$line" ]] && profiles+=("$line")
-    done < <(saved_profiles)
+    done <<< "$saved"
   fi
 
   for profile in "${profiles[@]+"${profiles[@]}"}"; do
@@ -294,4 +314,12 @@ if [[ $NO_PROFILES -eq 0 ]]; then
          --settings "$HOME/$profile/settings.json" \
          --hook-dir "$HOOK_DIR"
   done
+fi
+
+# Exit 3 means "the saved profile list could not be read": the default profile was
+# still wired, but any extra ones were not, and the app turns that code into a
+# message of its own (HookInstaller.SavedListUnreadableExit). Exit 0 here used to
+# make an unreadable list indistinguishable from an empty one (CB-258).
+if [[ $LIST_UNREADABLE -eq 1 ]]; then
+  exit 3
 fi

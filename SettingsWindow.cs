@@ -1148,7 +1148,8 @@ namespace ClaudeBuddy
                 current: () => ClaudeBuddySettings.ClaudeCodeProfileDirs,
                 add: ClaudeBuddySettings.AddClaudeCodeProfileDir,
                 remove: ClaudeBuddySettings.RemoveClaudeCodeProfileDir,
-                reapply: HookInstaller.ReapplyClaudeCode)));
+                reapply: HookInstaller.ReapplyClaudeCode,
+                verify: HookInstaller.IsWired)));
 
             // WSL is genuinely Windows-only, unlike the extra accounts above,
             // and belongs here because Claude Code's sessions are what it
@@ -1867,18 +1868,50 @@ namespace ClaudeBuddy
             OnGatewayTokenChanged(host, value);
         }
 
-        // Excluded from coverage: the continuation only runs after the work it
-        // follows, and that work rewrites Claude Code's own settings files for a
-        // profile directory. Re-enabling two controls afterwards is what it does;
-        // there is no decision in it, and no way to reach it without doing the
-        // rewrite first.
-        [ExcludeFromCodeCoverage]
-        private static void RunThenReEnable(Action work, Control a, Control b) =>
-            Task.Run(work).ContinueWith(_ => Dispatcher.UIThread.Post(() =>
+        // Runs the installer off the UI thread, then says on the card what happened
+        // and gives the two controls back (CB-258).
+        //
+        // This used to be RunThenReEnable, which ignored the task entirely: the
+        // controls came back and nothing else did, so an installer that failed —
+        // or was never found, or exited 0 having wired nothing — left a card
+        // that looked exactly as it does when it worked. The status line is the
+        // part a person can see; hook-installer.log has the rest.
+        //
+        // Returns the task that finishes after the UI update, so a test can await
+        // it rather than sleep.
+        internal static Task ReapplyThenReport(
+            Func<HookInstallResult> reapply, string name, Func<string, bool>? verify,
+            TextBlock status, Control a, Control b)
+        {
+            status.Text = "Wiring hooks…";
+
+            return Task.Run(() =>
             {
-                a.IsEnabled = true;
-                b.IsEnabled = true;
-            }));
+                HookInstallResult result;
+                try { result = reapply(); }
+                catch (Exception ex)
+                {
+                    // Not the installer's own failure paths, which return a
+                    // result; this is whatever escaped them.
+                    result = new HookInstallResult(HookInstallOutcome.Threw, "reapply", Error: ex.Message);
+                    HookInstallerLog.Record("reapply", result);
+                }
+
+                // Checked here, off the UI thread, because it reads a file.
+                bool? wired = result.Outcome == HookInstallOutcome.Ok && verify is not null
+                    ? verify(name)
+                    : null;
+                return HookInstaller.StatusMessage(result, name, wired);
+            }).ContinueWith(async done =>
+            {
+                await Dispatcher.UIThread.InvokeAsync(() =>
+                {
+                    status.Text = done.Result;
+                    a.IsEnabled = true;
+                    b.IsEnabled = true;
+                });
+            }).Unwrap();
+        }
 
         internal Control GatewayTokenBox()
         {
@@ -3328,7 +3361,7 @@ namespace ClaudeBuddy
             SoundPickerRow("When a turn finishes", TurnFinishedSoundPicker(),
                 () => ClaudeBuddySettings.TurnFinishedSound, SystemSoundCatalog.DefaultFinishedSoundName,
                 $"Plays once a reply is done and {Brand.DisplayName} is waiting on you again. "
-                + "Vibe summary speaks one to three sentences on what just happened and "
+                + "Vibe summary speaks two or three sentences on what just happened and "
                 + "what's next, in that orb's own voice — if you're already listening to "
                 + "something else, it plays the chime below instead of talking over it."),
 
@@ -4159,7 +4192,8 @@ namespace ClaudeBuddy
             Func<IReadOnlyList<string>> current,
             Action<string> add,
             Action<string> remove,
-            Action reapply)
+            Func<HookInstallResult> reapply,
+            Func<string, bool>? verify = null)
         {
             var content = new StackPanel { Spacing = 8, Margin = new Thickness(14, 10) };
 
@@ -4207,7 +4241,7 @@ namespace ClaudeBuddy
                 // either way.
                 addButton.IsEnabled = false;
                 input.IsEnabled = false;
-                RunThenReEnable(reapply, addButton, input);
+                _ = ReapplyThenReport(reapply, name, verify, status, addButton, input);
             };
 
             content.Children.Add(new StackPanel
