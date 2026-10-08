@@ -177,7 +177,7 @@ public class HookInstallerRunTests : IDisposable
     }
 
     [Fact]
-    public void AFoundScriptIsRunWithTheAutoColorFlagOnlyWhenAsked()
+    public void AFoundScriptIsRunWithNothingButItsOwnPath()
     {
         if (OperatingSystem.IsWindows()) return; // RunScript's interpreter is /bin/bash
 
@@ -187,26 +187,20 @@ public class HookInstallerRunTests : IDisposable
         Directory.CreateDirectory(resources);
         File.WriteAllText(Path.Combine(resources, "fake-installer.sh"), "echo \"args:$*\"\n");
 
-        var plain = HookInstaller.RunScript("fake-installer.sh", autoColor: false, baseDirectory: macOs);
-        var colored = HookInstaller.RunScript("fake-installer.sh", autoColor: true, baseDirectory: macOs);
+        var result = HookInstaller.RunScript("fake-installer.sh", baseDirectory: macOs);
 
-        Assert.Equal("args:", plain.Output.Trim());
-        Assert.Equal("args:--auto-color", colored.Output.Trim());
+        Assert.Equal("args:", result.Output.Trim());
     }
 
     [Fact]
-    public void IsWiredLooksForTheHookScriptInTheProfilesSettings()
+    public void TheArgumentListsCarryNoColourFlag()
     {
-        var home = Path.Combine(_root, "home");
-        Directory.CreateDirectory(Path.Combine(home, ".wired"));
-        Directory.CreateDirectory(Path.Combine(home, ".bare"));
-        File.WriteAllText(Path.Combine(home, ".wired", "settings.json"),
-            """{"hooks":{"Stop":[{"hooks":[{"command":"bash \"$HOME/.claude/claude-buddy/ClaudeBuddyHook.sh\" idle"}]}]}}""");
-        File.WriteAllText(Path.Combine(home, ".bare", "settings.json"), """{"theme":"auto"}""");
-
-        Assert.True(HookInstaller.IsWiredIn(".wired", home));
-        Assert.False(HookInstaller.IsWiredIn(".bare", home));
-        Assert.False(HookInstaller.IsWiredIn(".absent", home));
+        // The flag the installers stopped accepting on 2026-08-20 and the app kept
+        // passing until CB-258: every installer exits 2 on it.
+        Assert.Equal(new[] { "/x/install.sh" }, HookInstaller.ScriptArguments("/x/install.sh"));
+        Assert.Equal(
+            new[] { "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "/x/install.ps1" },
+            HookInstaller.PowerShellArguments("/x/install.ps1"));
     }
 
     [Fact]

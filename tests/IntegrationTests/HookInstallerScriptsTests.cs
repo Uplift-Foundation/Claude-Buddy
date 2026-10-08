@@ -17,6 +17,7 @@ namespace ClaudeBuddy.Tests;
 //
 // macOS only: the installers read the list with osascript (JXA). The Windows
 // installer's own copy of the seam is exercised on the Windows leg below.
+[Collection("Settings")]
 public class HookInstallerScriptsTests : IDisposable
 {
     private static readonly string RepoRoot = FindRepoRoot();
@@ -145,6 +146,68 @@ public class HookInstallerScriptsTests : IDisposable
 
         Assert.True(File.Exists(Home(".grok-decoy", "hooks", "claude-buddy.json")));
         Assert.False(Directory.Exists(Home(".grok-wanted")));
+    }
+
+    // The cause of CB-258 itself, found by a real click: HookInstaller appended
+    // --auto-color for any user with the colour setting on, every installer
+    // rejects an unknown option with exit 2 before wiring anything, and the
+    // failure was swallowed. These run each real installer through the app's own
+    // RunScript, which builds its argument list from the one function the app
+    // uses, with the setting both on and off, and assert a clean exit and a
+    // wired profile. [Collection("Settings")] because the setting is process-wide.
+    [MacOnlyTheory]
+    [InlineData("install-macos-hooks.sh", true)]
+    [InlineData("install-macos-hooks.sh", false)]
+    [InlineData("install-codex-hooks.sh", true)]
+    [InlineData("install-codex-hooks.sh", false)]
+    [InlineData("install-grok-hooks.sh", true)]
+    [InlineData("install-grok-hooks.sh", false)]
+    public void EveryInstallerRunsCleanlyThroughTheAppsOwnRunnerWhateverTheColourSetting(
+        string script, bool autoColor)
+    {
+        var key = script.Contains("macos") ? "claudeCodeProfileDirs"
+            : script.Contains("codex") ? "codexHomes" : "grokHomes";
+        File.WriteAllText(Path.Combine(_settingsDir, "settings.json"), $$"""{"{{key}}":[".cb258-profile"]}""");
+
+        var was = ClaudeBuddySettings.AutoColorSessions;
+        ClaudeBuddySettings.AutoColorSessions = autoColor;
+        try
+        {
+            var result = HookInstaller.RunScript(script, baseDirectory: RepoRoot,
+                environment: new Dictionary<string, string?>
+                {
+                    ["HOME"] = _home,
+                    ["TMPDIR"] = _root + Path.DirectorySeparatorChar,
+                    ["CLAUDE_BUDDY_SETTINGS_DIR"] = _settingsDir
+                });
+
+            Assert.True(result.Outcome == HookInstallOutcome.Ok, $"{script}: {result.Outcome} exit {result.ExitCode}: {result.Error}");
+            Assert.True(Directory.Exists(Home(".cb258-profile")), $"{script} wired nothing for the saved profile");
+        }
+        finally
+        {
+            ClaudeBuddySettings.AutoColorSessions = was;
+        }
+    }
+
+    // The Windows twins, through the same runner. Not runnable off Windows and not
+    // run here: the Windows leg of CI is where they are verified.
+    [WindowsOnlyTheory]
+    [InlineData("install-codex-hooks.ps1")]
+    [InlineData("install-grok-hooks.ps1")]
+    public void TheWindowsCodexAndGrokInstallersRunCleanlyThroughTheAppsOwnRunner(string script)
+    {
+        var result = HookInstaller.RunPowerShell(script, baseDirectory: RepoRoot,
+            environment: new Dictionary<string, string?>
+            {
+                ["USERPROFILE"] = _home,
+                ["HOME"] = _home,
+                ["CODEX_HOME"] = null,
+                ["GROK_HOME"] = null,
+                ["CLAUDE_BUDDY_SETTINGS_DIR"] = _settingsDir
+            });
+
+        Assert.True(result.Outcome == HookInstallOutcome.Ok, $"{script}: {result.Outcome} exit {result.ExitCode}: {result.Error}");
     }
 
     // The second bug found while testing the seam: the Grok installer re-invoked
@@ -334,6 +397,24 @@ public sealed class MacOnlyFactAttribute : FactAttribute
 public sealed class WindowsOnlyFactAttribute : FactAttribute
 {
     public WindowsOnlyFactAttribute()
+    {
+        if (!OperatingSystem.IsWindows())
+            Skip = "drives Windows PowerShell 5.1";
+    }
+}
+
+public sealed class MacOnlyTheoryAttribute : TheoryAttribute
+{
+    public MacOnlyTheoryAttribute()
+    {
+        if (!OperatingSystem.IsMacOS())
+            Skip = "the macOS installers read the saved list with osascript";
+    }
+}
+
+public sealed class WindowsOnlyTheoryAttribute : TheoryAttribute
+{
+    public WindowsOnlyTheoryAttribute()
     {
         if (!OperatingSystem.IsWindows())
             Skip = "drives Windows PowerShell 5.1";

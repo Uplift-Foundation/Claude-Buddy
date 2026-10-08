@@ -64,7 +64,7 @@ namespace ClaudeBuddy
                 return WslIntegration.ReapplyProfiles();
             }
 
-            return RunScript("install-macos-hooks.sh", ClaudeBuddySettings.AutoColorSessions);
+            return RunScript("install-macos-hooks.sh");
         }
 
         // Re-wire every Codex home the app knows about.
@@ -75,10 +75,10 @@ namespace ClaudeBuddy
         {
             if (OperatingSystem.IsWindows())
             {
-                return RunPowerShell("install-codex-hooks.ps1", ClaudeBuddySettings.AutoColorSessions);
+                return RunPowerShell("install-codex-hooks.ps1");
             }
 
-            return RunScript("install-codex-hooks.sh", ClaudeBuddySettings.AutoColorSessions);
+            return RunScript("install-codex-hooks.sh");
         }
 
         // Excluded from coverage: platform dispatch over the two runners below.
@@ -87,44 +87,57 @@ namespace ClaudeBuddy
         {
             if (OperatingSystem.IsWindows())
             {
-                return RunPowerShell("install-grok-hooks.ps1", ClaudeBuddySettings.AutoColorSessions);
+                return RunPowerShell("install-grok-hooks.ps1");
             }
 
-            return RunScript("install-grok-hooks.sh", ClaudeBuddySettings.AutoColorSessions);
+            return RunScript("install-grok-hooks.sh");
         }
 
+        // The argument lists, in one place so the app and the test that runs the
+        // real installers cannot drift apart (CB-258).
+        //
+        // They used to carry the colour setting too, as --auto-color and
+        // -AutoColor. The installers stopped accepting those on 2026-08-20, when
+        // the setting moved to the .auto-color marker beside the status files
+        // (SessionManager.SyncAutoColorMarker, which the hook reads and which
+        // needs no re-wiring). Nobody removed the callers' half, and every
+        // installer rejects an unknown option before wiring anything — exit 2,
+        // "unknown option: --auto-color" — so for six weeks every reapply the app
+        // ran for a user with the setting on failed, and the failure was
+        // swallowed. Adding a profile in Settings is how it was found.
+        internal static string[] ScriptArguments(string script) => new[] { script };
+
+        internal static string[] PowerShellArguments(string script) =>
+            new[] { "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script };
+
         // baseDirectory is Resolve's own seam, passed through so a test can put
-        // a fake installer where the real one would be found.
+        // a fake installer where the real one would be found; environment is
+        // Run's, so a test can aim the real installers at a scratch HOME.
         internal static HookInstallResult RunScript(
-            string name, bool autoColor = false, string? baseDirectory = null)
+            string name, string? baseDirectory = null,
+            IReadOnlyDictionary<string, string?>? environment = null)
         {
             var script = Resolve(name, baseDirectory);
             if (script is null) return Finish(name, HookInstallResult.NotFound(name));
 
-            // The flag rather than a setting the hook reads for itself: the
-            // hook runs on every tool call, and a settings read there would be
-            // an osascript each time. Re-running the installer is how a change
-            // to it takes effect, which is the same way the extra-profile list
-            // already works.
-            return Run("/bin/bash", autoColor ? new[] { script, "--auto-color" } : new[] { script }, name);
+            return Run("/bin/bash", ScriptArguments(script), name, environment: environment);
         }
 
-        // Excluded from coverage: the one line that is not Resolve or Run builds
-        // the Windows PowerShell command line, and only Windows has that exe.
-        // The not-found arm is the same code RunScript tests.
+        // Excluded from coverage: the only line that is not Resolve, Run or
+        // PowerShellArguments names Windows PowerShell's exe, which only Windows
+        // has. The argument list and the not-found arm are the code RunScript's
+        // tests already run, and the Windows leg runs the real installers through
+        // this.
         [ExcludeFromCodeCoverage]
-        private static HookInstallResult RunPowerShell(string name, bool autoColor = false)
+        internal static HookInstallResult RunPowerShell(
+            string name, string? baseDirectory = null,
+            IReadOnlyDictionary<string, string?>? environment = null)
         {
-            var script = Resolve(name);
+            var script = Resolve(name, baseDirectory);
             if (script is null) return Finish(name, HookInstallResult.NotFound(name));
 
-            var args = new List<string>
-            {
-                "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script
-            };
-            if (autoColor) args.Add("-AutoColor");
-
-            return Run(@"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe", args.ToArray(), name);
+            return Run(@"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+                PowerShellArguments(script), name, environment: environment);
         }
 
         // Where the installers live, in both layouts this app runs from.
