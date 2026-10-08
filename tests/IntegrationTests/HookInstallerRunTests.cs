@@ -188,6 +188,39 @@ public class HookInstallerRunTests : IDisposable
     }
 
     [Fact]
+    public void AProfileWiredOnlyInASecondHomeCountsAsWired()
+    {
+        // The WSL-only shape: no native directory at all, hooks in a distro's home.
+        var native = Path.Combine(_root, "native");
+        var wsl = Path.Combine(_root, "wsl-home");
+        Directory.CreateDirectory(native);
+        Directory.CreateDirectory(Path.Combine(wsl, ".claude-work"));
+        File.WriteAllText(Path.Combine(wsl, ".claude-work", "settings.json"), "ClaudeBuddyHook");
+
+        Assert.True(HookInstaller.IsWiredInAny(".claude-work", new[] { native, wsl }));
+    }
+
+    [Fact]
+    public void AProfileWiredNativelyCountsAsWiredWhateverTheOtherHomesHold()
+    {
+        var native = Path.Combine(_root, "native");
+        var wsl = Path.Combine(_root, "wsl-home");
+        Directory.CreateDirectory(Path.Combine(native, ".claude-work"));
+        Directory.CreateDirectory(wsl);
+        File.WriteAllText(Path.Combine(native, ".claude-work", "settings.json"), "ClaudeBuddyHook");
+
+        Assert.True(HookInstaller.IsWiredInAny(".claude-work", new[] { native, wsl }));
+    }
+
+    [Fact]
+    public void AProfileWiredInNoHomeIsNotWired()
+    {
+        Assert.False(HookInstaller.IsWiredInAny(".claude-work",
+            new[] { Path.Combine(_root, "a"), Path.Combine(_root, "b") }));
+        Assert.False(HookInstaller.IsWiredInAny(".claude-work", Array.Empty<string>()));
+    }
+
+    [Fact]
     public void IsWiredReadsTheRealHomeAndFindsNothingForAProfileThatDoesNotExist()
     {
         Assert.False(HookInstaller.IsWired(".cb258-no-such-profile-" + Guid.NewGuid().ToString("N")));

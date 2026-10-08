@@ -284,7 +284,19 @@ namespace ClaudeBuddy
         // The marker is the hook script's own name, which is what the installers
         // themselves strip and re-add. homeDirectory is a parameter so a test can
         // point at a scratch directory.
-        internal static bool IsWired(string profileName) => IsWiredIn(profileName, null);
+        //
+        // On Windows a profile can live in the native home, in a WSL distro's home
+        // (as \\wsl.localhost\... UNC paths), or in both, and one saved name can be
+        // WSL-only with no native directory at all; so "wired" means wired in any
+        // of them. Checking only the native home would report a perfectly wired
+        // WSL-only profile as unwired. Off Windows the WSL list is empty.
+        internal static bool IsWired(string profileName) =>
+            IsWiredInAny(profileName,
+                new[] { Environment.GetFolderPath(Environment.SpecialFolder.UserProfile) }
+                    .Concat(WslIntegration.GetWslHomeUncPaths()));
+
+        internal static bool IsWiredInAny(string profileName, IEnumerable<string> homeDirectories) =>
+            homeDirectories.Any(home => IsWiredIn(profileName, home));
 
         internal static bool IsWiredIn(string profileName, string? homeDirectory)
         {

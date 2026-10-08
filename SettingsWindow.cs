@@ -1149,7 +1149,7 @@ namespace ClaudeBuddy
                 add: ClaudeBuddySettings.AddClaudeCodeProfileDir,
                 remove: ClaudeBuddySettings.RemoveClaudeCodeProfileDir,
                 reapply: HookInstaller.ReapplyClaudeCode,
-                verify: OperatingSystem.IsWindows() ? null : HookInstaller.IsWired)));
+                verify: HookInstaller.IsWired)));
 
             // WSL is genuinely Windows-only, unlike the extra accounts above,
             // and belongs here because Claude Code's sessions are what it
