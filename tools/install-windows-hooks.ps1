@@ -94,7 +94,11 @@ $ErrorActionPreference = 'Stop'
 # Works with no app installed or ever run yet: that's just an absent file,
 # same as the caller genuinely having nothing configured.
 function Get-ConfiguredExtraProfileDirs {
-    $path = Join-Path $env:APPDATA 'ClaudeBuddy\settings.json'
+    # CLAUDE_BUDDY_SETTINGS_DIR first, as the app and the macOS installers do, so
+    # a test instance pointed at a scratch directory is not wired from the real
+    # list (CB-258).
+    $settingsDir = if ($env:CLAUDE_BUDDY_SETTINGS_DIR) { $env:CLAUDE_BUDDY_SETTINGS_DIR } else { Join-Path $env:APPDATA 'ClaudeBuddy' }
+    $path = Join-Path $settingsDir 'settings.json'
     if (-not (Test-Path -LiteralPath $path)) { return @() }
 
     try {
@@ -102,6 +106,10 @@ function Get-ConfiguredExtraProfileDirs {
         return @($json.claudeCodeProfileDirs | Where-Object { $_ })
     }
     catch {
+        # Said, not swallowed: an unreadable list used to look exactly like an
+        # empty one (CB-258).
+        Write-Warning "Could not read the saved profile list from $path ($($_.Exception.Message)); no extra profiles will be wired."
+        $script:ProfileListUnreadable = $true
         return @()
     }
 }
@@ -641,3 +649,8 @@ else {
     Write-Host 'Restart any running Claude Code sessions -- hooks are read at session start,'
     Write-Host 'so existing sessions will not produce orbs until they are restarted.'
 }
+
+# Exit 3 means the saved profile list could not be read: the default profile was
+# still wired, but any extra ones were not (HookInstaller.SavedListUnreadableExit,
+# CB-258).
+if ($script:ProfileListUnreadable) { exit 3 }
