@@ -304,6 +304,28 @@ namespace ClaudeBuddy
 
         private readonly string _statusDir;
 
+        // The folder the pre-Orbweaver hooks write (StatusDirectory.LegacyFolderName),
+        // watched beside _statusDir so a session that was alive across the
+        // upgrade — still calling the old script, which still writes the old
+        // folder — keeps its orb (CB-255 §1). Null means "one folder only",
+        // which is what every test gets unless it passes one, and what the
+        // cleanup after phase 3 turns this back into.
+        private readonly string? _legacyStatusDir;
+
+        // Which file each session's status came from on the last read, for
+        // ResetSessionToIdle, which rewrites a session's file by id. With two
+        // folders watched, "<status dir>/<id>.txt" is no longer the answer:
+        // resetting a legacy session that way would write a second, newer copy
+        // into the new folder, which would then win every scan and hide the
+        // file the session's own hook is still writing. (DeleteStatusFile does
+        // not need it — it removes the session from both folders.)
+        //
+        // Replaced whole by each read rather than edited, because the read
+        // runs on ScheduleScan's background thread and the two users run on
+        // the UI thread: one reference swap is the whole of the hand-over.
+        private volatile IReadOnlyDictionary<string, string> _statusFiles =
+            new Dictionary<string, string>(StringComparer.Ordinal);
+
         // What the persona files looked like the last time this session's
         // persona was actually read, and what was read from them:
         // LocalPersona.Signature is existence, length and mtime and nothing
@@ -363,7 +385,7 @@ namespace ClaudeBuddy
         private readonly Func<IReadOnlyList<string>> _userConfigDirs;
 
         public SessionManager()
-            : this(StatusDirectory.Path())
+            : this(StatusDirectory.Path(), null, legacyStatusDir: StatusDirectory.LegacyPath())
         {
         }
 
@@ -404,9 +426,11 @@ namespace ClaudeBuddy
             Func<IReadOnlyList<SessionStatus>, IReadOnlyDictionary<TmuxPaneKey, string?>>? paneOwners = null,
             Func<string, AgentViewer?>? agentViewer = null,
             Func<IReadOnlyList<int>, IReadOnlyDictionary<int, AgentTeam.Membership>>? teams = null,
-            Action<int, SessionDependents.Verdict>? terminate = null)
+            Action<int, SessionDependents.Verdict>? terminate = null,
+            string? legacyStatusDir = null)
         {
             _statusDir = statusDir;
+            _legacyStatusDir = legacyStatusDir;
             _jobListing = jobListing ?? BackgroundJobs.SnapshotForScan;
             // Wrapped rather than handed over as a method group: AttachedJobIds
             // grew an optional `fresh` parameter for the click path, and an
@@ -573,6 +597,7 @@ namespace ClaudeBuddy
         internal AccountOrbs AccountOrbsForTests => _accountOrbs;
 
         private DeferredWatcher? _watcher;
+        private DeferredWatcher? _legacyWatcher;
         private readonly DispatcherTimer _pollTimer = new() { Interval = TimeSpan.FromSeconds(2) };
         private readonly DispatcherTimer _debounce = new() { Interval = TimeSpan.FromMilliseconds(150) };
 
@@ -587,7 +612,7 @@ namespace ClaudeBuddy
         // Written from the app rather than by the installer so it also needs no
         // re-wiring: the hooks stay exactly as they were and simply see a
         // different answer on their next call.
-        private string AutoColorMarker => Path.Combine(_statusDir, ".auto-color");
+        private const string AutoColorMarkerName = ".auto-color";
 
         // Reconciled on every scan rather than only when the toggle is flipped.
         // The status directory lives in the temp path, which the OS is entitled
@@ -598,15 +623,32 @@ namespace ClaudeBuddy
         // setting — the hook runs on every tool call and reading a setting there
         // would be an osascript each time — so what this writes is a contract
         // with a script, not an implementation detail.
+        //
+        // Into both folders while the legacy one is watched (CB-255 §1): the
+        // old hook a long-running session is still calling reads the marker
+        // beside the files it writes, so a marker in the new folder alone
+        // would silently switch auto-colour off for exactly those sessions.
+        // Each folder on its own try, so a legacy folder that does not exist —
+        // the usual case, once every old session has restarted — cannot stop
+        // the new one being reconciled. Nothing here creates the legacy
+        // folder: a marker is not a reason to resurrect it.
         internal void SyncAutoColorMarker()
+        {
+            var wanted = ClaudeBuddySettings.AutoColorSessions;
+
+            SyncAutoColorMarkerIn(_statusDir, wanted);
+            if (_legacyStatusDir is not null) SyncAutoColorMarkerIn(_legacyStatusDir, wanted);
+        }
+
+        private static void SyncAutoColorMarkerIn(string statusDir, bool wanted)
         {
             try
             {
-                var wanted = ClaudeBuddySettings.AutoColorSessions;
-                var present = File.Exists(AutoColorMarker);
+                var marker = Path.Combine(statusDir, AutoColorMarkerName);
+                var present = File.Exists(marker);
 
-                if (wanted && !present) File.WriteAllText(AutoColorMarker, "");
-                else if (!wanted && present) File.Delete(AutoColorMarker);
+                if (wanted && !present) File.WriteAllText(marker, "");
+                else if (!wanted && present) File.Delete(marker);
             }
             catch
             {
@@ -702,6 +744,26 @@ namespace ClaudeBuddy
                     watcher.Deleted += (_, _) => Dispatcher.UIThread.Post(RestartDebounce);
                 },
                 "SessionManager.StatusWatcher");
+
+            // The legacy folder too, but only if it is there: a watcher on a
+            // folder that does not exist throws, and the old hook creating it
+            // later is caught by the poll timer, which reads both regardless.
+            if (_legacyStatusDir is { } legacy && Directory.Exists(legacy))
+            {
+                _legacyWatcher = new DeferredWatcher(
+                    () => new FileSystemWatcher(legacy, "*.txt")
+                    {
+                        NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.CreationTime | NotifyFilters.FileName,
+                        EnableRaisingEvents = true
+                    },
+                    watcher =>
+                    {
+                        watcher.Changed += (_, _) => Dispatcher.UIThread.Post(RestartDebounce);
+                        watcher.Created += (_, _) => Dispatcher.UIThread.Post(RestartDebounce);
+                        watcher.Deleted += (_, _) => Dispatcher.UIThread.Post(RestartDebounce);
+                    },
+                    "SessionManager.LegacyStatusWatcher");
+            }
         }
 
         // Excluded from coverage: restarts an Avalonia timer, and is only ever
@@ -1216,6 +1278,97 @@ namespace ClaudeBuddy
             return ScanVerdict.Keep;
         }
 
+        // One status file, read and parsed but not yet judged: what both
+        // folders contribute before NewestPerSession picks one per session.
+        internal sealed record StatusFileRead(
+            string SessionId, string Path, SessionStatus Status, DateTime Written);
+
+        // Every parseable status file in one folder, or null if the folder
+        // itself cannot be listed. Null rather than empty because
+        // HeadlessSnapshot has to tell "no folder" from "an empty one" when
+        // neither folder can be listed, which is the one case it logs.
+        //
+        // A file that cannot be read or parsed is skipped, the same as the
+        // scan always has — mid-write or vanished, retried next tick — and
+        // skipping it *before* the merge is the point: a session whose copy in
+        // one folder is half-written is answered by its copy in the other
+        // rather than by nothing.
+        internal static List<StatusFileRead>? ReadStatusDirectory(string statusDir)
+        {
+            List<string> files;
+            try
+            {
+                files = Directory.EnumerateFiles(statusDir, "*.txt").ToList();
+            }
+            catch
+            {
+                return null;
+            }
+
+            var reads = new List<StatusFileRead>(files.Count);
+            foreach (var file in files)
+            {
+                SessionStatus? status;
+                DateTime written;
+                try
+                {
+                    written = File.GetLastWriteTimeUtc(file);
+                    using var stream = new FileStream(
+                        file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                    status = System.Text.Json.JsonSerializer.Deserialize<SessionStatus>(stream);
+                }
+                catch
+                {
+                    continue; // mid-write or vanished; retried next tick
+                }
+
+                if (status is null) continue;
+
+                reads.Add(new StatusFileRead(
+                    Path.GetFileNameWithoutExtension(file), file, status, written));
+            }
+
+            return reads;
+        }
+
+        // One file per session out of the new folder and the legacy one
+        // (CB-255 §1): **the newest write wins, and the loser is ignored, not
+        // deleted.** The realistic duplicate is a resumed session —
+        // `claude --resume` keeps the id — whose old hook wrote the legacy
+        // folder before the upgrade and whose new one writes the new folder
+        // after it; the newer file is the one that knows what it is doing now.
+        //
+        // Not deleted, because a scan is not allowed side effects on a file a
+        // hook may be in the middle of writing, and a loser is by definition a
+        // file somebody else's hook owns. It goes the way it always would
+        // have: a SessionEnd from whichever hook wrote it, or the temp cleaner.
+        //
+        // A tie goes to the new folder, so the answer never depends on
+        // enumeration order. Order out is the new folder's own, then whatever
+        // only the legacy folder had — so a caller handed one folder sees it
+        // exactly as it was. Pure: no disk, no clock.
+        internal static List<StatusFileRead> NewestPerSession(
+            IReadOnlyList<StatusFileRead> current, IReadOnlyList<StatusFileRead> legacy)
+        {
+            var winners = new List<StatusFileRead>(current.Count + legacy.Count);
+            var at = new Dictionary<string, int>(StringComparer.Ordinal);
+
+            foreach (var read in current.Concat(legacy))
+            {
+                if (!at.TryGetValue(read.SessionId, out var index))
+                {
+                    at[read.SessionId] = winners.Count;
+                    winners.Add(read);
+                }
+                else if (read.Written > winners[index].Written)
+                {
+                    winners[index] = read;
+                }
+            }
+
+            return winners;
+        }
+
         // The scan, reduced to what another machine's Buddy needs before this
         // one has a UI.
         //
@@ -1242,6 +1395,15 @@ namespace ClaudeBuddy
         // (`claude agents --json`) or read this machine's real temp directory,
         // so tests always pass all four; those four `??` arms are the named
         // coverage gap, exactly as the live scan's constructor defaults are.
+        //
+        // legacyStatusDir is the pre-Orbweaver hooks' folder (CB-255 §1), read
+        // beside statusDir and merged by NewestPerSession exactly as the live
+        // scan merges them. It follows statusDir's default: left out with
+        // statusDir also left out, it is the real legacy folder, because that
+        // is the production call and a headless machine serving a session
+        // that predates the upgrade must not report it missing; left out with
+        // a statusDir handed in, it is no second folder at all, so every test
+        // written before the second folder existed still reads exactly one.
         internal static List<(string SessionId, SessionStatus Status)> HeadlessSnapshot(
             string? statusDir = null,
             Func<Dictionary<string, string>?>? jobListing = null,
@@ -1249,48 +1411,40 @@ namespace ClaudeBuddy
             DateTime? nowUtc = null,
             bool honourOrbLifetime = true,
             bool? onWindows = null,
-            Func<IReadOnlyList<int>, IReadOnlyDictionary<int, AgentTeam.Membership>>? teams = null)
+            Func<IReadOnlyList<int>, IReadOnlyDictionary<int, AgentTeam.Membership>>? teams = null,
+            string? legacyStatusDir = null)
         {
-            statusDir ??= StatusDirectory.Path();
+            if (statusDir is null)
+            {
+                statusDir = StatusDirectory.Path();
+                legacyStatusDir ??= StatusDirectory.LegacyPath();
+            }
+
             var windows = onWindows ?? OperatingSystem.IsWindows();
             var now = nowUtc ?? DateTime.UtcNow;
 
-            IEnumerable<string> files;
-            try
-            {
-                files = Directory.EnumerateFiles(statusDir, "*.txt").ToList();
-            }
-            catch
+            var current = ReadStatusDirectory(statusDir);
+            var legacy = legacyStatusDir is null ? null : ReadStatusDirectory(legacyStatusDir);
+            if (current is null && legacy is null)
             {
                 // No directory yet means no sessions yet, which is an answer.
                 MirrorLog.SayOnce("headless-scan", $"dir={statusDir} unreadable");
                 return new List<(string, SessionStatus)>();
             }
 
+            var reads = NewestPerSession(current ?? new(), legacy ?? new());
+
             // Says where it looked and what it found, once. Two halves of this
             // app agreeing on a directory is not something either can check
             // alone, and when they disagreed the symptom was a machine calmly
             // reporting no sessions while running two.
-            MirrorLog.SayOnce("headless-scan", $"dir={statusDir} files={files.Count()}");
+            MirrorLog.SayOnce("headless-scan",
+                $"dir={statusDir} legacy={legacyStatusDir ?? "none"} files={reads.Count}");
 
             var found = new List<ScanEntry>();
-            foreach (var file in files)
+            foreach (var read in reads)
             {
-                SessionStatus? status;
-                DateTime written;
-                try
-                {
-                    written = File.GetLastWriteTimeUtc(file);
-                    using var stream = new FileStream(
-                        file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-                    status = System.Text.Json.JsonSerializer.Deserialize<SessionStatus>(stream);
-                }
-                catch
-                {
-                    continue; // mid-write or vanished, same as the live scan
-                }
-
-                if (status is null) continue;
+                var status = read.Status;
 
                 status.Source = SourceOf(status);
                 if (!EnabledFor(status.Source)) continue;
@@ -1303,8 +1457,7 @@ namespace ClaudeBuddy
                 // wearing a different machine.
                 if (InternalSessions.IsInternal(status.SessionPid)) continue;
 
-                found.Add(new ScanEntry(
-                    Path.GetFileNameWithoutExtension(file), status, written));
+                found.Add(new ScanEntry(read.SessionId, status, read.Written));
             }
 
             var jobs = (jobListing ?? BackgroundJobs.SnapshotForScan)();
@@ -1958,37 +2111,23 @@ namespace ClaudeBuddy
         // against it too.
         private List<ScanEntry> ReadStatusFiles(DateTime now)
         {
-            IEnumerable<string> files;
-            try
-            {
-                files = Directory.EnumerateFiles(_statusDir, "*.txt");
-            }
-            catch
-            {
-                files = Enumerable.Empty<string>();
-            }
+            // Both folders while the legacy one is watched, one file per
+            // session — see NewestPerSession for which one and why the other
+            // is left alone.
+            var reads = NewestPerSession(
+                ReadStatusDirectory(_statusDir) ?? new(),
+                _legacyStatusDir is null ? new() : ReadStatusDirectory(_legacyStatusDir) ?? new());
+
+            _statusFiles = reads.ToDictionary(r => r.SessionId, r => r.Path, StringComparer.Ordinal);
 
             // Read everything before judging any of it: whether a file is live can
             // depend on the *other* files — see Superseded.
             var found = new List<ScanEntry>();
-            foreach (var file in files)
+            foreach (var read in reads)
             {
-                SessionStatus? status;
-                DateTime written;
-                try
-                {
-                    written = File.GetLastWriteTimeUtc(file);
-                    using var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-                    status = System.Text.Json.JsonSerializer.Deserialize<SessionStatus>(stream);
-                }
-                catch
-                {
-                    continue; // mid-write or vanished; retry next tick
-                }
-
-                if (status is null) continue;
-
-                var sessionId = Path.GetFileNameWithoutExtension(file);
+                var status = read.Status;
+                var written = read.Written;
+                var sessionId = read.SessionId;
 
                 status.Source = SourceOf(status);
                 status.SessionId = sessionId;
@@ -4070,7 +4209,7 @@ namespace ClaudeBuddy
                 return;
             }
 
-            var file = Path.Combine(_statusDir, sessionId + ".txt");
+            var file = StatusFileFor(sessionId);
             SessionStatus? existing = null;
             try
             {
@@ -4166,16 +4305,39 @@ namespace ClaudeBuddy
         // this process may not delete will simply be found again on the next
         // scan, which is a better outcome than a message this app has no
         // vocabulary for.
+        //
+        // In both folders while the legacy one is watched (CB-255 §1). The
+        // scan ignores the losing copy of a session rather than deleting it,
+        // but this is not the scan choosing a winner — it is the session being
+        // removed, by a click or by the sweep having judged it dead — and
+        // deleting only the winner would hand the screen straight back to the
+        // older copy on the next scan: a dismissed orb that reappears, still
+        // dead, until the sweep's grace runs out a second time.
         private void DeleteStatusFile(string sessionId)
+        {
+            DeleteQuietly(Path.Combine(_statusDir, sessionId + ".txt"));
+            if (_legacyStatusDir is not null) DeleteQuietly(Path.Combine(_legacyStatusDir, sessionId + ".txt"));
+        }
+
+        private static void DeleteQuietly(string file)
         {
             try
             {
-                File.Delete(Path.Combine(_statusDir, sessionId + ".txt"));
+                File.Delete(file);
             }
             catch
             {
             }
         }
+
+        // The file a session's status was last read from — which, with the
+        // legacy folder watched, may not be in _statusDir (CB-255 §1). A
+        // session the last read never saw falls back to the new folder, which
+        // is where any file this app creates for it belongs.
+        private string StatusFileFor(string sessionId) =>
+            _statusFiles.TryGetValue(sessionId, out var path)
+                ? path
+                : Path.Combine(_statusDir, sessionId + ".txt");
 
         // "End this session": stop the process behind it.
         //

@@ -129,6 +129,46 @@ public class StatusDirectoryTests
         // are shell and PowerShell — so the name is worth pinning on this side
         // at least. tests/IntegrationTests drives the real hooks against a
         // scratch TMPDIR and would catch a change on the other side.
-        Assert.Equal("claude_buddy", StatusDirectory.FolderName);
+        Assert.Equal("orbweaver", StatusDirectory.FolderName);
+    }
+
+    // The folder the pre-Orbweaver hooks write (CB-255 §1), watched beside the
+    // new one until the cleanup after phase 3. Pinned to the old string: a
+    // session alive across the upgrade is still running the old script, and
+    // that script's folder name is history rather than a choice.
+    [Fact]
+    public void TheLegacyFolderNameIsTheOneTheOldHooksWrite()
+    {
+        Assert.Equal("claude_buddy", StatusDirectory.LegacyFolderName);
+    }
+
+    // **Same root, different last segment, always.** The old hook and the new
+    // one read TMPDIR the same way, so a legacy folder resolved under any
+    // other root would be watched and never written.
+    [Theory]
+    [InlineData("/var/folders/ab/T")]
+    [InlineData("/tmp")]
+    [InlineData("/sandbox/with space")]
+    public void BothFoldersSitUnderTheSameRoot(string root)
+    {
+        var (current, legacy) = StatusDirectory.Under(root);
+
+        Assert.Equal(Path.Combine(root, "orbweaver"), current);
+        Assert.Equal(Path.Combine(root, "claude_buddy"), legacy);
+        Assert.Equal(Path.GetDirectoryName(current), Path.GetDirectoryName(legacy));
+    }
+
+    // And the real pair agrees: whatever Root decides for this process —
+    // here, the suite's own CLAUDE_BUDDY_STATUS_ROOT — Path() and LegacyPath()
+    // are siblings in it. A negative control is built in: the two differ.
+    [Fact]
+    public void TheRealLegacyPathIsASiblingOfTheRealPath()
+    {
+        var current = StatusDirectory.Path();
+        var legacy = StatusDirectory.LegacyPath();
+
+        Assert.NotEqual(current, legacy);
+        Assert.Equal(Path.GetDirectoryName(current), Path.GetDirectoryName(legacy));
+        Assert.Equal("claude_buddy", Path.GetFileName(legacy));
     }
 }
