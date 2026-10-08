@@ -28,6 +28,12 @@ namespace ClaudeBuddy.Tests
         [InlineData("""{"hooks":{"Stop":[{"command":"pwsh -File C:/x/ClaudeBuddyHook.ps1"}]}}""")]
         [InlineData("""{"hooks":{"Stop":[{"command":"pwsh -File C:/x/claudebuddyhook.PS1"}]}}""")]
         [InlineData("ClaudeBuddyHook.ps1")]
+        // CB-255 §1: the Orbweaver script counts as well as the legacy one —
+        // a re-wired distro names only the new script, an un-upgraded one only
+        // the old, and both are wired.
+        [InlineData("""{"hooks":{"Stop":[{"command":"pwsh -File C:/x/OrbweaverHook.ps1"}]}}""")]
+        [InlineData("""{"hooks":{"Stop":[{"command":"pwsh -File C:/x/orbweaverhook.PS1"}]}}""")]
+        [InlineData("""{"hooks":{"Stop":[{"command":"OrbweaverHook.ps1"},{"command":"ClaudeBuddyHook.ps1"}]}}""")]
         public void SettingsMentioningTheHookCountAsWired(string text)
         {
             Assert.True(WslIntegration.SettingsTextMentionsHook(text));
@@ -40,6 +46,10 @@ namespace ClaudeBuddy.Tests
         // The .sh twin is a different platform's hook and must not count: a WSL
         // distro wired for bash is not wired for this.
         [InlineData("""{"hooks":{"Stop":[{"command":"ClaudeBuddyHook.sh"}]}}""")]
+        [InlineData("""{"hooks":{"Stop":[{"command":"OrbweaverHook.sh"}]}}""")]
+        // The folder name alone is not the script: a path mentioning the new
+        // folder but some other tool's script is somebody else's hook.
+        [InlineData("""{"hooks":{"Stop":[{"command":"C:/x/orbweaver/other-hook.ps1"}]}}""")]
         public void SettingsWithoutTheHookAreNotWired(string text)
         {
             Assert.False(WslIntegration.SettingsTextMentionsHook(text));

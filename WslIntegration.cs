@@ -84,13 +84,21 @@ namespace ClaudeBuddy
         }
 
         // "Wired" means the same thing here as it does to the PowerShell side:
-        // the settings file's text mentions ClaudeBuddyHook.ps1. Split out of
+        // the settings file's text mentions the hook script. Split out of
         // IsWired so the definition can be asserted without a WSL distro — the
         // whole reason it is a text match rather than a JSON structure check is
         // that the two surfaces must never disagree about it, and a definition
         // two implementations share is worth a test of its own.
+        //
+        // Either script name counts since CB-255 (§1): a distro an
+        // un-upgraded installer wired still names ClaudeBuddyHook.ps1, its
+        // hooks still fire, and calling it un-wired would show a toggle that
+        // lies. It is also what makes ReapplyProfiles re-wire such a distro to
+        // the new script on the next reapply, since it only touches distros
+        // that read as wired. The installers strip on the same two substrings.
         internal static bool SettingsTextMentionsHook(string text) =>
-            text.Contains(Brand.HookScriptPowerShell, StringComparison.OrdinalIgnoreCase);
+            text.Contains(Brand.HookScriptPowerShell, StringComparison.OrdinalIgnoreCase)
+            || text.Contains(Brand.Legacy.HookScriptPowerShell, StringComparison.OrdinalIgnoreCase);
 
         // Enable or disable hooks for one distro by shelling out to the
         // shipped installer script — same script the installer itself runs,
