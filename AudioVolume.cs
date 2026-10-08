@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -74,6 +75,33 @@ namespace ClaudeBuddy
         // because every one of them can be rebuilt from its source on demand.
         internal static string ChimeCacheDirectory =>
             Path.Combine(Path.GetTempPath(), $"{Brand.DataDirName}-chimes");
+
+        // The same cache under its pre-CB-255 name. Nothing reads or writes it
+        // any more, and everything in it is rebuilt on demand, so it is deleted
+        // at startup (DataDirMigration.Run) rather than migrated.
+        internal static string LegacyChimeCacheDirectory =>
+            Path.Combine(Path.GetTempPath(), $"{Brand.Legacy.DataDirName}-chimes");
+
+        // Excluded from coverage: aims at the real temp folder, where a test has
+        // no business deleting anything. The rule is the overload below, which
+        // the tests drive against a scratch folder.
+        [ExcludeFromCodeCoverage]
+        internal static void SweepLegacyChimeCache() => SweepLegacyChimeCache(LegacyChimeCacheDirectory);
+
+        // Best effort: a chime the old build is still playing on Windows holds
+        // its file open, and that is no reason to stop a launch. Whatever is
+        // left goes next time, or to the OS temp cleaner.
+        internal static void SweepLegacyChimeCache(string directory)
+        {
+            try
+            {
+                if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                // Left for next launch.
+            }
+        }
 
         // NaN is what a corrupt or hand-edited number turns into after
         // arithmetic, and Math.Clamp passes NaN straight through — so it is
