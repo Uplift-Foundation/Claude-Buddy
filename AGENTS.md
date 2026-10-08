@@ -222,22 +222,22 @@ That Windows box is also the ComfyUI host, so `curl http://192.168.1.24:8000/sys
 ```bash
 dotnet build                       # quick compile check
 dotnet run                         # run the loose binary (no bundle)
-./tools/build-macos-app.sh         # "Claude Buddy.app" into dist/
+./tools/build-macos-app.sh         # "Orbweaver.app" into dist/
 ./tools/build-macos-app.sh --install   # ...and copy to /Applications
 ```
 
-When installing over an existing `/Applications/Claude Buddy.app` on macOS, build **signed**:
+When installing over an existing `/Applications/Orbweaver.app` (or the pre-CB-255 `/Applications/Claude Buddy.app`) on macOS, build **signed**:
 
 ```bash
 MACOS_SIGNING_IDENTITY="Developer ID Application: UPLIFT FOUNDATION (5AQ4ULRG3Z)" \
   ./tools/build-macos-app.sh --install
 ```
 
-`--install` stops the Buddy already running from `/Applications` before replacing it, and ends with exactly one running the new binary (launchd's keep-alive starts it if registered, otherwise the script relaunches it with `CLAUDE_CONFIG_DIR` stripped). **Do not relaunch by hand afterwards** — since CB-206 the single-instance mutex is one per user across sessions, so a manual launch just finds the new copy and exits. The script prints the running pid; a warning there is the thing to look at.
+`--install` stops the Buddy already running from `/Applications` — out of `Orbweaver.app` or the legacy `Claude Buddy.app`, which it then removes so the two never share the one bundle id — before replacing it, and ends with exactly one running the new binary (launchd's keep-alive starts it if registered, otherwise the script relaunches it with `CLAUDE_CONFIG_DIR` stripped). **Do not relaunch by hand afterwards** — since CB-206 the single-instance mutex is one per user across sessions, so a manual launch just finds the new copy and exits. The script prints the running pid; a warning there is the thing to look at.
 
 macOS ties the Automation (Apple Events) consent to the app's code identity, so an ad-hoc build silently breaks click-to-focus until the user re-approves it in System Settings — and that failure is invisible.
 
-**Local Network consent works the same way, and breaks on every upgrade.** Replacing `/Applications/Claude Buddy.app` gives the bundle a new CDHash, macOS re-evaluates Local Network access against it, and the grant does not carry over — so anything on the LAN, OpenClaw's gateway most of all, starts failing with `EHOSTUNREACH`. Nothing prompts loudly enough to notice: this is a menu-bar app with no Dock icon and no window.
+**Local Network consent works the same way, and breaks on every upgrade.** Replacing `/Applications/Orbweaver.app` gives the bundle a new CDHash, macOS re-evaluates Local Network access against it, and the grant does not carry over — so anything on the LAN, OpenClaw's gateway most of all, starts failing with `EHOSTUNREACH`. Nothing prompts loudly enough to notice: this is a menu-bar app with no Dock icon and no window.
 
 What makes it expensive is that **every obvious check agrees with the wrong answer.** `ping`, `nc`, `curl` and `ssh` are Apple-signed and exempt from the gate, so they all report the host perfectly reachable while the app cannot open a socket to it — and `nc -z` will additionally claim success against ports that refuse an honest connect. Reach for the app's own transport instead:
 

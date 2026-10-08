@@ -4,10 +4,12 @@ using Xunit;
 namespace ClaudeBuddy.Tests;
 
 // tools/stop-installed-buddy.sh, which `build-macos-app.sh --install` runs
-// before it replaces /Applications/Claude Buddy.app (CB-206). Once the
+// before it replaces /Applications/Orbweaver.app (CB-206). Once the
 // single-instance mutex spans sessions, the copy launchd starts after an
 // install finds the old one holding it and exits, so the old one has to be
-// gone first or the install leaves a stale Buddy running.
+// gone first or the install leaves a stale Buddy running. Since CB-255 the
+// install also removes the legacy /Applications/Claude Buddy.app, so the
+// script takes every path to stop in one call.
 //
 // Driven against stand-ins rather than Buddy: an ad-hoc re-signed copy of
 // /bin/bash at a scratch path with a space in it, as /Applications' has. The
@@ -337,6 +339,59 @@ public class StopInstalledBuddyScriptTests : IDisposable
     public void Refuses_to_run_without_a_path()
     {
         var result = Stop([]);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Contains("usage", result.Stderr);
+    }
+
+    // CB-255: the new bundle and the legacy one in one call, as --install
+    // makes it. Both are stopped and named; a third build at another path —
+    // the negative control — is left running, so a pass cannot come from the
+    // script stopping everything once it has more than one path.
+    [MacInstallFact]
+    public void Stops_copies_running_from_any_of_several_paths()
+    {
+        var current = StandIn("Orbweaver");
+        var legacy = StandIn("Claude Buddy");
+        var elsewhere = StandIn("Claude Buddy dev");
+        var fromCurrent = Launch(current);
+        var fromLegacy = Launch(legacy);
+        var bystander = Launch(elsewhere);
+
+        var result = Stop([current, legacy]);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(new[] { fromCurrent.Id, fromLegacy.Id }.Order().ToArray(), Pids(result.Stdout));
+        Assert.True(fromCurrent.WaitForExit(5000));
+        Assert.True(fromLegacy.WaitForExit(5000));
+        Assert.False(bystander.HasExited);
+        Assert.Equal(new[] { bystander.Id }, Running(elsewhere).ToArray());
+    }
+
+    // One path running, one not — the ordinary upgrade from a machine where
+    // only the legacy bundle was ever installed.
+    [MacInstallFact]
+    public void A_path_with_nothing_running_beside_one_that_has_a_copy_is_fine()
+    {
+        var current = StandIn("Orbweaver");
+        var legacy = StandIn("Claude Buddy");
+        var fromLegacy = Launch(legacy);
+
+        var result = Stop([current, legacy]);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(new[] { fromLegacy.Id }, Pids(result.Stdout));
+        Assert.True(fromLegacy.WaitForExit(5000));
+    }
+
+    // An empty path anywhere in the list is a caller's mistake, refused
+    // rather than read as "nothing was running there".
+    [MacInstallFact]
+    public void Refuses_an_empty_path_among_several()
+    {
+        var current = StandIn("Orbweaver");
+
+        var result = Stop([current, ""]);
 
         Assert.Equal(2, result.ExitCode);
         Assert.Contains("usage", result.Stderr);

@@ -44,7 +44,10 @@ public class KeepAliveInstallScriptTests
 
     private sealed record ScriptResult(int ExitCode, string Stdout, string Stderr);
 
-    private static ScriptResult Run(string[] args, IDictionary<string, string>? env = null)
+    // A null value removes the variable from the child's environment, which
+    // inherits this process's — and TestBootstrap has set
+    // CLAUDE_BUDDY_SETTINGS_DIR in it.
+    private static ScriptResult Run(string[] args, IDictionary<string, string?>? env = null)
     {
         var psi = new ProcessStartInfo
         {
@@ -56,7 +59,9 @@ public class KeepAliveInstallScriptTests
         psi.ArgumentList.Add(Script);
         foreach (var a in args) psi.ArgumentList.Add(a);
         if (env is not null)
-            foreach (var (key, value) in env) psi.Environment[key] = value;
+            foreach (var (key, value) in env)
+                if (value is null) psi.Environment.Remove(key);
+                else psi.Environment[key] = value;
 
         using var proc = Process.Start(psi)!;
         var stdout = proc.StandardOutput.ReadToEnd();
@@ -68,16 +73,141 @@ public class KeepAliveInstallScriptTests
     [MacKeepAliveFact]
     public void PrintKeepalivePlist_NamesBundleIdThrottleAndExecutable()
     {
-        var result = Run(["--print-keepalive-plist", "/Applications/Claude Buddy.app/Contents/MacOS/ClaudeBuddy"]);
+        var result = Run(["--print-keepalive-plist", "/Applications/Orbweaver.app/Contents/MacOS/ClaudeBuddy"]);
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal(string.Empty, result.Stderr);
         // Must match build-macos-app.sh's BUNDLE_ID -- a mismatch here would
         // mean the plist install-hooks.sh writes doesn't reconcile with any
-        // app build-macos-app.sh actually installs.
-        Assert.Contains("io.github.wtvamp.claudebuddy", result.Stdout);
+        // app build-macos-app.sh actually installs. Unchanged by the CB-255
+        // rename, deliberately: the LaunchAgent's label is the bundle id.
+        Assert.Contains("<string>io.github.wtvamp.claudebuddy</string>", result.Stdout);
         Assert.Contains("<integer>60</integer>", result.Stdout);
-        Assert.Contains("/Applications/Claude Buddy.app/Contents/MacOS/ClaudeBuddy", result.Stdout);
+        Assert.Contains("/Applications/Orbweaver.app/Contents/MacOS/ClaudeBuddy", result.Stdout);
+    }
+
+    // CB-255: the keep-alive's log goes beside the app's own logs, which moved
+    // from Logs/ClaudeBuddy to Logs/Orbweaver.
+    [MacKeepAliveFact]
+    public void PrintKeepalivePlist_LogsUnderTheOrbweaverLogsFolder()
+    {
+        var result = Run(["--print-keepalive-plist", "/tmp/fake/ClaudeBuddy"]);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains("/Library/Logs/Orbweaver/keepalive.log</string>", result.Stdout);
+        Assert.DoesNotContain("Logs/ClaudeBuddy", result.Stdout);
+    }
+
+    // ---- CB-255: which settings.json, with no override set ------------------
+    //
+    // HOME is a temp folder and CLAUDE_BUDDY_SETTINGS_DIR is removed, so the
+    // script reads Application Support under the fake home exactly as it would
+    // on a real Mac. The app candidates stay pinned to a fake bundle so only
+    // the settings path varies.
+
+    private static string Support(string home, string folder) =>
+        Path.Combine(home, "Library", "Application Support", folder);
+
+    private static void WriteSettings(string home, string folder, bool serve)
+    {
+        Directory.CreateDirectory(Support(home, folder));
+        File.WriteAllText(Path.Combine(Support(home, folder), "settings.json"),
+            $"{{ \"remoteControlServeOnLaunch\": {(serve ? "true" : "false")} }}");
+    }
+
+    private static ScriptResult KeepaliveOnlyUnderHome(string home, string launchAgents, string app) =>
+        Run(["--keepalive-only"], new Dictionary<string, string?>
+        {
+            ["HOME"] = home,
+            ["CLAUDE_BUDDY_SETTINGS_DIR"] = null,
+            ["CLAUDE_BUDDY_LAUNCHAGENTS_DIR"] = launchAgents,
+            ["CLAUDE_BUDDY_KEEPALIVE_DRY_RUN"] = "1",
+            ["CLAUDE_BUDDY_KEEPALIVE_APP_CANDIDATES"] = app,
+        });
+
+    // Upgrade day: the app has not launched since the rename, so its settings
+    // are still in the legacy folder. Reading only the new one would take
+    // Serve on launch as off and tear the user's keep-alive down.
+    [MacKeepAliveFact]
+    public void KeepaliveOnly_ReadsTheLegacySettingsWhenTheOrbweaverFolderHasNone()
+    {
+        using var home = new TempDir();
+        using var launchAgentsDir = new TempDir();
+        var exePath = WriteFakeAppBundle(home.Path);
+        WriteSettings(home.Path, "ClaudeBuddy", serve: true);
+
+        var result = KeepaliveOnlyUnderHome(home.Path, launchAgentsDir.Path, Path.Combine(home.Path, "Fake.app"));
+
+        Assert.Equal(0, result.ExitCode);
+        var plistPath = Path.Combine(launchAgentsDir.Path, "io.github.wtvamp.claudebuddy.plist");
+        Assert.True(File.Exists(plistPath), result.Stdout + result.Stderr);
+        Assert.Contains(exePath, File.ReadAllText(plistPath));
+    }
+
+    // Both folders have settings: the new one wins, as it does in the app's
+    // own migration. Its "false" removes a stale agent although the legacy
+    // file still says true.
+    [MacKeepAliveFact]
+    public void KeepaliveOnly_TheOrbweaverSettingsWinOverTheLegacyOnes()
+    {
+        using var home = new TempDir();
+        using var launchAgentsDir = new TempDir();
+        WriteFakeAppBundle(home.Path);
+        WriteSettings(home.Path, "ClaudeBuddy", serve: true);
+        WriteSettings(home.Path, "Orbweaver", serve: false);
+        var stalePlist = Path.Combine(launchAgentsDir.Path, "io.github.wtvamp.claudebuddy.plist");
+        File.WriteAllText(stalePlist, "<stale/>");
+
+        var result = KeepaliveOnlyUnderHome(home.Path, launchAgentsDir.Path, Path.Combine(home.Path, "Fake.app"));
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.False(File.Exists(stalePlist), "the legacy settings were read although the Orbweaver ones exist");
+    }
+
+    // The control for the two above: the new folder alone is read, so a pass
+    // there cannot come from the script reading only the legacy one.
+    [MacKeepAliveFact]
+    public void KeepaliveOnly_ReadsTheOrbweaverSettings()
+    {
+        using var home = new TempDir();
+        using var launchAgentsDir = new TempDir();
+        WriteFakeAppBundle(home.Path);
+        WriteSettings(home.Path, "Orbweaver", serve: true);
+
+        var result = KeepaliveOnlyUnderHome(home.Path, launchAgentsDir.Path, Path.Combine(home.Path, "Fake.app"));
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.True(File.Exists(Path.Combine(launchAgentsDir.Path, "io.github.wtvamp.claudebuddy.plist")));
+    }
+
+    // CB-255: with no candidate override, Orbweaver.app is looked for before
+    // Claude Buddy.app. Both are planted under the fake home's Applications;
+    // the assertion allows a real /Applications/Orbweaver.app on the machine
+    // running the suite to win (it is ahead of ~/Applications), but never a
+    // Claude Buddy.app while an Orbweaver.app exists.
+    [MacKeepAliveFact]
+    public void KeepaliveOnly_PrefersOrbweaverAppOverTheLegacyBundle()
+    {
+        using var home = new TempDir();
+        using var launchAgentsDir = new TempDir();
+        var applications = Path.Combine(home.Path, "Applications");
+        WriteFakeAppBundle(applications, "Claude Buddy.app");
+        WriteFakeAppBundle(applications, "Orbweaver.app");
+        WriteSettings(home.Path, "Orbweaver", serve: true);
+
+        var result = Run(["--keepalive-only"], new Dictionary<string, string?>
+        {
+            ["HOME"] = home.Path,
+            ["CLAUDE_BUDDY_SETTINGS_DIR"] = null,
+            ["CLAUDE_BUDDY_LAUNCHAGENTS_DIR"] = launchAgentsDir.Path,
+            ["CLAUDE_BUDDY_KEEPALIVE_DRY_RUN"] = "1",
+            ["CLAUDE_BUDDY_KEEPALIVE_APP_CANDIDATES"] = null,
+        });
+
+        Assert.Equal(0, result.ExitCode);
+        var plist = File.ReadAllText(Path.Combine(launchAgentsDir.Path, "io.github.wtvamp.claudebuddy.plist"));
+        Assert.Contains("/Orbweaver.app/Contents/MacOS/ClaudeBuddy", plist);
+        Assert.DoesNotContain("Claude Buddy.app", plist);
     }
 
     [MacKeepAliveFact]
@@ -114,7 +244,7 @@ public class KeepAliveInstallScriptTests
         var stalePlist = Path.Combine(launchAgentsDir.Path, "io.github.wtvamp.claudebuddy.plist");
         File.WriteAllText(stalePlist, "<stale/>");
 
-        var result = Run(["--keepalive-only"], new Dictionary<string, string>
+        var result = Run(["--keepalive-only"], new Dictionary<string, string?>
         {
             ["CLAUDE_BUDDY_SETTINGS_DIR"] = settingsDir.Path,
             ["CLAUDE_BUDDY_LAUNCHAGENTS_DIR"] = launchAgentsDir.Path,
@@ -137,7 +267,7 @@ public class KeepAliveInstallScriptTests
         using var fakeApp = new TempDir();
         WriteFakeAppBundle(fakeApp.Path);
 
-        var result = Run(["--keepalive-only"], new Dictionary<string, string>
+        var result = Run(["--keepalive-only"], new Dictionary<string, string?>
         {
             ["CLAUDE_BUDDY_SETTINGS_DIR"] = settingsDir.Path,
             ["CLAUDE_BUDDY_LAUNCHAGENTS_DIR"] = launchAgentsDir.Path,
@@ -159,7 +289,7 @@ public class KeepAliveInstallScriptTests
         File.WriteAllText(Path.Combine(settingsDir.Path, "settings.json"),
             "{ \"remoteControlServeOnLaunch\": true }");
 
-        var result = Run(["--keepalive-only"], new Dictionary<string, string>
+        var result = Run(["--keepalive-only"], new Dictionary<string, string?>
         {
             ["CLAUDE_BUDDY_SETTINGS_DIR"] = settingsDir.Path,
             ["CLAUDE_BUDDY_LAUNCHAGENTS_DIR"] = launchAgentsDir.Path,
@@ -181,7 +311,7 @@ public class KeepAliveInstallScriptTests
         File.WriteAllText(Path.Combine(settingsDir.Path, "settings.json"),
             "{ \"remoteControlServeOnLaunch\": true }");
 
-        var result = Run(["--keepalive-only"], new Dictionary<string, string>
+        var result = Run(["--keepalive-only"], new Dictionary<string, string?>
         {
             ["CLAUDE_BUDDY_SETTINGS_DIR"] = settingsDir.Path,
             ["CLAUDE_BUDDY_LAUNCHAGENTS_DIR"] = launchAgentsDir.Path,
@@ -213,7 +343,7 @@ public class KeepAliveInstallScriptTests
         var plistPath = Path.Combine(launchAgentsDir.Path, "io.github.wtvamp.claudebuddy.plist");
         File.WriteAllText(plistPath, "<placeholder/>");
 
-        var result = Run(["--keepalive-only", "--uninstall"], new Dictionary<string, string>
+        var result = Run(["--keepalive-only", "--uninstall"], new Dictionary<string, string?>
         {
             ["CLAUDE_BUDDY_SETTINGS_DIR"] = settingsDir.Path,
             ["CLAUDE_BUDDY_LAUNCHAGENTS_DIR"] = launchAgentsDir.Path,
@@ -226,9 +356,9 @@ public class KeepAliveInstallScriptTests
 
     // A minimal .app bundle: just enough for resolve_app_executable's
     // executable-exists check in install-hooks.sh to find something real.
-    private static string WriteFakeAppBundle(string root)
+    private static string WriteFakeAppBundle(string root, string name = "Fake.app")
     {
-        var macosDir = Path.Combine(root, "Fake.app", "Contents", "MacOS");
+        var macosDir = Path.Combine(root, name, "Contents", "MacOS");
         Directory.CreateDirectory(macosDir);
         var exePath = Path.Combine(macosDir, "ClaudeBuddy");
         File.WriteAllText(exePath, "#!/bin/sh\n");
