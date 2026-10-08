@@ -1,4 +1,5 @@
-; Inno Setup script for the Claude Buddy Windows installer.
+; Inno Setup script for the Orbweaver Windows installer (the file keeps its
+; pre-rename name until the binaries are renamed too).
 ;
 ; Build it with (from the repo root):
 ;   dotnet publish ClaudeBuddy.csproj -c Release -r win-x64 -p:DebugType=none
@@ -16,9 +17,14 @@
   #define Version "0.0.0-dev"
 #endif
 
-#define AppName "Claude Buddy"
+#define AppName "Orbweaver"
+; The name every install before the rename used. Only the upgrade cleanup below
+; refers to it: the Start Menu group, Startup shortcut, firewall rule and
+; keep-alive task that an old install left behind are all keyed on it.
+#define LegacyAppName "Claude Buddy"
 #define AppPublisher "Kawika Miller and Repo Owner"
 #define AppUrl "https://github.com/Uplift-Foundation/Claude-Buddy"
+; Still ClaudeBuddy.exe: the binary is renamed with the assembly, not here.
 #define AppExe "ClaudeBuddy.exe"
 
 ; CFBundleVersion's Windows equivalent: VersionInfoVersion must be a plain
@@ -34,6 +40,8 @@
 [Setup]
 ; Never change AppId — it is how Windows recognises an existing install and
 ; upgrades it in place instead of stacking a second copy in Apps & Features.
+; It is what makes the Claude Buddy -> Orbweaver rename an upgrade rather than
+; a second app.
 AppId={{4046CFD2-79A9-4270-8302-21B87A92C0A5}
 AppName={#AppName}
 AppVersion={#Version}
@@ -44,14 +52,24 @@ AppSupportURL={#AppUrl}/issues
 AppUpdatesURL={#AppUrl}/releases
 VersionInfoVersion={#NumericVersion}
 
-; Per-user, no elevation. Note the install directory is \Programs\ClaudeBuddy,
-; deliberately distinct from the %LOCALAPPDATA%\ClaudeBuddy that
+; Per-user, no elevation. Note the install directory is \Programs\Orbweaver,
+; deliberately distinct from the %LOCALAPPDATA%\Orbweaver that
 ; install-windows-hooks.ps1 copies the hook script into. If they were the same
 ; folder, that script would try to copy the hook onto itself and fail.
+;
+; Only a fresh install lands in Programs\Orbweaver. An upgrade from Claude Buddy
+; stays in Programs\ClaudeBuddy, because UsePreviousAppDir (default yes) reuses
+; the directory the AppId was last installed to -- moving it would strand every
+; path the old install handed out.
 PrivilegesRequired=lowest
-DefaultDirName={localappdata}\Programs\ClaudeBuddy
+DefaultDirName={localappdata}\Programs\Orbweaver
 DisableProgramGroupPage=yes
 DefaultGroupName={#AppName}
+; Unlike the directory, the Start Menu group must not be reused: with the
+; default (yes), an upgrade from Claude Buddy would put Orbweaver's shortcuts
+; back into a "Claude Buddy" group -- the very folder [InstallDelete] below
+; removes -- and the Start Menu would keep the old name forever.
+UsePreviousGroup=no
 
 ; win-x64 self-contained publish; there is no 32-bit build to fall back to.
 ArchitecturesAllowed=x64compatible
@@ -61,7 +79,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 ; text and RTF by extension, and the repo's LICENSE has none.
 LicenseFile=..\dist\LICENSE.txt
 OutputDir=..\dist
-OutputBaseFilename=ClaudeBuddy-{#Version}-win-x64-setup
+OutputBaseFilename=Orbweaver-{#Version}-win-x64-setup
 SetupIconFile=..\Assets\ClaudeBuddy.ico
 UninstallDisplayIcon={app}\{#AppExe}
 UninstallDisplayName={#AppName}
@@ -95,19 +113,37 @@ Name: "startup"; Description: "Start {#AppName} automatically when I sign in"; G
 [Files]
 Source: "..\bin\Release\net10.0\win-x64\publish\{#AppExe}"; DestDir: "{app}"; Flags: ignoreversion
 ; The hook script sits at {app}\ and its installers at {app}\tools\, mirroring
-; the repo layout. Each installer resolves the hook as ..\ClaudeBuddyHook.ps1
+; the repo layout. Each installer resolves the hook as ..\OrbweaverHook.ps1
 ; relative to itself, so this layout is what makes them work unmodified.
 ;
 ; Three installers: one per CLI, and install-hooks.ps1 over the top of them,
 ; which is the only one anything else calls. Nobody should have to know which of
 ; two scripts their machine needs.
-Source: "..\ClaudeBuddyHook.ps1"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\OrbweaverHook.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\tools\install-hooks.ps1"; DestDir: "{app}\tools"; Flags: ignoreversion
 Source: "..\tools\install-windows-hooks.ps1"; DestDir: "{app}\tools"; Flags: ignoreversion
 Source: "..\tools\install-codex-hooks.ps1"; DestDir: "{app}\tools"; Flags: ignoreversion
 Source: "..\tools\install-grok-hooks.ps1"; DestDir: "{app}\tools"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
+
+[InstallDelete]
+; Inno never removes what an earlier version installed and this script no
+; longer declares, so an upgrade from Claude Buddy would leave its Start Menu
+; group beside the new one and its Startup shortcut beside Orbweaver.lnk -- two
+; entries under two names, and the app started twice at every sign-in (the
+; second exits on the single-instance mutex, but it is still debris). This runs
+; before [Icons] recreates anything, and on a fresh install it matches nothing.
+;
+; {autoprograms} rather than {userprograms}: it is where {group} resolved to,
+; for whichever install mode the old install ran in.
+Type: filesandordirs; Name: "{autoprograms}\{#LegacyAppName}"
+Type: files; Name: "{userstartup}\{#LegacyAppName}.lnk"
+; The source copy of the pre-rename hook in an upgraded install dir. Nothing
+; runs it -- every wired hook entry points at the copy install-windows-hooks.ps1
+; made under %LOCALAPPDATA%, which that script leaves alone for sessions still
+; running against it -- so this is purely the old install's leftover.
+Type: files; Name: "{app}\ClaudeBuddyHook.ps1"
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"
@@ -124,7 +160,7 @@ Name: "{userstartup}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: startup
 [Run]
 ; Let the peer link listen without the first experience being a silent block.
 ;
-; Claude Buddy connects directly to your other machines running it, which means
+; Orbweaver connects directly to your other machines running it, which means
 ; listening on a port — the first time this app has ever done so. Windows
 ; Firewall would otherwise either drop the packets with no visible reason or
 ; raise a prompt behind a menu-bar-only app that has no window to attach it to.
@@ -144,19 +180,37 @@ Name: "{userstartup}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: startup
 ; itself failing (CB-213). Skipping it there changes nothing about what the
 ; install achieves, since the rule could not be added either way; a per-user
 ; install is left to Windows Firewall's own first-listen prompt.
+;
+; Delete, delete, add. The first drops the rule an install from before the
+; rename added under the old name, which would otherwise sit beside the new one
+; naming the same exe. The second is what makes a re-run idempotent: netsh
+; happily adds a second rule with the same name, so without it every upgrade
+; stacks another copy. A delete of a rule that is not there exits 1, which is
+; the expected outcome and, like the add, never fails the install.
+Filename: "{sys}\netsh.exe"; \
+  Parameters: "advfirewall firewall delete rule name=""{#LegacyAppName} peer link"""; \
+  Flags: runhidden skipifdoesntexist; Check: IsAdminInstallMode
+Filename: "{sys}\netsh.exe"; \
+  Parameters: "advfirewall firewall delete rule name=""{#AppName} peer link"""; \
+  Flags: runhidden skipifdoesntexist; Check: IsAdminInstallMode
 Filename: "{sys}\netsh.exe"; \
   Parameters: "advfirewall firewall add rule name=""{#AppName} peer link"" dir=in action=allow program=""{app}\{#AppExe}"" enable=yes profile=private"; \
-  Flags: runhidden skipifdoesntexist; Check: IsAdminInstallMode; StatusMsg: "Allowing Claude Buddy through the firewall..."
+  Flags: runhidden skipifdoesntexist; Check: IsAdminInstallMode; StatusMsg: "Allowing {#AppName} through the firewall..."
 Filename: "{app}\{#AppExe}"; Description: "Start {#AppName} now"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
 ; The firewall rule goes when the app does. Leaving it behind would name a
 ; program that is no longer installed, which is exactly the kind of debris a
 ; user cannot interpret later. Only where an administrative install could have
-; added it; see the add rule above.
+; added it; see the add rule above. Both names, forever: an install upgraded
+; from Claude Buddy on which the install-time delete above did not run (or
+; failed) still holds the old one.
 Filename: "{sys}\netsh.exe"; \
   Parameters: "advfirewall firewall delete rule name=""{#AppName} peer link"""; \
   Flags: runhidden skipifdoesntexist; RunOnceId: "removefirewallrule"; Check: IsAdminInstallMode
+Filename: "{sys}\netsh.exe"; \
+  Parameters: "advfirewall firewall delete rule name=""{#LegacyAppName} peer link"""; \
+  Flags: runhidden skipifdoesntexist; RunOnceId: "removelegacyfirewallrule"; Check: IsAdminInstallMode
 ; Take the hook entries back out of every CLI they were wired into, or the CLI
 ; keeps invoking a script that is about to be deleted and logs a hook error on
 ; every event. runhidden because an uninstall should not flash a console window.
@@ -167,10 +221,15 @@ Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; \
 ; app -- left behind it would name an exe that no longer exists, which is the
 ; same kind of debris the firewall rule above is removed to avoid. Unlike
 ; install time, uninstall doesn't need to check the setting first: the app is
-; leaving either way, so the task comes out unconditionally.
+; leaving either way, so the task comes out unconditionally -- under both its
+; names, since the pre-rename one may survive an upgrade whose reconcile could
+; not delete it.
+Filename: "{sys}\schtasks.exe"; \
+  Parameters: "/delete /tn ""OrbweaverCrashKeepAlive"" /f"; \
+  Flags: runhidden skipifdoesntexist; RunOnceId: "removekeepalivetask"
 Filename: "{sys}\schtasks.exe"; \
   Parameters: "/delete /tn ""ClaudeBuddyCrashKeepAlive"" /f"; \
-  Flags: runhidden skipifdoesntexist; RunOnceId: "removekeepalivetask"
+  Flags: runhidden skipifdoesntexist; RunOnceId: "removelegacykeepalivetask"
 ; Restart Manager only runs during install, so stop a running instance here too.
 ; Full {sys} path rather than bare "taskkill.exe" — skipifdoesntexist tests the
 ; filename as given, and an unqualified name would not resolve.
@@ -202,7 +261,10 @@ end;
   substring check rather than a real JSON parse, because Pascal Script has
   no JSON support and this only needs one boolean out of the file. }
 const
-  KeepAliveTaskName = 'ClaudeBuddyCrashKeepAlive';
+  KeepAliveTaskName = 'OrbweaverCrashKeepAlive';
+  { What every install before the rename registered. Never re-created; only
+    ever deleted, see ReconcileKeepAliveTask. }
+  LegacyKeepAliveTaskName = 'ClaudeBuddyCrashKeepAlive';
 
 function ServeOnLaunchEnabled(): Boolean;
 var
@@ -212,13 +274,20 @@ var
   KeyPos, TruePos, FalsePos: Integer;
 begin
   Result := False;
-  { %APPDATA%\ClaudeBuddy\settings.json -- ClaudeBuddySettings.Directory
+  { %APPDATA%\Orbweaver\settings.json -- ClaudeBuddySettings.Directory
     resolves via SpecialFolder.ApplicationData, which is roaming AppData on
     Windows, not the LocalAppData directory this installer itself lives
     under. Do not write an Inno constant in brace form inside this comment --
     comments don't nest, so a brace pair anywhere in here closes the comment
-    at the first closing brace and leaves the rest to be parsed as code. }
-  SettingsPath := ExpandConstant('{userappdata}\ClaudeBuddy\settings.json');
+    at the first closing brace and leaves the rest to be parsed as code.
+
+    Falls back to the pre-rename %APPDATA%\ClaudeBuddy\settings.json: on
+    upgrade day this runs before the new app has ever started, and it is the
+    app that moves that folder, so reading only the new path would reconcile
+    the keep-alive against "not enabled" and silently remove it. }
+  SettingsPath := ExpandConstant('{userappdata}\Orbweaver\settings.json');
+  if not FileExists(SettingsPath) then
+    SettingsPath := ExpandConstant('{userappdata}\ClaudeBuddy\settings.json');
   if not FileExists(SettingsPath) then Exit;
   if not LoadStringFromFile(SettingsPath, Contents) then Exit;
 
@@ -251,7 +320,7 @@ begin
     '<?xml version="1.0" encoding="UTF-8"?>' + #13#10 +
     '<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">' + #13#10 +
     '  <RegistrationInfo>' + #13#10 +
-    '    <Description>Restarts Claude Buddy after a crash. Installed because "Serve on launch" (Remote Control) is turned on; removed if that is turned off and this installer is re-run, and always removed on uninstall.</Description>' + #13#10 +
+    '    <Description>Restarts Orbweaver after a crash. Installed because "Serve on launch" (Remote Control) is turned on; removed if that is turned off and this installer is re-run, and always removed on uninstall.</Description>' + #13#10 +
     '  </RegistrationInfo>' + #13#10 +
     '  <Triggers>' + #13#10 +
     '    <EventTrigger>' + #13#10 +
@@ -280,15 +349,15 @@ begin
     '</Task>';
 end;
 
-{ Removes the task unconditionally; schtasks exits nonzero for a task that
-  isn't registered, which this treats the same as success -- "already gone"
-  is the outcome either way. }
-procedure RemoveKeepAliveTask();
+{ Removes the named task unconditionally; schtasks exits nonzero for a task
+  that isn't registered, which this treats the same as success -- "already
+  gone" is the outcome either way. }
+procedure RemoveKeepAliveTask(TaskName: String);
 var
   ResultCode: Integer;
 begin
   Exec(ExpandConstant('{sys}\schtasks.exe'),
-       '/delete /tn "' + KeepAliveTaskName + '" /f', '', SW_HIDE,
+       '/delete /tn "' + TaskName + '" /f', '', SW_HIDE,
        ewWaitUntilTerminated, ResultCode);
 end;
 
@@ -303,13 +372,19 @@ var
   ResultCode: Integer;
   XmlPath, TaskXml: String;
 begin
+  { The pre-rename task goes first, whichever way the setting points: left in
+    place beside a freshly created new one, a single crash would launch the
+    app twice; left in place with the setting off, it is the "app that will not
+    stay quit" this gate exists to prevent, under a name nothing else deletes. }
+  RemoveKeepAliveTask(LegacyKeepAliveTaskName);
+
   if not ServeOnLaunchEnabled() then
   begin
-    RemoveKeepAliveTask();
+    RemoveKeepAliveTask(KeepAliveTaskName);
     Exit;
   end;
 
-  XmlPath := ExpandConstant('{tmp}\ClaudeBuddyKeepAlive.xml');
+  XmlPath := ExpandConstant('{tmp}\OrbweaverKeepAlive.xml');
   TaskXml := BuildKeepAliveTaskXml(ExpandConstant('{app}\{#AppExe}'));
   SaveStringToFile(XmlPath, TaskXml, False);
 
@@ -318,7 +393,7 @@ begin
               '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
   begin
     MsgBox('Could not start schtasks.exe to register the crash keep-alive task.' + #13#10#13#10 +
-           'Claude Buddy is installed and will run either way; it just will not' + #13#10 +
+           'Orbweaver is installed and will run either way; it just will not' + #13#10 +
            'restart itself automatically after a crash.',
            mbError, MB_OK);
   end;
@@ -351,7 +426,7 @@ begin
               Params, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
   begin
     MsgBox('Could not start PowerShell to wire up the agent hooks.' + #13#10#13#10 +
-           'Claude Buddy is installed and will run, but no orbs will appear until' + #13#10 +
+           'Orbweaver is installed and will run, but no orbs will appear until' + #13#10 +
            'the hooks are set up. Run this from a PowerShell prompt to finish:' + #13#10#13#10 +
            '  & "' + Script + '"',
            mbError, MB_OK);
@@ -360,7 +435,7 @@ begin
 
   if ResultCode <> 0 then
     MsgBox('Hook setup failed (exit code ' + IntToStr(ResultCode) + ').' + #13#10#13#10 +
-           'Claude Buddy is installed and will run, but no orbs will appear until' + #13#10 +
+           'Orbweaver is installed and will run, but no orbs will appear until' + #13#10 +
            'the hooks are set up. Run this from a PowerShell prompt to see the error:' + #13#10#13#10 +
            '  & "' + Script + '"',
            mbError, MB_OK);
