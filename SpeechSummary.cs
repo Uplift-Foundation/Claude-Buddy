@@ -143,7 +143,7 @@ namespace ClaudeBuddy
             // "what's next" is what makes it worth listening to over a
             // Glass sound — it can tell you whether you need to come back.
             (kind == SpeechSummaryKind.TurnFinished
-                ? "Summarise what was just done and what's next, in one to three sentences, "
+                ? "Summarise what was just done and what's next, in two or three short sentences, about 40 words in total, at most three sentences, "
                     + "for someone who will hear it read aloud rather than read it. "
                     + "Say what changed and what to expect next, not what the text is about. "
                 : "Summarise the assistant reply below in two or three sentences, "
@@ -234,6 +234,88 @@ namespace ClaudeBuddy
             return result.Length == 0 ? null : result;
         }
 
+        // The prompt already said "one to three sentences" and Haiku wrote six or
+        // seven short ones anyway (250-470 chars in the bridge log), so the count
+        // is enforced here as well as asked for.
+        internal const int TurnFinishedMaxSentences = 3;
+        internal const int TurnFinishedMaxChars = 400;
+
+        // Dotted words that end in a full stop without ending a sentence.
+        private static readonly HashSet<string> Abbreviations =
+            new(StringComparer.OrdinalIgnoreCase) { "e.g", "i.e", "vs", "mr", "mrs", "ms", "dr", "approx" };
+
+        // Closing quotes and brackets that may sit between a stop and the
+        // whitespace after it: He said "done." Then...
+        private const string Closers = "\"')]}\u201D\u2019\u00BB";
+
+        // Where each sentence ends: `.`, `!` or `?` followed by whitespace or the
+        // end of the text. "0.5" has no whitespace after its dot, an ellipsis is
+        // skipped (a trailing "..." is a pause, not a stop), and the
+        // abbreviations above are skipped.
+        internal static List<int> SentenceEnds(string t)
+        {
+            var ends = new List<int>();
+            for (var i = 0; i < t.Length; i++)
+            {
+                if (t[i] is not ('.' or '!' or '?')) continue;
+
+                // The stop counts only when whitespace or the end follows it,
+                // after any closing quotes or brackets.
+                var after = i + 1;
+                while (after < t.Length && Closers.Contains(t[after])) after++;
+                if (after < t.Length && !char.IsWhiteSpace(t[after])) continue;
+
+                if (t[i] == '.' && i > 0 && t[i - 1] == '.') continue;
+                if (t[i] == '.')
+                {
+                    var start = i;
+                    while (start > 0 && !char.IsWhiteSpace(t[start - 1])) start--;
+                    var word = t[start..i].TrimStart('(', '"', '\'', '[', '\u201C', '\u2018');
+                    if (Abbreviations.Contains(word) || IsInitials(word)) continue;
+                }
+                ends.Add(after - 1);
+            }
+            return ends;
+        }
+
+        // "U.S", "a.m" — dotted single letters are initials. A lone letter is not:
+        // "plan B." and "step A." really do end sentences, and a summary naming a
+        // person by initial is rarer than either.
+        private static bool IsInitials(string word)
+        {
+            if (word.Length < 3) return false;
+            for (var i = 0; i < word.Length; i++)
+                if (i % 2 == 0 ? !char.IsLetter(word[i]) : word[i] != '.') return false;
+            return word.Length % 2 == 1;
+        }
+
+        // Keep at most `maxSentences` sentences, then at most `maxChars`
+        // characters: cut at the last sentence end inside the cap, else the last
+        // word boundary, else hard (one unbroken token). Text that already fits
+        // both limits comes back trimmed but otherwise unchanged.
+        internal static string Shorten(string? text, int maxSentences, int maxChars)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return "";
+            var t = text.Trim();
+
+            var ends = SentenceEnds(t);
+            if (ends.Count > maxSentences) t = t[..(ends[maxSentences - 1] + 1)];
+            if (t.Length <= maxChars) return t;
+
+            var lastEnd = ends.LastOrDefault(e => e < maxChars, -1);
+            if (lastEnd >= 0) return t[..(lastEnd + 1)];
+
+            // Any whitespace is a word boundary, not only a space. The hard cut
+            // steps back over a split surrogate pair rather than leave half an emoji.
+            var window = t[..maxChars];
+            if (char.IsWhiteSpace(t[maxChars])) return window.TrimEnd();
+            var space = -1;
+            for (var i = window.Length - 1; i > 0; i--)
+                if (char.IsWhiteSpace(window[i])) { space = i; break; }
+            if (space > 0) return window[..space].TrimEnd();
+            return char.IsHighSurrogate(window[^1]) ? window[..^1] : window;
+        }
+
         // What the speaker says when the summary could not be produced.
         //
         // Deliberately not "fall back to the full text". Somebody who chose this
@@ -311,7 +393,11 @@ namespace ClaudeBuddy
             try
             {
                 var summary = await SummarizeAsync(reply, kind, accountDir).ConfigureAwait(true);
-                return string.IsNullOrWhiteSpace(summary) ? Unavailable : summary;
+                if (string.IsNullOrWhiteSpace(summary)) return Unavailable;
+
+                // Only the model's own words are capped. The failure sentences
+                // above and below are fixed text and never pass through here.
+                return kind == SpeechSummaryKind.TurnFinished ? Shorten(summary, TurnFinishedMaxSentences, TurnFinishedMaxChars) : summary;
             }
             catch (SpokenFailureException ex)
             {

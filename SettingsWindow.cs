@@ -3328,7 +3328,7 @@ namespace ClaudeBuddy
             SoundPickerRow("When a turn finishes", TurnFinishedSoundPicker(),
                 () => ClaudeBuddySettings.TurnFinishedSound, SystemSoundCatalog.DefaultFinishedSoundName,
                 $"Plays once a reply is done and {Brand.DisplayName} is waiting on you again. "
-                + "Vibe summary speaks one to three sentences on what just happened and "
+                + "Vibe summary speaks two or three sentences on what just happened and "
                 + "what's next, in that orb's own voice — if you're already listening to "
                 + "something else, it plays the chime below instead of talking over it."),
 
