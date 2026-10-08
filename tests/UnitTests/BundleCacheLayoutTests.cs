@@ -64,7 +64,7 @@ public class BundleCacheLayoutTests : IDisposable
     {
         Environment.SetEnvironmentVariable(Override, null);
 
-        Assert.Contains("ClaudeBuddy", ClaudeDesktopBundles.Root);
+        Assert.Contains("Orbweaver", ClaudeDesktopBundles.Root);
         Assert.EndsWith("bundles", ClaudeDesktopBundles.Root);
     }
 

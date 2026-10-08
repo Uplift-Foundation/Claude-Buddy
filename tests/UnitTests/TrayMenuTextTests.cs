@@ -24,15 +24,15 @@ public class TrayMenuTextTests
     [Fact]
     public void TheTooltipSaysNoSessionsRatherThanZero()
     {
-        Assert.Equal("Claude Buddy — no sessions", TrayController.Summary(0, 0, 0));
+        Assert.Equal("Orbweaver — no sessions", TrayController.Summary(0, 0, 0));
     }
 
     [Theory]
-    [InlineData(1, 0, 0, "Claude Buddy — 1 session")]
-    [InlineData(4, 0, 0, "Claude Buddy — 4 sessions")]
-    [InlineData(4, 1, 0, "Claude Buddy — 4 sessions, 1 needs you")]
-    [InlineData(4, 0, 2, "Claude Buddy — 4 sessions, 2 working")]
-    [InlineData(4, 1, 2, "Claude Buddy — 4 sessions, 1 needs you, 2 working")]
+    [InlineData(1, 0, 0, "Orbweaver — 1 session")]
+    [InlineData(4, 0, 0, "Orbweaver — 4 sessions")]
+    [InlineData(4, 1, 0, "Orbweaver — 4 sessions, 1 needs you")]
+    [InlineData(4, 0, 2, "Orbweaver — 4 sessions, 2 working")]
+    [InlineData(4, 1, 2, "Orbweaver — 4 sessions, 1 needs you, 2 working")]
     public void TheTooltipCountsAndOnlyMentionsWhatIsActuallyHappening(
         int total, int waiting, int generating, string expected)
     {

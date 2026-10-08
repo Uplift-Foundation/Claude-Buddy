@@ -203,6 +203,223 @@ public class SingleInstanceTests
         }
     }
 
+    // --- CB-255: ClaimAll, the legacy name and the new one ------------------
+    //
+    // Every "is it free?" check below is made from a thread of its own, for the
+    // reason Second_claimant_observes_it_held_while_the_first_is_still_alive
+    // gives: ownership is per thread and recursive, so a check from the thread
+    // that ran ClaimAll would answer Acquired whether or not ClaimAll had let
+    // go — a false pass of exactly the kind this section exists to catch.
+
+    // One claim of `name` from a fresh thread, released again before the
+    // thread ends, so the answer describes the name's state at that moment and
+    // leaves nothing behind.
+    private static SingleInstanceClaim ClaimFromAnotherThread(string name)
+    {
+        SingleInstanceClaim? answer = null;
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                var (claim, mutex) = SingleInstance.Claim(name);
+                if (SingleInstance.ShouldProceed(claim)) mutex.ReleaseMutex();
+                mutex.Dispose();
+                answer = claim;
+            }
+            catch (Exception ex)
+            {
+                failure = ex;
+            }
+        });
+        thread.Start();
+        Assert.True(thread.Join(TimeSpan.FromSeconds(10)), "the checking thread never finished");
+        if (failure is not null) throw new Xunit.Sdk.XunitException("the checking thread failed: " + failure);
+        return answer!.Value;
+    }
+
+    // A thread that holds `name` until told to let go — a running build of the
+    // other generation, in-process. Dispose releases it and joins.
+    private sealed class Holder : IDisposable
+    {
+        private readonly ManualResetEventSlim _ready = new(false);
+        private readonly ManualResetEventSlim _release = new(false);
+        private readonly Thread _thread;
+        private Exception? _failure;
+
+        internal Holder(string name)
+        {
+            _thread = new Thread(() =>
+            {
+                try
+                {
+                    var (claim, mutex) = SingleInstance.Claim(name);
+                    Assert.Equal(SingleInstanceClaim.Acquired, claim);
+                    _ready.Set();
+                    _release.Wait();
+                    mutex.ReleaseMutex();
+                    mutex.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    _failure = ex;
+                    _ready.Set();
+                }
+            });
+            _thread.Start();
+            Assert.True(_ready.Wait(TimeSpan.FromSeconds(5)), "holder thread never signalled");
+            if (_failure is not null)
+            {
+                throw new Xunit.Sdk.XunitException("the holder failed before it could hold the mutex: " + _failure);
+            }
+        }
+
+        public void Dispose()
+        {
+            _release.Set();
+            _thread.Join();
+            _ready.Dispose();
+            _release.Dispose();
+        }
+    }
+
+    private static void ReleaseAll(IReadOnlyList<Mutex> held)
+    {
+        for (var i = held.Count - 1; i >= 0; i--)
+        {
+            held[i].ReleaseMutex();
+            held[i].Dispose();
+        }
+    }
+
+    [Fact]
+    public void ClaimAll_acquires_and_holds_both_names_when_neither_is_held()
+    {
+        var legacy = FreshName();
+        var current = FreshName();
+
+        var (proceed, held) = SingleInstance.ClaimAll([legacy, current]);
+        try
+        {
+            Assert.True(proceed);
+            Assert.Equal(2, held.Count);
+
+            // And both really are held — the positive control for every
+            // "released" assertion below, showing this thread-based check
+            // does see a held name as held.
+            Assert.Equal(SingleInstanceClaim.HeldByAnother, ClaimFromAnotherThread(legacy));
+            Assert.Equal(SingleInstanceClaim.HeldByAnother, ClaimFromAnotherThread(current));
+        }
+        finally
+        {
+            ReleaseAll(held);
+        }
+
+        // Given back, both are free again.
+        Assert.Equal(SingleInstanceClaim.Acquired, ClaimFromAnotherThread(legacy));
+        Assert.Equal(SingleInstanceClaim.Acquired, ClaimFromAnotherThread(current));
+    }
+
+    [Fact]
+    public void ClaimAll_stops_when_an_old_build_holds_the_legacy_name_and_leaves_the_new_name_free()
+    {
+        // An old build is running. Legacy is claimed first, so ClaimAll loses
+        // there and never takes the new name at all — and a later claimant
+        // (the negative control) must be able to take it.
+        var legacy = FreshName();
+        var current = FreshName();
+
+        using (new Holder(legacy))
+        {
+            var (proceed, held) = SingleInstance.ClaimAll([legacy, current]);
+
+            Assert.False(proceed);
+            Assert.Empty(held);
+            Assert.Equal(SingleInstanceClaim.Acquired, ClaimFromAnotherThread(current));
+        }
+    }
+
+    [Fact]
+    public void ClaimAll_gives_the_legacy_name_back_when_a_new_build_holds_the_new_name()
+    {
+        // The arm that actually exercises the giving-back: legacy is acquired
+        // first, the new name is held elsewhere, so ClaimAll has to release
+        // the legacy name it already took. If it leaked it, the third claimant
+        // here would answer HeldByAnother — and an old build launched after
+        // this duplicate exited would be locked out by a dead process.
+        var legacy = FreshName();
+        var current = FreshName();
+
+        using (new Holder(current))
+        {
+            var (proceed, held) = SingleInstance.ClaimAll([legacy, current]);
+
+            Assert.False(proceed);
+            Assert.Empty(held);
+            Assert.Equal(SingleInstanceClaim.Acquired, ClaimFromAnotherThread(legacy));
+        }
+    }
+
+    [Fact]
+    public void ClaimAll_refuses_an_empty_list_of_names()
+    {
+        Assert.Throws<ArgumentException>(() => SingleInstance.ClaimAll([]));
+    }
+
+    // CB-206's probe, for CB-255's claim: this process runs as the new build
+    // holding both names, and a probe in a POSIX session of its own claims the
+    // legacy name — which is what an old build launched from a terminal, an
+    // ssh login or a stale login item does. It must find the name held, or
+    // the old and new builds run side by side.
+    [Fact]
+    public void An_old_build_in_a_new_session_finds_the_legacy_name_held_by_ClaimAll()
+    {
+        var legacy = FreshName();
+        var current = FreshName();
+
+        var (proceed, held) = SingleInstance.ClaimAll([legacy, current]);
+        try
+        {
+            Assert.True(proceed);
+
+            var (sid, probeClaim) = RunProbe(legacy, "--new-session");
+            if (!OperatingSystem.IsWindows()) Assert.NotEqual(getsid(0), sid);
+
+            Assert.Equal(SingleInstanceClaim.HeldByAnother, probeClaim);
+        }
+        finally
+        {
+            ReleaseAll(held);
+        }
+    }
+
+    // The same shape the other way round: an old build in another session
+    // holds the legacy name, and ClaimAll here must stop — leaving the new
+    // name free for a probe in that other session to take (the control).
+    [Fact]
+    public void ClaimAll_stops_when_an_old_build_in_another_session_holds_the_legacy_name()
+    {
+        var legacy = FreshName();
+        var current = FreshName();
+
+        using var holder = StartProbe(legacy, "--new-session", "--hold");
+        try
+        {
+            Assert.Equal(SingleInstanceClaim.Acquired, ReadProbe(holder).Claim);
+
+            var (proceed, held) = SingleInstance.ClaimAll([legacy, current]);
+
+            Assert.False(proceed);
+            Assert.Empty(held);
+            Assert.Equal(SingleInstanceClaim.Acquired, RunProbe(current, "--new-session").Claim);
+        }
+        finally
+        {
+            holder.Kill();
+            Assert.True(holder.WaitForExit(30_000), "the holder did not die");
+        }
+    }
+
     // --- CB-206: one per user, across sessions ------------------------------
 
     // The probe beside this assembly, run under the same dotnet host the test

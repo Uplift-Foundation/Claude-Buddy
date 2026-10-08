@@ -211,6 +211,6 @@ public class GrokUsageRefreshTests : IDisposable
         var dir = GrokUsageRefresher.ScratchDirectory;
 
         Assert.StartsWith(Path.GetTempPath(), dir);
-        Assert.EndsWith("claude-buddy-grok-refresh", dir);
+        Assert.EndsWith("orbweaver-grok-refresh", dir);
     }
 }

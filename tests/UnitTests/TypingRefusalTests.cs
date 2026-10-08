@@ -41,7 +41,7 @@ public class TypingRefusalTests
         // they did not want for a session that was in iTerm2 all along. The
         // far machine's own reason cannot be read from here — a code is all
         // that crosses the wire — so this says what is true of every case.
-        Assert.Contains("terminal Buddy can type into", said);
+        Assert.Contains("terminal Orbweaver can type into", said);
         Assert.DoesNotContain("tmux pane", said);
         Assert.Contains(Remote, said);
     }
@@ -67,7 +67,7 @@ public class TypingRefusalTests
 
         // Names both real causes, because neither is guessable from the
         // failure itself.
-        Assert.Contains("allow Claude Buddy to control it", refused);
+        Assert.Contains("allow Orbweaver to control it", refused);
         Assert.Contains("closed", refused);
 
         // And is not the other sentence.
@@ -341,7 +341,7 @@ public class TypingRefusalTests
         var said = RemoteControlChatSession.FetchingNote(Remote);
 
         Assert.Equal(
-            $"Found a live view of {Remote} — fetching its conversation from Claude Buddy on the other machine.",
+            $"Found a live view of {Remote} — fetching its conversation from Orbweaver on the other machine.",
             said);
         Assert.DoesNotContain("relay", said);
         Assert.DoesNotContain("minute", said);
@@ -392,7 +392,7 @@ public class TypingRefusalTests
     [Fact]
     public void TheWaitHintSaysWhereTheConversationIsComingFrom()
     {
-        Assert.Equal("coming over the link from Claude Buddy on the other machine",
+        Assert.Equal("coming over the link from Orbweaver on the other machine",
             RemoteControlChatSession.WaitHint);
         Assert.DoesNotContain("minute", RemoteControlChatSession.WaitHint);
         Assert.DoesNotContain("relay", RemoteControlChatSession.WaitHint);
@@ -405,7 +405,7 @@ public class TypingRefusalTests
     public void TheNoLiveViewNoteSaysThereIsNothingToReadOrTypeInto()
     {
         Assert.Equal(
-            $"No live view: Claude Buddy on the other machine lists {Remote} but can't show its "
+            $"No live view: Orbweaver on the other machine lists {Remote} but can't show its "
             + "conversation, so there's nothing to read or type into here.",
             RemoteControlChatSession.NoLiveViewNote(Remote));
     }

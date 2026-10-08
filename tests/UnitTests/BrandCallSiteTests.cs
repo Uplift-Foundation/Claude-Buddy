@@ -14,6 +14,11 @@ namespace ClaudeBuddy.Tests;
 // Spelled out rather than rebuilt from Brand on purpose: an expectation
 // written as $"{Brand.Slug}-..." agrees with any value Brand ever holds, which
 // is the one thing these tests exist to not do.
+//
+// CB-255 moved the expectations to the Orbweaver names deliberately, as
+// phase 2 of the rename; each one that names something already on a user's
+// disk has a migration elsewhere in that change. The speech engine's two stay
+// on the old stem, since that is a binary name and moves in phase 3.
 public class BrandCallSiteTests
 {
     // Temp folders. Each one is where a running copy looks for files an
@@ -22,7 +27,7 @@ public class BrandCallSiteTests
     public void TheChimeCacheIsTheShippedTempFolder()
     {
         Assert.Equal(
-            Path.Combine(Path.GetTempPath(), "ClaudeBuddy-chimes"),
+            Path.Combine(Path.GetTempPath(), "Orbweaver-chimes"),
             AudioVolume.ChimeCacheDirectory);
     }
 
@@ -30,7 +35,7 @@ public class BrandCallSiteTests
     public void TheGrokRefreshScratchIsTheShippedTempFolder()
     {
         Assert.Equal(
-            Path.Combine(Path.GetTempPath(), "claude-buddy-grok-refresh"),
+            Path.Combine(Path.GetTempPath(), "orbweaver-grok-refresh"),
             GrokUsageRefresher.ScratchDirectory);
     }
 
@@ -38,8 +43,8 @@ public class BrandCallSiteTests
     // rename that moved them would strand every pasted image or saved media
     // file a previous run wrote.
     [Theory]
-    [InlineData(typeof(ChatAttachments), "claude_buddy_pasted_images")]
-    [InlineData(typeof(OpenClawMedia), "claude_buddy_media")]
+    [InlineData(typeof(ChatAttachments), "orbweaver_pasted_images")]
+    [InlineData(typeof(OpenClawMedia), "orbweaver_media")]
     public void PrivateTempFoldersAreTheShippedNames(Type owner, string folder)
     {
         var property = owner.GetProperty("Directory_", BindingFlags.NonPublic | BindingFlags.Static)
@@ -73,7 +78,7 @@ public class BrandCallSiteTests
     public void TheHookScriptIsTheShippedFilename()
     {
         Assert.Equal(
-            OperatingSystem.IsWindows() ? "ClaudeBuddyHook.ps1" : "ClaudeBuddyHook.sh",
+            OperatingSystem.IsWindows() ? "OrbweaverHook.ps1" : "OrbweaverHook.sh",
             NewChatHookState.HookScriptName);
     }
 
@@ -83,10 +88,10 @@ public class BrandCallSiteTests
         var root = Path.Combine(Path.GetTempPath(), "cb250-" + Guid.NewGuid().ToString("N"));
         try
         {
-            Directory.CreateDirectory(Path.Combine(root, "claude-buddy"));
-            File.WriteAllText(Path.Combine(root, "claude-buddy", "ClaudeBuddyHook.sh"), "");
+            Directory.CreateDirectory(Path.Combine(root, "orbweaver"));
+            File.WriteAllText(Path.Combine(root, "orbweaver", "OrbweaverHook.sh"), "");
 
-            Assert.True(NewChatHookState.IsInstalled(root, "ClaudeBuddyHook.sh"));
+            Assert.True(NewChatHookState.IsInstalled(root, "OrbweaverHook.sh"));
         }
         finally
         {
@@ -94,10 +99,13 @@ public class BrandCallSiteTests
         }
     }
 
+    // A distro is wired if its settings name either script: the new one, or
+    // the legacy one an un-upgraded install wrote (CB-255 §1). The legacy rows
+    // stay true across the flip; only the Orbweaver row inverted.
     [Theory]
     [InlineData("\"command\": \"C:\\\\Users\\\\x\\\\.claude\\\\claude-buddy\\\\ClaudeBuddyHook.ps1\"", true)]
     [InlineData("\"command\": \"...\\\\claudebuddyhook.PS1\"", true)]
-    [InlineData("\"command\": \"...\\\\OrbweaverHook.ps1\"", false)]
+    [InlineData("\"command\": \"...\\\\OrbweaverHook.ps1\"", true)]
     public void WslSettingsRecogniseTheShippedHookName(string text, bool expected)
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -111,21 +119,21 @@ public class BrandCallSiteTests
     public void UserFacingSentencesAreTheShippedWording()
     {
         Assert.Equal(
-            "Hello. This is how Claude Buddy will sound when it reads a reply aloud.",
+            "Hello. This is how Orbweaver will sound when it reads a reply aloud.",
             VoicePreview.SampleText);
         Assert.Equal(
-            "Claude Buddy could not read what is running under this session, so it is not "
+            "Orbweaver could not read what is running under this session, so it is not "
             + "offering to end it. Close this menu and open it again to retry.",
             SessionDependents.UnknownTip);
         Assert.Equal(
-            "Not connected to Claude Buddy on the other machine right now. Check the link in "
+            "Not connected to Orbweaver on the other machine right now. Check the link in "
             + "Settings, then try again.",
             RemoteControlChatSession.NotConnectedNote);
         Assert.Equal(
-            "coming over the link from Claude Buddy on the other machine",
+            "coming over the link from Orbweaver on the other machine",
             RemoteControlChatSession.WaitHint);
         Assert.Equal(
-            "Handed to job-hunter for its next turn. It arrives as a message from Claude Buddy, "
+            "Handed to job-hunter for its next turn. It arrives as a message from Orbweaver, "
             + "not keystrokes, so built-in slash commands won't run.",
             LocalCliChatSession.DeliveryNote(new DeliveryReceipt(DeliveryResult.Accepted, null), "job-hunter"));
     }

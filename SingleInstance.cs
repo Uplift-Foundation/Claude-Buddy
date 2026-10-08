@@ -121,13 +121,25 @@ namespace ClaudeBuddy
 
     internal static class SingleInstance
     {
-        // The kernel/file object name every Buddy process claims. Unchanged
-        // from the string App.axaml.cs used to own directly, because it is
-        // part of the contract with every already-installed copy of Buddy —
-        // renaming it would just make two old and new instances blind to
-        // each other.
+        // The kernel/file object names every Orbweaver process claims, both of
+        // them, for the process's lifetime (CB-255).
         //
-        // The name is unchanged; its scope on macOS is not (CB-206) — see
+        // The name is part of the contract with every already-installed copy:
+        // a build before the rename knows only LegacyMutexName, so a new build
+        // that claimed only MutexName would run right beside it and every orb
+        // would draw twice — CB-206's bug by another route. So the new build
+        // claims the legacy name too. Holding it is what makes an old build
+        // launched later (a stale login item, a DMG drag-install that left the
+        // old bundle behind) find its name taken and exit 0; holding the new
+        // name is what the next new build checks. Neither alone covers both.
+        //
+        // ClaimNames is the order they are claimed in, legacy first: if an old
+        // build is running, that is found out before taking the new name, so
+        // there is nothing to give back. The legacy claim stays until the
+        // cleanup after phase 3, and not fewer than two releases; its cost is
+        // one more file under `/tmp/.dotnet-uid<uid>/shm/global/`.
+        //
+        // The scope on macOS changed too (CB-206) — see
         // OptionsFor below. Claimed with the bare constructor, as it was until
         // CB-206, it resolved to a file under
         // `/tmp/.dotnet/shm/session<SID>/`, scoped to one POSIX session, and
@@ -136,6 +148,8 @@ namespace ClaudeBuddy
         // got a mutex of its own, and ran alongside it. Four such files existed
         // at once on the MacBook on 26 Sep, and every orb was drawn twice.
         internal const string MutexName = Brand.SingleInstanceMutexName;
+        internal const string LegacyMutexName = Brand.Legacy.SingleInstanceMutexName;
+        internal static readonly IReadOnlyList<string> ClaimNames = [LegacyMutexName, MutexName];
 
         // How the mutex is scoped, per platform (CB-206).
         //
@@ -181,6 +195,73 @@ namespace ClaudeBuddy
             SingleInstanceClaim.HeldByAnother => false,
             _ => throw new ArgumentOutOfRangeException(nameof(claim), claim, null)
         };
+
+        // The same question over several names (CB-255): proceed only if every
+        // claim made so far would proceed on its own. AbandonedByPreviousOwner
+        // counts as proceeding per claim, exactly as ShouldProceed has it, so a
+        // crashed holder of either name still lets the keep-alive restart the
+        // app.
+        //
+        // An empty set answers no rather than All's vacuous yes: having claimed
+        // nothing proves nothing about who else is running, and an app that
+        // started on that answer would be the duplicate this class exists to
+        // stop.
+        internal static bool ShouldProceedAll(IEnumerable<SingleInstanceClaim> claims)
+        {
+            var any = false;
+            foreach (var claim in claims)
+            {
+                if (!ShouldProceed(claim)) return false;
+                any = true;
+            }
+            return any;
+        }
+
+        // Claims each name in order and either holds them all or holds none
+        // (CB-255). On the first claim that would not proceed, the loser's
+        // handle is closed and everything acquired before it is released and
+        // closed, newest first — so a new build that loses to an old one on the
+        // legacy name leaves no claim on the new name behind it, and the next
+        // launch is not blocked by a process that has already exited.
+        //
+        // The held mutexes come back on success because keeping them alive is
+        // the caller's business, as it is for Claim: Program.cs keeps them in a
+        // static field so neither is finalized out from under the process.
+        // Release has to happen on the thread that claimed, which is why the
+        // giving-back is done here, on that thread, rather than left to a
+        // caller that might hand the list somewhere else.
+        //
+        // An empty list is a programming error rather than an answer, so it
+        // throws: returning "don't proceed" would make the app exit 0 on every
+        // launch with nothing to say why.
+        internal static (bool Proceed, IReadOnlyList<Mutex> Held) ClaimAll(
+            IReadOnlyList<string> names, bool? onWindows = null)
+        {
+            if (names.Count == 0)
+            {
+                throw new ArgumentException("at least one mutex name is needed", nameof(names));
+            }
+
+            var claims = new List<SingleInstanceClaim>(names.Count);
+            var held = new List<Mutex>(names.Count);
+            foreach (var name in names)
+            {
+                var (claim, mutex) = Claim(name, onWindows);
+                claims.Add(claim);
+                if (!ShouldProceedAll(claims))
+                {
+                    mutex.Dispose();
+                    for (var i = held.Count - 1; i >= 0; i--)
+                    {
+                        held[i].ReleaseMutex();
+                        held[i].Dispose();
+                    }
+                    return (false, []);
+                }
+                held.Add(mutex);
+            }
+            return (true, held);
+        }
 
         // The thin impure half: actually attempts to take ownership of a
         // named mutex and maps the raw BCL outcome onto SingleInstanceClaim.

@@ -37,7 +37,10 @@ namespace ClaudeBuddy
         // for GC (and, with it, the finalizer that releases the mutex) the
         // moment Main stops referencing it, which is right away since
         // everything after this point runs through Startup.Run's delegates.
-        private static Mutex? _singleInstanceMutex;
+        // A list since CB-255: the legacy name and the new one are both held,
+        // for the whole of the process, so an old build started later finds
+        // its own name taken (see SingleInstance.ClaimNames).
+        private static IReadOnlyList<Mutex> _singleInstanceMutexes = [];
 
         [STAThread]
         public static void Main(string[] args)
@@ -57,21 +60,17 @@ namespace ClaudeBuddy
 
                 // Whether this is the one Buddy that gets to run. See
                 // SingleInstance.cs for the enum and the reasoning; this is
-                // just the glue that keeps the acquired mutex alive for the
-                // rest of the process and disposes it immediately when we
-                // are the duplicate, since we are about to return without
-                // using it for anything.
+                // just the glue that keeps the acquired mutexes alive for the
+                // rest of the process. When we are the duplicate, ClaimAll
+                // has already given back and closed everything it took, so
+                // there is nothing here to dispose.
                 claimSingleInstance: () =>
                 {
-                    var (claim, mutex) = SingleInstance.Claim(SingleInstance.MutexName);
-                    if (SingleInstance.ShouldProceed(claim))
-                    {
-                        _singleInstanceMutex = mutex;
-                        return true;
-                    }
+                    var (proceed, held) = SingleInstance.ClaimAll(SingleInstance.ClaimNames);
+                    if (!proceed) return false;
 
-                    mutex.Dispose();
-                    return false;
+                    _singleInstanceMutexes = held;
+                    return true;
                 },
 
                 // Claim Avalonia's UI thread for this thread while it is
