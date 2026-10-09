@@ -53,7 +53,7 @@
 
   <ItemGroup>
     <!-- tools/ is scripts, plus the side-car speech engine's own project (see
-         tools/ClaudeBuddySpeech). The SDK's default glob is **/*.cs rooted at
+         tools/OrbweaverSpeech). The SDK's default glob is **/*.cs rooted at
          this file, so without this the side-car's source would be compiled into
          the app — dragging in the very 82MB of dependencies that keeping it a
          separate downloadable process exists to avoid. Harmless until tools/
@@ -62,7 +62,7 @@
     <!-- ...except the one file the app shares with the side-car engine: the
          names of their contract, compiled into both so they cannot drift
          (CB-200). -->
-    <Compile Include="tools\ClaudeBuddySpeech\SpeechEngineContract.cs" Link="SpeechEngineContract.cs" />
+    <Compile Include="tools\OrbweaverSpeech\SpeechEngineContract.cs" Link="SpeechEngineContract.cs" />
 
     <!-- Same trap, second door: tests/ has its own project with its own entry
          point, and the SDK's default glob would compile it into the app. It is

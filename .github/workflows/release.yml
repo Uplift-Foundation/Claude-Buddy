@@ -165,7 +165,7 @@ jobs:
           name: dmg-${{ matrix.rid }}
           path: |
             dist/*.dmg
-            dist/ClaudeBuddySpeech-*.zip
+            dist/OrbweaverSpeech-*.zip
           if-no-files-found: error
 
   windows:
@@ -208,7 +208,7 @@ jobs:
           name: windows-setup
           path: |
             dist/*.exe
-            dist/ClaudeBuddySpeech-*.zip
+            dist/OrbweaverSpeech-*.zip
           if-no-files-found: error
 
   publish:
