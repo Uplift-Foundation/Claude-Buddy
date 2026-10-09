@@ -149,7 +149,7 @@ namespace Orbweaver
 
             try
             {
-                // .../Claude Buddy.app/Contents/MacOS/ClaudeBuddy
+                // .../Orbweaver.app/Contents/MacOS/Orbweaver
                 var executable = Environment.ProcessPath;
                 if (executable is null) return null;
 

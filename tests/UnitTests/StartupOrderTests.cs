@@ -37,6 +37,7 @@ public class StartupOrderTests
             migrateUserData: () => { },
             claimUiThread: () => order.Add("claim"),
             retireLegacy: () => { },
+            repairKeepAlive: () => { },
             serveOnLaunch: () => order.Add("serve"),
             waitForUnlock: () => order.Add("wait"),
             startUi: () => order.Add("ui"));
@@ -58,6 +59,7 @@ public class StartupOrderTests
             migrateUserData: () => { },
             claimUiThread: () => order.Add("claim"),
             retireLegacy: () => { },
+            repairKeepAlive: () => { },
             serveOnLaunch: () => order.Add("serve"),
             waitForUnlock: () => { },
             startUi: () => { });
@@ -80,6 +82,7 @@ public class StartupOrderTests
             migrateUserData: () => { },
             claimUiThread: () => { },
             retireLegacy: () => { },
+            repairKeepAlive: () => { },
             serveOnLaunch: () => { },
             waitForUnlock: () => order.Add("wait"),
             startUi: () => order.Add("ui"));
@@ -102,6 +105,7 @@ public class StartupOrderTests
             migrateUserData: () => { },
             claimUiThread: () => order.Add("claim"),
             retireLegacy: () => { },
+            repairKeepAlive: () => { },
             serveOnLaunch: () => { },
             waitForUnlock: () => { },
             startUi: () => order.Add("ui"));
@@ -126,6 +130,7 @@ public class StartupOrderTests
             migrateUserData: () => { },
             claimUiThread: () => order.Add("claim"),
             retireLegacy: () => { },
+            repairKeepAlive: () => { },
             serveOnLaunch: () => { },
             waitForUnlock: () => { },
             startUi: () => { });
@@ -139,7 +144,7 @@ public class StartupOrderTests
     {
         var counts = new Dictionary<string, int>
         {
-            ["log"] = 0, ["single"] = 0, ["migrate"] = 0, ["claim"] = 0, ["retire"] = 0,
+            ["log"] = 0, ["single"] = 0, ["migrate"] = 0, ["claim"] = 0, ["retire"] = 0, ["repair"] = 0,
             ["serve"] = 0, ["wait"] = 0, ["ui"] = 0
         };
 
@@ -149,6 +154,7 @@ public class StartupOrderTests
             migrateUserData: () => counts["migrate"]++,
             claimUiThread: () => counts["claim"]++,
             retireLegacy: () => counts["retire"]++,
+            repairKeepAlive: () => counts["repair"]++,
             serveOnLaunch: () => counts["serve"]++,
             waitForUnlock: () => counts["wait"]++,
             startUi: () => counts["ui"]++);
@@ -172,6 +178,7 @@ public class StartupOrderTests
             migrateUserData: () => { },
             claimUiThread: () => { },
             retireLegacy: () => { },
+            repairKeepAlive: () => { },
             serveOnLaunch: () => throw new InvalidOperationException("relay"),
             waitForUnlock: () => reached = true,
             startUi: () => reached = true));
@@ -195,6 +202,7 @@ public class StartupOrderTests
             migrateUserData: () => reached.Add("migrate"),
             claimUiThread: () => reached.Add("claim"),
             retireLegacy: () => reached.Add("retire"),
+            repairKeepAlive: () => reached.Add("repair"),
             serveOnLaunch: () => reached.Add("serve"),
             waitForUnlock: () => reached.Add("wait"),
             startUi: () => reached.Add("ui"));
@@ -217,6 +225,7 @@ public class StartupOrderTests
             migrateUserData: () => { },
             claimUiThread: () => { },
             retireLegacy: () => { },
+            repairKeepAlive: () => { },
             serveOnLaunch: () => { },
             waitForUnlock: () => { },
             startUi: () => { });
@@ -237,12 +246,13 @@ public class StartupOrderTests
             migrateUserData: () => order.Add("migrate"),
             claimUiThread: () => order.Add("claim"),
             retireLegacy: () => order.Add("retire"),
+            repairKeepAlive: () => order.Add("repair"),
             serveOnLaunch: () => order.Add("serve"),
             waitForUnlock: () => order.Add("wait"),
             startUi: () => order.Add("ui"));
 
         Assert.Equal(
-            new[] { "log", "single", "migrate", "claim", "retire", "serve", "wait", "ui" }, order);
+            new[] { "log", "single", "migrate", "claim", "retire", "repair", "serve", "wait", "ui" }, order);
     }
 
     // CB-255: the data-folder move sits between the two claims. After the
@@ -261,6 +271,7 @@ public class StartupOrderTests
             migrateUserData: () => order.Add("migrate"),
             claimUiThread: () => order.Add("claim"),
             retireLegacy: () => { },
+            repairKeepAlive: () => { },
             serveOnLaunch: () => order.Add("serve"),
             waitForUnlock: () => { },
             startUi: () => { });
@@ -283,11 +294,36 @@ public class StartupOrderTests
             migrateUserData: () => order.Add("migrate"),
             claimUiThread: () => order.Add("claim"),
             retireLegacy: () => order.Add("retire"),
+            repairKeepAlive: () => order.Add("repair"),
             serveOnLaunch: () => order.Add("serve"),
             waitForUnlock: () => { },
             startUi: () => order.Add("ui"));
 
-        Assert.Equal(new[] { "migrate", "claim", "retire", "serve", "ui" }, order);
+        Assert.Equal(new[] { "migrate", "claim", "retire", "repair", "serve", "ui" }, order);
+    }
+
+    // CB-256: the keep-alive repair runs straight after the retirement step —
+    // a plist naming the legacy bundle goes stale when that step trashes it,
+    // and running second catches it in the same launch — and still after the
+    // single-instance claim (the script loads the job, and the copy launchd
+    // starts must find this one holding the mutex) and before serving.
+    [Fact]
+    public void Repairs_the_keep_alive_after_retiring_legacy_and_before_serving()
+    {
+        var order = new List<string>();
+
+        Startup.Run(
+            installCrashLog: () => { },
+            claimSingleInstance: () => { order.Add("single"); return true; },
+            migrateUserData: () => { },
+            claimUiThread: () => { },
+            retireLegacy: () => order.Add("retire"),
+            repairKeepAlive: () => order.Add("repair"),
+            serveOnLaunch: () => order.Add("serve"),
+            waitForUnlock: () => { },
+            startUi: () => { });
+
+        Assert.Equal(new[] { "single", "retire", "repair", "serve" }, order);
     }
 
     // The interface units B, C and F build against (CB-255 §7): each step's
@@ -302,5 +338,6 @@ public class StartupOrderTests
         DataDirMigration.Run();
         LegacyHookCleanup.Run();
         MacOSLegacyBundle.Run();
+        KeepAliveRepair.Run();
     }
 }

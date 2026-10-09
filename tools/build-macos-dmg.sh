@@ -182,6 +182,13 @@ instead (System Settings > General > Login Items). If click-to-focus or
 anything on your LAN stops working afterwards, re-grant Automation and Local
 Network for $APP_NAME in System Settings > Privacy & Security.
 
+If "Serve on launch" was on, the crash keep-alive LaunchAgent still names the
+old program inside the app, which the drag replaced. Running
+"Install Hooks.command" again points it at the new one; if you skip that,
+$APP_NAME does it itself the first time it starts, and says so in
+~/Library/Logs/Orbweaver/migration.log. Either way the keep-alive covers the
+copy launchd starts, so it is fully back after your next login.
+
 Source, issues and docs: https://github.com/Uplift-Foundation/Claude-Buddy
 MIT licensed.
 READ_ME
