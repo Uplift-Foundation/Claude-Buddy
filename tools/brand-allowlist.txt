@@ -1,0 +1,12 @@
+# Brand allow-list for tools/check-brand.py (CB-256, Orbweaver rebrand phase 3).
+#
+# One entry per line, TAB separated:   path<TAB>count<TAB>reason
+#   path    forward slashes, relative to the repo root
+#   count   EXACT number of lines still matching (?i)claude[ _-]?buddy after the
+#           permanent tokens are masked; drift in either direction fails CI
+#   reason  why the legacy name must stay (a legacy migration arm, a fixture, ...)
+# Lines starting with # and blank lines are ignored.
+#
+# This file is generated LAST, after every phase 3 unit has merged, from
+# `python tools/check-brand.py --suggest` with a real reason typed per line.
+# Until then CI's brand step fails on purpose.
