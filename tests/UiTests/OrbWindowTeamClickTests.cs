@@ -7,7 +7,7 @@ using Avalonia.Input;
 using Avalonia.Threading;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Whether a real pointer gesture on a *team-role* orb becomes a click at all.
 //
@@ -27,7 +27,7 @@ namespace ClaudeBuddy.Tests;
 // a click, and ResolvedGestures answers that without needing it to do anything.
 //
 // [Collection("Settings")] because these tests write the three click-action
-// settings, and ClaudeBuddySettings is a process-wide static — see
+// settings, and OrbweaverSettings is a process-wide static — see
 // tests/UiTests/SettingsCollection.cs.
 [Collection("Settings")]
 public class OrbWindowTeamClickTests
@@ -69,19 +69,19 @@ public class OrbWindowTeamClickTests
     // RunClickAction's "none" arm and stops there. Restored by the caller.
     private static IDisposable NoActionsBound()
     {
-        var click = ClaudeBuddySettings.ClickAction;
-        var dbl = ClaudeBuddySettings.DoubleClickAction;
-        var triple = ClaudeBuddySettings.TripleClickAction;
+        var click = OrbweaverSettings.ClickAction;
+        var dbl = OrbweaverSettings.DoubleClickAction;
+        var triple = OrbweaverSettings.TripleClickAction;
 
-        ClaudeBuddySettings.ClickAction = "none";
-        ClaudeBuddySettings.DoubleClickAction = "none";
-        ClaudeBuddySettings.TripleClickAction = "none";
+        OrbweaverSettings.ClickAction = "none";
+        OrbweaverSettings.DoubleClickAction = "none";
+        OrbweaverSettings.TripleClickAction = "none";
 
         return new Restore(() =>
         {
-            ClaudeBuddySettings.ClickAction = click;
-            ClaudeBuddySettings.DoubleClickAction = dbl;
-            ClaudeBuddySettings.TripleClickAction = triple;
+            OrbweaverSettings.ClickAction = click;
+            OrbweaverSettings.DoubleClickAction = dbl;
+            OrbweaverSettings.TripleClickAction = triple;
         });
     }
 
@@ -190,14 +190,14 @@ public class OrbWindowTeamClickTests
     [AvaloniaFact]
     public async System.Threading.Tasks.Task ADoubleClickResolvesOnTheReportersOwnGestureChain()
     {
-        var click = ClaudeBuddySettings.ClickAction;
-        var dbl = ClaudeBuddySettings.DoubleClickAction;
-        var triple = ClaudeBuddySettings.TripleClickAction;
+        var click = OrbweaverSettings.ClickAction;
+        var dbl = OrbweaverSettings.DoubleClickAction;
+        var triple = OrbweaverSettings.TripleClickAction;
         try
         {
-            ClaudeBuddySettings.ClickAction = "chat";
-            ClaudeBuddySettings.DoubleClickAction = "terminal";
-            ClaudeBuddySettings.TripleClickAction = "speak";
+            OrbweaverSettings.ClickAction = "chat";
+            OrbweaverSettings.DoubleClickAction = "terminal";
+            OrbweaverSettings.TripleClickAction = "speak";
 
             // A gateway status, so the "terminal" arm this chain resolves to
             // reaches TerminalFocuser.Focus and returns from its !IsLocalCli
@@ -235,9 +235,9 @@ public class OrbWindowTeamClickTests
         }
         finally
         {
-            ClaudeBuddySettings.ClickAction = click;
-            ClaudeBuddySettings.DoubleClickAction = dbl;
-            ClaudeBuddySettings.TripleClickAction = triple;
+            OrbweaverSettings.ClickAction = click;
+            OrbweaverSettings.DoubleClickAction = dbl;
+            OrbweaverSettings.TripleClickAction = triple;
         }
     }
 }

@@ -1,7 +1,7 @@
 using Xunit;
-using static ClaudeBuddy.MacOSLegacyBundle;
+using static Orbweaver.MacOSLegacyBundle;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-255 §5: the stale-bundle cleanup's executor against real folders.
 //
@@ -146,7 +146,7 @@ public class MacOSLegacyBundleTests : IDisposable
         Assert.Empty(_log);
     }
 
-    // Every suite sets CLAUDE_BUDDY_SETTINGS_DIR; under it this must never
+    // Every suite sets ORBWEAVER_SETTINGS_DIR; under it this must never
     // reach the developer's real /Applications.
     [Fact]
     public void Nothing_happens_under_the_test_overrides()

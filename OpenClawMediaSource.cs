@@ -1,4 +1,4 @@
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // CB-109: the fully-formed assistant-media request for a picture on the
     // gateway — the file, and *whose* conversation named it.

@@ -1,4 +1,4 @@
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Personas received from a paired Buddy. This is deliberately separate
     // from LocalPersonas: the two records have the same presentation fields,

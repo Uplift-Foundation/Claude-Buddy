@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Covers RemoteControlSessions.Remote — the record the orb scan actually reads,
 // and the only part of that class testable without starting a real Claude Code
@@ -76,7 +76,7 @@ public class RemoteSnapshotTests
     [Fact]
     public void Snapshot_IsEmptyWhileTheFeatureIsOff()
     {
-        // Not asserting on ClaudeBuddySettings here: this suite has no settings
+        // Not asserting on OrbweaverSettings here: this suite has no settings
         // isolation (that lives in IntegrationTests), and the default is off, so
         // the untouched state is the one worth checking.
         Assert.Empty(RemoteControlSessions.Snapshot());

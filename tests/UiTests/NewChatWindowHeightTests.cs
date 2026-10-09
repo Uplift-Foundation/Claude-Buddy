@@ -10,7 +10,7 @@ using Avalonia.LogicalTree;
 using Avalonia.Threading;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-207: the New chat dialog must never change height once it is on screen.
 //
@@ -48,8 +48,8 @@ public class NewChatWindowHeightTests : IDisposable
     {
         var dir = Path.Combine(Path.GetTempPath(), "cb-newchat-height-" + Guid.NewGuid());
         Directory.CreateDirectory(dir);
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
-        ClaudeBuddySettings.ReloadForTests();
+        Environment.SetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR", dir);
+        OrbweaverSettings.ReloadForTests();
     }
 
     private static NewChatOption Enabled(NewChatCli cli) => new(cli, Enabled: true, Reason: null, Warning: null);
@@ -89,7 +89,7 @@ public class NewChatWindowHeightTests : IDisposable
     private static NewChatWindow EverythingAvailable()
     {
         FreshSettings();
-        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-board");
+        OrbweaverSettings.AddClaudeCodeProfileDir(".claude-board");
         NewChatWindow.CurrentStatusesForTests = () => new Dictionary<string, SessionStatus>();
         NewChatAvailability.CurrentForTests = () => new[]
         {
@@ -110,9 +110,9 @@ public class NewChatWindowHeightTests : IDisposable
     private static NewChatWindow EverythingAvailableWithMissingHomes()
     {
         FreshSettings();
-        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-board");
-        ClaudeBuddySettings.AddCodexHome(".codex-work");
-        ClaudeBuddySettings.AddGrokHome(".grok-work");
+        OrbweaverSettings.AddClaudeCodeProfileDir(".claude-board");
+        OrbweaverSettings.AddCodexHome(".codex-work");
+        OrbweaverSettings.AddGrokHome(".grok-work");
         NewChatWindow.CurrentStatusesForTests = () => new Dictionary<string, SessionStatus>();
         NewChatAvailability.CurrentForTests = () => new[]
         {
@@ -369,7 +369,7 @@ public class NewChatWindowHeightTests : IDisposable
         var opened = ContentHeight(window);
         Assert.False(window.AccountGhost.IsVisible);
 
-        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-board");
+        OrbweaverSettings.AddClaudeCodeProfileDir(".claude-board");
         Select(window, NewChatCli.Codex);
         Select(window, NewChatCli.ClaudeCode);
 
@@ -386,7 +386,7 @@ public class NewChatWindowHeightTests : IDisposable
         var window = EverythingAvailable();
         var opened = ContentHeight(window);
 
-        ClaudeBuddySettings.RemoveClaudeCodeProfileDir(".claude-board");
+        OrbweaverSettings.RemoveClaudeCodeProfileDir(".claude-board");
         Select(window, NewChatCli.Codex);
         Select(window, NewChatCli.ClaudeCode);
 
@@ -398,7 +398,7 @@ public class NewChatWindowHeightTests : IDisposable
     public void AnAccountListWithoutAUsableClaudeCodeReservesNothing()
     {
         FreshSettings();
-        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-board");
+        OrbweaverSettings.AddClaudeCodeProfileDir(".claude-board");
         NewChatAvailability.CurrentForTests = () => new[]
         {
             new NewChatOption(NewChatCli.ClaudeCode, Enabled: false, Reason: "not installed", Warning: null),

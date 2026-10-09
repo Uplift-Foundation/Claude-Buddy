@@ -2,7 +2,7 @@ using System.Buffers.Binary;
 using System.Text;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The `.npy` reader, the weighted average and the writer, over bytes and
 // nothing else (CB-136).

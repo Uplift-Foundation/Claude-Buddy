@@ -1,4 +1,4 @@
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // When an orb's avatar should be stepping through its frames (CB-218).
     //

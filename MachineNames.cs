@@ -1,6 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // What this machine calls itself on a wire, and how to recognise a relay
     // that outlived the code that started it.

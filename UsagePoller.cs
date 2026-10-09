@@ -5,7 +5,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Text.Json;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Where the usage readings come from, as an interface, so the windows above
     // can be driven in a test without launching anything.
@@ -252,7 +252,7 @@ namespace ClaudeBuddy
 
         public IReadOnlyList<AccountUsage> Read()
         {
-            if (!ClaudeBuddySettings.AccountUsageEnabled)
+            if (!OrbweaverSettings.AccountUsageEnabled)
                 return Array.Empty<AccountUsage>();
 
             var claude = ClaudeBinary.Path;
@@ -263,7 +263,7 @@ namespace ClaudeBuddy
             var readings = new List<AccountUsage>();
 
             foreach (var configDir in
-                     UsageAccounts.ConfigDirs(home, ClaudeBuddySettings.ClaudeCodeProfileDirs, inherited))
+                     UsageAccounts.ConfigDirs(home, OrbweaverSettings.ClaudeCodeProfileDirs, inherited))
             {
                 var label = UsageAccounts.LabelFrom(
                     ReadAccountFile(home, configDir), configDir);

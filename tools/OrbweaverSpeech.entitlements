@@ -4,7 +4,7 @@
   Entitlements for the side-car speech engine, when it is signed with a real
   Developer ID.
 
-  Deliberately a shorter list than tools/ClaudeBuddy.entitlements. The engine is
+  Deliberately a shorter list than tools/Orbweaver.entitlements. The engine is
   a headless process that loads a model, synthesises audio and hands the samples
   to afplay; it sends no Apple Events and opens no input device, so the two
   TCC-gated keys the app needs would be privileges granted for nothing.

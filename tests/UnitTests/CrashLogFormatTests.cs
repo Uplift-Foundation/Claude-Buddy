@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // What one crash entry says (CB-44).
 //
@@ -132,11 +132,11 @@ public class CrashLogFormatTests
         // tells people to look at, and it is the one thing here no test on a
         // scratch directory can check. macOS keeps logs in ~/Library/Logs;
         // Windows keeps them under %LOCALAPPDATA%.
-        var was = Environment.GetEnvironmentVariable("CLAUDE_BUDDY_LOG_DIR");
+        var was = Environment.GetEnvironmentVariable("ORBWEAVER_LOG_DIR");
 
         try
         {
-            Environment.SetEnvironmentVariable("CLAUDE_BUDDY_LOG_DIR", null);
+            Environment.SetEnvironmentVariable("ORBWEAVER_LOG_DIR", null);
 
             var expected = OperatingSystem.IsWindows()
                 ? Path.Combine("Orbweaver", "Logs")
@@ -148,31 +148,31 @@ public class CrashLogFormatTests
         }
         finally
         {
-            Environment.SetEnvironmentVariable("CLAUDE_BUDDY_LOG_DIR", was);
+            Environment.SetEnvironmentVariable("ORBWEAVER_LOG_DIR", was);
         }
     }
 
     [Fact]
     public void Prefers_the_scratch_directory_a_test_or_a_user_points_it_at()
     {
-        var was = Environment.GetEnvironmentVariable("CLAUDE_BUDDY_LOG_DIR");
+        var was = Environment.GetEnvironmentVariable("ORBWEAVER_LOG_DIR");
 
         try
         {
             var scratch = Path.Combine(Path.GetTempPath(), "cb-log-seam");
-            Environment.SetEnvironmentVariable("CLAUDE_BUDDY_LOG_DIR", scratch);
+            Environment.SetEnvironmentVariable("ORBWEAVER_LOG_DIR", scratch);
 
             Assert.Equal(scratch, CrashLog.Directory);
 
             // An empty value is not an override — it is a variable somebody
             // exported and left blank, and treating it as "write to the current
             // directory" would scatter crash logs wherever Buddy was launched.
-            Environment.SetEnvironmentVariable("CLAUDE_BUDDY_LOG_DIR", "");
+            Environment.SetEnvironmentVariable("ORBWEAVER_LOG_DIR", "");
             Assert.NotEqual("", CrashLog.Directory);
         }
         finally
         {
-            Environment.SetEnvironmentVariable("CLAUDE_BUDDY_LOG_DIR", was);
+            Environment.SetEnvironmentVariable("ORBWEAVER_LOG_DIR", was);
         }
     }
 }

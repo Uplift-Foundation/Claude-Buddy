@@ -3,7 +3,7 @@ using Avalonia.Headless.XUnit;
 using SkiaSharp;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // A real workspace-shaped fixture rather than a hand-filled identity table:
 // the capture is meant to review the full visible consequence of the Markdown

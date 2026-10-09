@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-142 against a real tree, for the reason PersonaRealFileTests gives at
 // length: a grammar suite can only ever say the parser does what the parser

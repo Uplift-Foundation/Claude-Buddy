@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Which of two selections the copy gesture means. One case per outcome, plus
 // the case the rule exists to settle: both selected at once.

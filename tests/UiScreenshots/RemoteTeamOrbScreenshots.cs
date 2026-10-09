@@ -3,7 +3,7 @@ using Avalonia.Headless.XUnit;
 using SkiaSharp;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-223: an agent team on another machine, as this one draws it over the
 // direct link — the lead's orb and a member's, from exactly the statuses

@@ -1,7 +1,7 @@
 using Avalonia.Input;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The arithmetic and the key mapping behind Cmd+ / Cmd- in the chat panel.
 //

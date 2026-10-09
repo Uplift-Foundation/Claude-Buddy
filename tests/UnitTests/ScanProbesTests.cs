@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Which subprocess questions a scan pass asks, and what the reconciliation half
 // reads back. The scan used to ask these on the UI thread, one pane at a time;

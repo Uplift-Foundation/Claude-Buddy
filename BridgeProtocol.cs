@@ -1,6 +1,6 @@
 using System.Text.RegularExpressions;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // The one piece of the Remote Control relay's protocol still in use: reading
     // a `<cross-session-message>` tag out of a piece of transcript text.

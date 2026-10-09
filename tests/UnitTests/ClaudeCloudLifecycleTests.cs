@@ -6,7 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-225: the rules for archiving and deleting a cloud session, one case per
 // outcome. The answers these cases stand in for were measured on throwaway

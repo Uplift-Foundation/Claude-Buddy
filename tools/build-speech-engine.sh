@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Builds the optional side-car speech engine for macOS and packs it for release.
 #
-#   ./tools/build-speech-engine.sh                  # dist/ClaudeBuddySpeech-<version>-<rid>.zip
+#   ./tools/build-speech-engine.sh                  # dist/OrbweaverSpeech-<version>-<rid>.zip
 #   ./tools/build-speech-engine.sh --install        # ...and drop it where the app looks,
 #                                                   #    for testing before a release exists
 #   ./tools/build-speech-engine.sh --rid osx-x64    # build for Intel Macs
@@ -22,7 +22,7 @@
 # job rather than beside the Windows installer.
 #
 # Why the app downloads this instead of shipping it: see NeuralSpeech, and
-# tools/ClaudeBuddySpeech/ClaudeBuddySpeech.csproj for why the engine is a
+# tools/OrbweaverSpeech/OrbweaverSpeech.csproj for why the engine is a
 # separate process rather than a dependency.
 
 set -euo pipefail
@@ -51,21 +51,21 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# Read from the *app's* csproj, not the engine's. ClaudeBuddy.csproj's <Version>
+# Read from the *app's* csproj, not the engine's. Orbweaver.csproj's <Version>
 # is the single source of truth for the shipped version — the installer scripts
 # and the release workflow all parse that same element — and the engine ships in
 # the app's own release under the same tag. NeuralSpeech derives the version it
 # asks for from the app assembly, so taking it from anywhere else here is how the
 # filename and the URL drift apart.
-VERSION="$(sed -n 's|.*<Version>\(.*\)</Version>.*|\1|p' ClaudeBuddy.csproj | head -1)"
-[[ -n "$VERSION" ]] || { echo "Could not read <Version> from ClaudeBuddy.csproj" >&2; exit 1; }
+VERSION="$(sed -n 's|.*<Version>\(.*\)</Version>.*|\1|p' Orbweaver.csproj | head -1)"
+[[ -n "$VERSION" ]] || { echo "Could not read <Version> from Orbweaver.csproj" >&2; exit 1; }
 
-PROJECT="tools/ClaudeBuddySpeech/ClaudeBuddySpeech.csproj"
-BUILD="tools/ClaudeBuddySpeech/bin/Release/net10.0/$RID"
+PROJECT="tools/OrbweaverSpeech/OrbweaverSpeech.csproj"
+BUILD="tools/OrbweaverSpeech/bin/Release/net10.0/$RID"
 PUBLISH="$BUILD/publish"
 DIST="dist"
 SIGN_IDENTITY="${MACOS_SIGNING_IDENTITY:-}"
-ENGINE_ENTITLEMENTS="tools/ClaudeBuddySpeech.entitlements"
+ENGINE_ENTITLEMENTS="tools/OrbweaverSpeech.entitlements"
 
 echo "==> Speech engine $VERSION ($RID)"
 
@@ -117,7 +117,7 @@ if [[ -n "$SIGN_IDENTITY" ]]; then
   # Inside-out, nested code first, for the same reason build-macos-app.sh does
   # it that way: --deep is not supported for distribution.
   while IFS= read -r nested; do
-    [[ "$nested" == "$PUBLISH/ClaudeBuddySpeech" ]] && continue
+    [[ "$nested" == "$PUBLISH/OrbweaverSpeech" ]] && continue
     codesign --force --timestamp --options runtime --sign "$SIGN_IDENTITY" "$nested" >/dev/null 2>&1 ||
       { echo "    failed to sign $nested" >&2; exit 1; }
   done < <(find "$PUBLISH" -type f \( -name '*.dylib' -o -name 'createdump' -o -name '*.a' \) -print)
@@ -131,18 +131,18 @@ if [[ -n "$SIGN_IDENTITY" ]]; then
   # Events nor the microphone one.
   codesign --force --timestamp --options runtime \
     --entitlements "$ENGINE_ENTITLEMENTS" \
-    --sign "$SIGN_IDENTITY" "$PUBLISH/ClaudeBuddySpeech"
-  codesign --verify --strict --verbose=1 "$PUBLISH/ClaudeBuddySpeech"
+    --sign "$SIGN_IDENTITY" "$PUBLISH/OrbweaverSpeech"
+  codesign --verify --strict --verbose=1 "$PUBLISH/OrbweaverSpeech"
 fi
 
 mkdir -p "$DIST"
-ZIP="$DIST/ClaudeBuddySpeech-$VERSION-$RID.zip"
+ZIP="$DIST/OrbweaverSpeech-$VERSION-$RID.zip"
 
 echo "==> Packing"
 rm -f "$ZIP"
 # Zipped from inside the publish directory so the archive has no wrapping
 # folder: NeuralSpeech extracts straight into its versioned directory and looks
-# for ./ClaudeBuddySpeech there, not ./publish/ClaudeBuddySpeech.
+# for ./OrbweaverSpeech there, not ./publish/OrbweaverSpeech.
 #
 # `zip` rather than `ditto`, which would add the __MACOSX resource-fork entries
 # that .NET's ZipFile.ExtractToDirectory then materialises as junk files beside
@@ -158,11 +158,11 @@ if [[ $INSTALL -eq 1 ]]; then
   # end to end before any release exists to download from. Settings do not
   # follow HOME on macOS — SpecialFolder.ApplicationData resolves through the
   # OS — so this is the real location the running app will read.
-  TARGET="$HOME/Library/Application Support/ClaudeBuddy/speech-engine/$VERSION"
+  TARGET="$HOME/Library/Application Support/Orbweaver/speech-engine/$VERSION"
   echo "==> Installing to $TARGET"
   rm -rf "$TARGET"
   mkdir -p "$TARGET"
   cp -R "$PUBLISH"/. "$TARGET/"
-  chmod +x "$TARGET/ClaudeBuddySpeech"
+  chmod +x "$TARGET/OrbweaverSpeech"
   echo "==> Installed. The model downloads separately on first enable."
 fi

@@ -1,12 +1,12 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The settings that are lists and dictionaries rather than single values, and
 // the per-profile store.
 //
 // Same collection and the same repointing dance as SettingsRoundTripTests, and
-// for the reason its header gives: ClaudeBuddySettings is a static class with one
+// for the reason its header gives: OrbweaverSettings is a static class with one
 // model for the whole process, so two of these running at once would stomp each
 // other's environment variable.
 //
@@ -23,8 +23,8 @@ public class SettingsListsAndProfilesTests
     {
         var dir = Path.Combine(Path.GetTempPath(), "cb-settings-lists-" + Guid.NewGuid());
         Directory.CreateDirectory(dir);
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
-        ClaudeBuddySettings.ReloadForTests();
+        Environment.SetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR", dir);
+        OrbweaverSettings.ReloadForTests();
     }
 
     // --- Remote Control accounts: a list that replaced a single value ---
@@ -36,9 +36,9 @@ public class SettingsListsAndProfilesTests
     {
         FreshSettings();
 
-        ClaudeBuddySettings.RemoteControlProfileDir = ".claude-work";
+        OrbweaverSettings.RemoteControlProfileDir = ".claude-work";
 
-        Assert.Equal(new[] { ".claude-work" }, ClaudeBuddySettings.RemoteControlProfileDirs);
+        Assert.Equal(new[] { ".claude-work" }, OrbweaverSettings.RemoteControlProfileDirs);
     }
 
     [Fact]
@@ -47,8 +47,8 @@ public class SettingsListsAndProfilesTests
         FreshSettings();
 
         Assert.Equal(
-            new[] { ClaudeBuddySettings.DefaultRemoteControlProfileDir },
-            ClaudeBuddySettings.RemoteControlProfileDirs);
+            new[] { OrbweaverSettings.DefaultRemoteControlProfileDir },
+            OrbweaverSettings.RemoteControlProfileDirs);
     }
 
     // A blank single value is not a choice, so it falls through to the default
@@ -60,11 +60,11 @@ public class SettingsListsAndProfilesTests
     {
         FreshSettings();
 
-        ClaudeBuddySettings.RemoteControlProfileDir = value;
+        OrbweaverSettings.RemoteControlProfileDir = value;
 
         Assert.Equal(
-            new[] { ClaudeBuddySettings.DefaultRemoteControlProfileDir },
-            ClaudeBuddySettings.RemoteControlProfileDirs);
+            new[] { OrbweaverSettings.DefaultRemoteControlProfileDir },
+            OrbweaverSettings.RemoteControlProfileDirs);
     }
 
     [Fact]
@@ -72,10 +72,10 @@ public class SettingsListsAndProfilesTests
     {
         FreshSettings();
 
-        ClaudeBuddySettings.RemoteControlProfileDir = ".claude-old";
-        ClaudeBuddySettings.SetRemoteControlProfileDirs(new[] { ".claude", ".claude-work" });
+        OrbweaverSettings.RemoteControlProfileDir = ".claude-old";
+        OrbweaverSettings.SetRemoteControlProfileDirs(new[] { ".claude", ".claude-work" });
 
-        Assert.Equal(new[] { ".claude", ".claude-work" }, ClaudeBuddySettings.RemoteControlProfileDirs);
+        Assert.Equal(new[] { ".claude", ".claude-work" }, OrbweaverSettings.RemoteControlProfileDirs);
     }
 
     // The single key is cleared when a list is written, so the two cannot
@@ -86,15 +86,15 @@ public class SettingsListsAndProfilesTests
     {
         FreshSettings();
 
-        ClaudeBuddySettings.RemoteControlProfileDir = ".claude-old";
-        ClaudeBuddySettings.SetRemoteControlProfileDirs(new[] { ".claude-work" });
-        ClaudeBuddySettings.SetRemoteControlProfileDirs(Array.Empty<string>());
+        OrbweaverSettings.RemoteControlProfileDir = ".claude-old";
+        OrbweaverSettings.SetRemoteControlProfileDirs(new[] { ".claude-work" });
+        OrbweaverSettings.SetRemoteControlProfileDirs(Array.Empty<string>());
 
         // Back to the default, not back to ".claude-old" — the old choice is
         // gone rather than lying in wait.
         Assert.Equal(
-            new[] { ClaudeBuddySettings.DefaultRemoteControlProfileDir },
-            ClaudeBuddySettings.RemoteControlProfileDirs);
+            new[] { OrbweaverSettings.DefaultRemoteControlProfileDir },
+            OrbweaverSettings.RemoteControlProfileDirs);
     }
 
     // Duplicates are dropped. Two entries for one account would start two relays
@@ -106,10 +106,10 @@ public class SettingsListsAndProfilesTests
     {
         FreshSettings();
 
-        ClaudeBuddySettings.SetRemoteControlProfileDirs(
+        OrbweaverSettings.SetRemoteControlProfileDirs(
             new[] { ".claude", ".claude-work", ".claude" });
 
-        Assert.Equal(new[] { ".claude", ".claude-work" }, ClaudeBuddySettings.RemoteControlProfileDirs);
+        Assert.Equal(new[] { ".claude", ".claude-work" }, OrbweaverSettings.RemoteControlProfileDirs);
     }
 
     // Ordinal, so two accounts differing only in case stay two accounts — they
@@ -120,9 +120,9 @@ public class SettingsListsAndProfilesTests
     {
         FreshSettings();
 
-        ClaudeBuddySettings.SetRemoteControlProfileDirs(new[] { ".claude", ".Claude" });
+        OrbweaverSettings.SetRemoteControlProfileDirs(new[] { ".claude", ".Claude" });
 
-        Assert.Equal(2, ClaudeBuddySettings.RemoteControlProfileDirs.Count);
+        Assert.Equal(2, OrbweaverSettings.RemoteControlProfileDirs.Count);
     }
 
     [Theory]
@@ -132,23 +132,23 @@ public class SettingsListsAndProfilesTests
     {
         FreshSettings();
 
-        ClaudeBuddySettings.SetRemoteControlProfileDirs(new[] { ".claude", blank });
+        OrbweaverSettings.SetRemoteControlProfileDirs(new[] { ".claude", blank });
 
-        Assert.Equal(new[] { ".claude" }, ClaudeBuddySettings.RemoteControlProfileDirs);
+        Assert.Equal(new[] { ".claude" }, OrbweaverSettings.RemoteControlProfileDirs);
     }
 
     [Fact]
     public void TheAccountListSurvivesARestart()
     {
         FreshSettings();
-        var dir = Environment.GetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR")!;
+        var dir = Environment.GetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR")!;
 
-        ClaudeBuddySettings.SetRemoteControlProfileDirs(new[] { ".claude", ".claude-work" });
+        OrbweaverSettings.SetRemoteControlProfileDirs(new[] { ".claude", ".claude-work" });
 
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
-        ClaudeBuddySettings.ReloadForTests();
+        Environment.SetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR", dir);
+        OrbweaverSettings.ReloadForTests();
 
-        Assert.Equal(new[] { ".claude", ".claude-work" }, ClaudeBuddySettings.RemoteControlProfileDirs);
+        Assert.Equal(new[] { ".claude", ".claude-work" }, OrbweaverSettings.RemoteControlProfileDirs);
     }
 
     // --- extra CLI profile directories ---
@@ -157,14 +157,14 @@ public class SettingsListsAndProfilesTests
     public void AnExtraClaudeCodeProfileIsAddedAndPersisted()
     {
         FreshSettings();
-        var dir = Environment.GetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR")!;
+        var dir = Environment.GetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR")!;
 
-        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-work");
+        OrbweaverSettings.AddClaudeCodeProfileDir(".claude-work");
 
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
-        ClaudeBuddySettings.ReloadForTests();
+        Environment.SetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR", dir);
+        OrbweaverSettings.ReloadForTests();
 
-        Assert.Contains(".claude-work", ClaudeBuddySettings.ClaudeCodeProfileDirs);
+        Assert.Contains(".claude-work", OrbweaverSettings.ClaudeCodeProfileDirs);
     }
 
     // Adding the same one twice is one entry. Every extra profile costs a
@@ -175,10 +175,10 @@ public class SettingsListsAndProfilesTests
     {
         FreshSettings();
 
-        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-work");
-        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-work");
+        OrbweaverSettings.AddClaudeCodeProfileDir(".claude-work");
+        OrbweaverSettings.AddClaudeCodeProfileDir(".claude-work");
 
-        Assert.Single(ClaudeBuddySettings.ClaudeCodeProfileDirs, d => d == ".claude-work");
+        Assert.Single(OrbweaverSettings.ClaudeCodeProfileDirs, d => d == ".claude-work");
     }
 
     [Fact]
@@ -186,10 +186,10 @@ public class SettingsListsAndProfilesTests
     {
         FreshSettings();
 
-        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-work");
-        ClaudeBuddySettings.RemoveClaudeCodeProfileDir(".claude-work");
+        OrbweaverSettings.AddClaudeCodeProfileDir(".claude-work");
+        OrbweaverSettings.RemoveClaudeCodeProfileDir(".claude-work");
 
-        Assert.DoesNotContain(".claude-work", ClaudeBuddySettings.ClaudeCodeProfileDirs);
+        Assert.DoesNotContain(".claude-work", OrbweaverSettings.ClaudeCodeProfileDirs);
     }
 
     [Fact]
@@ -197,9 +197,9 @@ public class SettingsListsAndProfilesTests
     {
         FreshSettings();
 
-        ClaudeBuddySettings.RemoveClaudeCodeProfileDir(".never-added");
+        OrbweaverSettings.RemoveClaudeCodeProfileDir(".never-added");
 
-        Assert.Empty(ClaudeBuddySettings.ClaudeCodeProfileDirs);
+        Assert.Empty(OrbweaverSettings.ClaudeCodeProfileDirs);
     }
 
     // The list is handed out as a copy, so a caller cannot change the store
@@ -210,10 +210,10 @@ public class SettingsListsAndProfilesTests
     {
         FreshSettings();
 
-        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-work");
-        var first = ClaudeBuddySettings.ClaudeCodeProfileDirs;
+        OrbweaverSettings.AddClaudeCodeProfileDir(".claude-work");
+        var first = OrbweaverSettings.ClaudeCodeProfileDirs;
 
-        Assert.NotSame(first, ClaudeBuddySettings.ClaudeCodeProfileDirs);
+        Assert.NotSame(first, OrbweaverSettings.ClaudeCodeProfileDirs);
     }
 
     // --- Codex homes: the same rules, a different list ---
@@ -223,14 +223,14 @@ public class SettingsListsAndProfilesTests
     {
         FreshSettings();
 
-        ClaudeBuddySettings.AddCodexHome(".codex-work");
-        ClaudeBuddySettings.AddCodexHome(".codex-work");
+        OrbweaverSettings.AddCodexHome(".codex-work");
+        OrbweaverSettings.AddCodexHome(".codex-work");
 
-        Assert.Single(ClaudeBuddySettings.CodexHomes, h => h == ".codex-work");
+        Assert.Single(OrbweaverSettings.CodexHomes, h => h == ".codex-work");
 
-        ClaudeBuddySettings.RemoveCodexHome(".codex-work");
+        OrbweaverSettings.RemoveCodexHome(".codex-work");
 
-        Assert.DoesNotContain(".codex-work", ClaudeBuddySettings.CodexHomes);
+        Assert.DoesNotContain(".codex-work", OrbweaverSettings.CodexHomes);
     }
 
     [Fact]
@@ -238,11 +238,11 @@ public class SettingsListsAndProfilesTests
     {
         FreshSettings();
 
-        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-work");
-        ClaudeBuddySettings.AddCodexHome(".codex-work");
+        OrbweaverSettings.AddClaudeCodeProfileDir(".claude-work");
+        OrbweaverSettings.AddCodexHome(".codex-work");
 
-        Assert.DoesNotContain(".codex-work", ClaudeBuddySettings.ClaudeCodeProfileDirs);
-        Assert.DoesNotContain(".claude-work", ClaudeBuddySettings.CodexHomes);
+        Assert.DoesNotContain(".codex-work", OrbweaverSettings.ClaudeCodeProfileDirs);
+        Assert.DoesNotContain(".claude-work", OrbweaverSettings.CodexHomes);
     }
 
     // --- per-profile settings ---
@@ -252,7 +252,7 @@ public class SettingsListsAndProfilesTests
     {
         FreshSettings();
 
-        var settings = ClaudeBuddySettings.For("Claude-Profile-9");
+        var settings = OrbweaverSettings.For("Claude-Profile-9");
 
         Assert.NotNull(settings);
         Assert.True(string.IsNullOrEmpty(settings.Name));
@@ -262,9 +262,9 @@ public class SettingsListsAndProfilesTests
     public void AProfilesNameAndColourRoundTripThroughDisk()
     {
         FreshSettings();
-        var dir = Environment.GetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR")!;
+        var dir = Environment.GetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR")!;
 
-        ClaudeBuddySettings.Update("Claude-Profile-1", p =>
+        OrbweaverSettings.Update("Claude-Profile-1", p =>
         {
             p.Name = "Work";
             p.Color = "green";
@@ -273,10 +273,10 @@ public class SettingsListsAndProfilesTests
             p.TintWindow = false;
         });
 
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
-        ClaudeBuddySettings.ReloadForTests();
+        Environment.SetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR", dir);
+        OrbweaverSettings.ReloadForTests();
 
-        var saved = ClaudeBuddySettings.For("Claude-Profile-1");
+        var saved = OrbweaverSettings.For("Claude-Profile-1");
 
         Assert.Equal("Work", saved.Name);
         Assert.Equal("green", saved.Color);
@@ -294,12 +294,12 @@ public class SettingsListsAndProfilesTests
     {
         FreshSettings();
 
-        ClaudeBuddySettings.Update("Claude-Profile-1", p => p.Name = "Work");
+        OrbweaverSettings.Update("Claude-Profile-1", p => p.Name = "Work");
 
-        var borrowed = ClaudeBuddySettings.For("Claude-Profile-1");
+        var borrowed = OrbweaverSettings.For("Claude-Profile-1");
         borrowed.Name = "Scribbled over";
 
-        Assert.Equal("Work", ClaudeBuddySettings.For("Claude-Profile-1").Name);
+        Assert.Equal("Work", OrbweaverSettings.For("Claude-Profile-1").Name);
     }
 
     // Forgotten when the profile itself is gone, because a leftover entry is
@@ -311,10 +311,10 @@ public class SettingsListsAndProfilesTests
     {
         FreshSettings();
 
-        ClaudeBuddySettings.Update("Claude-Profile-2", p => { p.Name = "Old"; p.Color = "red"; });
-        ClaudeBuddySettings.RemoveProfile("Claude-Profile-2");
+        OrbweaverSettings.Update("Claude-Profile-2", p => { p.Name = "Old"; p.Color = "red"; });
+        OrbweaverSettings.RemoveProfile("Claude-Profile-2");
 
-        var reused = ClaudeBuddySettings.For("Claude-Profile-2");
+        var reused = OrbweaverSettings.For("Claude-Profile-2");
 
         Assert.True(string.IsNullOrEmpty(reused.Name));
         Assert.True(string.IsNullOrEmpty(reused.Color));
@@ -325,9 +325,9 @@ public class SettingsListsAndProfilesTests
     {
         FreshSettings();
 
-        ClaudeBuddySettings.RemoveProfile("Claude-Profile-never");
+        OrbweaverSettings.RemoveProfile("Claude-Profile-never");
 
-        Assert.True(string.IsNullOrEmpty(ClaudeBuddySettings.For("Claude-Profile-never").Name));
+        Assert.True(string.IsNullOrEmpty(OrbweaverSettings.For("Claude-Profile-never").Name));
     }
 
     [Fact]
@@ -335,13 +335,13 @@ public class SettingsListsAndProfilesTests
     {
         FreshSettings();
 
-        ClaudeBuddySettings.Update("Claude-Profile-1", p => { p.Name = "Work"; p.Color = "green"; });
-        ClaudeBuddySettings.Update("Claude-Profile-2", p => { p.Name = "Home"; p.Color = "blue"; });
+        OrbweaverSettings.Update("Claude-Profile-1", p => { p.Name = "Work"; p.Color = "green"; });
+        OrbweaverSettings.Update("Claude-Profile-2", p => { p.Name = "Home"; p.Color = "blue"; });
 
-        Assert.Equal("Work", ClaudeBuddySettings.For("Claude-Profile-1").Name);
-        Assert.Equal("Home", ClaudeBuddySettings.For("Claude-Profile-2").Name);
-        Assert.Equal("green", ClaudeBuddySettings.For("Claude-Profile-1").Color);
-        Assert.Equal("blue", ClaudeBuddySettings.For("Claude-Profile-2").Color);
+        Assert.Equal("Work", OrbweaverSettings.For("Claude-Profile-1").Name);
+        Assert.Equal("Home", OrbweaverSettings.For("Claude-Profile-2").Name);
+        Assert.Equal("green", OrbweaverSettings.For("Claude-Profile-1").Color);
+        Assert.Equal("blue", OrbweaverSettings.For("Claude-Profile-2").Color);
     }
 
     // Update on an existing profile changes only what the callback touches, so a
@@ -351,10 +351,10 @@ public class SettingsListsAndProfilesTests
     {
         FreshSettings();
 
-        ClaudeBuddySettings.Update("Claude-Profile-1", p => { p.Name = "Work"; p.Color = "green"; });
-        ClaudeBuddySettings.Update("Claude-Profile-1", p => p.Color = "red");
+        OrbweaverSettings.Update("Claude-Profile-1", p => { p.Name = "Work"; p.Color = "green"; });
+        OrbweaverSettings.Update("Claude-Profile-1", p => p.Color = "red");
 
-        var saved = ClaudeBuddySettings.For("Claude-Profile-1");
+        var saved = OrbweaverSettings.For("Claude-Profile-1");
 
         Assert.Equal("Work", saved.Name);
         Assert.Equal("red", saved.Color);

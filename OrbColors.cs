@@ -1,6 +1,6 @@
 using Avalonia.Media;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // The three colours that say what a session is *doing*, and the one place
     // that answers "what colour is this state".
@@ -14,7 +14,7 @@ namespace ClaudeBuddy
     // default-coloured artwork, which the tray uses directly when a colour has
     // never been changed and as an alpha mask when it has.
     //
-    // A projection over ClaudeBuddySettings rather than a cache of it. The
+    // A projection over OrbweaverSettings rather than a cache of it. The
     // settings model is already in memory once Load() has run, so reading
     // through costs a property get, and there is no second copy to fall out of
     // step. Nothing here notifies, either: whoever writes a colour calls
@@ -32,12 +32,12 @@ namespace ClaudeBuddy
         public static readonly Color DefaultGenerating = Color.Parse("#8B6FD1"); // violet
         public static readonly Color DefaultWaiting = Color.Parse("#E8983B");    // amber
 
-        public static Color Idle => Resolve(ClaudeBuddySettings.IdleColor, DefaultIdle);
+        public static Color Idle => Resolve(OrbweaverSettings.IdleColor, DefaultIdle);
 
         public static Color Generating =>
-            Resolve(ClaudeBuddySettings.GeneratingColor, DefaultGenerating);
+            Resolve(OrbweaverSettings.GeneratingColor, DefaultGenerating);
 
-        public static Color Waiting => Resolve(ClaudeBuddySettings.WaitingColor, DefaultWaiting);
+        public static Color Waiting => Resolve(OrbweaverSettings.WaitingColor, DefaultWaiting);
 
         // State is a bare string off a hook script, so the default arm carries
         // real weight: "ended" (which deletes the status file and never reaches
@@ -69,21 +69,21 @@ namespace ClaudeBuddy
         // the Reset button undoes — picking the shipped blue by hand is not the
         // same thing, and shouldn't grey the button out.
         public static bool AllDefault =>
-            ClaudeBuddySettings.IdleColor is null
-            && ClaudeBuddySettings.GeneratingColor is null
-            && ClaudeBuddySettings.WaitingColor is null;
+            OrbweaverSettings.IdleColor is null
+            && OrbweaverSettings.GeneratingColor is null
+            && OrbweaverSettings.WaitingColor is null;
 
         // The only writer. Keeps the state -> setting mapping beside For() above
         // rather than spreading a third switch through the settings window.
         // A null hex means "back to the built-in colour", which is not the same
-        // as writing today's default — see ClaudeBuddySettings.IdleColor.
+        // as writing today's default — see OrbweaverSettings.IdleColor.
         public static void Set(string state, string? hex)
         {
             switch (state)
             {
-                case "waiting": ClaudeBuddySettings.WaitingColor = hex; break;
-                case "generating": ClaudeBuddySettings.GeneratingColor = hex; break;
-                default: ClaudeBuddySettings.IdleColor = hex; break;
+                case "waiting": OrbweaverSettings.WaitingColor = hex; break;
+                case "generating": OrbweaverSettings.GeneratingColor = hex; break;
+                default: OrbweaverSettings.IdleColor = hex; break;
             }
         }
 

@@ -1,7 +1,7 @@
 using System.Collections.Generic;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The rule that decides which profile a `claude://` link belongs to, and the
 // two command lines built from it.
@@ -17,8 +17,8 @@ public class ClaudeDesktopUrlRoutingTests
     private const string WorkDirectory = "/Users/x/Library/Application Support/Claude-Work";
 
     private const string InstalledBundle = "/Applications/Claude.app";
-    private const string BoardBundle = "/Users/x/Library/Application Support/ClaudeBuddy/bundles/Claude-Board/Claude.app";
-    private const string WorkBundle = "/Users/x/Library/Application Support/ClaudeBuddy/bundles/Claude-Work/Claude.app";
+    private const string BoardBundle = "/Users/x/Library/Application Support/Orbweaver/bundles/Claude-Board/Claude.app";
+    private const string WorkBundle = "/Users/x/Library/Application Support/Orbweaver/bundles/Claude-Work/Claude.app";
 
     private static UrlRouteCandidate Default(bool running = false, int pid = 0) =>
         new(DefaultDirectory, InstalledBundle, IsDefault: true, running, pid);

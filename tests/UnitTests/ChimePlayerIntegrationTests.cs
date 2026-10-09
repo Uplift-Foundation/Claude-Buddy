@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-168 (Ines): the real-process half of ChimePlayerTests' old sweep tests.
 // ChimePlayer.IChimeProcess lets ChimePlayerTests.cs prove every kill/track

@@ -1,7 +1,7 @@
 using System.Text.Json;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The local workspace is a seam with another process: this covers the same
 // agents.list shape the gateway publishes, plus the files it points us at.

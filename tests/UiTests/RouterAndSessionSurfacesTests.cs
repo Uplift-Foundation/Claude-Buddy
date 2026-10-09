@@ -7,7 +7,7 @@ using Avalonia.Headless.XUnit;
 using Avalonia.Threading;
 using Xunit;
 
-namespace ClaudeBuddy.UiTests;
+namespace Orbweaver.UiTests;
 
 // Five small surfaces whose only callers are excluded, or which only ever run
 // on a thread no test is on, so nothing else asks them anything.

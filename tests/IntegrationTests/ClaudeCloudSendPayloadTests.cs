@@ -5,7 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // A write into a cloud session, end to end through the seam: the request the
 // app builds, handed to an ICloudApi, and the answer read back through the real

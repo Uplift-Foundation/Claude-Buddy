@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The one rule for reading a picture out of markdown, and the four spellings
 // that now share it.

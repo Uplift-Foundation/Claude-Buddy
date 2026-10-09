@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Text.Json;
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 // CB-98's cross-arm case, second instance: an agent's own inline image block
 // and the gateway's delivery-mirror record can each put the same picture on

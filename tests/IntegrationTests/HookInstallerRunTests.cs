@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // HookInstaller.Run and RunScript against real subprocesses, and the log they
 // leave (CB-258). The thing being pinned is that a run which fails, hangs, is
@@ -211,7 +211,7 @@ public class HookInstallerRunTests : IDisposable
         var wsl = Path.Combine(_root, "wsl-home");
         Directory.CreateDirectory(native);
         Directory.CreateDirectory(Path.Combine(wsl, ".claude-work"));
-        File.WriteAllText(Path.Combine(wsl, ".claude-work", "settings.json"), "ClaudeBuddyHook");
+        File.WriteAllText(Path.Combine(wsl, ".claude-work", "settings.json"), "OrbweaverHook.ps1");
 
         Assert.True(HookInstaller.IsWiredInAny(".claude-work", new[] { native, wsl }));
     }
@@ -223,9 +223,47 @@ public class HookInstallerRunTests : IDisposable
         var wsl = Path.Combine(_root, "wsl-home");
         Directory.CreateDirectory(Path.Combine(native, ".claude-work"));
         Directory.CreateDirectory(wsl);
-        File.WriteAllText(Path.Combine(native, ".claude-work", "settings.json"), "ClaudeBuddyHook");
+        File.WriteAllText(Path.Combine(native, ".claude-work", "settings.json"), "OrbweaverHook.sh");
 
         Assert.True(HookInstaller.IsWiredInAny(".claude-work", new[] { native, wsl }));
+    }
+
+    // CB-256, the phase-2 bug: IsWiredIn looked only for "ClaudeBuddyHook", and
+    // every phase-2 installer writes OrbweaverHook.* and strips the old name, so
+    // a freshly wired profile on an upgraded machine read as un-wired and the
+    // Settings card reported a failure. Each of the four script names counts —
+    // both platforms, both brands — since one profile's settings.json carries
+    // the .sh on a Mac and the .ps1 on Windows. Plain files under a scratch
+    // home, so this runs on both CI legs with nothing installed. Spelled out
+    // rather than read off Brand: they are what the installers write, and this
+    // assembly also sees SingleInstanceProbe's copy of Brand.
+    [Theory]
+    [InlineData("OrbweaverHook.sh")]
+    [InlineData("OrbweaverHook.ps1")]
+    [InlineData("ClaudeBuddyHook.sh")]
+    [InlineData("ClaudeBuddyHook.ps1")]
+    public void AProfileNamingEitherHookScriptOnEitherPlatformIsWired(string script)
+    {
+        var home = Path.Combine(_root, "home");
+        Directory.CreateDirectory(Path.Combine(home, ".claude"));
+        File.WriteAllText(Path.Combine(home, ".claude", "settings.json"),
+            $$$"""{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"/x/{{{script}}}"}]}]}}""");
+
+        Assert.True(HookInstaller.IsWiredIn(".claude", home));
+    }
+
+    // The negative control for the cases above: a settings.json with somebody
+    // else's hook in it, which the same scratch layout must report un-wired —
+    // so a check that answered true for any file would fail here.
+    [Fact]
+    public void AProfileWithSomeoneElsesHookIsNotWired()
+    {
+        var home = Path.Combine(_root, "home");
+        Directory.CreateDirectory(Path.Combine(home, ".claude"));
+        File.WriteAllText(Path.Combine(home, ".claude", "settings.json"),
+            """{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"/x/orbweaver/other-hook.sh"}]}]}}""");
+
+        Assert.False(HookInstaller.IsWiredIn(".claude", home));
     }
 
     [Fact]
@@ -248,7 +286,7 @@ public class HookInstallerRunTests : IDisposable
         var home = Path.Combine(_root, "home");
         Directory.CreateDirectory(Path.Combine(home, ".locked"));
         var settings = Path.Combine(home, ".locked", "settings.json");
-        File.WriteAllText(settings, "ClaudeBuddyHook");
+        File.WriteAllText(settings, "OrbweaverHook.sh");
 
         // Held open with no sharing, so the read throws an IOException on every
         // OS — the shape of a settings file mid-write by Claude Code itself.

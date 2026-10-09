@@ -2,7 +2,7 @@ using System.Text;
 using System.Text.Json;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // SessionMessageFrame — the pure wire-format encoding for one delivery to a
 // headless session's registry socket. No socket anywhere in this file, per

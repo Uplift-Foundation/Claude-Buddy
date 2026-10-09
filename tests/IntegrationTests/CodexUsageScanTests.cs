@@ -5,7 +5,7 @@ using System.Linq;
 using System.Text;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CodexUsagePoller's walk of $CODEX_HOME/sessions, against real files on disk.
 //
@@ -304,7 +304,7 @@ public class CodexUsageScanTests : IDisposable
     [Fact]
     public void TheSwitchBeingOffMeansNoReadingsAtAll()
     {
-        Assert.False(ClaudeBuddySettings.CodexAccountUsageEnabled);
+        Assert.False(OrbweaverSettings.CodexAccountUsageEnabled);
 
         Assert.Empty(new CodexUsagePoller().Read());
     }

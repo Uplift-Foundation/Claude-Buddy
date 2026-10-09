@@ -2,7 +2,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 using Avalonia.Input;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Registers global hotkeys on Windows via user32's RegisterHotKey, which
     // delivers WM_HOTKEY to whatever window registered it. Avalonia doesn't

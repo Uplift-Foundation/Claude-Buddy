@@ -1,4 +1,4 @@
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // The bottom of a chat panel's header: which session this is, where it is
     // working, and which machine it is running on.

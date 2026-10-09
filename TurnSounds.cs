@@ -1,6 +1,6 @@
 using System.Threading;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // The one call SessionManager makes at the end of a scan to turn whatever
     // TurnSignalTracker noticed into an actual sound.
@@ -89,7 +89,7 @@ namespace ClaudeBuddy
         // Test seam: a scan-level test wants a clean rate-limit clock and no
         // timer left armed from a previous case, without sleeping two real
         // seconds to clear either — the same reason
-        // ClaudeBuddySettings.ReloadForTests exists.
+        // OrbweaverSettings.ReloadForTests exists.
         // The tail of the chime chain as it stands, so a test can await "everything
         // enqueued so far has played" instead of sleeping.
         internal static Task ChimesEnqueuedSoFar()
@@ -545,10 +545,10 @@ namespace ClaudeBuddy
             var extensions = SystemSoundCatalog.DefaultExtensions;
 
             return new SoundSettingsSnapshot(
-                MasterEnabled: ClaudeBuddySettings.TurnSoundsEnabled,
-                DefaultFinishedSetting: ClaudeBuddySettings.TurnFinishedSound,
-                DefaultAttentionSetting: ClaudeBuddySettings.NeedsAttentionSound,
-                OverrideFor: ClaudeBuddySettings.OrbTurnSoundFor,
+                MasterEnabled: OrbweaverSettings.TurnSoundsEnabled,
+                DefaultFinishedSetting: OrbweaverSettings.TurnFinishedSound,
+                DefaultAttentionSetting: OrbweaverSettings.NeedsAttentionSound,
+                OverrideFor: OrbweaverSettings.OrbTurnSoundFor,
                 ResolveFinishedSound: setting => SystemSoundCatalog.Resolve(
                     setting ?? SystemSoundCatalog.DefaultFinishedSoundName, directory, extensions),
                 ResolveAttentionSound: setting => SystemSoundCatalog.Resolve(

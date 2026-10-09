@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 // The four decisions ClaudeDesktopUrlRouter makes before it touches anything.
 //
@@ -78,7 +78,7 @@ public class UrlRouterDecisionTests
 
     // Once, and never again. Re-claiming must not overwrite the real previous
     // handler — by then the current handler is usually *us*, and recording that
-    // would make "restore" hand the schemes back to Claude Buddy for ever.
+    // would make "restore" hand the schemes back to Orbweaver for ever.
     [Fact]
     public void AHandlerAlreadyRememberedIsNotOverwritten() =>
         Assert.False(ClaudeDesktopUrlRouter.ShouldRememberPreviousHandler(

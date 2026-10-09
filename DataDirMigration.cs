@@ -1,7 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using System.IO;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Moves the per-user data and log folders from Brand.Legacy.DataDirName to
     // Brand.DataDirName on the first launch after the rename (CB-255 §2).
@@ -34,16 +34,16 @@ namespace ClaudeBuddy
     //
     // It runs from Startup.Run's `migrateUserData` step: after both mutex names
     // are held (so no second instance, old or new, can be moving the same
-    // folder) and before anything reads ClaudeBuddySettings, PeerIdentity or
+    // folder) and before anything reads OrbweaverSettings, PeerIdentity or
     // NeuralSpeech. Checked rather than assumed for the two steps that run
     // before it: neither CrashLog.cs nor SingleInstance.cs refers to
-    // ClaudeBuddySettings at all. CrashLog.Install does not create its
+    // OrbweaverSettings at all. CrashLog.Install does not create its
     // directory either — only a write does — but a crash or a persona refusal
     // could have created the new Logs folder before now, which is why the Logs
     // rule below is a merge rather than move-or-nothing.
     //
-    // Does nothing at all while CLAUDE_BUDDY_SETTINGS_DIR, CLAUDE_BUDDY_LOG_DIR
-    // or CLAUDE_BUDDY_BUNDLE_ROOT is set. Every test suite sets the first, and
+    // Does nothing at all while ORBWEAVER_SETTINGS_DIR, ORBWEAVER_LOG_DIR
+    // or ORBWEAVER_BUNDLE_ROOT is set. Every test suite sets the first, and
     // a migration that ran under it would move a developer's real folder.
     internal static class DataDirMigration
     {
@@ -99,8 +99,9 @@ namespace ClaudeBuddy
         // bundles) or does not need.
         internal static readonly IReadOnlyList<string> SnapshotFiles = [SettingsFile, PeerIdentityFile];
 
+        // BrandEnv suffixes, so either spelling of any of the three counts.
         internal static readonly IReadOnlyList<string> OverrideVariables =
-            ["CLAUDE_BUDDY_SETTINGS_DIR", "CLAUDE_BUDDY_LOG_DIR", "CLAUDE_BUDDY_BUNDLE_ROOT"];
+            [BrandEnv.SettingsDir, BrandEnv.LogDir, BrandEnv.BundleRoot];
 
         // ---- the rules ------------------------------------------------------
 
@@ -119,11 +120,11 @@ namespace ClaudeBuddy
         }
 
         internal static bool OverrideSet(Func<string, string?> environment) =>
-            OverrideVariables.Any(name => environment(name) is { Length: > 0 });
+            OverrideVariables.Any(suffix => BrandEnv.Get(suffix, environment) is not null);
 
         // Where the two roots are on each platform, given the folders the OS
         // reports. Each new path is built exactly as its reader builds it —
-        // ClaudeBuddySettings.Directory for the data root, CrashLog's default
+        // OrbweaverSettings.Directory for the data root, CrashLog's default
         // directory for Logs — so the migration fills precisely the folder the
         // app is about to read.
         //

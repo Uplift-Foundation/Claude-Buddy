@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // PersonaFiles.CandidateRoots — CB-147's D8, in isolation and with no
 // filesystem at all: which roots a picture is tried against, in which order,

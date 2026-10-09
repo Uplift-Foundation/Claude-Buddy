@@ -1,7 +1,7 @@
 using Xunit;
-using static ClaudeBuddy.DataDirMigration;
+using static Orbweaver.DataDirMigration;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-255 §2: the data-dir migration's executor against real folders.
 //
@@ -14,8 +14,8 @@ namespace ClaudeBuddy.Tests;
 // scratch folder.
 //
 // In [Collection("Settings")] because one case round-trips settings.json
-// through ClaudeBuddySettings, which moves the process-wide
-// CLAUDE_BUDDY_SETTINGS_DIR.
+// through OrbweaverSettings, which moves the process-wide
+// ORBWEAVER_SETTINGS_DIR.
 [Collection("Settings")]
 public class DataDirMigrationTests : IDisposable
 {
@@ -299,8 +299,8 @@ public class DataDirMigrationTests : IDisposable
         Assert.True(File.Exists(Path.Combine(support, "Orbweaver", SettingsFile)));
     }
 
-    // Settings round-trip through the moved file: written by ClaudeBuddySettings
-    // into the legacy folder, read back by ClaudeBuddySettings from the new one
+    // Settings round-trip through the moved file: written by OrbweaverSettings
+    // into the legacy folder, read back by OrbweaverSettings from the new one
     // — and the snapshot left behind reads back too, which is the downgrade
     // story.
     [Fact]
@@ -308,30 +308,30 @@ public class DataDirMigrationTests : IDisposable
     {
         var root = DataRoot;
         Directory.CreateDirectory(root.Legacy);
-        var previous = Environment.GetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR");
+        var previous = Environment.GetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR");
 
         try
         {
-            Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", root.Legacy);
-            ClaudeBuddySettings.ReloadForTests();
-            ClaudeBuddySettings.SpeechVolume = 0.35;
-            ClaudeBuddySettings.FlushPendingSave();
+            Environment.SetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR", root.Legacy);
+            OrbweaverSettings.ReloadForTests();
+            OrbweaverSettings.SpeechVolume = 0.35;
+            OrbweaverSettings.FlushPendingSave();
             Assert.True(File.Exists(Path.Combine(root.Legacy, SettingsFile)));
 
             RunOn(root);
 
-            Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", root.New);
-            ClaudeBuddySettings.ReloadForTests();
-            Assert.Equal(0.35, ClaudeBuddySettings.SpeechVolume);
+            Environment.SetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR", root.New);
+            OrbweaverSettings.ReloadForTests();
+            Assert.Equal(0.35, OrbweaverSettings.SpeechVolume);
 
-            Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", root.Legacy);
-            ClaudeBuddySettings.ReloadForTests();
-            Assert.Equal(0.35, ClaudeBuddySettings.SpeechVolume);
+            Environment.SetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR", root.Legacy);
+            OrbweaverSettings.ReloadForTests();
+            Assert.Equal(0.35, OrbweaverSettings.SpeechVolume);
         }
         finally
         {
-            Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", previous);
-            ClaudeBuddySettings.ReloadForTests();
+            Environment.SetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR", previous);
+            OrbweaverSettings.ReloadForTests();
         }
     }
 
@@ -354,7 +354,7 @@ public class DataDirMigrationTests : IDisposable
     }
 
     // The real entry point under this suite's environment (TestBootstrap sets
-    // CLAUDE_BUDDY_SETTINGS_DIR): a no-op that does not throw.
+    // ORBWEAVER_SETTINGS_DIR): a no-op that does not throw.
     [Fact]
     public void The_real_entry_point_is_a_no_op_under_the_test_environment()
     {

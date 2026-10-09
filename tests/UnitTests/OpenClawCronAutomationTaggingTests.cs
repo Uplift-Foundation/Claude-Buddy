@@ -1,7 +1,7 @@
 using System.Text.Json;
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 // CB-115: TurnsFromHistory's half of the cron-recovery trigger — tagging a
 // HistoryTurn with the automation that produced it, so the async pass in

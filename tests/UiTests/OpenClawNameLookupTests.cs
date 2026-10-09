@@ -5,7 +5,7 @@ using Avalonia.Headless.XUnit;
 using SkiaSharp;
 using Xunit;
 
-namespace ClaudeBuddy.UiTests;
+namespace Orbweaver.UiTests;
 
 // Two lookups that run in front of a user: the face drawn beside a message in a
 // merged room, and the sentence the orb's speak button reads out.

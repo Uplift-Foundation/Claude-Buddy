@@ -3,7 +3,7 @@ using Avalonia.Headless.XUnit;
 using Avalonia.Threading;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // A local CLI session as the chat panel talks to it: a transcript file on disk,
 // tailed.
@@ -411,10 +411,10 @@ public class LocalCliChatSessionTests : IDisposable
     {
         var session = Session(Transcript(User("u1", "hello")));
 
-        ClaudeBuddySettings.ClaudeCodeReplyEnabled = true;
+        OrbweaverSettings.ClaudeCodeReplyEnabled = true;
         Assert.Equal("No terminal to type into", session.ComposerHint);
 
-        ClaudeBuddySettings.ClaudeCodeReplyEnabled = false;
+        OrbweaverSettings.ClaudeCodeReplyEnabled = false;
         Assert.Equal("No terminal to type into", session.ComposerHint);
     }
 
@@ -568,7 +568,7 @@ public class LocalCliChatSessionTests : IDisposable
         var path = Transcript(User("u1", "hello"));
         var session = Started(path, state: "waiting");
 
-        ClaudeBuddySettings.ClaudeCodeReplyEnabled = false;
+        OrbweaverSettings.ClaudeCodeReplyEnabled = false;
 
         var before = session.History.Count;
         await session.AnswerAsync(new ChatPromptOption("1", "Yes"));
@@ -1028,11 +1028,11 @@ public class LocalCliChatSessionTests : IDisposable
     [AvaloniaFact]
     public async Task SendingWhileReplyingIsOffLeavesANoteInsteadOfTyping()
     {
-        var before = ClaudeBuddySettings.ClaudeCodeReplyEnabled;
+        var before = OrbweaverSettings.ClaudeCodeReplyEnabled;
         try
         {
             var session = Session(Transcript(User("u1", "hi")));
-            ClaudeBuddySettings.ClaudeCodeReplyEnabled = false;
+            OrbweaverSettings.ClaudeCodeReplyEnabled = false;
 
             var outcome = await session.SendAsync("hello there");
 
@@ -1046,18 +1046,18 @@ public class LocalCliChatSessionTests : IDisposable
         }
         finally
         {
-            ClaudeBuddySettings.ClaudeCodeReplyEnabled = before;
+            OrbweaverSettings.ClaudeCodeReplyEnabled = before;
         }
     }
 
     [AvaloniaFact]
     public async Task SendingWithNoTmuxPaneExplainsThereIsNowhereToTypeQuietly()
     {
-        var before = ClaudeBuddySettings.ClaudeCodeReplyEnabled;
+        var before = OrbweaverSettings.ClaudeCodeReplyEnabled;
         try
         {
             var session = Session(Transcript(User("u1", "hi"))); // TmuxPane empty by construction
-            ClaudeBuddySettings.ClaudeCodeReplyEnabled = true;
+            OrbweaverSettings.ClaudeCodeReplyEnabled = true;
 
             var outcome = await session.SendAsync("hello there");
 
@@ -1069,7 +1069,7 @@ public class LocalCliChatSessionTests : IDisposable
         }
         finally
         {
-            ClaudeBuddySettings.ClaudeCodeReplyEnabled = before;
+            OrbweaverSettings.ClaudeCodeReplyEnabled = before;
         }
     }
 
@@ -1078,11 +1078,11 @@ public class LocalCliChatSessionTests : IDisposable
     [AvaloniaFact]
     public async Task SendingWithNoImagesFallsBackToThePlainSend()
     {
-        var before = ClaudeBuddySettings.ClaudeCodeReplyEnabled;
+        var before = OrbweaverSettings.ClaudeCodeReplyEnabled;
         try
         {
             var session = Session(Transcript(User("u1", "hi")));
-            ClaudeBuddySettings.ClaudeCodeReplyEnabled = false;
+            OrbweaverSettings.ClaudeCodeReplyEnabled = false;
 
             var outcome = await session.SendWithImagesAsync("hello", Array.Empty<string>());
 
@@ -1098,7 +1098,7 @@ public class LocalCliChatSessionTests : IDisposable
         }
         finally
         {
-            ClaudeBuddySettings.ClaudeCodeReplyEnabled = before;
+            OrbweaverSettings.ClaudeCodeReplyEnabled = before;
         }
     }
 
@@ -1109,14 +1109,14 @@ public class LocalCliChatSessionTests : IDisposable
     [AvaloniaFact]
     public async Task SendingWithAnImagePathStillRefusesQuietlyWhenReplyingIsOff()
     {
-        var before = ClaudeBuddySettings.ClaudeCodeReplyEnabled;
+        var before = OrbweaverSettings.ClaudeCodeReplyEnabled;
         try
         {
             var imagePath = Path.Combine(_root, "pic.png");
             File.WriteAllBytes(imagePath, new byte[] { 1, 2, 3 });
 
             var session = Session(Transcript(User("u1", "hi")));
-            ClaudeBuddySettings.ClaudeCodeReplyEnabled = false;
+            OrbweaverSettings.ClaudeCodeReplyEnabled = false;
 
             await session.SendWithImagesAsync("a caption", new[] { imagePath });
 
@@ -1126,7 +1126,7 @@ public class LocalCliChatSessionTests : IDisposable
         }
         finally
         {
-            ClaudeBuddySettings.ClaudeCodeReplyEnabled = before;
+            OrbweaverSettings.ClaudeCodeReplyEnabled = before;
         }
     }
 
@@ -1138,13 +1138,13 @@ public class LocalCliChatSessionTests : IDisposable
     [AvaloniaFact]
     public async Task AMissingImageFileDoesNotStopTheSendFromProceeding()
     {
-        var before = ClaudeBuddySettings.ClaudeCodeReplyEnabled;
+        var before = OrbweaverSettings.ClaudeCodeReplyEnabled;
         try
         {
             var missingPath = Path.Combine(_root, "never-written.png");
 
             var session = Session(Transcript(User("u1", "hi")));
-            ClaudeBuddySettings.ClaudeCodeReplyEnabled = false;
+            OrbweaverSettings.ClaudeCodeReplyEnabled = false;
 
             await session.SendWithImagesAsync("a caption", new[] { missingPath });
 
@@ -1156,7 +1156,7 @@ public class LocalCliChatSessionTests : IDisposable
         }
         finally
         {
-            ClaudeBuddySettings.ClaudeCodeReplyEnabled = before;
+            OrbweaverSettings.ClaudeCodeReplyEnabled = before;
         }
     }
 
@@ -1165,28 +1165,28 @@ public class LocalCliChatSessionTests : IDisposable
     [AvaloniaFact]
     public void CancellingDoesNothingWhenReplyingIsOff()
     {
-        var before = ClaudeBuddySettings.ClaudeCodeReplyEnabled;
+        var before = OrbweaverSettings.ClaudeCodeReplyEnabled;
         try
         {
             var session = Session(Transcript(User("u1", "hi")));
-            ClaudeBuddySettings.ClaudeCodeReplyEnabled = false;
+            OrbweaverSettings.ClaudeCodeReplyEnabled = false;
 
             session.Cancel(); // must not throw, and must not touch TerminalFocuser at all
         }
         finally
         {
-            ClaudeBuddySettings.ClaudeCodeReplyEnabled = before;
+            OrbweaverSettings.ClaudeCodeReplyEnabled = before;
         }
     }
 
     [AvaloniaFact]
     public void CancellingWithReplyingOnButNoPaneSendsNothing()
     {
-        var before = ClaudeBuddySettings.ClaudeCodeReplyEnabled;
+        var before = OrbweaverSettings.ClaudeCodeReplyEnabled;
         try
         {
             var session = Session(Transcript(User("u1", "hi"))); // TmuxPane empty
-            ClaudeBuddySettings.ClaudeCodeReplyEnabled = true;
+            OrbweaverSettings.ClaudeCodeReplyEnabled = true;
 
             // SendPaneKey short-circuits on CanSendQuietly before it would
             // otherwise touch tmux, exactly like the composer's own checks.
@@ -1194,7 +1194,7 @@ public class LocalCliChatSessionTests : IDisposable
         }
         finally
         {
-            ClaudeBuddySettings.ClaudeCodeReplyEnabled = before;
+            OrbweaverSettings.ClaudeCodeReplyEnabled = before;
         }
     }
 
@@ -1205,12 +1205,12 @@ public class LocalCliChatSessionTests : IDisposable
     [AvaloniaFact]
     public async Task AnsweringWithNoPaneExplainsAndAsksAgainWhileStillWaiting()
     {
-        var before = ClaudeBuddySettings.ClaudeCodeReplyEnabled;
+        var before = OrbweaverSettings.ClaudeCodeReplyEnabled;
         try
         {
             var path = Transcript(User("u1", "hello"));
             var session = Started(path, state: "waiting");
-            ClaudeBuddySettings.ClaudeCodeReplyEnabled = true;
+            OrbweaverSettings.ClaudeCodeReplyEnabled = true;
 
             session.SetPrompt(new ChatPrompt("Proceed?", new[] { new ChatPromptOption("1", "Yes") }));
 
@@ -1223,7 +1223,7 @@ public class LocalCliChatSessionTests : IDisposable
         }
         finally
         {
-            ClaudeBuddySettings.ClaudeCodeReplyEnabled = before;
+            OrbweaverSettings.ClaudeCodeReplyEnabled = before;
         }
     }
 
@@ -1411,10 +1411,10 @@ public class LocalCliChatSessionTests : IDisposable
     [AvaloniaFact]
     public async Task SendingToADeliverableBackgroundSessionNotesItWasHandedOver()
     {
-        var before = ClaudeBuddySettings.ClaudeCodeReplyEnabled;
+        var before = OrbweaverSettings.ClaudeCodeReplyEnabled;
         try
         {
-            ClaudeBuddySettings.ClaudeCodeReplyEnabled = true;
+            OrbweaverSettings.ClaudeCodeReplyEnabled = true;
             var (messenger, find) = FakeMessaging(RegistryEntry("s1"));
             var session = BackgroundSession(Transcript(User("seed", "seed")), messenger, find);
 
@@ -1431,7 +1431,7 @@ public class LocalCliChatSessionTests : IDisposable
         }
         finally
         {
-            ClaudeBuddySettings.ClaudeCodeReplyEnabled = before;
+            OrbweaverSettings.ClaudeCodeReplyEnabled = before;
         }
     }
 
@@ -1443,10 +1443,10 @@ public class LocalCliChatSessionTests : IDisposable
     [AvaloniaFact]
     public async Task ADeliveredMessageSettlesWhenTheWrappedRowArrivesInTheTranscript()
     {
-        var before = ClaudeBuddySettings.ClaudeCodeReplyEnabled;
+        var before = OrbweaverSettings.ClaudeCodeReplyEnabled;
         try
         {
-            ClaudeBuddySettings.ClaudeCodeReplyEnabled = true;
+            OrbweaverSettings.ClaudeCodeReplyEnabled = true;
             var (messenger, find) = FakeMessaging(RegistryEntry("s1"));
             var session = BackgroundSession(Transcript(User("seed", "seed")), messenger, find);
 
@@ -1467,7 +1467,7 @@ public class LocalCliChatSessionTests : IDisposable
         }
         finally
         {
-            ClaudeBuddySettings.ClaudeCodeReplyEnabled = before;
+            OrbweaverSettings.ClaudeCodeReplyEnabled = before;
         }
     }
 
@@ -1478,10 +1478,10 @@ public class LocalCliChatSessionTests : IDisposable
     [AvaloniaFact]
     public async Task SendingWhenTheFarSessionHasLeftTheRegistrySaysSo()
     {
-        var before = ClaudeBuddySettings.ClaudeCodeReplyEnabled;
+        var before = OrbweaverSettings.ClaudeCodeReplyEnabled;
         try
         {
-            ClaudeBuddySettings.ClaudeCodeReplyEnabled = true;
+            OrbweaverSettings.ClaudeCodeReplyEnabled = true;
             var (messenger, find) = FakeMessaging(
                 findRegistryEntry: RegistryEntry("s1"), messengerEntries: Array.Empty<SessionRegistry.Entry>());
             var session = BackgroundSession(Transcript(User("seed", "seed")), messenger, find);
@@ -1495,7 +1495,7 @@ public class LocalCliChatSessionTests : IDisposable
         }
         finally
         {
-            ClaudeBuddySettings.ClaudeCodeReplyEnabled = before;
+            OrbweaverSettings.ClaudeCodeReplyEnabled = before;
         }
     }
 
@@ -1504,10 +1504,10 @@ public class LocalCliChatSessionTests : IDisposable
     [AvaloniaFact]
     public async Task SendingWhenTheFarSessionSpeaksAnUnsupportedProtocolSaysSo()
     {
-        var before = ClaudeBuddySettings.ClaudeCodeReplyEnabled;
+        var before = OrbweaverSettings.ClaudeCodeReplyEnabled;
         try
         {
-            ClaudeBuddySettings.ClaudeCodeReplyEnabled = true;
+            OrbweaverSettings.ClaudeCodeReplyEnabled = true;
             var (messenger, find) = FakeMessaging(
                 findRegistryEntry: RegistryEntry("s1"),
                 messengerEntries: new[] { RegistryEntry("s1", peerProtocol: 2) });
@@ -1522,7 +1522,7 @@ public class LocalCliChatSessionTests : IDisposable
         }
         finally
         {
-            ClaudeBuddySettings.ClaudeCodeReplyEnabled = before;
+            OrbweaverSettings.ClaudeCodeReplyEnabled = before;
         }
     }
 
@@ -1531,10 +1531,10 @@ public class LocalCliChatSessionTests : IDisposable
     [AvaloniaFact]
     public async Task SendingWhenTheSocketRefusesSaysNothingWasSent()
     {
-        var before = ClaudeBuddySettings.ClaudeCodeReplyEnabled;
+        var before = OrbweaverSettings.ClaudeCodeReplyEnabled;
         try
         {
-            ClaudeBuddySettings.ClaudeCodeReplyEnabled = true;
+            OrbweaverSettings.ClaudeCodeReplyEnabled = true;
             var (messenger, find) = FakeMessaging(RegistryEntry("s1"), write: false);
             var session = BackgroundSession(Transcript(User("seed", "seed")), messenger, find);
 
@@ -1547,7 +1547,7 @@ public class LocalCliChatSessionTests : IDisposable
         }
         finally
         {
-            ClaudeBuddySettings.ClaudeCodeReplyEnabled = before;
+            OrbweaverSettings.ClaudeCodeReplyEnabled = before;
         }
     }
 }

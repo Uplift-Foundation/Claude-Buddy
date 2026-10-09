@@ -10,7 +10,7 @@ using Avalonia.Headless.XUnit;
 using Avalonia.Threading;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Presence on the orb: the third axis, beside identity and state. A parked
 // background job or an orphaned teammate is dimmed and held still, and it wears
@@ -24,7 +24,7 @@ namespace ClaudeBuddy.Tests;
 // needed to tell them apart was parsed, and then discarded.
 //
 // [Collection("Settings")] because constructing an OrbWindow reads a colour
-// setting in a field initializer, and ClaudeBuddySettings is a process-wide
+// setting in a field initializer, and OrbweaverSettings is a process-wide
 // static — see tests/UiTests/SettingsCollection.cs.
 [Collection("Settings")]
 public class OrbWindowPresenceTests

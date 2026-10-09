@@ -1,7 +1,7 @@
 using System.IO;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The words the tray puts on screen: the tooltip's one-line summary, the name a
 // session is listed under, and the row that name ends up in.

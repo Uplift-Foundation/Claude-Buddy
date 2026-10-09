@@ -1,4 +1,4 @@
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Whether a CLI's hook is installed, for CB-168's new-chat dialog: a CLI
     // launched with no hook wired up never gets an orb, and the dialog warns

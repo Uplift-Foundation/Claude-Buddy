@@ -1,6 +1,6 @@
 using Avalonia.Input;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // What a global hotkey does, once pressed. CB-155 asks for one — hide/show
     // orbs — "plus room for a couple more" without saying which, so this is an
@@ -49,7 +49,7 @@ namespace ClaudeBuddy
     // lives somewhere a unit test can reach it without constructing anything.
     //
     // GlobalHotkeys (the platform-facing half) is what actually reads
-    // ClaudeBuddySettings and calls into a native hook; this class never
+    // OrbweaverSettings and calls into a native hook; this class never
     // touches either.
     public static class HotkeyRegistry
     {

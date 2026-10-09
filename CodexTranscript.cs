@@ -1,6 +1,6 @@
 using System.Text.Json;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Turning what Codex writes down into what the chat panel shows.
     //

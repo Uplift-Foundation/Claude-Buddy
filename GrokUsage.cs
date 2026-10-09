@@ -5,7 +5,7 @@ using System.Globalization;
 using System.IO;
 using System.Text.Json;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Turning Grok's credits-config JSON into AccountUsage, and nothing else.
     //
@@ -251,12 +251,12 @@ namespace ClaudeBuddy
     {
         public IReadOnlyList<AccountUsage> Read()
         {
-            if (!ClaudeBuddySettings.GrokAccountUsageEnabled)
+            if (!OrbweaverSettings.GrokAccountUsageEnabled)
                 return Array.Empty<AccountUsage>();
 
             var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             var readings = new List<AccountUsage>();
-            foreach (var grokHome in GrokUsageAccounts.Homes(home, ClaudeBuddySettings.GrokHomes))
+            foreach (var grokHome in GrokUsageAccounts.Homes(home, OrbweaverSettings.GrokHomes))
             {
                 var label = GrokUsageAccounts.LabelFrom(ReadAuth(grokHome), grokHome);
                 var line = LatestCreditsLine(grokHome);

@@ -2,7 +2,7 @@ using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // What the daemon says a background session is *doing*, as opposed to
     // whether it is worth an orb at all.
@@ -284,7 +284,7 @@ namespace ClaudeBuddy
                 : inherited.Trim().TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
 
             var all = new List<(string Dir, string? ConfigDir)> { (inheritedDir, null) };
-            all.AddRange(ExtraAccountDirs(home, ClaudeBuddySettings.ClaudeCodeProfileDirs, inherited)
+            all.AddRange(ExtraAccountDirs(home, OrbweaverSettings.ClaudeCodeProfileDirs, inherited)
                 .Select(dir => (dir, (string?)dir)));
 
             string?[]? transcripts;

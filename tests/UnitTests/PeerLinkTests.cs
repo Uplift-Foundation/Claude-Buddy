@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 // Covers PeerLink's logic — the read loop, the trust decision and the
 // bookkeeping — with no socket, no certificate and no second machine.

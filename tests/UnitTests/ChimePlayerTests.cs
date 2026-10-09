@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // QA (CB-167): ChimePlayer.Play itself is [ExcludeFromCodeCoverage] — it
 // starts a real audio subprocess — but WindowsStartInfoFor and WindowsScript

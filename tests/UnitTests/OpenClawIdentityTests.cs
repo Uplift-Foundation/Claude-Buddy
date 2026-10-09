@@ -4,7 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // This machine's identity to an OpenClaw gateway.
 //
@@ -20,7 +20,7 @@ namespace ClaudeBuddy.Tests;
 // fixed key or read back from a file this test wrote, which is the whole of what
 // this file does.
 // The shared "Settings" collection rather than a private one: this file's own
-// comment gives the reason — its files live at ClaudeBuddySettings.Directory,
+// comment gives the reason — its files live at OrbweaverSettings.Directory,
 // one directory for the whole assembly — and that is exactly what every other
 // settings-touching class in here contends for too. Serialising against all of
 // them is strictly stronger than serialising against itself.
@@ -28,7 +28,7 @@ namespace ClaudeBuddy.Tests;
 public class OpenClawIdentityTests
 {
     // OpenClawIdentity caches the keypair and the token table for the process,
-    // and its files live at ClaudeBuddySettings.Directory — one directory for
+    // and its files live at OrbweaverSettings.Directory — one directory for
     // the whole assembly. Two of these running at once would read each other's
     // identity file, so they share a collection and xUnit runs them one at a
     // time. ResetForTests exists for the same reason; see its comment.
@@ -38,10 +38,10 @@ public class OpenClawIdentityTests
     // assembly reads settings through the same property.
     private static void InIsolation(Action<string> body)
     {
-        var previous = Environment.GetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR");
+        var previous = Environment.GetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR");
         var scratch = Path.Combine(Path.GetTempPath(), "cb-identity-" + Guid.NewGuid());
 
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", scratch);
+        Environment.SetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR", scratch);
         OpenClawIdentity.ResetForTests();
 
         try
@@ -50,7 +50,7 @@ public class OpenClawIdentityTests
         }
         finally
         {
-            Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", previous);
+            Environment.SetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR", previous);
             OpenClawIdentity.ResetForTests();
             try { Directory.Delete(scratch, recursive: true); } catch { }
         }
@@ -288,13 +288,13 @@ public class OpenClawIdentityTests
     [Fact]
     public void AnIdentityThatCannotBePersistedStillWorksForThisRun()
     {
-        var previous = Environment.GetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR");
+        var previous = Environment.GetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR");
         var blocker = Path.Combine(Path.GetTempPath(), "cb-identity-blocked-" + Guid.NewGuid());
         File.WriteAllText(blocker, "not a directory");
 
         try
         {
-            Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", blocker);
+            Environment.SetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR", blocker);
             OpenClawIdentity.ResetForTests();
 
             var identity = OpenClawIdentity.Current();
@@ -307,7 +307,7 @@ public class OpenClawIdentityTests
         }
         finally
         {
-            Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", previous);
+            Environment.SetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR", previous);
             OpenClawIdentity.ResetForTests();
             try { File.Delete(blocker); } catch { }
         }

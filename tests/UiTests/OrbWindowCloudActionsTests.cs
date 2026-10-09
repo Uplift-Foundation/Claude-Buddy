@@ -9,7 +9,7 @@ using Avalonia.Interactivity;
 using Avalonia.Threading;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-225: a cloud orb's "Archive this session" and "Delete this session…"
 // rows, as a user meets them — which orbs offer them, that both arm before
@@ -42,9 +42,9 @@ public class OrbWindowCloudActionsTests
 
     private sealed class Scope : IDisposable
     {
-        internal Scope(bool enabled = true) => ClaudeBuddySettings.ClaudeCloudEnabled = enabled;
+        internal Scope(bool enabled = true) => OrbweaverSettings.ClaudeCloudEnabled = enabled;
 
-        public void Dispose() => ClaudeBuddySettings.ClaudeCloudEnabled = false;
+        public void Dispose() => OrbweaverSettings.ClaudeCloudEnabled = false;
     }
 
     private static (OrbWindow Orb, List<string> Calls) OrbWith(

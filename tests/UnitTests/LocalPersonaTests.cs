@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // LocalPersona — which files a session's persona could be written in, which of
 // them actually says what, and what the orb ends up called.

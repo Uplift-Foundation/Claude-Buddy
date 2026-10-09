@@ -1,7 +1,7 @@
 using System.Text.Json.Nodes;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The chat panel's text size through a real settings file.
 //
@@ -23,8 +23,8 @@ public class ChatTextScaleSettingTests
 
     private static void PointSettingsAt(string dir)
     {
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
-        ClaudeBuddySettings.ReloadForTests();
+        Environment.SetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR", dir);
+        OrbweaverSettings.ReloadForTests();
     }
 
     [Fact]
@@ -33,9 +33,9 @@ public class ChatTextScaleSettingTests
         var dir = NewSettingsDir();
         PointSettingsAt(dir);
 
-        Assert.Equal(ChatZoom.Default, ClaudeBuddySettings.ChatTextScale, 3);
+        Assert.Equal(ChatZoom.Default, OrbweaverSettings.ChatTextScale, 3);
 
-        ClaudeBuddySettings.ChatTextScale = 1.5;
+        OrbweaverSettings.ChatTextScale = 1.5;
 
         var root = JsonNode.Parse(File.ReadAllText(Path.Combine(dir, "settings.json"))) as JsonObject;
         Assert.Equal(1.5, root!["chatTextScale"]!.GetValue<double>(), 3);
@@ -49,10 +49,10 @@ public class ChatTextScaleSettingTests
         var dir = NewSettingsDir();
         PointSettingsAt(dir);
 
-        ClaudeBuddySettings.ChatTextScale = 1.75;
+        OrbweaverSettings.ChatTextScale = 1.75;
 
         PointSettingsAt(dir);
-        Assert.Equal(1.75, ClaudeBuddySettings.ChatTextScale, 3);
+        Assert.Equal(1.75, OrbweaverSettings.ChatTextScale, 3);
     }
 
     [Theory]
@@ -71,7 +71,7 @@ public class ChatTextScaleSettingTests
 
         PointSettingsAt(dir);
 
-        var scale = ClaudeBuddySettings.ChatTextScale;
+        var scale = OrbweaverSettings.ChatTextScale;
         Assert.InRange(scale, ChatZoom.Min, ChatZoom.Max);
     }
 
@@ -88,9 +88,9 @@ public class ChatTextScaleSettingTests
             "{ \"version\": 1, \"chatTextScale\": 1.3, \"somethingFromANewerBuild\": \"keep me\" }");
 
         PointSettingsAt(dir);
-        Assert.Equal(1.3, ClaudeBuddySettings.ChatTextScale, 3);
+        Assert.Equal(1.3, OrbweaverSettings.ChatTextScale, 3);
 
-        ClaudeBuddySettings.ChatTextScale = 0.9;
+        OrbweaverSettings.ChatTextScale = 0.9;
 
         var root = JsonNode.Parse(File.ReadAllText(Path.Combine(dir, "settings.json"))) as JsonObject;
         Assert.Equal(0.9, root!["chatTextScale"]!.GetValue<double>(), 3);

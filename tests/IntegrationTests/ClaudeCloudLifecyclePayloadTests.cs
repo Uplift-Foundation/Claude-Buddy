@@ -6,7 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-225: archive and delete, end to end through the seam — the request the
 // app builds, handed to an ICloudApi built exactly as HttpCloudApi builds it,

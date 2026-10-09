@@ -5,7 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Reads Claude Code's JSONL transcript to extract the latest assistant
     // message text. Reads from the tail (transcripts reach tens of MB) and
@@ -146,7 +146,7 @@ namespace ClaudeBuddy
 
             home ??= Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             var dirs = new List<string> { Path.Combine(home, ".claude") };
-            foreach (var extra in ClaudeBuddySettings.ClaudeCodeProfileDirs)
+            foreach (var extra in OrbweaverSettings.ClaudeCodeProfileDirs)
                 dirs.Add(Path.Combine(home, extra));
 
             var encoded = EncodeCwd(cwd);
@@ -193,7 +193,7 @@ namespace ClaudeBuddy
             home ??= Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             var dirs = new List<string> { Path.Combine(home, ".claude") };
 
-            foreach (var extra in ClaudeBuddySettings.ClaudeCodeProfileDirs)
+            foreach (var extra in OrbweaverSettings.ClaudeCodeProfileDirs)
                 dirs.Add(Path.Combine(home, extra));
 
             var filename = sessionId + ".jsonl";

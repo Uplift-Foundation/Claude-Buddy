@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-143's regression test, driving the mechanism on purpose rather than
 // waiting for a CI runner to interleave into it.

@@ -6,7 +6,7 @@ using System.Linq;
 using System.Runtime.InteropServices;
 
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Speaks text aloud using the platform's built-in TTS: `say` on macOS,
     // PowerShell's SpeechSynthesizer on Windows. A second call while speech
@@ -227,7 +227,7 @@ namespace ClaudeBuddy
         public sealed record VoiceOption(SpeakEngine Engine, string Name, string Label);
 
         public static bool CustomCommandConfigured =>
-            !string.IsNullOrWhiteSpace(ClaudeBuddySettings.SpeakCommand);
+            !string.IsNullOrWhiteSpace(OrbweaverSettings.SpeakCommand);
 
         // Everything this machine can speak with, from every engine that is
         // actually available, in the order they are worth trying: the system voices
@@ -316,13 +316,13 @@ namespace ClaudeBuddy
         {
             if (options.Count == 0) return null;
 
-            var engine = EngineNamed(ClaudeBuddySettings.SpeakEngine);
+            var engine = EngineNamed(OrbweaverSettings.SpeakEngine);
 
             var name = engine switch
             {
-                SpeakEngine.Custom => ClaudeBuddySettings.SpeakCommandVoice ?? "",
-                SpeakEngine.Neural => ClaudeBuddySettings.NeuralVoice,
-                _ => ClaudeBuddySettings.SpeakVoice
+                SpeakEngine.Custom => OrbweaverSettings.SpeakCommandVoice ?? "",
+                SpeakEngine.Neural => OrbweaverSettings.NeuralVoice,
+                _ => OrbweaverSettings.SpeakVoice
             };
 
             return options.FirstOrDefault(o => o.Engine == engine
@@ -362,22 +362,22 @@ namespace ClaudeBuddy
         // Records a choice made in the settings window, writing both which engine
         // speaks and that engine's own voice key. The per-engine keys are kept
         // separate so switching away from an engine and back remembers what was
-        // chosen there — see the comments on them in ClaudeBuddySettings.
+        // chosen there — see the comments on them in OrbweaverSettings.
         public static void SelectVoice(VoiceOption option)
         {
             switch (option.Engine)
             {
                 case SpeakEngine.Custom:
-                    ClaudeBuddySettings.SpeakCommandVoice = option.Name;
-                    ClaudeBuddySettings.SpeakEngine = "custom";
+                    OrbweaverSettings.SpeakCommandVoice = option.Name;
+                    OrbweaverSettings.SpeakEngine = "custom";
                     break;
                 case SpeakEngine.Neural:
-                    ClaudeBuddySettings.NeuralVoice = option.Name;
-                    ClaudeBuddySettings.SpeakEngine = "neural";
+                    OrbweaverSettings.NeuralVoice = option.Name;
+                    OrbweaverSettings.SpeakEngine = "neural";
                     break;
                 default:
-                    ClaudeBuddySettings.SpeakVoice = option.Name;
-                    ClaudeBuddySettings.SpeakEngine = "system";
+                    OrbweaverSettings.SpeakVoice = option.Name;
+                    OrbweaverSettings.SpeakEngine = "system";
                     break;
             }
         }
@@ -392,7 +392,7 @@ namespace ClaudeBuddy
         {
             var found = new List<string>();
 
-            var command = ClaudeBuddySettings.SpeakVoicesCommand;
+            var command = OrbweaverSettings.SpeakVoicesCommand;
             if (string.IsNullOrWhiteSpace(command)) return found;
 
             try
@@ -409,7 +409,7 @@ namespace ClaudeBuddy
                 // script serving both roles branches on a flag, and reusing the
                 // speak arguments would hand that flag to the speaking invocation
                 // too, which would list voices instead of talking.
-                foreach (var argument in ClaudeBuddySettings.SpeakVoicesCommandArgs)
+                foreach (var argument in OrbweaverSettings.SpeakVoicesCommandArgs)
                 {
                     startInfo.ArgumentList.Add(argument);
                 }
@@ -822,7 +822,7 @@ namespace ClaudeBuddy
         // Read once per utterance, so moving the slider mid-sentence takes
         // effect from the next one rather than half-way through.
         internal static ProcessStartInfo? SystemSpeechStartInfo(string text, string voice, OSPlatform platform) =>
-            SystemSpeechStartInfo(text, voice, platform, ClaudeBuddySettings.SpeechVolume);
+            SystemSpeechStartInfo(text, voice, platform, OrbweaverSettings.SpeechVolume);
 
         internal static ProcessStartInfo? SystemSpeechStartInfo(string text, string voice, OSPlatform platform,
             double volume)
@@ -915,7 +915,7 @@ namespace ClaudeBuddy
         // The shorter overload is what StartCustomCommand calls, and it is
         // where the level is read.
         internal static ProcessStartInfo CustomCommandStartInfo(string command, string? voice) =>
-            CustomCommandStartInfo(command, voice, ClaudeBuddySettings.SpeechVolume);
+            CustomCommandStartInfo(command, voice, OrbweaverSettings.SpeechVolume);
 
         internal static ProcessStartInfo CustomCommandStartInfo(string command, string? voice, double volume)
         {
@@ -928,7 +928,7 @@ namespace ClaudeBuddy
                 CreateNoWindow = true
             };
 
-            foreach (var argument in ClaudeBuddySettings.SpeakCommandArgs)
+            foreach (var argument in OrbweaverSettings.SpeakCommandArgs)
             {
                 startInfo.ArgumentList.Add(argument);
             }
@@ -940,7 +940,7 @@ namespace ClaudeBuddy
             // empty so a wrapper can tell "no choice made" from a stale value
             // inherited from this process's own environment.
             startInfo.Environment["CLAUDEBUDDY_VOICE"] = voice ??
-                ClaudeBuddySettings.SpeakCommandVoice ?? "";
+                OrbweaverSettings.SpeakCommandVoice ?? "";
 
             // CB-200: the Speech level, 0 to 1, invariant ("0.5", never "0,5"),
             // under the same name the Kokoro engine reads. Optional for the
@@ -959,7 +959,7 @@ namespace ClaudeBuddy
             return startInfo;
         }
 
-        // Whatever the user pointed ClaudeBuddySettings.SpeakCommand at. Returns
+        // Whatever the user pointed OrbweaverSettings.SpeakCommand at. Returns
         // false only when no command is configured — a configured command that
         // fails to launch returns true, having reported why, because falling
         // through to a system voice would disguise the problem.
@@ -973,7 +973,7 @@ namespace ClaudeBuddy
         [ExcludeFromCodeCoverage]
         private static bool StartCustomCommand(string text, string? voice = null)
         {
-            var command = ClaudeBuddySettings.SpeakCommand;
+            var command = OrbweaverSettings.SpeakCommand;
             if (string.IsNullOrWhiteSpace(command)) return false;
 
             var startInfo = CustomCommandStartInfo(command, voice);
@@ -1053,7 +1053,7 @@ namespace ClaudeBuddy
 
             var proc = NeuralSpeech.Start(
                 text,
-                voice ?? ClaudeBuddySettings.NeuralVoice,
+                voice ?? OrbweaverSettings.NeuralVoice,
                 rate,
                 onSpeaking: () => Enter(SpeakState.Speaking));
 

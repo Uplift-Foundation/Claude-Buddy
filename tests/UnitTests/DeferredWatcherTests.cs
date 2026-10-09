@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-234. On macOS turning a FileSystemWatcher on can wait on the kernel's
 // machine-wide sync(2) -- 118.7 s once, measured. DeferredWatcher exists so no

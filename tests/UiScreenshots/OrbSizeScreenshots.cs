@@ -1,7 +1,7 @@
 using Avalonia.Headless.XUnit;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Captures for CB-198's orb size: the two ends of the range, and a team member
 // at the top end wearing every badge a member can. A LayoutTransform scales the
@@ -13,9 +13,9 @@ namespace ClaudeBuddy.Tests;
 [Collection("Settings")]
 public class OrbSizeScreenshots : IDisposable
 {
-    private readonly double _globalBefore = ClaudeBuddySettings.OrbSize;
+    private readonly double _globalBefore = OrbweaverSettings.OrbSize;
 
-    public void Dispose() => ClaudeBuddySettings.OrbSize = _globalBefore;
+    public void Dispose() => OrbweaverSettings.OrbSize = _globalBefore;
 
     private static SessionStatus Status() => new()
     {
@@ -31,7 +31,7 @@ public class OrbSizeScreenshots : IDisposable
     [AvaloniaFact]
     public void AnOrbAtTheSmallestSize()
     {
-        ClaudeBuddySettings.OrbSize = OrbSizing.Min;
+        OrbweaverSettings.OrbSize = OrbSizing.Min;
         var orb = new OrbWindow(Guid.NewGuid().ToString());
         orb.UpdateFrom(Status());
 
@@ -41,7 +41,7 @@ public class OrbSizeScreenshots : IDisposable
     [AvaloniaFact]
     public void AnOrbAtDoubleSize()
     {
-        ClaudeBuddySettings.OrbSize = 2.0;
+        OrbweaverSettings.OrbSize = 2.0;
         var orb = new OrbWindow(Guid.NewGuid().ToString());
         orb.UpdateFrom(Status());
 
@@ -51,7 +51,7 @@ public class OrbSizeScreenshots : IDisposable
     [AvaloniaFact]
     public void ATeamMemberAtDoubleSizeKeepsEveryBadgeOnItsSmallerRim()
     {
-        ClaudeBuddySettings.OrbSize = 2.0;
+        OrbweaverSettings.OrbSize = 2.0;
         var orb = new OrbWindow(Guid.NewGuid().ToString());
         var status = Status();
         status.Heartbeat = true;

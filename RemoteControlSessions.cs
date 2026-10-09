@@ -1,14 +1,14 @@
 using System.Diagnostics.CodeAnalysis;
 using Avalonia.Threading;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // The remote half of what SessionManager displays: sessions running on the
     // user's *other* machines, published as an immutable snapshot the scan reads
     // for free.
     //
     // **Everything here arrives over the direct link** (PeerSessions and
-    // PeerMirrorHost) from a Claude Buddy running on the far machine. This class
+    // PeerMirrorHost) from an Orbweaver running on the far machine. This class
     // used to be the home of the Remote Control relay — a live Claude Code
     // session per account, polled for its peer list — and 937de9ec deleted that
     // relay. CB-238 then deleted what it left behind here: the table the relays
@@ -159,7 +159,7 @@ namespace ClaudeBuddy
         }
 
         public static IReadOnlyList<Remote> Snapshot() =>
-            Visible(_snapshot, ClaudeBuddySettings.PeerLinkEnabled);
+            Visible(_snapshot, OrbweaverSettings.PeerLinkEnabled);
 
         // Whether remote orbs are shown at all.
         //
@@ -423,7 +423,7 @@ namespace ClaudeBuddy
             var rows = client is null
                 ? Array.Empty<Remote>()
                 : RemotesFromRoster(
-                    ClaudeBuddySettings.DefaultRemoteControlProfileDir,
+                    OrbweaverSettings.DefaultRemoteControlProfileDir,
                     client.Known(),
                     Now());
 

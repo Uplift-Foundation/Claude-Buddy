@@ -1,5 +1,5 @@
 using System.Text.Json;
-using ClaudeBuddy;
+using Orbweaver;
 
 // Asks the gateway a question and prints what it says, using the app's own
 // transport rather than a second one.
@@ -18,12 +18,12 @@ using ClaudeBuddy;
 // Read-only by construction: it never calls chat.send, and it requests whatever
 // scopes the app's settings already granted rather than asking for more.
 
-var host = ClaudeBuddySettings.OpenClawHost;
-var port = ClaudeBuddySettings.OpenClawPort;
+var host = OrbweaverSettings.OpenClawHost;
+var port = OrbweaverSettings.OpenClawPort;
 
 if (string.IsNullOrWhiteSpace(host))
 {
-    Console.Error.WriteLine("No gateway address in settings. Turn OpenClaw on in Claude Buddy first.");
+    Console.Error.WriteLine("No gateway address in settings. Turn OpenClaw on in Orbweaver first.");
     return 1;
 }
 
@@ -39,7 +39,7 @@ if (string.IsNullOrWhiteSpace(token))
 
 using var gateway = new OpenClawGateway(host, port, token!);
 
-var pinned = ClaudeBuddySettings.OpenClawFingerprint;
+var pinned = OrbweaverSettings.OpenClawFingerprint;
 var result = await gateway.ConnectAsync(string.IsNullOrEmpty(pinned) ? null : pinned, CancellationToken.None);
 
 if (result.Outcome != OpenClawGateway.Outcome.Connected)

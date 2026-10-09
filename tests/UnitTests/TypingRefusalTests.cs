@@ -1,7 +1,7 @@
 using System;
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 // What a live view says when a keystroke was refused on the other machine, and
 // when a message this side sent stops waiting to be matched.

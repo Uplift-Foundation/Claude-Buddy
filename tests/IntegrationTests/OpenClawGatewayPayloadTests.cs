@@ -1,7 +1,7 @@
 using System.Text.Json;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The gateway's two payloads, end to end, against fixtures derived from what a
 // real gateway actually returned.
@@ -583,9 +583,9 @@ public class OpenClawGatewayPayloadTests
     private static (IReadOnlyList<OpenClawSessions.Session> Sessions, int Total) Parse(
         int withinMinutes)
     {
-        ClaudeBuddySettings.OpenClawHeartbeatMode = ClusterMode.WithChats;
-        ClaudeBuddySettings.OpenClawCronMode = ClusterMode.WithChats;
-        ClaudeBuddySettings.OpenClawActiveWithinMinutes = withinMinutes;
+        OrbweaverSettings.OpenClawHeartbeatMode = ClusterMode.WithChats;
+        OrbweaverSettings.OpenClawCronMode = ClusterMode.WithChats;
+        OrbweaverSettings.OpenClawActiveWithinMinutes = withinMinutes;
 
         return OpenClawSessions.Parse(Json(SessionsList), Now);
     }
@@ -628,7 +628,7 @@ public class OpenClawGatewayPayloadTests
     public void AMemberOutsideTheWindowStillHasAnAddress()
     {
         Parse(withinMinutes: 60);
-        ClaudeBuddySettings.OpenClawEnabled = true;
+        OrbweaverSettings.OpenClawEnabled = true;
 
         foreach (var key in OpenClawSessions.MembersOfRoom(Room))
         {
@@ -649,7 +649,7 @@ public class OpenClawGatewayPayloadTests
     public void EachMemberCarriesItsOwnAccount()
     {
         Parse(withinMinutes: 60);
-        ClaudeBuddySettings.OpenClawEnabled = true;
+        OrbweaverSettings.OpenClawEnabled = true;
 
         var accounts = OpenClawSessions.MembersOfRoom(Room)
             .Select(k => ((OpenClawChatSession)OpenClawSessions.ChatFor("openclaw:" + k, "#lobby")!)
@@ -927,11 +927,11 @@ public class OpenClawGatewayPayloadTests
     [Fact]
     public async Task ARoomSendThatCannotHappenSaysSoInTheRoom()
     {
-        ClaudeBuddySettings.ReloadForTests();
-        ClaudeBuddySettings.OpenClawReplyEnabled = true;
+        OrbweaverSettings.ReloadForTests();
+        OrbweaverSettings.OpenClawReplyEnabled = true;
 
         Parse(withinMinutes: 60);
-        ClaudeBuddySettings.OpenClawEnabled = true;
+        OrbweaverSettings.OpenClawEnabled = true;
 
         var members = OpenClawSessions.MembersOfRoom(Room)
             .Select(k => ((OpenClawChatSession)OpenClawSessions.ChatFor("openclaw:" + k, "#lobby")!,

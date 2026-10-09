@@ -3,7 +3,7 @@ using Avalonia.Headless.XUnit;
 using Avalonia.Threading;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-167's turn sounds over a real scan, the way SessionScanTests proves the
 // orb lifecycle over one: TurnSignalsTests and TurnSoundPolicyTests already
@@ -45,13 +45,13 @@ public class TurnSoundScanTests : IDisposable
         // A fresh settings directory per test, the same isolation
         // SessionScanTests' sibling suites use — this class does not touch
         // it directly, but Snapshot() inside TurnSounds reads
-        // ClaudeBuddySettings, and a stale TurnSoundsEnabled=false left by
+        // OrbweaverSettings, and a stale TurnSoundsEnabled=false left by
         // another test would make every case here read as "silent for the
         // wrong reason".
         Environment.SetEnvironmentVariable(
-            "CLAUDE_BUDDY_SETTINGS_DIR",
+            "ORBWEAVER_SETTINGS_DIR",
             Path.Combine(Path.GetTempPath(), "cb-turnsound-settings-" + Guid.NewGuid()));
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
 
         // The rate-limit clock TurnSounds owns is process-wide, so a test
         // left mid-gap by whichever case ran before this one would make an
@@ -192,8 +192,8 @@ public class TurnSoundScanTests : IDisposable
 
     private static SessionManager Scan(Scratch scratch)
     {
-        ClaudeBuddySettings.ClaudeCodeEnabled = true;
-        ClaudeBuddySettings.CodexEnabled = true;
+        OrbweaverSettings.ClaudeCodeEnabled = true;
+        OrbweaverSettings.CodexEnabled = true;
 
         var manager = new SessionManager(scratch.Dir);
         manager.ScanAndUpdate();
@@ -240,7 +240,7 @@ public class TurnSoundScanTests : IDisposable
             signal.TrySetResult(true);
         };
 
-        ClaudeBuddySettings.ClaudeCodeEnabled = true;
+        OrbweaverSettings.ClaudeCodeEnabled = true;
         var manager = new SessionManager(scratch.Dir);
 
         await manager.ScheduleScan();
@@ -390,7 +390,7 @@ public class TurnSoundScanTests : IDisposable
     [AvaloniaFact]
     public async Task ATurnFinishedSetToSummarySpeaksTheSessionsLastTurnRatherThanChiming()
     {
-        ClaudeBuddySettings.TurnFinishedSound = "summary";
+        OrbweaverSettings.TurnFinishedSound = "summary";
 
         using var scratch = new Scratch();
         const string AssistantSaid =
@@ -416,7 +416,7 @@ public class TurnSoundScanTests : IDisposable
     [AvaloniaFact]
     public async Task ATurnFinishedSetToSummaryFallsBackToTheChimeWhenThereIsNoTextToSpeak()
     {
-        ClaudeBuddySettings.TurnFinishedSound = "summary";
+        OrbweaverSettings.TurnFinishedSound = "summary";
 
         using var scratch = new Scratch();
         // No transcript at all: FindSpeakableText has nothing to read, so
@@ -564,7 +564,7 @@ public class TurnSoundScanTests : IDisposable
         File.WriteAllText(attention, "");
         try
         {
-            ClaudeBuddySettings.NeedsAttentionSound = attention;
+            OrbweaverSettings.NeedsAttentionSound = attention;
 
             using var scratch = new Scratch();
             using var other = StartLongRunningProcess();

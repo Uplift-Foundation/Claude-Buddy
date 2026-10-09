@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests
+namespace Orbweaver.Tests
 {
     // The transcript and dialog parsers, as a test rather than as an exe you
     // have to remember to run.

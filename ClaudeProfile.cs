@@ -1,6 +1,6 @@
 using System.IO;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Which config directory to hand a `claude` this app starts, given the
     // profile the user named — and, for the default profile, the answer is
@@ -49,7 +49,7 @@ namespace ClaudeBuddy
         // ignored for the same reason it is there — Windows paths are, and one
         // account reached under two capitalizations is one account.
         internal static string? ConfigDirFor(string home, string? profileDir) =>
-            ConfigDirFor(home, profileDir, ClaudeBuddySettings.DefaultRemoteControlProfileDir);
+            ConfigDirFor(home, profileDir, OrbweaverSettings.DefaultRemoteControlProfileDir);
 
         // The same rule with the default directory named by the caller
         // (CB-203): ".codex" for CODEX_HOME and ".grok" for GROK_HOME go

@@ -1,7 +1,7 @@
 using Avalonia.Headless.XUnit;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // RemoteControlChatSession drives the panel for a session on another machine.
 //
@@ -98,12 +98,12 @@ public class RemoteControlChatSessionTests
         // failed on the wording of a message it was never testing.
         //
         // The state this test needs is part of the test, so it is set here.
-        ClaudeBuddySettings.RemoteControlEnabled = false;
+        OrbweaverSettings.RemoteControlEnabled = false;
         // Both transports, because "off" is now two switches. A test that
         // turns one off and leaves the other to whatever the last test set
         // is asserting about a state it did not arrange — and settings here
         // persist through ReloadForTests, since the setter writes the file.
-        ClaudeBuddySettings.PeerLinkEnabled = false;
+        OrbweaverSettings.PeerLinkEnabled = false;
 
         var outcome = await session.SendAsync("run the tests");
 
@@ -129,11 +129,11 @@ public class RemoteControlChatSessionTests
     [AvaloniaFact]
     public async Task WithNoLiveViewSendingSaysThereIsNothingToTypeInto()
     {
-        var before = ClaudeBuddySettings.PeerLinkEnabled;
+        var before = OrbweaverSettings.PeerLinkEnabled;
         try
         {
-            ClaudeBuddySettings.ReloadForTests();
-            ClaudeBuddySettings.PeerLinkEnabled = true;
+            OrbweaverSettings.ReloadForTests();
+            OrbweaverSettings.PeerLinkEnabled = true;
 
             var session = NewSession();
             Assert.False(session.IsMirroring);
@@ -146,7 +146,7 @@ public class RemoteControlChatSessionTests
         }
         finally
         {
-            ClaudeBuddySettings.PeerLinkEnabled = before;
+            OrbweaverSettings.PeerLinkEnabled = before;
         }
     }
 
@@ -198,11 +198,11 @@ public class RemoteControlChatSessionTests
         // the user's turn and a note saying why. That is the messaging-mode
         // traffic still reachable now the relay's inbound messages are gone
         // (CB-238), and it is bounded by the same rule.
-        var before = ClaudeBuddySettings.PeerLinkEnabled;
+        var before = OrbweaverSettings.PeerLinkEnabled;
         try
         {
-            ClaudeBuddySettings.ReloadForTests();
-            ClaudeBuddySettings.PeerLinkEnabled = true;
+            OrbweaverSettings.ReloadForTests();
+            OrbweaverSettings.PeerLinkEnabled = true;
 
             var session = NewSession();
 
@@ -215,7 +215,7 @@ public class RemoteControlChatSessionTests
         }
         finally
         {
-            ClaudeBuddySettings.PeerLinkEnabled = before;
+            OrbweaverSettings.PeerLinkEnabled = before;
         }
     }
 }

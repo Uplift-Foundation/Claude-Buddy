@@ -51,7 +51,7 @@ cd "$(dirname "$0")/.."
 # it measured anything (CB-229, found on the Windows box). Same digest either way.
 if command -v shasum >/dev/null 2>&1; then HASHER=shasum; else HASHER=sha1sum; fi
 CHECKOUT_KEY="$(printf '%s' "$PWD" | $HASHER | cut -c1-16)"
-OUT="${TMPDIR:-/tmp}/claude-buddy-coverage/$CHECKOUT_KEY"
+OUT="${TMPDIR:-/tmp}/orbweaver-coverage/$CHECKOUT_KEY"
 rm -rf "$OUT"
 mkdir -p "$OUT"
 
@@ -189,7 +189,7 @@ note_missing_report integration tests/IntegrationTests
 # repoints TMPDIR sends the client looking somewhere the server never bound. It
 # then fails one of two ways depending only on how long the wrong path is, which
 # is why it reads as two separate bugs. CB-172; the four TestBootstrap.cs files
-# carry the full story and CLAUDE_BUDDY_STATUS_ROOT is the seam that replaced it.
+# carry the full story and ORBWEAVER_STATUS_ROOT is the seam that replaced it.
 #
 # **And do not check for the report by asking whether the file is there.** Both
 # of those failures still left a 5.3MB cobertura file on disk, freshly written,

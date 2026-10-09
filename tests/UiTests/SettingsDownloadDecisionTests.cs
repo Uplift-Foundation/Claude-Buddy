@@ -7,7 +7,7 @@ using Avalonia.Headless.XUnit;
 using Avalonia.LogicalTree;
 using Xunit;
 
-namespace ClaudeBuddy.UiTests;
+namespace Orbweaver.UiTests;
 
 // Whether flicking a switch should start a download, and two picker rules that
 // only show up with an odd value already stored.
@@ -34,7 +34,7 @@ public class SettingsDownloadDecisionTests
     [AvaloniaFact]
     public void TurningTheNeuralVoiceOffNeverStartsADownload()
     {
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
 
         Assert.False(SettingsWindow.ShouldStartNeuralDownload(false));
     }
@@ -42,7 +42,7 @@ public class SettingsDownloadDecisionTests
     [AvaloniaFact]
     public void TurningItOnWithNothingOnDiskStartsOne()
     {
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
         WipeEngine();
 
         Assert.True(SettingsWindow.ShouldStartNeuralDownload(true));
@@ -53,7 +53,7 @@ public class SettingsDownloadDecisionTests
     [AvaloniaFact]
     public void TurningItOnWithTheEngineAlreadyThereDoesNotRefetchIt()
     {
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
         PlaceEngine();
 
         try
@@ -72,7 +72,7 @@ public class SettingsDownloadDecisionTests
     [AvaloniaFact]
     public void TurningDictationOffNeverStartsADownload()
     {
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
 
         Assert.False(SettingsWindow.ShouldStartVoiceInputDownload(false));
     }
@@ -84,7 +84,7 @@ public class SettingsDownloadDecisionTests
     [AvaloniaFact]
     public void TurningDictationOnAsksForTheModelOnlyWhenItIsMissing()
     {
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
 
         Assert.Equal(
             !SpeechTranscriber.ModelDownloaded,

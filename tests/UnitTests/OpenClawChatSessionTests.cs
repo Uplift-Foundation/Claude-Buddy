@@ -1,7 +1,7 @@
 using System.Text.Json;
 using Xunit;
 
-namespace ClaudeBuddy.Tests
+namespace Orbweaver.Tests
 {
     // A gateway conversation as the chat panel sees it: events in, turns out.
     //
@@ -616,10 +616,10 @@ namespace ClaudeBuddy.Tests
         {
             var session = Session();
 
-            ClaudeBuddySettings.OpenClawReplyEnabled = true;
+            OrbweaverSettings.OpenClawReplyEnabled = true;
             Assert.Equal("Message…", session.ComposerHint);
 
-            ClaudeBuddySettings.OpenClawReplyEnabled = false;
+            OrbweaverSettings.OpenClawReplyEnabled = false;
             Assert.Equal("Replying is off", session.ComposerHint);
         }
 

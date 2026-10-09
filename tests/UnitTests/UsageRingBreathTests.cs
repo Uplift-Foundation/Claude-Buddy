@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-219: the breath a usage ring in the danger band takes, now sampled by a
 // 20 fps ticker instead of run as an infinite style animation. These pin that it

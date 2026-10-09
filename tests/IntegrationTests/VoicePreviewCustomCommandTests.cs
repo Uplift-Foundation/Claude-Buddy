@@ -1,9 +1,9 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Xunit;
-using Speak = ClaudeBuddy.TextToSpeech.SpeakState;
+using Speak = Orbweaver.TextToSpeech.SpeakState;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-222: the one seam the voice preview has with something this process does
 // not own — the user's own speakCommand, run as a real subprocess.
@@ -65,9 +65,9 @@ public class VoicePreviewCustomCommandTests
 
     private static void Point(string dir, string command)
     {
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
-        ClaudeBuddySettings.ReloadForTests();
-        ClaudeBuddySettings.SpeakCommand = command;
+        Environment.SetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR", dir);
+        OrbweaverSettings.ReloadForTests();
+        OrbweaverSettings.SpeakCommand = command;
     }
 
     // Pids of the long-running child, found by its command line. Read from the
@@ -141,7 +141,7 @@ public class VoicePreviewCustomCommandTests
     public async Task ThePreviewRunsTheUsersCommandWithTheVoiceAndSampleAndStopsItsWholeTree()
     {
         var dir = NewDir();
-        var previousDir = Environment.GetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR");
+        var previousDir = Environment.GetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR");
         var transitions = new List<Speak>();
         void Record(Speak s) { lock (transitions) transitions.Add(s); }
 
@@ -183,8 +183,8 @@ public class VoicePreviewCustomCommandTests
             TextToSpeech.StateChanged -= Record;
             KillSurvivors();
             TextToSpeech.Cancel();
-            Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", previousDir);
-            ClaudeBuddySettings.ReloadForTests();
+            Environment.SetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR", previousDir);
+            OrbweaverSettings.ReloadForTests();
             VoicePreview.ResetForTests();
         }
     }
@@ -193,7 +193,7 @@ public class VoicePreviewCustomCommandTests
     public async Task ACommandThatCannotStartLeavesTheButtonIdleAndSubstitutesNothing()
     {
         var dir = NewDir();
-        var previousDir = Environment.GetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR");
+        var previousDir = Environment.GetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR");
         var transitions = new List<Speak>();
         void Record(Speak s) { lock (transitions) transitions.Add(s); }
 
@@ -223,8 +223,8 @@ public class VoicePreviewCustomCommandTests
             TextToSpeech.SilenceForTests = true;
             TextToSpeech.StateChanged -= Record;
             TextToSpeech.Cancel();
-            Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", previousDir);
-            ClaudeBuddySettings.ReloadForTests();
+            Environment.SetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR", previousDir);
+            OrbweaverSettings.ReloadForTests();
             VoicePreview.ResetForTests();
         }
     }

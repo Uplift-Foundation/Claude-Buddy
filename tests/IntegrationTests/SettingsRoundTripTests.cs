@@ -1,11 +1,11 @@
 using System.Text.Json.Nodes;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
-// ClaudeBuddySettings is a static class: one model shared by the whole
+// OrbweaverSettings is a static class: one model shared by the whole
 // process, guarded by its own lock but with no isolation between test
-// cases. Every test here repoints CLAUDE_BUDDY_SETTINGS_DIR and calls
+// cases. Every test here repoints ORBWEAVER_SETTINGS_DIR and calls
 // ReloadForTests() before touching anything, and the whole class is
 // [Collection("Settings")] so xUnit never runs two of them at once — without
 // that, two settings tests running in parallel would stomp each other's
@@ -27,20 +27,20 @@ public class SettingsRoundTripTests
 
     private static void PointSettingsAt(string dir)
     {
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
-        ClaudeBuddySettings.ReloadForTests();
+        Environment.SetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR", dir);
+        OrbweaverSettings.ReloadForTests();
     }
 
     [Fact]
     public void SettingWithADirectSetter_IsWrittenToDiskImmediately()
     {
-        // TwoLetterGlyphs's setter calls Save() directly (ClaudeBuddySettings.cs
+        // TwoLetterGlyphs's setter calls Save() directly (OrbweaverSettings.cs
         // ~line 601), not SaveSoon() — no debounce, so it should be on disk the
         // instant the setter returns.
         var dir = NewSettingsDir();
         PointSettingsAt(dir);
 
-        ClaudeBuddySettings.TwoLetterGlyphs = true;
+        OrbweaverSettings.TwoLetterGlyphs = true;
 
         var settingsPath = Path.Combine(dir, "settings.json");
         Assert.True(File.Exists(settingsPath));
@@ -61,15 +61,15 @@ public class SettingsRoundTripTests
         var dir = NewSettingsDir();
         PointSettingsAt(dir);
 
-        Assert.Equal(ClusterMode.WithChats, ClaudeBuddySettings.OpenClawHeartbeatMode);
-        Assert.Equal(ClusterMode.WithChats, ClaudeBuddySettings.OpenClawCronMode);
+        Assert.Equal(ClusterMode.WithChats, OrbweaverSettings.OpenClawHeartbeatMode);
+        Assert.Equal(ClusterMode.WithChats, OrbweaverSettings.OpenClawCronMode);
 
         // Hidden in particular for the heartbeats, because that is the value a
         // bug would produce by accident: a missing key reads as WithChats, so
         // only Hidden proves the write happened.
-        ClaudeBuddySettings.OpenClawHeartbeatMode = ClusterMode.Hidden;
-        ClaudeBuddySettings.OpenClawCronMode = ClusterMode.OwnShape;
-        ClaudeBuddySettings.OpenClawCronShape = "star";
+        OrbweaverSettings.OpenClawHeartbeatMode = ClusterMode.Hidden;
+        OrbweaverSettings.OpenClawCronMode = ClusterMode.OwnShape;
+        OrbweaverSettings.OpenClawCronShape = "star";
 
         var settingsPath = Path.Combine(dir, "settings.json");
         var root = JsonNode.Parse(File.ReadAllText(settingsPath)) as JsonObject;
@@ -85,9 +85,9 @@ public class SettingsRoundTripTests
 
         // And all of it survives a reload, which is what the settings are for.
         PointSettingsAt(dir);
-        Assert.Equal(ClusterMode.Hidden, ClaudeBuddySettings.OpenClawHeartbeatMode);
-        Assert.Equal(ClusterMode.OwnShape, ClaudeBuddySettings.OpenClawCronMode);
-        Assert.Equal("star", ClaudeBuddySettings.OpenClawCronShape);
+        Assert.Equal(ClusterMode.Hidden, OrbweaverSettings.OpenClawHeartbeatMode);
+        Assert.Equal(ClusterMode.OwnShape, OrbweaverSettings.OpenClawCronMode);
+        Assert.Equal("star", OrbweaverSettings.OpenClawCronShape);
     }
 
     [Theory]
@@ -110,11 +110,11 @@ public class SettingsRoundTripTests
 
         PointSettingsAt(dir);
 
-        Assert.Equal(expected, ClaudeBuddySettings.OpenClawHeartbeatMode);
+        Assert.Equal(expected, OrbweaverSettings.OpenClawHeartbeatMode);
 
         // Crons had no setting at all before this, so there is nothing to
         // migrate and the default is the behaviour they already had.
-        Assert.Equal(ClusterMode.WithChats, ClaudeBuddySettings.OpenClawCronMode);
+        Assert.Equal(ClusterMode.WithChats, OrbweaverSettings.OpenClawCronMode);
     }
 
     [Fact]
@@ -136,7 +136,7 @@ public class SettingsRoundTripTests
 
         PointSettingsAt(dir);
 
-        Assert.Equal(ClusterMode.Hidden, ClaudeBuddySettings.OpenClawHeartbeatMode);
+        Assert.Equal(ClusterMode.Hidden, OrbweaverSettings.OpenClawHeartbeatMode);
     }
 
     [Fact]
@@ -160,11 +160,11 @@ public class SettingsRoundTripTests
         PointSettingsAt(dir);
 
         // Both fall back to the default rather than throwing...
-        Assert.Equal(ClusterMode.WithChats, ClaudeBuddySettings.OpenClawHeartbeatMode);
-        Assert.Equal(ClusterMode.WithChats, ClaudeBuddySettings.OpenClawCronMode);
+        Assert.Equal(ClusterMode.WithChats, OrbweaverSettings.OpenClawHeartbeatMode);
+        Assert.Equal(ClusterMode.WithChats, OrbweaverSettings.OpenClawCronMode);
 
         // ...and, the point of the test, the rest of the file is still there.
-        Assert.True(ClaudeBuddySettings.TwoLetterGlyphs);
+        Assert.True(OrbweaverSettings.TwoLetterGlyphs);
     }
 
     [Fact]
@@ -179,10 +179,10 @@ public class SettingsRoundTripTests
         // the interaction between Load and Save that breaks, not the list.
         var dir = NewSettingsDir();
         PointSettingsAt(dir);
-        ClaudeBuddySettings.OpenClawHeartbeatMode = ClusterMode.Hidden;
+        OrbweaverSettings.OpenClawHeartbeatMode = ClusterMode.Hidden;
 
         PointSettingsAt(dir);
-        ClaudeBuddySettings.TwoLetterGlyphs = true;   // any Save at all
+        OrbweaverSettings.TwoLetterGlyphs = true;   // any Save at all
 
         var text = File.ReadAllText(Path.Combine(dir, "settings.json"));
         var root = JsonNode.Parse(text) as JsonObject;
@@ -202,7 +202,7 @@ public class SettingsRoundTripTests
         }
     }
 
-    // The single most valuable untested piece of ClaudeBuddySettings.cs, per
+    // The single most valuable untested piece of OrbweaverSettings.cs, per
     // its own comment on _unknownKeys (~line 38): Save() rebuilds the whole
     // document from the in-memory model, so any key it doesn't know about
     // would otherwise be silently deleted the next time anything is saved —
@@ -229,7 +229,7 @@ public class SettingsRoundTripTests
         // Any real setter works here; TwoLetterGlyphs's Save() is direct and
         // synchronous, so the write below is guaranteed to have happened by
         // the time this method returns.
-        ClaudeBuddySettings.TwoLetterGlyphs = true;
+        OrbweaverSettings.TwoLetterGlyphs = true;
 
         var rewritten = JsonNode.Parse(File.ReadAllText(settingsPath)) as JsonObject;
         Assert.NotNull(rewritten);
@@ -258,13 +258,13 @@ public class SettingsRoundTripTests
         var dir = NewSettingsDir();
         PointSettingsAt(dir);
 
-        ClaudeBuddySettings.ArrangeAnchor = new ClaudeBuddySettings.OrbPlacement(640, 360);
+        OrbweaverSettings.ArrangeAnchor = new OrbweaverSettings.OrbPlacement(640, 360);
 
         // Simulate a relaunch: force the next access to re-read settings.json
         // from disk rather than serve the in-memory model.
         PointSettingsAt(dir);
 
-        var restored = ClaudeBuddySettings.ArrangeAnchor;
+        var restored = OrbweaverSettings.ArrangeAnchor;
         Assert.NotNull(restored);
         Assert.Equal(640, restored!.X);
         Assert.Equal(360, restored.Y);
@@ -272,7 +272,7 @@ public class SettingsRoundTripTests
 
     // IdleColor/GeneratingColor/WaitingColor are the only three setters that
     // go through SaveSoon() instead of Save() directly (grep confirms — see
-    // ClaudeBuddySettings.cs ~line 630-646), because the colour pickers raise
+    // OrbweaverSettings.cs ~line 630-646), because the colour pickers raise
     // a change event on every pointer move and a direct Save() per event
     // would thrash the disk. SaveSoon() debounces via a DispatcherTimer.
     //
@@ -302,14 +302,14 @@ public class SettingsRoundTripTests
         PointSettingsAt(dir);
         var settingsPath = Path.Combine(dir, "settings.json");
 
-        ClaudeBuddySettings.IdleColor = "green";
+        OrbweaverSettings.IdleColor = "green";
 
         Assert.False(
             File.Exists(settingsPath),
             "SaveSoon() debounces via a DispatcherTimer that nothing in this test process pumps, " +
             "so the write should still be pending immediately after the setter returns");
 
-        ClaudeBuddySettings.FlushPendingSave();
+        OrbweaverSettings.FlushPendingSave();
 
         Assert.True(
             File.Exists(settingsPath),
@@ -336,18 +336,18 @@ public class SettingsRoundTripTests
         var dir = NewSettingsDir();
         PointSettingsAt(dir);
 
-        ClaudeBuddySettings.RemoteControlEnabled = true;
-        ClaudeBuddySettings.RemoteControlProfileDir = ".claude-board";
-        ClaudeBuddySettings.RemoteControlIdleMinutes = 25;
-        ClaudeBuddySettings.RemoteControlServeOnLaunch = true;
+        OrbweaverSettings.RemoteControlEnabled = true;
+        OrbweaverSettings.RemoteControlProfileDir = ".claude-board";
+        OrbweaverSettings.RemoteControlIdleMinutes = 25;
+        OrbweaverSettings.RemoteControlServeOnLaunch = true;
 
         // Back from disk, not from the in-memory model the setters just wrote.
         PointSettingsAt(dir);
 
-        Assert.True(ClaudeBuddySettings.RemoteControlEnabled);
-        Assert.Equal(".claude-board", ClaudeBuddySettings.RemoteControlProfileDir);
-        Assert.Equal(25, ClaudeBuddySettings.RemoteControlIdleMinutes);
-        Assert.True(ClaudeBuddySettings.RemoteControlServeOnLaunch);
+        Assert.True(OrbweaverSettings.RemoteControlEnabled);
+        Assert.Equal(".claude-board", OrbweaverSettings.RemoteControlProfileDir);
+        Assert.Equal(25, OrbweaverSettings.RemoteControlIdleMinutes);
+        Assert.True(OrbweaverSettings.RemoteControlServeOnLaunch);
     }
 
     [Fact]
@@ -358,20 +358,20 @@ public class SettingsRoundTripTests
 
         // Off by default: enabling it is what permits Buddy to start a real
         // Claude Code session on the user's account, which costs them quota.
-        Assert.False(ClaudeBuddySettings.RemoteControlEnabled);
+        Assert.False(OrbweaverSettings.RemoteControlEnabled);
 
         // Never empty — the bridge has to launch under some config directory.
         Assert.Equal(
-            ClaudeBuddySettings.DefaultRemoteControlProfileDir,
-            ClaudeBuddySettings.RemoteControlProfileDir);
+            OrbweaverSettings.DefaultRemoteControlProfileDir,
+            OrbweaverSettings.RemoteControlProfileDir);
 
         Assert.Equal(
-            ClaudeBuddySettings.DefaultRemoteControlIdle,
-            ClaudeBuddySettings.RemoteControlIdleMinutes);
+            OrbweaverSettings.DefaultRemoteControlIdle,
+            OrbweaverSettings.RemoteControlIdleMinutes);
 
         // Also off by default, for the same reason as the switch above: it
         // makes every app launch start a quota-spending relay.
-        Assert.False(ClaudeBuddySettings.RemoteControlServeOnLaunch);
+        Assert.False(OrbweaverSettings.RemoteControlServeOnLaunch);
     }
 
     // A negative idle would read as "already expired" to every comparison
@@ -384,9 +384,9 @@ public class SettingsRoundTripTests
         var dir = NewSettingsDir();
         PointSettingsAt(dir);
 
-        ClaudeBuddySettings.RemoteControlIdleMinutes = -5;
+        OrbweaverSettings.RemoteControlIdleMinutes = -5;
 
-        Assert.Equal(ClaudeBuddySettings.RemoteControlIdleNever, ClaudeBuddySettings.RemoteControlIdleMinutes);
+        Assert.Equal(OrbweaverSettings.RemoteControlIdleNever, OrbweaverSettings.RemoteControlIdleMinutes);
     }
 
     // An unchosen profile stays null on disk rather than being written as a copy
@@ -399,7 +399,7 @@ public class SettingsRoundTripTests
         PointSettingsAt(dir);
         var settingsPath = Path.Combine(dir, "settings.json");
 
-        ClaudeBuddySettings.RemoteControlEnabled = true;
+        OrbweaverSettings.RemoteControlEnabled = true;
 
         var root = JsonNode.Parse(File.ReadAllText(settingsPath)) as JsonObject;
         Assert.NotNull(root);
@@ -408,8 +408,8 @@ public class SettingsRoundTripTests
 
         // The accessor still answers with the default, so callers never see null.
         Assert.Equal(
-            ClaudeBuddySettings.DefaultRemoteControlProfileDir,
-            ClaudeBuddySettings.RemoteControlProfileDir);
+            OrbweaverSettings.DefaultRemoteControlProfileDir,
+            OrbweaverSettings.RemoteControlProfileDir);
     }
 
     // One panel size per agent, keyed and reloaded independently — the whole
@@ -422,8 +422,8 @@ public class SettingsRoundTripTests
         var dir = NewSettingsDir();
         PointSettingsAt(dir);
 
-        ClaudeBuddySettings.SetChatPanelSize("agent-a", 500, 600);
-        ClaudeBuddySettings.SetChatPanelSize("agent-b", 300.4, 250.6);
+        OrbweaverSettings.SetChatPanelSize("agent-a", 500, 600);
+        OrbweaverSettings.SetChatPanelSize("agent-b", 300.4, 250.6);
 
         var root = JsonNode.Parse(File.ReadAllText(Path.Combine(dir, "settings.json"))) as JsonObject;
         var sizes = root!["chatPanelSizes"] as JsonObject;
@@ -439,21 +439,21 @@ public class SettingsRoundTripTests
         // Load, which is exactly the step speakVoice was once missing.
         PointSettingsAt(dir);
 
-        var a = ClaudeBuddySettings.ChatPanelSizeFor("agent-a");
+        var a = OrbweaverSettings.ChatPanelSizeFor("agent-a");
         Assert.NotNull(a);
         Assert.Equal(500, a!.Width);
         Assert.Equal(600, a.Height);
 
-        Assert.Equal(300, ClaudeBuddySettings.ChatPanelSizeFor("agent-b")!.Width);
+        Assert.Equal(300, OrbweaverSettings.ChatPanelSizeFor("agent-b")!.Width);
 
         // Never resized means null, not a copy of the shipped default — that
         // is what lets ChatPanel keep owning what "default" means.
-        Assert.Null(ClaudeBuddySettings.ChatPanelSizeFor("agent-never-opened"));
+        Assert.Null(OrbweaverSettings.ChatPanelSizeFor("agent-never-opened"));
 
         // A session with no stable identity (a local CLI orb with no cwd) has
         // nothing to save under, and saying so must not create a "" entry.
-        ClaudeBuddySettings.SetChatPanelSize("", 400, 400);
-        Assert.Null(ClaudeBuddySettings.ChatPanelSizeFor(""));
+        OrbweaverSettings.SetChatPanelSize("", 400, 400);
+        Assert.Null(OrbweaverSettings.ChatPanelSizeFor(""));
     }
     // The hazard this file already documents for colours, in the newest block
     // to read numbers: Load() sits inside one catch that replaces the *whole*
@@ -486,19 +486,19 @@ public class SettingsRoundTripTests
         PointSettingsAt(dir);
 
         // The good entry survives...
-        var fine = ClaudeBuddySettings.ChatPanelSizeFor("agent-fine");
+        var fine = OrbweaverSettings.ChatPanelSizeFor("agent-fine");
         Assert.NotNull(fine);
         Assert.Equal(480, fine!.Width);
 
         // ...each broken one is dropped rather than half-applied...
-        Assert.Null(ClaudeBuddySettings.ChatPanelSizeFor("agent-string-width"));
-        Assert.Null(ClaudeBuddySettings.ChatPanelSizeFor("agent-missing-height"));
-        Assert.Null(ClaudeBuddySettings.ChatPanelSizeFor("agent-not-an-object"));
-        Assert.Null(ClaudeBuddySettings.ChatPanelSizeFor("agent-null-width"));
+        Assert.Null(OrbweaverSettings.ChatPanelSizeFor("agent-string-width"));
+        Assert.Null(OrbweaverSettings.ChatPanelSizeFor("agent-missing-height"));
+        Assert.Null(OrbweaverSettings.ChatPanelSizeFor("agent-not-an-object"));
+        Assert.Null(OrbweaverSettings.ChatPanelSizeFor("agent-null-width"));
 
         // ...and — the actual point — nothing else in the file was lost to it.
-        Assert.True(ClaudeBuddySettings.TwoLetterGlyphs);
-        var position = ClaudeBuddySettings.OrbPositionFor("/some/repo");
+        Assert.True(OrbweaverSettings.TwoLetterGlyphs);
+        var position = OrbweaverSettings.OrbPositionFor("/some/repo");
         Assert.NotNull(position);
         Assert.Equal(12, position!.X);
     }
@@ -515,22 +515,22 @@ public class SettingsRoundTripTests
         PointSettingsAt(dir);
         var settingsPath = Path.Combine(dir, "settings.json");
 
-        ClaudeBuddySettings.SetChatPanelSize("agent-a", 500, 600);
+        OrbweaverSettings.SetChatPanelSize("agent-a", 500, 600);
         Assert.True(File.Exists(settingsPath));
 
         File.Delete(settingsPath);
 
         // Same size, including a fraction that rounds to the same whole DIPs
         // as the stored value — the comparison happens after rounding.
-        ClaudeBuddySettings.SetChatPanelSize("agent-a", 500, 600);
-        ClaudeBuddySettings.SetChatPanelSize("agent-a", 500.2, 599.8);
+        OrbweaverSettings.SetChatPanelSize("agent-a", 500, 600);
+        OrbweaverSettings.SetChatPanelSize("agent-a", 500.2, 599.8);
 
         Assert.False(
             File.Exists(settingsPath),
             "an unchanged size should return before Save(), so nothing recreates the deleted file");
 
         // A real change still writes, so the guard isn't just refusing to save.
-        ClaudeBuddySettings.SetChatPanelSize("agent-a", 501, 600);
+        OrbweaverSettings.SetChatPanelSize("agent-a", 501, 600);
         Assert.True(File.Exists(settingsPath));
     }
 
@@ -544,14 +544,14 @@ public class SettingsRoundTripTests
         var dir = NewSettingsDir();
         PointSettingsAt(dir);
 
-        ClaudeBuddySettings.SetChatPanelSize("agent-a", 500, 600);
-        ClaudeBuddySettings.TwoLetterGlyphs = true;
-        ClaudeBuddySettings.IdleColor = "green";
-        ClaudeBuddySettings.FlushPendingSave();
+        OrbweaverSettings.SetChatPanelSize("agent-a", 500, 600);
+        OrbweaverSettings.TwoLetterGlyphs = true;
+        OrbweaverSettings.IdleColor = "green";
+        OrbweaverSettings.FlushPendingSave();
 
         PointSettingsAt(dir);
 
-        var a = ClaudeBuddySettings.ChatPanelSizeFor("agent-a");
+        var a = OrbweaverSettings.ChatPanelSizeFor("agent-a");
         Assert.NotNull(a);
         Assert.Equal(500, a!.Width);
         Assert.Equal(600, a.Height);
@@ -567,8 +567,8 @@ public class SettingsRoundTripTests
         var dir = NewSettingsDir();
         PointSettingsAt(dir);
 
-        ClaudeBuddySettings.SetPinnedChatPanelPosition("agent-a", 100, 200);
-        ClaudeBuddySettings.SetPinnedChatPanelPosition("agent-b", -40, 900);
+        OrbweaverSettings.SetPinnedChatPanelPosition("agent-a", 100, 200);
+        OrbweaverSettings.SetPinnedChatPanelPosition("agent-b", -40, 900);
 
         var root = JsonNode.Parse(File.ReadAllText(Path.Combine(dir, "settings.json"))) as JsonObject;
         var pinned = root!["pinnedChatPanels"] as JsonObject;
@@ -581,21 +581,21 @@ public class SettingsRoundTripTests
         // step a new setting can be added everywhere else and forgotten here.
         PointSettingsAt(dir);
 
-        var a = ClaudeBuddySettings.PinnedChatPanelPositionFor("agent-a");
+        var a = OrbweaverSettings.PinnedChatPanelPositionFor("agent-a");
         Assert.NotNull(a);
         Assert.Equal(100, a!.X);
         Assert.Equal(200, a.Y);
 
-        Assert.Equal(-40, ClaudeBuddySettings.PinnedChatPanelPositionFor("agent-b")!.X);
+        Assert.Equal(-40, OrbweaverSettings.PinnedChatPanelPositionFor("agent-b")!.X);
 
         // Never pinned means null — there is no "pinned" bool to default
         // false, presence in the dictionary is the whole of what pinned means.
-        Assert.Null(ClaudeBuddySettings.PinnedChatPanelPositionFor("agent-never-pinned"));
+        Assert.Null(OrbweaverSettings.PinnedChatPanelPositionFor("agent-never-pinned"));
 
         // No stable identity, nothing to save under — same guard SetChatPanelSize
         // has for the identical reason (a local CLI orb with no cwd).
-        ClaudeBuddySettings.SetPinnedChatPanelPosition("", 1, 1);
-        Assert.Null(ClaudeBuddySettings.PinnedChatPanelPositionFor(""));
+        OrbweaverSettings.SetPinnedChatPanelPosition("", 1, 1);
+        Assert.Null(OrbweaverSettings.PinnedChatPanelPositionFor(""));
     }
 
     // ClearPinnedChatPanelPosition is the only thing CB-111 lets forget a
@@ -609,11 +609,11 @@ public class SettingsRoundTripTests
         var dir = NewSettingsDir();
         PointSettingsAt(dir);
 
-        ClaudeBuddySettings.SetPinnedChatPanelPosition("agent-a", 10, 20);
-        Assert.NotNull(ClaudeBuddySettings.PinnedChatPanelPositionFor("agent-a"));
+        OrbweaverSettings.SetPinnedChatPanelPosition("agent-a", 10, 20);
+        Assert.NotNull(OrbweaverSettings.PinnedChatPanelPositionFor("agent-a"));
 
-        ClaudeBuddySettings.ClearPinnedChatPanelPosition("agent-a");
-        Assert.Null(ClaudeBuddySettings.PinnedChatPanelPositionFor("agent-a"));
+        OrbweaverSettings.ClearPinnedChatPanelPosition("agent-a");
+        Assert.Null(OrbweaverSettings.PinnedChatPanelPositionFor("agent-a"));
 
         var root = JsonNode.Parse(
             File.ReadAllText(Path.Combine(dir, "settings.json"))) as JsonObject;
@@ -624,7 +624,7 @@ public class SettingsRoundTripTests
         // Clearing a key that was never there is a no-op, not an error — the
         // same shape ClearOrbPosition already has, checked here so the two
         // don't drift apart.
-        ClaudeBuddySettings.ClearPinnedChatPanelPosition("agent-never-there");
+        OrbweaverSettings.ClearPinnedChatPanelPosition("agent-never-there");
     }
 
     // Same hazard SettingAChatPanelSizeToTheValueItAlreadyHas_WritesNothing
@@ -641,17 +641,17 @@ public class SettingsRoundTripTests
         PointSettingsAt(dir);
         var settingsPath = Path.Combine(dir, "settings.json");
 
-        ClaudeBuddySettings.SetPinnedChatPanelPosition("agent-a", 100, 200);
+        OrbweaverSettings.SetPinnedChatPanelPosition("agent-a", 100, 200);
         Assert.True(File.Exists(settingsPath));
 
         File.Delete(settingsPath);
 
-        ClaudeBuddySettings.SetPinnedChatPanelPosition("agent-a", 100, 200);
+        OrbweaverSettings.SetPinnedChatPanelPosition("agent-a", 100, 200);
         Assert.False(
             File.Exists(settingsPath),
             "an unchanged position should return before Save(), so nothing recreates the deleted file");
 
-        ClaudeBuddySettings.SetPinnedChatPanelPosition("agent-a", 101, 200);
+        OrbweaverSettings.SetPinnedChatPanelPosition("agent-a", 101, 200);
         Assert.True(File.Exists(settingsPath));
     }
 
@@ -681,16 +681,16 @@ public class SettingsRoundTripTests
 
         PointSettingsAt(dir);
 
-        var fine = ClaudeBuddySettings.PinnedChatPanelPositionFor("agent-fine");
+        var fine = OrbweaverSettings.PinnedChatPanelPositionFor("agent-fine");
         Assert.NotNull(fine);
         Assert.Equal(480, fine!.X);
 
-        Assert.Null(ClaudeBuddySettings.PinnedChatPanelPositionFor("agent-string-x"));
-        Assert.Null(ClaudeBuddySettings.PinnedChatPanelPositionFor("agent-missing-y"));
-        Assert.Null(ClaudeBuddySettings.PinnedChatPanelPositionFor("agent-not-an-object"));
+        Assert.Null(OrbweaverSettings.PinnedChatPanelPositionFor("agent-string-x"));
+        Assert.Null(OrbweaverSettings.PinnedChatPanelPositionFor("agent-missing-y"));
+        Assert.Null(OrbweaverSettings.PinnedChatPanelPositionFor("agent-not-an-object"));
 
-        Assert.True(ClaudeBuddySettings.TwoLetterGlyphs);
-        var position = ClaudeBuddySettings.OrbPositionFor("/some/repo");
+        Assert.True(OrbweaverSettings.TwoLetterGlyphs);
+        var position = OrbweaverSettings.OrbPositionFor("/some/repo");
         Assert.NotNull(position);
         Assert.Equal(12, position!.X);
     }
@@ -707,14 +707,14 @@ public class SettingsRoundTripTests
         var dir = NewSettingsDir();
         PointSettingsAt(dir);
 
-        ClaudeBuddySettings.SetPinnedChatPanelPosition("agent-a", 100, 200);
-        ClaudeBuddySettings.TwoLetterGlyphs = true;
-        ClaudeBuddySettings.IdleColor = "green";
-        ClaudeBuddySettings.FlushPendingSave();
+        OrbweaverSettings.SetPinnedChatPanelPosition("agent-a", 100, 200);
+        OrbweaverSettings.TwoLetterGlyphs = true;
+        OrbweaverSettings.IdleColor = "green";
+        OrbweaverSettings.FlushPendingSave();
 
         PointSettingsAt(dir);
 
-        var a = ClaudeBuddySettings.PinnedChatPanelPositionFor("agent-a");
+        var a = OrbweaverSettings.PinnedChatPanelPositionFor("agent-a");
         Assert.NotNull(a);
         Assert.Equal(100, a!.X);
         Assert.Equal(200, a.Y);
@@ -730,16 +730,16 @@ public class SettingsRoundTripTests
         var dir = NewSettingsDir();
         PointSettingsAt(dir);
 
-        Assert.Null(ClaudeBuddySettings.ToggleOrbsHotkey);
+        Assert.Null(OrbweaverSettings.ToggleOrbsHotkey);
 
-        ClaudeBuddySettings.ToggleOrbsHotkey = "Ctrl+Shift+H";
+        OrbweaverSettings.ToggleOrbsHotkey = "Ctrl+Shift+H";
 
         var settingsPath = Path.Combine(dir, "settings.json");
         var root = JsonNode.Parse(File.ReadAllText(settingsPath)) as JsonObject;
         Assert.Equal("Ctrl+Shift+H", root!["toggleOrbsHotkey"]!.GetValue<string>());
 
         PointSettingsAt(dir);
-        Assert.Equal("Ctrl+Shift+H", ClaudeBuddySettings.ToggleOrbsHotkey);
+        Assert.Equal("Ctrl+Shift+H", OrbweaverSettings.ToggleOrbsHotkey);
     }
 
     // The new-chat hotkey's override, on the toggle's terms: null by default,
@@ -750,22 +750,22 @@ public class SettingsRoundTripTests
         var dir = NewSettingsDir();
         PointSettingsAt(dir);
 
-        Assert.Null(ClaudeBuddySettings.NewChatHotkey);
+        Assert.Null(OrbweaverSettings.NewChatHotkey);
 
-        ClaudeBuddySettings.NewChatHotkey = "Ctrl+Shift+N";
+        OrbweaverSettings.NewChatHotkey = "Ctrl+Shift+N";
 
         var settingsPath = Path.Combine(dir, "settings.json");
         var root = JsonNode.Parse(File.ReadAllText(settingsPath)) as JsonObject;
         Assert.Equal("Ctrl+Shift+N", root!["newChatHotkey"]!.GetValue<string>());
 
         PointSettingsAt(dir);
-        Assert.Equal("Ctrl+Shift+N", ClaudeBuddySettings.NewChatHotkey);
+        Assert.Equal("Ctrl+Shift+N", OrbweaverSettings.NewChatHotkey);
 
         // Clearing it goes back to "use the built-in binding" across a reload
         // too, rather than the old value resurfacing from anywhere.
-        ClaudeBuddySettings.NewChatHotkey = null;
+        OrbweaverSettings.NewChatHotkey = null;
         PointSettingsAt(dir);
-        Assert.Null(ClaudeBuddySettings.NewChatHotkey);
+        Assert.Null(OrbweaverSettings.NewChatHotkey);
     }
 
     // CB-220's usage-orb hotkey, on the same terms as the other two.
@@ -775,16 +775,16 @@ public class SettingsRoundTripTests
         var dir = NewSettingsDir();
         PointSettingsAt(dir);
 
-        Assert.Null(ClaudeBuddySettings.ToggleUsageOrbsHotkey);
+        Assert.Null(OrbweaverSettings.ToggleUsageOrbsHotkey);
 
-        ClaudeBuddySettings.ToggleUsageOrbsHotkey = "Ctrl+Shift+U";
+        OrbweaverSettings.ToggleUsageOrbsHotkey = "Ctrl+Shift+U";
 
         var settingsPath = Path.Combine(dir, "settings.json");
         var root = JsonNode.Parse(File.ReadAllText(settingsPath)) as JsonObject;
         Assert.Equal("Ctrl+Shift+U", root!["toggleUsageOrbsHotkey"]!.GetValue<string>());
 
         PointSettingsAt(dir);
-        Assert.Equal("Ctrl+Shift+U", ClaudeBuddySettings.ToggleUsageOrbsHotkey);
+        Assert.Equal("Ctrl+Shift+U", OrbweaverSettings.ToggleUsageOrbsHotkey);
     }
 
     // showUsageOrbs inherits showOrbs until someone sets it, and is written
@@ -799,20 +799,20 @@ public class SettingsRoundTripTests
         File.WriteAllText(settingsPath, """{ "showOrbs": false }""");
 
         PointSettingsAt(dir);
-        Assert.False(ClaudeBuddySettings.ShowUsageOrbs);
-        Assert.Null(ClaudeBuddySettings.ShowUsageOrbsStored);
+        Assert.False(OrbweaverSettings.ShowUsageOrbs);
+        Assert.Null(OrbweaverSettings.ShowUsageOrbsStored);
 
-        ClaudeBuddySettings.TwoLetterGlyphs = true;   // any Save at all
-        ClaudeBuddySettings.FlushPendingSave();
+        OrbweaverSettings.TwoLetterGlyphs = true;   // any Save at all
+        OrbweaverSettings.FlushPendingSave();
 
         var root = JsonNode.Parse(File.ReadAllText(settingsPath)) as JsonObject;
         Assert.True(root!.ContainsKey("showUsageOrbs"));
         Assert.Null(root["showUsageOrbs"]);
 
         PointSettingsAt(dir);
-        Assert.Null(ClaudeBuddySettings.ShowUsageOrbsStored);
-        ClaudeBuddySettings.ShowOrbs = true;
-        Assert.True(ClaudeBuddySettings.ShowUsageOrbs);
+        Assert.Null(OrbweaverSettings.ShowUsageOrbsStored);
+        OrbweaverSettings.ShowOrbs = true;
+        Assert.True(OrbweaverSettings.ShowUsageOrbs);
     }
 
     [Fact]
@@ -821,7 +821,7 @@ public class SettingsRoundTripTests
         var dir = NewSettingsDir();
         PointSettingsAt(dir);
 
-        ClaudeBuddySettings.ShowUsageOrbs = false;
+        OrbweaverSettings.ShowUsageOrbs = false;
 
         var settingsPath = Path.Combine(dir, "settings.json");
         var root = JsonNode.Parse(File.ReadAllText(settingsPath)) as JsonObject;
@@ -829,18 +829,18 @@ public class SettingsRoundTripTests
         Assert.True(root["showOrbs"]!.GetValue<bool>());
 
         PointSettingsAt(dir);
-        Assert.False(ClaudeBuddySettings.ShowUsageOrbs);
-        Assert.True(ClaudeBuddySettings.ShowOrbs);
+        Assert.False(OrbweaverSettings.ShowUsageOrbs);
+        Assert.True(OrbweaverSettings.ShowOrbs);
 
         // And the other way round: shown while every session orb is hidden.
         File.WriteAllText(settingsPath, """{ "showOrbs": false, "showUsageOrbs": true }""");
         PointSettingsAt(dir);
-        Assert.True(ClaudeBuddySettings.ShowUsageOrbs);
-        Assert.Equal(true, ClaudeBuddySettings.ShowUsageOrbsStored);
+        Assert.True(OrbweaverSettings.ShowUsageOrbs);
+        Assert.Equal(true, OrbweaverSettings.ShowUsageOrbsStored);
 
-        ClaudeBuddySettings.ShowUsageOrbsStored = null;
+        OrbweaverSettings.ShowUsageOrbsStored = null;
         PointSettingsAt(dir);
-        Assert.False(ClaudeBuddySettings.ShowUsageOrbs);
+        Assert.False(OrbweaverSettings.ShowUsageOrbs);
     }
 
     // Every override survives a relaunch followed by a save that touches
@@ -862,8 +862,8 @@ public class SettingsRoundTripTests
             """{ "toggleOrbsHotkey": "Ctrl+Shift+H", "newChatHotkey": "Ctrl+Shift+N", "toggleUsageOrbsHotkey": "Ctrl+Shift+U", "showUsageOrbs": false, "someFutureSetting": 7 }""");
 
         PointSettingsAt(dir);
-        ClaudeBuddySettings.TwoLetterGlyphs = true;   // any Save at all
-        ClaudeBuddySettings.FlushPendingSave();
+        OrbweaverSettings.TwoLetterGlyphs = true;   // any Save at all
+        OrbweaverSettings.FlushPendingSave();
 
         var text = File.ReadAllText(settingsPath);
         var root = JsonNode.Parse(text) as JsonObject;
@@ -881,9 +881,9 @@ public class SettingsRoundTripTests
         // that survived: a key replayed only out of _unknownKeys would pass
         // the file assertions above and still read as null here.
         PointSettingsAt(dir);
-        Assert.Equal("Ctrl+Shift+H", ClaudeBuddySettings.ToggleOrbsHotkey);
-        Assert.Equal("Ctrl+Shift+N", ClaudeBuddySettings.NewChatHotkey);
-        Assert.Equal("Ctrl+Shift+U", ClaudeBuddySettings.ToggleUsageOrbsHotkey);
-        Assert.False(ClaudeBuddySettings.ShowUsageOrbs);
+        Assert.Equal("Ctrl+Shift+H", OrbweaverSettings.ToggleOrbsHotkey);
+        Assert.Equal("Ctrl+Shift+N", OrbweaverSettings.NewChatHotkey);
+        Assert.Equal("Ctrl+Shift+U", OrbweaverSettings.ToggleUsageOrbsHotkey);
+        Assert.False(OrbweaverSettings.ShowUsageOrbs);
     }
 }

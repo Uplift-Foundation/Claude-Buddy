@@ -2,7 +2,7 @@ using Avalonia.Headless.XUnit;
 using Avalonia.Threading;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The scan's subprocess questions, through a real SessionManager: who owns
 // each claimed tmux pane, what the daemon lists, who is attached, and which
@@ -64,8 +64,8 @@ public class ScanProbeScanTests
         Func<string, AgentViewer?>? agentViewer = null,
         Func<IReadOnlyList<int>, IReadOnlyDictionary<int, AgentTeam.Membership>>? teams = null)
     {
-        ClaudeBuddySettings.ClaudeCodeEnabled = true;
-        ClaudeBuddySettings.CodexEnabled = true;
+        OrbweaverSettings.ClaudeCodeEnabled = true;
+        OrbweaverSettings.CodexEnabled = true;
 
         return new SessionManager(
             scratch.Dir,
@@ -327,7 +327,7 @@ public class ScanProbeScanTests
             scratch.Write("member", LivePid, termProgram: "iTerm.app", tmuxPane: "%1");
 
             var aged = false;
-            ClaudeBuddySettings.ClaudeCodeEnabled = true;
+            OrbweaverSettings.ClaudeCodeEnabled = true;
             var manager = new SessionManager(
                 scratch.Dir,
                 () => new Dictionary<string, string>(StringComparer.Ordinal),

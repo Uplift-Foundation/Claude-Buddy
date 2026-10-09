@@ -3,7 +3,7 @@ using System.Text.Json;
 using Avalonia.Headless.XUnit;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // A scan that has gateway sessions in it, and the room orbs it invents from them.
 //
@@ -65,10 +65,10 @@ public class GatewayScanTests
     // Publishes exactly what a poll would: parsed sessions, nothing hand-rolled.
     private static void Publish(string sessionsJson)
     {
-        ClaudeBuddySettings.OpenClawEnabled = true;
-        ClaudeBuddySettings.OpenClawHeartbeatMode = ClusterMode.WithChats;
-        ClaudeBuddySettings.OpenClawActiveWithinMinutes =
-            ClaudeBuddySettings.OpenClawActiveWithinAll;
+        OrbweaverSettings.OpenClawEnabled = true;
+        OrbweaverSettings.OpenClawHeartbeatMode = ClusterMode.WithChats;
+        OrbweaverSettings.OpenClawActiveWithinMinutes =
+            OrbweaverSettings.OpenClawActiveWithinAll;
 
         var (sessions, _) = OpenClawSessions.Parse(
             JsonDocument.Parse(sessionsJson).RootElement, DateTime.UtcNow);
@@ -590,14 +590,14 @@ public class GatewayScanTests
             manager.ScanAndUpdate();
             Assert.NotEmpty(Orbs(manager));
 
-            ClaudeBuddySettings.OpenClawEnabled = false;
+            OrbweaverSettings.OpenClawEnabled = false;
             manager.ScanAndUpdate();
 
             Assert.Empty(Orbs(manager));
         }
         finally
         {
-            ClaudeBuddySettings.OpenClawEnabled = true;
+            OrbweaverSettings.OpenClawEnabled = true;
             PublishNothing();
         }
     }
@@ -617,17 +617,17 @@ public class GatewayScanTests
 
         try
         {
-            ClaudeBuddySettings.AutoColorSessions = true;
+            OrbweaverSettings.AutoColorSessions = true;
             manager.SyncAutoColorMarker();
             Assert.True(File.Exists(marker), "the marker should appear when the setting is on");
 
-            ClaudeBuddySettings.AutoColorSessions = false;
+            OrbweaverSettings.AutoColorSessions = false;
             manager.SyncAutoColorMarker();
             Assert.False(File.Exists(marker), "the marker should go when the setting is off");
         }
         finally
         {
-            ClaudeBuddySettings.AutoColorSessions = false;
+            OrbweaverSettings.AutoColorSessions = false;
         }
     }
 
@@ -642,7 +642,7 @@ public class GatewayScanTests
 
         try
         {
-            ClaudeBuddySettings.AutoColorSessions = true;
+            OrbweaverSettings.AutoColorSessions = true;
             manager.SyncAutoColorMarker();
             var first = File.GetLastWriteTimeUtc(marker);
 
@@ -650,7 +650,7 @@ public class GatewayScanTests
 
             Assert.Equal(first, File.GetLastWriteTimeUtc(marker));
 
-            ClaudeBuddySettings.AutoColorSessions = false;
+            OrbweaverSettings.AutoColorSessions = false;
             manager.SyncAutoColorMarker();
             manager.SyncAutoColorMarker();
 
@@ -658,7 +658,7 @@ public class GatewayScanTests
         }
         finally
         {
-            ClaudeBuddySettings.AutoColorSessions = false;
+            OrbweaverSettings.AutoColorSessions = false;
         }
     }
 

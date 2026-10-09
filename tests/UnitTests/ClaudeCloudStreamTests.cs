@@ -7,7 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Covers the cloud event stream's pure half: SSE framing, reading each event
 // for what it means, the two requests, and when to reconnect.

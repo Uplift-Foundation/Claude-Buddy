@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Same pattern as tests/IntegrationTests/PlatformFactAttributes.cs: skip rather
 // than fail, so a `dotnet test` run says "not exercised here" instead of

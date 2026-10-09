@@ -5,7 +5,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Claude Code's own per-session registry at ~/.claude/sessions/<pid>.json —
     // NOT a Buddy invention, and not the same file AgentRoster reads. AgentRoster

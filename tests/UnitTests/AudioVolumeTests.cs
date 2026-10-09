@@ -1,9 +1,9 @@
 using System.Globalization;
 using System.Text;
 using Xunit;
-using static ClaudeBuddy.TextToSpeech;
+using static Orbweaver.TextToSpeech;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-200: every rule about turning a volume level into a backend's own units,
 // and the one decision the settings window greys the Speech slider on.

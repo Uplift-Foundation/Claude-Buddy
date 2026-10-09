@@ -1,6 +1,6 @@
-using ClaudeBuddy;
+using Orbweaver;
 
-namespace ClaudeBuddy.Tests
+namespace Orbweaver.Tests
 {
     // Two things that turn text nobody controls into things the panel shows,
     // and both fail quietly when they fail.

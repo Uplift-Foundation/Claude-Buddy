@@ -1,4 +1,4 @@
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Every name this app goes by, in one place.
     //
@@ -28,12 +28,13 @@ namespace ClaudeBuddy
     //
     // What deliberately is *not* flipped here, or not here at all:
     //
-    // - SpeechEngineName and AssemblyName. Both are binary names rather than
-    //   names a user's disk holds: the speech engine's is its <AssemblyName>,
-    //   its release zip's stem and the exe inside every speech-engine folder
-    //   already downloaded, and the app's follows the csproj. Flipping either
-    //   constant without the project it names buys a 404 or a tray icon that
-    //   resolves to nothing. They move with the binaries in phase 3.
+    // - SpeechEngineName and AssemblyName, in phase 2. Both are binary names
+    //   rather than names a user's disk holds: the speech engine's is its
+    //   <AssemblyName>, its release zip's stem and the exe inside every
+    //   speech-engine folder already downloaded, and the app's follows the
+    //   csproj. Flipping either constant without the project it names buys a
+    //   404 or a tray icon that resolves to nothing, so both moved with the
+    //   binaries in phase 3 (CB-256) instead.
     // - MacBundleId. Automation and Accessibility consent are tied to it, and
     //   it is never renamed, phase 3 included.
     // - MachineNames' relay prefix. Nothing creates a relay any more; the
@@ -42,9 +43,9 @@ namespace ClaudeBuddy
     // - The hook scripts, installers and build scripts. They are shell,
     //   PowerShell and Inno, and can't read a C# constant; they carry their
     //   own copies of the names below and are renamed alongside them.
-    // - The CLAUDE_BUDDY_* environment variables. Almost all are test seams,
-    //   and renaming one breaks every script that sets it — that is its own
-    //   decision, not part of moving literals.
+    // - The environment variables. They are ORBWEAVER_* since phase 3 and the
+    //   pre-rename spelling still works; BrandEnv owns both prefixes, so they
+    //   are not literals here.
     // - The CLAUDEBUDDY_* ones (no underscore) that ChimePlayer and TextToSpeech
     //   hand to a user's own chime and speak commands. Those are a contract
     //   with scripts the user wrote, so they keep their names on purpose.
@@ -88,9 +89,14 @@ namespace ClaudeBuddy
         // claims both and holds both (Program.cs, SingleInstance.ClaimAll).
         internal const string SingleInstanceMutexName = "Orbweaver_SingleInstance_Mutex";
 
-        // The neural speech engine's executable and release-asset stem. Not
-        // flipped in phase 2; see the header.
-        internal const string SpeechEngineName = "ClaudeBuddySpeech";
+        // The neural speech engine's executable and release-asset stem.
+        // Five places have to agree on it or the toggle in Settings downloads
+        // a 404: this constant, the engine csproj's <AssemblyName>, the zip
+        // stem in both build-speech-engine scripts and release.yml's two
+        // upload globs. None of the other four can read a C# constant, and CI
+        // never runs a release, so SpeechEngineNameConsistencyTests reads all
+        // four files and checks them against this.
+        internal const string SpeechEngineName = "OrbweaverSpeech";
 
         // The macOS bundle id. Automation and Accessibility consent are tied to
         // it, so it is never renamed casually — see tools/build-macos-app.sh.
@@ -105,7 +111,7 @@ namespace ClaudeBuddy
         // Not a free choice: it follows <AssemblyName> in the csproj, and
         // BrandTests checks the two agree so a rename can't break the tray icon
         // by changing one and not the other.
-        internal const string AssemblyName = "ClaudeBuddy";
+        internal const string AssemblyName = "Orbweaver";
 
         // The names that shipped before phase 2, for the migrations and
         // compatibility arms that have to recognise them. Pinned to the old
@@ -124,6 +130,14 @@ namespace ClaudeBuddy
             internal const string HookScriptPowerShell = "ClaudeBuddyHook.ps1";
             internal const string HookScriptShell = "ClaudeBuddyHook.sh";
             internal const string SingleInstanceMutexName = "ClaudeBuddy_SingleInstance_Mutex";
+            // The executable every build before phase 3 shipped as: ClaudeBuddy.exe
+            // on Windows, Contents/MacOS/ClaudeBuddy in the macOS bundle.
+            internal const string Executable = "ClaudeBuddy";
+            // The speech engine's executable before phase 3. Every engine
+            // already downloaded into speech-engine/<version>/ is named this,
+            // and NeuralSpeech.NewestOtherEngine still speaks through one
+            // while this build's own engine downloads.
+            internal const string SpeechEngineName = "ClaudeBuddySpeech";
         }
     }
 }

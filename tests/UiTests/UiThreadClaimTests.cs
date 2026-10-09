@@ -2,7 +2,7 @@ using Avalonia.Threading;
 using Avalonia.Headless.XUnit;
 using Xunit;
 
-namespace ClaudeBuddy.UiTests;
+namespace Orbweaver.UiTests;
 
 // Startup.ClaimUiThread, asserted from the only kind of thread that is allowed
 // to own the dispatcher (CB-28).

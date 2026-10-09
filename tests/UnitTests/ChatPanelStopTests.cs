@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Threading.Tasks;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // ChatPanel.StopOffered, the one rule for whether Stop is shown and whether a
 // press on it reaches Cancel (CB-199). Pure, so every arm is a case here rather

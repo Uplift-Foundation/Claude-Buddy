@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 [Collection("Settings")]
 public class OpenClawPeerIdentityTests
@@ -86,12 +86,12 @@ public class OpenClawPeerIdentityTests
     [Fact]
     public void APeerVoiceIsBoundToTheCurrentGatewayPinAndRemovedOnDisconnect()
     {
-        var savedPin = ClaudeBuddySettings.OpenClawFingerprint;
+        var savedPin = OrbweaverSettings.OpenClawFingerprint;
         const string agent = "main";
         var option = new TextToSpeech.VoiceOption(TextToSpeech.SpeakEngine.Neural, "af_bella", "Bella");
         try
         {
-            ClaudeBuddySettings.OpenClawFingerprint = Pin;
+            OrbweaverSettings.OpenClawFingerprint = Pin;
             OpenClawSessions.SetIdentitiesForTests(new Dictionary<string, OpenClawSessions.AgentIdentity>
             {
                 [agent] = new("Main", null, null),
@@ -102,18 +102,18 @@ public class OpenClawPeerIdentityTests
             Assert.Equal(option, OpenClawSessions.VoiceForSession(
                 "openclaw:agent:main:discord:channel:1", new[] { option }));
 
-            ClaudeBuddySettings.OpenClawFingerprint = new string('b', 64);
+            OrbweaverSettings.OpenClawFingerprint = new string('b', 64);
             Assert.Null(OpenClawSessions.VoiceForSession(
                 "openclaw:agent:main:discord:channel:1", new[] { option }));
 
-            ClaudeBuddySettings.OpenClawFingerprint = Pin;
+            OrbweaverSettings.OpenClawFingerprint = Pin;
             OpenClawSessions.ForgetPeerProfileVoices("mini");
             Assert.Null(OpenClawSessions.VoiceForSession(
                 "openclaw:agent:main:discord:channel:1", new[] { option }));
         }
         finally
         {
-            ClaudeBuddySettings.OpenClawFingerprint = savedPin;
+            OrbweaverSettings.OpenClawFingerprint = savedPin;
             OpenClawSessions.SetIdentitiesForTests(new Dictionary<string, OpenClawSessions.AgentIdentity>());
         }
     }
@@ -121,10 +121,10 @@ public class OpenClawPeerIdentityTests
     [Fact]
     public void ResolvingAKnownAgentWithARateIncludesItInTheRow()
     {
-        var savedPin = ClaudeBuddySettings.OpenClawFingerprint;
+        var savedPin = OrbweaverSettings.OpenClawFingerprint;
         try
         {
-            ClaudeBuddySettings.OpenClawFingerprint = Pin;
+            OrbweaverSettings.OpenClawFingerprint = Pin;
             OpenClawSessions.SetIdentitiesForTests(new Dictionary<string, OpenClawSessions.AgentIdentity>
             {
                 ["main"] = new("Main", null, null, "af_nicole", 1.3),
@@ -141,7 +141,7 @@ public class OpenClawPeerIdentityTests
         }
         finally
         {
-            ClaudeBuddySettings.OpenClawFingerprint = savedPin;
+            OrbweaverSettings.OpenClawFingerprint = savedPin;
             OpenClawSessions.SetIdentitiesForTests(new Dictionary<string, OpenClawSessions.AgentIdentity>());
         }
     }
@@ -149,11 +149,11 @@ public class OpenClawPeerIdentityTests
     [Fact]
     public void APeerRateIsBoundToTheCurrentGatewayPinAndRemovedOnDisconnect()
     {
-        var savedPin = ClaudeBuddySettings.OpenClawFingerprint;
+        var savedPin = OrbweaverSettings.OpenClawFingerprint;
         const string agent = "main";
         try
         {
-            ClaudeBuddySettings.OpenClawFingerprint = Pin;
+            OrbweaverSettings.OpenClawFingerprint = Pin;
             OpenClawSessions.SetIdentitiesForTests(new Dictionary<string, OpenClawSessions.AgentIdentity>
             {
                 [agent] = new("Main", null, null),
@@ -163,16 +163,16 @@ public class OpenClawPeerIdentityTests
                 new[] { new OpenClawPeerIdentity.Row(agent, "af_bella", 1.3) });
             Assert.Equal(1.3, OpenClawSessions.RateForSession("openclaw:agent:main:discord:channel:1"));
 
-            ClaudeBuddySettings.OpenClawFingerprint = new string('b', 64);
+            OrbweaverSettings.OpenClawFingerprint = new string('b', 64);
             Assert.Null(OpenClawSessions.RateForSession("openclaw:agent:main:discord:channel:1"));
 
-            ClaudeBuddySettings.OpenClawFingerprint = Pin;
+            OrbweaverSettings.OpenClawFingerprint = Pin;
             OpenClawSessions.ForgetPeerProfileVoices("mini");
             Assert.Null(OpenClawSessions.RateForSession("openclaw:agent:main:discord:channel:1"));
         }
         finally
         {
-            ClaudeBuddySettings.OpenClawFingerprint = savedPin;
+            OrbweaverSettings.OpenClawFingerprint = savedPin;
             OpenClawSessions.SetIdentitiesForTests(new Dictionary<string, OpenClawSessions.AgentIdentity>());
         }
     }
@@ -180,12 +180,12 @@ public class OpenClawPeerIdentityTests
     [Fact]
     public void APeerVoiceWithNoRateResolvesTheVoiceWithoutARate()
     {
-        var savedPin = ClaudeBuddySettings.OpenClawFingerprint;
+        var savedPin = OrbweaverSettings.OpenClawFingerprint;
         const string agent = "main";
         var option = new TextToSpeech.VoiceOption(TextToSpeech.SpeakEngine.Neural, "af_bella", "Bella");
         try
         {
-            ClaudeBuddySettings.OpenClawFingerprint = Pin;
+            OrbweaverSettings.OpenClawFingerprint = Pin;
             OpenClawSessions.SetIdentitiesForTests(new Dictionary<string, OpenClawSessions.AgentIdentity>
             {
                 [agent] = new("Main", null, null),
@@ -200,7 +200,7 @@ public class OpenClawPeerIdentityTests
         }
         finally
         {
-            ClaudeBuddySettings.OpenClawFingerprint = savedPin;
+            OrbweaverSettings.OpenClawFingerprint = savedPin;
             OpenClawSessions.SetIdentitiesForTests(new Dictionary<string, OpenClawSessions.AgentIdentity>());
         }
     }

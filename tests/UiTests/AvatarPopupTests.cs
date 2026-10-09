@@ -13,7 +13,7 @@ using Avalonia.Media.Imaging;
 using Avalonia.Threading;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The agent's portrait at four times the size the chat panel shows it.
 //

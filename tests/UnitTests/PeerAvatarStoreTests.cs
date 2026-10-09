@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-216: the server side of pictures-by-id. A roster is built for every peer's
 // ask every ten seconds, and the pictures in it were 11-15 MB GIFs read and

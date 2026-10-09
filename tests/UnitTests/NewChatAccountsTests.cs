@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests
+namespace Orbweaver.Tests
 {
     // CB-201's Account picker rows — pure, so every branch (nothing
     // configured, a second spelling of the default account, a duplicate, a

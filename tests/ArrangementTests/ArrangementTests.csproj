@@ -7,13 +7,13 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RollForward>LatestMajor</RollForward>
     <AssemblyName>ArrangementTests</AssemblyName>
-    <RootNamespace>ClaudeBuddy.Tests</RootNamespace>
+    <RootNamespace>Orbweaver.Tests</RootNamespace>
   </PropertyGroup>
 
   <ItemGroup>
     <!-- Avalonia for PixelPoint and PixelRect only; nothing here draws.
          Matches the app's own Avalonia 12.1.1 pin even though this project
-         has no ProjectReference to ClaudeBuddy.csproj and so isn't exposed
+         has no ProjectReference to Orbweaver.csproj and so isn't exposed
          to the cross-major-version MissingMethodException that forced that
          pin elsewhere — kept in step anyway so one Avalonia version doesn't
          silently drift across the repo. -->

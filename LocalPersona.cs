@@ -1,7 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Text;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // The persona a local CLI session wears, read from the CLAUDE.md files that
     // are already beside its work.
@@ -230,10 +230,10 @@ namespace ClaudeBuddy
         // developer's. macOS never showed it because $TMPDIR is /var/folders,
         // which no home directory is an ancestor of. A ceiling that the cwd is
         // not below changes nothing — the walk simply never meets it.
-        internal const string WalkCeilingVariable = "CLAUDE_BUDDY_PERSONA_WALK_CEILING";
+        internal const string WalkCeilingVariable = BrandEnv.PersonaWalkCeiling;
 
         private static string? WalkCeiling() =>
-            FullPathOrNull(Environment.GetEnvironmentVariable(WalkCeilingVariable));
+            FullPathOrNull(BrandEnv.Get(WalkCeilingVariable));
 
         private static bool PathsEqual(string a, string b) =>
             string.Equals(a, b, StringComparison.OrdinalIgnoreCase);

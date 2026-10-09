@@ -8,7 +8,7 @@ using Avalonia.VisualTree;
 using SkiaSharp;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Shared by every screenshot class in this project: build a control, show
 // it, force a real render, save the frame. Pulled out once every one of the
@@ -22,7 +22,7 @@ internal static class ScreenshotHelper
     // invoked from, so Directory.GetCurrentDirectory() lands nowhere near
     // where ci.yml's artifact-upload step expects TestResults/ to be. Walk
     // up from the running assembly to the repo root instead, the same way
-    // tests/IntegrationTests's hook-script tests locate ClaudeBuddyHook.sh.
+    // tests/IntegrationTests's hook-script tests locate OrbweaverHook.sh.
     public static readonly string OutputDir =
         Path.Combine(FindRepoRoot(), "TestResults", "screenshots");
 
@@ -31,13 +31,13 @@ internal static class ScreenshotHelper
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null)
         {
-            if (File.Exists(Path.Combine(dir.FullName, "ClaudeBuddy.csproj")))
+            if (File.Exists(Path.Combine(dir.FullName, "Orbweaver.csproj")))
                 return dir.FullName;
             dir = dir.Parent;
         }
 
         throw new InvalidOperationException(
-            "Could not find ClaudeBuddy.csproj by walking up from " + AppContext.BaseDirectory);
+            "Could not find Orbweaver.csproj by walking up from " + AppContext.BaseDirectory);
     }
 
     static ScreenshotHelper()

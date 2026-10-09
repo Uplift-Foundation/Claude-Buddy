@@ -18,7 +18,7 @@ No feature work starts from a chat message alone. A request that arrives in a te
 
 ### The team
 
-Features are built by an **agent team**, not by one session doing everything. That is the same mechanism this app draws orbs for: Claude Code spawns each member as its own `claude` process carrying `--agent-name`, `--team-name` and `--parent-session-id`, and `AgentTeam.cs` reads the last of those straight off the process to link a member to its lead — deliberately not out of the transcript, so a team that has gone quiet still draws its arrows. Building Claude Buddy with the thing Claude Buddy visualises is deliberate — a team whose shape looks wrong on the board is a bug report about the app, and you get it for free.
+Features are built by an **agent team**, not by one session doing everything. That is the same mechanism this app draws orbs for: Claude Code spawns each member as its own `claude` process carrying `--agent-name`, `--team-name` and `--parent-session-id`, and `AgentTeam.cs` reads the last of those straight off the process to link a member to its lead — deliberately not out of the transcript, so a team that has gone quiet still draws its arrows. Building Orbweaver with the thing Orbweaver visualises is deliberate — a team whose shape looks wrong on the board is a bug report about the app, and you get it for free.
 
 The roles, and who hands to whom:
 
@@ -57,7 +57,7 @@ If it *is* confident, it hands straight to the architects and engineers, and the
 
 Engineers and architects build, QA agents test, and the work goes back and forth until it stops coming back. The substance of QA's half is **Every feature ships with its tests** below — unit, integration and UI, covering 100% of the lines the branch adds — so "QA passed" means those exist and are green, not that somebody had a look.
 
-**A feature works on Windows and macOS, or it is not a feature.** CI enforces the shape of that already: the matrix is `macos-latest`/`osx-arm64` and `windows-latest`/`win-x64`, and every suite runs on both legs. Parity is more than a green build, though — a feature no install path wires up is equally unfinished. Before calling it done, check `tools/build-macos-dmg.sh`, `tools/build-macos-app.sh`'s Resources copy, `tools/ClaudeBuddy.iss`, `tools/install-hooks.sh`/`.ps1` and the README's install section, and satisfy yourself that any platform-specific gate is real (WSL) rather than accidental.
+**A feature works on Windows and macOS, or it is not a feature.** CI enforces the shape of that already: the matrix is `macos-latest`/`osx-arm64` and `windows-latest`/`win-x64`, and every suite runs on both legs. Parity is more than a green build, though — a feature no install path wires up is equally unfinished. Before calling it done, check `tools/build-macos-dmg.sh`, `tools/build-macos-app.sh`'s Resources copy, `tools/Orbweaver.iss`, `tools/install-hooks.sh`/`.ps1` and the README's install section, and satisfy yourself that any platform-specific gate is real (WSL) rather than accidental.
 
 ### PR, screenshots, and the call on done
 
@@ -119,7 +119,7 @@ That is not hypothetical. 0.4.3-beta was cut because seventeen merged PRs had be
 So the sequence below runs to the end, in one go, by whoever started it:
 
 1. **Branch** `release/<version>` off `develop`.
-2. **Bump `<Version>`** in `ClaudeBuddy.csproj` — the single source of truth the packaging scripts and `release.yml`'s `check-version` gate both parse. **Patch only** (`0.5.0-beta` → `0.5.1-beta`) unless you are told to bump the minor or major.
+2. **Bump `<Version>`** in `Orbweaver.csproj` — the single source of truth the packaging scripts and `release.yml`'s `check-version` gate both parse. **Patch only** (`0.5.0-beta` → `0.5.1-beta`) unless you are told to bump the minor or major.
 3. **Write `.github/release-notes/v<version>.md`**, which the workflow publishes with the tag. Without it the release gets generated notes and a warning.
 4. **Open the PR against `main`** and let CI go green on *both* rids.
 5. **Merge it to `main`.**
@@ -241,7 +241,7 @@ The three machines, and all three matter for a different reason:
 
 That Windows box is also the ComfyUI host, so `curl http://192.168.1.24:8000/system_stats` is a quick liveness check for it.
 
-**A green CI leg is not an install.** `windows-latest` runs tests against a checkout; it never runs `tools/ClaudeBuddy.iss`, never puts an icon in a tray, and never shows anybody a window. The parity rule above — a feature no install path wires up is unfinished — is about exactly the gap between those two things, and the only way to close it is to install the thing.
+**A green CI leg is not an install.** `windows-latest` runs tests against a checkout; it never runs `tools/Orbweaver.iss`, never puts an icon in a tray, and never shows anybody a window. The parity rule above — a feature no install path wires up is unfinished — is about exactly the gap between those two things, and the only way to close it is to install the thing.
 
 **Say which machines you actually installed on, and which you did not.** Same rule as everywhere else here: "installed on all three" when one of them was asleep is worse than "installed on the MacBook and the mini, Windows box was off". If a machine is unreachable, say so and carry on rather than silently dropping it.
 
@@ -275,7 +275,7 @@ dotnet run --project tools/openclaw-probe -- sessions
 
 Note the probe is itself subject to the gate, because `dotnet` is a third-party binary. **A failing probe alongside a working app is expected, not a contradiction** — it says the terminal lacks the grant, not that the app does. `OpenClawGateway.ExplainConnectFailure` now appends a hint naming the settings pane, so the app says this itself rather than only reporting the errno. CB-38 has the full diagnosis.
 
-`<Version>` in `ClaudeBuddy.csproj` is the single source of truth for the shipped version — the packaging scripts and the release workflow parse it out of there.
+`<Version>` in `Orbweaver.csproj` is the single source of truth for the shipped version — the packaging scripts and the release workflow parse it out of there.
 
 ## Every feature ships with its tests
 
@@ -296,7 +296,7 @@ Where a line genuinely cannot be covered — an OS call with no seam, a `catch` 
 To see the number:
 
 ```bash
-dotnet add tests/UnitTests/ClaudeBuddy.UnitTests.csproj package coverlet.collector
+dotnet add tests/UnitTests/Orbweaver.UnitTests.csproj package coverlet.collector
 dotnet test tests/UnitTests --collect:"XPlat Code Coverage"
 # tests/UnitTests/TestResults/<guid>/coverage.cobertura.xml
 ```
@@ -342,7 +342,7 @@ The wrong sentence survived because it read like a finding and was never checked
 
 ## The automated suite
 
-Three more suites, all xUnit rather than the bespoke console-exe pattern above, live in `tests/UnitTests`, `tests/IntegrationTests` and `tests/UiTests`. One command runs all three: `dotnet test tests/Tests.sln`. They join the three suites above rather than replacing them — `Tests.sln` holds only the xUnit projects, so it can't accidentally try to `dotnet test` an exe with no test SDK reference, and `claudeBuddy.sln` stays app-only. CI (`.github/workflows/ci.yml`) runs every one of them, plus `tests/UiScreenshots`, on both runners, before packaging — a failing test blocks the build the same way a failed `dotnet publish` already did.
+Three more suites, all xUnit rather than the bespoke console-exe pattern above, live in `tests/UnitTests`, `tests/IntegrationTests` and `tests/UiTests`. One command runs all three: `dotnet test tests/Tests.sln`. They join the three suites above rather than replacing them — `Tests.sln` holds only the xUnit projects, so it can't accidentally try to `dotnet test` an exe with no test SDK reference, and `Orbweaver.sln` stays app-only. CI (`.github/workflows/ci.yml`) runs every one of them, plus `tests/UiScreenshots`, on both runners, before packaging — a failing test blocks the build the same way a failed `dotnet publish` already did.
 
 **Run the UI suite in Release before pushing, because CI does and `dotnet test` does not.**
 
@@ -384,15 +384,15 @@ The other three suites have been clean in both so far. It is `tests/UiTests` tha
 
 That advice is for a flake that *fails* — it has nothing to investigate when the flake instead silently drops the test count, because there is no failure to chase down. CB-119's guard above is what turns a count-flake back into an ordinary failure with an exit code, which is the only way this section's advice can reach it at all.
 
-They reference `ClaudeBuddy.csproj` directly with a `<ProjectReference>` rather than compiling individual files in with `<Compile Include>` the way the three suites above do. That convention holds for a file with a small dependency closure; `SessionManager` and `ClaudeBuddySettings` do not have one, and pulling either in that way would mean compiling most of the app a second time. A `<ProjectReference>` also needs `<InternalsVisibleTo>` to see anything not `public` — granted in `ClaudeBuddy.csproj` to exactly the three new test assembly names, nothing else.
+They reference `Orbweaver.csproj` directly with a `<ProjectReference>` rather than compiling individual files in with `<Compile Include>` the way the three suites above do. That convention holds for a file with a small dependency closure; `SessionManager` and `OrbweaverSettings` do not have one, and pulling either in that way would mean compiling most of the app a second time. A `<ProjectReference>` also needs `<InternalsVisibleTo>` to see anything not `public` — granted in `Orbweaver.csproj` to exactly the three new test assembly names, nothing else.
 
 **`tests/UnitTests`** covers more of the same pure, no-window logic as the suites above — most valuably `SessionManager`'s `Superseded` and `InheritTerminalInfo`, the rules that decide which of several status files for one process is the live orb and which sibling donates terminal coordinates to one that has none. Both are `internal`, made reachable the same way.
 
-**`tests/IntegrationTests`** drives `ClaudeBuddyHook.sh`/`.ps1` as real subprocesses — payload on stdin, a scratch `TMPDIR`/`-TempDir`, asserting the one invariant everything else depends on: exit 0, empty stdout, empty stderr, always. Codex reads a hook's stdout as strict permission-request JSON and treats exit code 2 as a deny, so a hook that ever prints anything starts silently refusing the user's own approvals — this is what actually enforces the rule the hook scripts' own comments state. It also covers `TranscriptReader`'s tail-window and truncation rules against temp `.jsonl` files, and `ClaudeBuddySettings`' round-trip of unknown keys — the protection against exactly the downgrade that once silently erased three settings from a real file (see the comment on `_unknownKeys` in `ClaudeBuddySettings.cs`). The `OpenArgumentDeliveryTests` cases that launch app bundles through LaunchServices skip on a developer's Mac, because every launch leaves a tile in the logged-in user's Dock, and run only in CI (`CI=true`) or with `CLAUDE_BUDDY_LAUNCH_TESTS=1` (CB-246).
+**`tests/IntegrationTests`** drives `OrbweaverHook.sh`/`.ps1` as real subprocesses — payload on stdin, a scratch `TMPDIR`/`-TempDir`, asserting the one invariant everything else depends on: exit 0, empty stdout, empty stderr, always. Codex reads a hook's stdout as strict permission-request JSON and treats exit code 2 as a deny, so a hook that ever prints anything starts silently refusing the user's own approvals — this is what actually enforces the rule the hook scripts' own comments state. It also covers `TranscriptReader`'s tail-window and truncation rules against temp `.jsonl` files, and `OrbweaverSettings`' round-trip of unknown keys — the protection against exactly the downgrade that once silently erased three settings from a real file (see the comment on `_unknownKeys` in `OrbweaverSettings.cs`). The `OpenArgumentDeliveryTests` cases that launch app bundles through LaunchServices skip on a developer's Mac, because every launch leaves a tile in the logged-in user's Dock, and run only in CI (`CI=true`) or with `ORBWEAVER_LAUNCH_TESTS=1` (CB-246). Every `ORBWEAVER_*` variable in this repo used to be spelled `CLAUDE_BUDDY_*`; the old spelling still works as a fallback, and the new one wins when both are set.
 
 **`tests/UiTests`** runs headless, via `Avalonia.Headless.XUnit` — no display, no window ever actually shown. It uses the real `App` class as its own test host rather than a parallel stand-in: under Avalonia's headless lifetime, `App.OnFrameworkInitializationCompleted`'s guard for `IClassicDesktopStyleApplicationLifetime` is never true, so its entire body — mutex, `SessionManager.Start()`, tray icon — never runs, with no test code needed to arrange that. It drives `OrbFlyout` with real synthesized clicks, `OrbWindow.UpdateFrom` against hand-built `SessionStatus` values, and `ChatPanel` through `FakeChatSession` — an in-memory `IRemoteChatSession`, which `RemoteChat.cs`'s own header comment says the interface exists to make possible, used here for the first time for exactly that. It does not synthesize a click on an orb or a chat panel's send-via-mouse path: an orb click reaches `TerminalFocuser`, which fires real `tmux`/`ps`/`osascript` processes off-thread with no OS guard at its own entry point, so a headless click on a CI runner would be a real, unpredictable side effect rather than a test.
 
-All three new suites need settings.json out of the way, since even constructing an `OrbWindow` reads a color setting in a field initializer — see the next paragraph for why that file cannot otherwise be pointed elsewhere. Each project's `TestBootstrap.cs` sets `CLAUDE_BUDDY_SETTINGS_DIR` to a fresh temp directory via a `[ModuleInitializer]`, before any test can run and before any settings static constructor can fire.
+All three new suites need settings.json out of the way, since even constructing an `OrbWindow` reads a color setting in a field initializer — see the next paragraph for why that file cannot otherwise be pointed elsewhere. Each project's `TestBootstrap.cs` sets `ORBWEAVER_SETTINGS_DIR` to a fresh temp directory via a `[ModuleInitializer]`, before any test can run and before any settings static constructor can fire.
 
 ## Coverage
 
@@ -433,7 +433,7 @@ That is now three documented cases of an unreproducible number in this file, and
 
 Four things the number does not say, worth remembering before quoting it:
 
-- **The number is only reproducible because the settings-touching UI classes are serialised — keep them that way.** `ClaudeBuddySettings` is a process-wide static and nearly every visual class reads it while being constructed, so two test classes running in parallel with one of them flipping a setting do not race to a failure, they race to a *different set of executed lines*. Before CB-3 serialised them, three consecutive runs of `tests/UiTests` over an identical binary reported 1914, 2024 and 1914 covered lines in `SettingsWindow.cs`. That swing is bigger than most real changes, so it reads as one — and it cost this ticket an hour of chasing a 145-line "regression" that was scheduling. Anything new that reads or writes settings joins `[Collection("Settings")]` in `tests/UiTests/SettingsCollection.cs`, whose comment has the rest of the story.
+- **The number is only reproducible because the settings-touching UI classes are serialised — keep them that way.** `OrbweaverSettings` is a process-wide static and nearly every visual class reads it while being constructed, so two test classes running in parallel with one of them flipping a setting do not race to a failure, they race to a *different set of executed lines*. Before CB-3 serialised them, three consecutive runs of `tests/UiTests` over an identical binary reported 1914, 2024 and 1914 covered lines in `SettingsWindow.cs`. That swing is bigger than most real changes, so it reads as one — and it cost this ticket an hour of chasing a 145-line "regression" that was scheduling. Anything new that reads or writes settings joins `[Collection("Settings")]` in `tests/UiTests/SettingsCollection.cs`, whose comment has the rest of the story.
 
 - **`--base` is the number that matters when reviewing a change.** A file-level percentage is dominated by whatever was already in the file; the added-lines figure is the one that says whether the new code is tested.
 - **The three console suites still contribute nothing to it** as suites — `ArrangementTests`, `GlyphTests` and `TranscriptTests` are plain exes, not test-SDK projects. Their *cases* do count now, because CB-3 moved each one's matrix into a class that `tests/UnitTests` compiles in and runs (see `ArrangementSweep`, `GlyphSuite`, `TranscriptSuite`), so `OrbArrangement` no longer reads 0% while being the most exhaustively verified file in the repo. Running the exes is still the way to get the grouped failure report.
@@ -449,8 +449,8 @@ Four things the number does not say, worth remembering before quoting it:
 Everything else about orb behavior is still verified by running the app. Two things make that survivable:
 
 - The status directory comes from the temp path, so `TMPDIR=<dir>` plus hand-written `<session-id>.txt` files gives a second instance its own fake sessions without touching real ones.
-- The cloned-bundle cache honours `CLAUDE_BUDDY_BUNDLE_ROOT`, added by CB-3 for the same reason: without it, the only place a test of `ClaudeDesktopBundles` could write is the real `~/Library/Application Support/ClaudeBuddy/bundles` — the live cache, holding real cloned `.app` bundles whose icons a user is looking at. That the seam did not exist is the whole reason nothing in that file was covered.
-- Settings now honour `CLAUDE_BUDDY_SETTINGS_DIR`, an env-var override checked before `SpecialFolder.ApplicationData` — the same pattern as `CLAUDE_BUDDY_PROFILE_ROOT` in `ClaudeDesktopManager.cs`. Without it a test instance reads and writes the real `~/Library/Application Support/ClaudeBuddy/settings.json`; a manual run that skips setting it should still back that file up first.
+- The cloned-bundle cache honours `ORBWEAVER_BUNDLE_ROOT`, added by CB-3 for the same reason: without it, the only place a test of `ClaudeDesktopBundles` could write is the real `~/Library/Application Support/Orbweaver/bundles` — the live cache, holding real cloned `.app` bundles whose icons a user is looking at. That the seam did not exist is the whole reason nothing in that file was covered.
+- Settings now honour `ORBWEAVER_SETTINGS_DIR`, an env-var override checked before `SpecialFolder.ApplicationData` — the same pattern as `ORBWEAVER_PROFILE_ROOT` in `ClaudeDesktopManager.cs`. Without it a test instance reads and writes the real `~/Library/Application Support/Orbweaver/settings.json`; a manual run that skips setting it should still back that file up first.
 
 Read window geometry back out of the window server (`CGWindowListCopyWindowInfo` by owner pid) rather than eyeballing a screenshot when a change is about *where* an orb sits — and don't synthesize mouse events on a machine someone is using, because their real input interleaves with yours and the result is nonsense.
 

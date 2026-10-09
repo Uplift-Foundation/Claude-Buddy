@@ -1,7 +1,7 @@
 using System.IO;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The evidence that a tinted Dock icon actually went on.
 //

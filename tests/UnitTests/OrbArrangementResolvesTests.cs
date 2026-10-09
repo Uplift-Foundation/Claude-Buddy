@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 // OrbArrangement.Resolves: does following this orb's lead, and its lead's lead,
 // eventually get out of the team — or does it go round in circles?

@@ -1,7 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Text;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // This machine answering another machine's Buddy about the sessions running
     // here: what they are, what their transcripts actually say, and — when asked

@@ -1,6 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Retires the legacy hook-script folders (~/.claude/claude-buddy and its
     // Codex, Grok and Windows %LOCALAPPDATA% twins) once the installer has
@@ -123,11 +123,14 @@ namespace ClaudeBuddy
 
         // Whether this process is under a test suite's sandbox, where the real
         // home directory is not this process's to clean. Every suite's
-        // TestBootstrap sets CLAUDE_BUDDY_SETTINGS_DIR, and the scan suites
-        // CLAUDE_BUDDY_STATUS_ROOT; either one means "not a real launch".
+        // TestBootstrap sets ORBWEAVER_SETTINGS_DIR, and the scan suites
+        // ORBWEAVER_STATUS_ROOT; either one, in either spelling, means "not a
+        // real launch".
+        internal static readonly IReadOnlyList<string> SandboxVariables =
+            [BrandEnv.SettingsDir, BrandEnv.StatusRoot];
+
         internal static bool Skipped(Func<string, string?> env) =>
-            env("CLAUDE_BUDDY_SETTINGS_DIR") is { Length: > 0 }
-            || env("CLAUDE_BUDDY_STATUS_ROOT") is { Length: > 0 };
+            SandboxVariables.Any(suffix => BrandEnv.Get(suffix, env) is not null);
 
         // One folder: look, decide, and — only on Retire — remove. Never
         // throws; anything the filesystem throws is Failed, and the folder is

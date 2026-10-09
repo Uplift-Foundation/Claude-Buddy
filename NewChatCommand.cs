@@ -1,6 +1,6 @@
 using System.Diagnostics;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Which of the three local CLIs CB-168's "start a new chat" dialog can
     // launch. OpenClaw is a fourth entry in the dialog itself, but it never

@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // TerminalFocuser.TmuxPaneOwners against a real tmux and the real process
 // table: the batch the scan now asks from its background half, in place of a

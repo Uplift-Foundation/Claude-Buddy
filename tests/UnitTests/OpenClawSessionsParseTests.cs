@@ -1,7 +1,7 @@
 using System.Text.Json;
 using Xunit;
 
-namespace ClaudeBuddy.Tests
+namespace Orbweaver.Tests
 {
     // Turning the gateway's sessions.list into the orbs on screen.
     //
@@ -33,18 +33,18 @@ namespace ClaudeBuddy.Tests
         private static long JustNow => Ms(Now.AddSeconds(-5));
 
         // Both settings Parse reads are set on every call rather than left to
-        // whatever ran before. ClaudeBuddySettings is a process-wide static and
+        // whatever ran before. OrbweaverSettings is a process-wide static and
         // xUnit orders a class's tests as it pleases, so a test that mutated
         // them would silently change the meaning of every test after it — which
         // is exactly what the first draft of this file did: half of these failed
         // because another case had turned heartbeats off, and `agent:<id>:main`
         // is a heartbeat key.
         private static (IReadOnlyList<OpenClawSessions.Session> Sessions, int Total) Parse(
-            string json, bool heartbeats = true, int withinMinutes = ClaudeBuddySettings.OpenClawActiveWithinAll)
+            string json, bool heartbeats = true, int withinMinutes = OrbweaverSettings.OpenClawActiveWithinAll)
         {
-            ClaudeBuddySettings.OpenClawHeartbeatMode =
+            OrbweaverSettings.OpenClawHeartbeatMode =
                 heartbeats ? ClusterMode.WithChats : ClusterMode.Hidden;
-            ClaudeBuddySettings.OpenClawActiveWithinMinutes = withinMinutes;
+            OrbweaverSettings.OpenClawActiveWithinMinutes = withinMinutes;
 
             return OpenClawSessions.Parse(Json(json), Now);
         }
@@ -491,7 +491,7 @@ namespace ClaudeBuddy.Tests
 
             Assert.Empty(sessions);
 
-            ClaudeBuddySettings.OpenClawEnabled = true;
+            OrbweaverSettings.OpenClawEnabled = true;
             var chat = (OpenClawChatSession)OpenClawSessions.ChatFor(
                 "openclaw:agent:quill:discord:channel:900", "Quill")!;
 
@@ -519,7 +519,7 @@ namespace ClaudeBuddy.Tests
                 ]}
                 """);
 
-            ClaudeBuddySettings.OpenClawEnabled = true;
+            OrbweaverSettings.OpenClawEnabled = true;
 
             var quill = (OpenClawChatSession)OpenClawSessions.ChatFor(
                 "openclaw:agent:quill:discord:channel:901", "Quill")!;
@@ -550,7 +550,7 @@ namespace ClaudeBuddy.Tests
                 ]}
                 """);
 
-            ClaudeBuddySettings.OpenClawEnabled = true;
+            OrbweaverSettings.OpenClawEnabled = true;
             var chat = (OpenClawChatSession)OpenClawSessions.ChatFor(
                 "openclaw:agent:quill:discord:channel:902", "Quill")!;
             Assert.NotNull(chat.Delivery);
@@ -600,7 +600,7 @@ namespace ClaudeBuddy.Tests
                     SessionKind.Channel, false),
             });
 
-            ClaudeBuddySettings.OpenClawEnabled = true;
+            OrbweaverSettings.OpenClawEnabled = true;
             var chat = (OpenClawChatSession)OpenClawSessions.ChatFor(
                 "openclaw:agent:quill:discord:channel:904", "Quill")!;
 

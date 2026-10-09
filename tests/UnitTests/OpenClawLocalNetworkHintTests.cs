@@ -3,7 +3,7 @@ using System.IO;
 using System.Net.Sockets;
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 // OpenClawGateway.ExplainConnectFailure and IsHostUnreachable: turning
 // EHOSTUNREACH into a sentence that points at the actual cause.

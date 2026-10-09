@@ -2,7 +2,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 using System.Text;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Reading and setting which app macOS hands a URL scheme to.
     //
@@ -149,7 +149,7 @@ namespace ClaudeBuddy
 
             try
             {
-                // .../Claude Buddy.app/Contents/MacOS/ClaudeBuddy
+                // .../Orbweaver.app/Contents/MacOS/Orbweaver
                 var executable = Environment.ProcessPath;
                 if (executable is null) return null;
 

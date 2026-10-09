@@ -1,7 +1,7 @@
 using System;
 using System.Linq;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // How big a session orb is drawn, as a multiplier over the 56-DIP window
     // (and the 36-DIP circle inside it) that every orb has always been. Pure and

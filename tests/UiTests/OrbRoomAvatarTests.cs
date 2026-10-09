@@ -4,7 +4,7 @@ using Avalonia.Media;
 using SkiaSharp;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // A room orb wearing the people who are in it.
 //
@@ -66,7 +66,7 @@ public class OrbRoomAvatarTests
 
         var json = $$"""{"sessions":[{{string.Join(",", rows)}}]}""";
 
-        ClaudeBuddySettings.OpenClawActiveWithinMinutes = ClaudeBuddySettings.OpenClawActiveWithinAll;
+        OrbweaverSettings.OpenClawActiveWithinMinutes = OrbweaverSettings.OpenClawActiveWithinAll;
         OpenClawSessions.Parse(JsonDocument.Parse(json).RootElement, DateTime.UtcNow);
     }
 
@@ -83,9 +83,9 @@ public class OrbRoomAvatarTests
 
         var json = $$"""{"sessions":[{{string.Join(",", rows)}}]}""";
 
-        ClaudeBuddySettings.OpenClawActiveWithinMinutes = windowMinutes;
+        OrbweaverSettings.OpenClawActiveWithinMinutes = windowMinutes;
         OpenClawSessions.Parse(JsonDocument.Parse(json).RootElement, DateTime.UtcNow);
-        ClaudeBuddySettings.OpenClawActiveWithinMinutes = ClaudeBuddySettings.OpenClawActiveWithinAll;
+        OrbweaverSettings.OpenClawActiveWithinMinutes = OrbweaverSettings.OpenClawActiveWithinAll;
     }
 
     private static SessionStatus RoomStatus() => new()

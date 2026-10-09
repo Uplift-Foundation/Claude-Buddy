@@ -5,7 +5,7 @@ using Avalonia.Headless.XUnit;
 using Avalonia.Threading;
 using Xunit;
 
-namespace ClaudeBuddy.UiTests;
+namespace Orbweaver.UiTests;
 
 // Pins CB-183's fix: this assembly runs every [AvaloniaFact] against one
 // dispatcher, so a pool thread can never be handed the UI thread between tests.
@@ -22,7 +22,7 @@ public class UiDispatcherIsolationTests
     [Fact]
     public void The_assembly_asks_for_one_dispatcher_for_every_test()
     {
-        var attribute = typeof(ClaudeBuddy.Tests.TestAppBuilder).Assembly
+        var attribute = typeof(Orbweaver.Tests.TestAppBuilder).Assembly
             .GetCustomAttribute<AvaloniaTestIsolationAttribute>();
 
         Assert.NotNull(attribute);

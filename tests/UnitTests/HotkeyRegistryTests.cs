@@ -1,7 +1,7 @@
 using Avalonia.Input;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // HotkeyRegistry is pure — no window, no settings read, no OS call — so
 // every one of these runs with nothing arranged first. See CB-155: the

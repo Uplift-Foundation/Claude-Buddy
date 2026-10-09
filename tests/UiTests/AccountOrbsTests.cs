@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using Avalonia.Headless.XUnit;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // AccountOrbs driven by an in-memory source instead of the CLI.
 //
@@ -189,9 +189,9 @@ public class AccountOrbsTests
     [AvaloniaFact]
     public void TurningGrokUsageOnDoesNotCloseTheOrbs()
     {
-        ClaudeBuddySettings.ReloadForTests();
-        ClaudeBuddySettings.AccountUsageEnabled = false;
-        ClaudeBuddySettings.GrokAccountUsageEnabled = true;
+        OrbweaverSettings.ReloadForTests();
+        OrbweaverSettings.AccountUsageEnabled = false;
+        OrbweaverSettings.GrokAccountUsageEnabled = true;
 
         var orbs = new AccountOrbs(new FakeUsageSource());
         orbs.Apply(new[]
@@ -205,15 +205,15 @@ public class AccountOrbsTests
         Assert.True(orbs.Orbs.ContainsKey("/Users/x/.grok"));
 
         orbs.CloseAll();
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
     }
 
     [AvaloniaFact]
     public void TurningClaudeUsageOffLeavesTheGrokOrb()
     {
-        ClaudeBuddySettings.ReloadForTests();
-        ClaudeBuddySettings.AccountUsageEnabled = false;
-        ClaudeBuddySettings.GrokAccountUsageEnabled = true;
+        OrbweaverSettings.ReloadForTests();
+        OrbweaverSettings.AccountUsageEnabled = false;
+        OrbweaverSettings.GrokAccountUsageEnabled = true;
 
         var orbs = new AccountOrbs(new FakeUsageSource());
         orbs.Apply(new[]
@@ -229,15 +229,15 @@ public class AccountOrbsTests
         Assert.False(orbs.Orbs.ContainsKey(string.Empty));
 
         orbs.CloseAll();
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
     }
 
     [AvaloniaFact]
     public void TurningGrokUsageOffLeavesTheClaudeOrb()
     {
-        ClaudeBuddySettings.ReloadForTests();
-        ClaudeBuddySettings.AccountUsageEnabled = true;
-        ClaudeBuddySettings.GrokAccountUsageEnabled = false;
+        OrbweaverSettings.ReloadForTests();
+        OrbweaverSettings.AccountUsageEnabled = true;
+        OrbweaverSettings.GrokAccountUsageEnabled = false;
 
         var orbs = new AccountOrbs(new FakeUsageSource());
         orbs.Apply(new[]
@@ -253,16 +253,16 @@ public class AccountOrbsTests
         Assert.False(orbs.Orbs.ContainsKey("/Users/x/.grok"));
 
         orbs.CloseAll();
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
     }
 
     [AvaloniaFact]
     public void TurningBothOffClosesEverything()
     {
-        ClaudeBuddySettings.ReloadForTests();
-        ClaudeBuddySettings.AccountUsageEnabled = false;
-        ClaudeBuddySettings.GrokAccountUsageEnabled = false;
-        ClaudeBuddySettings.CodexAccountUsageEnabled = false;
+        OrbweaverSettings.ReloadForTests();
+        OrbweaverSettings.AccountUsageEnabled = false;
+        OrbweaverSettings.GrokAccountUsageEnabled = false;
+        OrbweaverSettings.CodexAccountUsageEnabled = false;
 
         var orbs = new AccountOrbs(new FakeUsageSource());
         orbs.Apply(new[]
@@ -276,16 +276,16 @@ public class AccountOrbsTests
         Assert.Empty(orbs.Orbs);
 
         orbs.CloseAll();
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
     }
 
     [AvaloniaFact]
     public void TurningCodexUsageOnDoesNotCloseTheOrbs()
     {
-        ClaudeBuddySettings.ReloadForTests();
-        ClaudeBuddySettings.AccountUsageEnabled = false;
-        ClaudeBuddySettings.GrokAccountUsageEnabled = false;
-        ClaudeBuddySettings.CodexAccountUsageEnabled = true;
+        OrbweaverSettings.ReloadForTests();
+        OrbweaverSettings.AccountUsageEnabled = false;
+        OrbweaverSettings.GrokAccountUsageEnabled = false;
+        OrbweaverSettings.CodexAccountUsageEnabled = true;
 
         var orbs = new AccountOrbs(new FakeUsageSource());
         orbs.Apply(new[]
@@ -299,15 +299,15 @@ public class AccountOrbsTests
         Assert.True(orbs.Orbs.ContainsKey("/Users/x/.codex"));
 
         orbs.CloseAll();
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
     }
 
     [AvaloniaFact]
     public void TurningClaudeUsageOffLeavesTheCodexOrb()
     {
-        ClaudeBuddySettings.ReloadForTests();
-        ClaudeBuddySettings.AccountUsageEnabled = false;
-        ClaudeBuddySettings.CodexAccountUsageEnabled = true;
+        OrbweaverSettings.ReloadForTests();
+        OrbweaverSettings.AccountUsageEnabled = false;
+        OrbweaverSettings.CodexAccountUsageEnabled = true;
 
         var orbs = new AccountOrbs(new FakeUsageSource());
         orbs.Apply(new[]
@@ -323,7 +323,7 @@ public class AccountOrbsTests
         Assert.False(orbs.Orbs.ContainsKey(string.Empty));
 
         orbs.CloseAll();
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
     }
 
     // The floor is the whole reason the poll is affordable: Claude Code caches
@@ -335,7 +335,7 @@ public class AccountOrbsTests
         var source = new FakeUsageSource();
         var orbs = new AccountOrbs(source);
 
-        ClaudeBuddySettings.AccountUsageEnabled = false;
+        OrbweaverSettings.AccountUsageEnabled = false;
         orbs.Tick(Now);
 
         Assert.Equal(0, source.Reads);
@@ -459,8 +459,8 @@ public class AccountOrbsTests
     [AvaloniaFact]
     public void SyncToSettingsReturnsToTheFastCadence()
     {
-        ClaudeBuddySettings.ReloadForTests();
-        ClaudeBuddySettings.AccountUsageEnabled = true;
+        OrbweaverSettings.ReloadForTests();
+        OrbweaverSettings.AccountUsageEnabled = true;
 
         var orbs = new AccountOrbs(new FakeUsageSource());
         var reading = Usage(null, "board");

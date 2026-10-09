@@ -2,14 +2,14 @@ using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 using System.Text;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
-    // Where the hooks leave a session's status file, and where Claude Buddy
+    // Where the hooks leave a session's status file, and where Orbweaver
     // looks for it.
     //
     // **These have to be the same directory, and on a launchd-started Mac they
     // were not.** The hooks run from the user's shell, where `TMPDIR` is set to
-    // the per-user temp directory macOS gives every login session. Claude Buddy
+    // the per-user temp directory macOS gives every login session. Orbweaver
     // asks .NET for `Path.GetTempPath()`, which on Unix reads `TMPDIR` and falls
     // back to `/tmp` when it is unset — and a launchd agent's environment does
     // not carry `TMPDIR` at all. `launchctl print` on the mini listed none, and
@@ -62,9 +62,9 @@ namespace ClaudeBuddy
         // Pure so every arm is a test rather than a launchd job. The order is
         // the point.
         //
-        // `statusRoot` is CLAUDE_BUDDY_STATUS_ROOT, and it exists so a test can
+        // `statusRoot` is ORBWEAVER_STATUS_ROOT, and it exists so a test can
         // get its own status directory **without moving TMPDIR**, which is the
-        // same seam CLAUDE_BUDDY_SETTINGS_DIR and CLAUDE_BUDDY_PROFILE_ROOT
+        // same seam ORBWEAVER_SETTINGS_DIR and ORBWEAVER_PROFILE_ROOT
         // already are for their own directories. Moving TMPDIR looks like the
         // cheaper trick and is not: it is process-wide, so it reaches every
         // other thing in the process that asks the OS for a temp path —
@@ -88,7 +88,7 @@ namespace ClaudeBuddy
         // What it decides is Root, which is pure.
         [ExcludeFromCodeCoverage]
         internal static string Path0() => Root(
-            Environment.GetEnvironmentVariable("CLAUDE_BUDDY_STATUS_ROOT"),
+            BrandEnv.Get(BrandEnv.StatusRoot),
             Environment.GetEnvironmentVariable("TMPDIR"),
             PerUserTemp,
             System.IO.Path.GetTempPath());

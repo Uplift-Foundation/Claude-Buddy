@@ -12,7 +12,7 @@ using Avalonia.Media;
 // dozen times and nothing here touches a file path.
 using Path = Avalonia.Controls.Shapes.Path;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // One account's usage orb.
     //
@@ -190,7 +190,7 @@ namespace ClaudeBuddy
         // takes it.
         internal void UpdateFrom(AccountUsage usage, DateTimeOffset now)
         {
-            Glyph.Text = OrbGlyph.For(usage.Label, ClaudeBuddySettings.TwoLetterGlyphs);
+            Glyph.Text = OrbGlyph.For(usage.Label, OrbweaverSettings.TwoLetterGlyphs);
 
             IsDimmed = usage.IsStale(now);
             Root.Opacity = IsDimmed ? StaleOpacity : 1;

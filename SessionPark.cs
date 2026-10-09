@@ -4,7 +4,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Text.Json;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Whether Claude Code's own session record says this session has been moved
     // to the background — parked — and so should not be wearing an orb.

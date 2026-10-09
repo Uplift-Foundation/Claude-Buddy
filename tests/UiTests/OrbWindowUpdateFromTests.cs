@@ -3,7 +3,7 @@ using Avalonia.Headless.XUnit;
 using Avalonia.Media;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // UpdateFrom(SessionStatus) is OrbWindow's one big "apply everything the
 // hook file said" method (OrbWindow.axaml.cs, ~line 207). It does not

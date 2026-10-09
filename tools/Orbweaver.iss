@@ -1,9 +1,8 @@
-; Inno Setup script for the Orbweaver Windows installer (the file keeps its
-; pre-rename name until the binaries are renamed too).
+; Inno Setup script for the Orbweaver Windows installer.
 ;
 ; Build it with (from the repo root):
-;   dotnet publish ClaudeBuddy.csproj -c Release -r win-x64 -p:DebugType=none
-;   iscc tools\ClaudeBuddy.iss /DVersion=0.1.0-beta
+;   dotnet publish Orbweaver.csproj -c Release -r win-x64 -p:DebugType=none
+;   iscc /DVersion=0.1.0-beta tools\Orbweaver.iss
 ;
 ; tools\build-windows-installer.ps1 wraps both steps and reads the version out
 ; of the csproj, which is what CI calls.
@@ -24,8 +23,13 @@
 #define LegacyAppName "Claude Buddy"
 #define AppPublisher "Kawika Miller and Repo Owner"
 #define AppUrl "https://github.com/Uplift-Foundation/Claude-Buddy"
-; Still ClaudeBuddy.exe: the binary is renamed with the assembly, not here.
-#define AppExe "ClaudeBuddy.exe"
+; The publish output, named after the csproj's <AssemblyName>.
+#define AppExe "Orbweaver.exe"
+; What every install before CB-256 shipped as the app's exe. An upgrade keeps
+; the old install directory, so this file is still sitting beside the new one
+; and, on a machine where the app is running, still executing: see
+; [InstallDelete] and PrepareToInstall below. Never installed again.
+#define LegacyAppExe "ClaudeBuddy.exe"
 
 ; CFBundleVersion's Windows equivalent: VersionInfoVersion must be a plain
 ; dotted number, so strip any prerelease label for it while the user-visible
@@ -80,7 +84,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 LicenseFile=..\dist\LICENSE.txt
 OutputDir=..\dist
 OutputBaseFilename=Orbweaver-{#Version}-win-x64-setup
-SetupIconFile=..\Assets\ClaudeBuddy.ico
+SetupIconFile=..\Assets\Orbweaver.ico
 UninstallDisplayIcon={app}\{#AppExe}
 UninstallDisplayName={#AppName}
 Compression=lzma2/max
@@ -89,8 +93,12 @@ WizardStyle=modern
 
 ; The app has no main window — it lives in the notification area — so a plain
 ; "close the app" request has nothing to close. Restart Manager detects the file
-; lock on ClaudeBuddy.exe and terminates it, which is what makes upgrading over
+; lock on Orbweaver.exe and terminates it, which is what makes upgrading over
 ; a running copy work instead of failing on a locked file.
+;
+; Restart Manager only asks about files this installer is about to write, so it
+; cannot see a running pre-rename ClaudeBuddy.exe at all; PrepareToInstall in
+; [Code] stops that one (and this one, belt and braces) by hand.
 CloseApplications=force
 RestartApplications=no
 
@@ -144,6 +152,14 @@ Type: files; Name: "{userstartup}\{#LegacyAppName}.lnk"
 ; made under %LOCALAPPDATA%, which that script leaves alone for sessions still
 ; running against it -- so this is purely the old install's leftover.
 Type: files; Name: "{app}\ClaudeBuddyHook.ps1"
+; The pre-rename exe, likewise left in an upgraded install dir (CB-256). With
+; the hook above, it is the only file an old install laid down that this one
+; does not overwrite under the same name (read off v0.5.10-beta's [Files]); the
+; publish is single-file with DebugType=none, so there is no .pdb, .deps.json
+; or .runtimeconfig.json beside it either. Deleting it only succeeds because
+; PrepareToInstall has stopped it first -- a running exe is locked, and Inno
+; skips a failed delete here without saying so.
+Type: files; Name: "{app}\{#LegacyAppExe}"
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"
@@ -274,7 +290,7 @@ var
   KeyPos, TruePos, FalsePos: Integer;
 begin
   Result := False;
-  { %APPDATA%\Orbweaver\settings.json -- ClaudeBuddySettings.Directory
+  { %APPDATA%\Orbweaver\settings.json -- OrbweaverSettings.Directory
     resolves via SpecialFolder.ApplicationData, which is roaming AppData on
     Windows, not the LocalAppData directory this installer itself lives
     under. Do not write an Inno constant in brace form inside this comment --
@@ -325,7 +341,7 @@ begin
     '  <Triggers>' + #13#10 +
     '    <EventTrigger>' + #13#10 +
     '      <Enabled>true</Enabled>' + #13#10 +
-    '      <Subscription>&lt;QueryList&gt;&lt;Query Id="0" Path="Application"&gt;&lt;Select Path="Application"&gt;*[System[Provider[@Name=''Application Error''] and EventID=1000] and EventData[Data[@Name=''AppName'']=''ClaudeBuddy.exe'']]&lt;/Select&gt;&lt;/Query&gt;&lt;/QueryList&gt;</Subscription>' + #13#10 +
+    '      <Subscription>&lt;QueryList&gt;&lt;Query Id="0" Path="Application"&gt;&lt;Select Path="Application"&gt;*[System[Provider[@Name=''Application Error''] and EventID=1000] and EventData[Data[@Name=''AppName'']=''{#AppExe}'']]&lt;/Select&gt;&lt;/Query&gt;&lt;/QueryList&gt;</Subscription>' + #13#10 +
     '    </EventTrigger>' + #13#10 +
     '  </Triggers>' + #13#10 +
     '  <Principals>' + #13#10 +
@@ -439,6 +455,78 @@ begin
            'the hooks are set up. Run this from a PowerShell prompt to see the error:' + #13#10#13#10 +
            '  & "' + Script + '"',
            mbError, MB_OK);
+end;
+
+{ CB-256: stop a running copy of the app before anything is installed.
+
+  CloseApplications=force has always done this for the current exe, but
+  Restart Manager is only asked about files this installer is about to write,
+  and since the rename the pre-rename exe is not one of them. Without this, an
+  upgrade over a running pre-rename build leaves that process running out of
+  its locked exe: the delete in [InstallDelete] fails silently, the old process
+  keeps the legacy single-instance mutex, and the new exe that the post-install
+  launch (or the next sign-in) starts finds the mutex taken and exits 0. The
+  user sees an upgrade that did nothing, still running the old build.
+
+  taskkill /F is the same blunt instrument the uninstaller already uses, and
+  no ruder than Restart Manager's force: the app has nothing it must flush on
+  the way out. A forced termination does not log Event 1000, so the pre-rename
+  keep-alive task does not bring the old exe straight back.
+
+  taskkill returns before the process is actually gone, so this polls until
+  tasklist no longer lists the image, for up to ten seconds. If it is still
+  there after that -- most plausibly a copy belonging to another user, which a
+  per-user install has no rights to stop -- setup carries on regardless and
+  says so in the log; refusing to install would help nobody. }
+function ImageIsRunning(Image: String): Boolean;
+var
+  ResultCode: Integer;
+begin
+  { tasklist exits 0 whether or not anything matched, so its output goes
+    through find, which exits 0 only on a match. The no-match line it prints
+    instead ("INFO: No tasks are running ...", localised) never contains the
+    image name. A failure to start cmd at all reads as not running, which
+    lets setup proceed exactly as it would have before this existed. }
+  Result := Exec(ExpandConstant('{cmd}'),
+                 '/C ""' + ExpandConstant('{sys}\tasklist.exe') + '" /NH /FI "IMAGENAME eq ' + Image + '" | "' +
+                   ExpandConstant('{sys}\find.exe') + '" /I "' + Image + '""',
+                 '', SW_HIDE, ewWaitUntilTerminated, ResultCode)
+            and (ResultCode = 0);
+end;
+
+procedure StopRunningImage(Image: String);
+var
+  ResultCode, Waited: Integer;
+begin
+  if not ImageIsRunning(Image) then
+  begin
+    Log(Image + ' is not running.');
+    Exit;
+  end;
+
+  Log('Stopping ' + Image + ' before installing.');
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM ' + Image, '', SW_HIDE,
+       ewWaitUntilTerminated, ResultCode);
+  Log('taskkill /F /IM ' + Image + ' exited ' + IntToStr(ResultCode) + '.');
+
+  Waited := 0;
+  while ImageIsRunning(Image) and (Waited < 10000) do
+  begin
+    Sleep(250);
+    Waited := Waited + 250;
+  end;
+
+  if ImageIsRunning(Image) then
+    Log('Warning: ' + Image + ' is still running; continuing anyway.')
+  else
+    Log(Image + ' has stopped.');
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  StopRunningImage('{#LegacyAppExe}');
+  StopRunningImage('{#AppExe}');
+  Result := '';
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);

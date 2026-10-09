@@ -4,7 +4,7 @@ using Avalonia.Input;
 using Avalonia.Threading;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The speak scope setting reaching the panel that acts on it, and the settings
 // row that offers it.
@@ -28,12 +28,12 @@ public class SpeakScopeUiTests : IDisposable
     // The id of the most recently built fake session, so a case can ask the
     // shared speak path about the same session the panel is bound to.
     private string _lastFakeId = "";
-    private readonly SpeakScope _scopeWas = ClaudeBuddySettings.SpeakScope;
+    private readonly SpeakScope _scopeWas = OrbweaverSettings.SpeakScope;
 
     public void Dispose()
     {
         foreach (var id in _toClean) ChatPanel.HideFor(id);
-        ClaudeBuddySettings.SpeakScope = _scopeWas;
+        OrbweaverSettings.SpeakScope = _scopeWas;
         SpeechSummary.SummarizerForTests = null;
         SpeechRequest.UtteranceForTests = null;
         SpeechRequest.VoiceOptionsForTests = null;
@@ -113,7 +113,7 @@ public class SpeakScopeUiTests : IDisposable
     [AvaloniaFact]
     public async Task SummaryModeSendsTheReplyToTheSummariser()
     {
-        ClaudeBuddySettings.SpeakScope = SpeakScope.Summary;
+        OrbweaverSettings.SpeakScope = SpeakScope.Summary;
         var reply = LongReply();
 
         string? seen = null;
@@ -141,7 +141,7 @@ public class SpeakScopeUiTests : IDisposable
     [AvaloniaFact]
     public async Task TheButtonShowsPreparingWhileTheSummaryIsBeingWritten()
     {
-        ClaudeBuddySettings.SpeakScope = SpeakScope.Summary;
+        OrbweaverSettings.SpeakScope = SpeakScope.Summary;
         var reply = LongReply();
 
         TextToSpeech.SpeakState duringRoundTrip = TextToSpeech.SpeakState.Idle;
@@ -164,7 +164,7 @@ public class SpeakScopeUiTests : IDisposable
     [AvaloniaFact]
     public async Task CancellingDuringTheWaitStopsTheSummaryBeingSpoken()
     {
-        ClaudeBuddySettings.SpeakScope = SpeakScope.Summary;
+        OrbweaverSettings.SpeakScope = SpeakScope.Summary;
         var reply = LongReply();
 
         var spoken = (string?)null;
@@ -202,7 +202,7 @@ public class SpeakScopeUiTests : IDisposable
     [AvaloniaFact]
     public async Task UnrelatedSpeechActivityDuringTheWaitDoesNotEatTheSummary()
     {
-        ClaudeBuddySettings.SpeakScope = SpeakScope.Summary;
+        OrbweaverSettings.SpeakScope = SpeakScope.Summary;
         var reply = LongReply();
 
         var spoken = (string?)null;
@@ -230,7 +230,7 @@ public class SpeakScopeUiTests : IDisposable
     [AvaloniaFact]
     public async Task ANewerRequestSupersedesASummaryStillInFlight()
     {
-        ClaudeBuddySettings.SpeakScope = SpeakScope.Summary;
+        OrbweaverSettings.SpeakScope = SpeakScope.Summary;
         var reply = LongReply();
 
         var spoken = new List<string>();
@@ -239,7 +239,7 @@ public class SpeakScopeUiTests : IDisposable
         SpeechSummary.SummarizerForTests = _ =>
         {
             // A second press, arriving while this one is still summarising.
-            ClaudeBuddySettings.SpeakScope = SpeakScope.Full;
+            OrbweaverSettings.SpeakScope = SpeakScope.Full;
             SpeechRequest.Speak("something else entirely", _lastFakeId);
             return Task.FromResult<string?>("a stale summary");
         };
@@ -258,7 +258,7 @@ public class SpeakScopeUiTests : IDisposable
     [AvaloniaFact]
     public void FullModeNeverAsksTheSummariser()
     {
-        ClaudeBuddySettings.SpeakScope = SpeakScope.Full;
+        OrbweaverSettings.SpeakScope = SpeakScope.Full;
 
         var asked = false;
         SpeechSummary.SummarizerForTests = _ =>
@@ -366,7 +366,7 @@ public class SpeakScopeUiTests : IDisposable
     [AvaloniaFact]
     public async Task TheOrbsSpeakPathConsultsSpeakScope()
     {
-        ClaudeBuddySettings.SpeakScope = SpeakScope.Summary;
+        OrbweaverSettings.SpeakScope = SpeakScope.Summary;
         CaptureUtterances();
 
         string? asked = null;
@@ -402,7 +402,7 @@ public class SpeakScopeUiTests : IDisposable
     [AvaloniaFact]
     public void ThePanelsSpeakPathResolvesALocalPersonaVoice()
     {
-        ClaudeBuddySettings.SpeakScope = SpeakScope.Full;
+        OrbweaverSettings.SpeakScope = SpeakScope.Full;
         CaptureUtterances();
 
         var panel = OpenWith("Short enough to speak whole.");
@@ -423,7 +423,7 @@ public class SpeakScopeUiTests : IDisposable
     [AvaloniaFact]
     public void TheOrbsSpeakPathStillResolvesALocalPersonaVoice()
     {
-        ClaudeBuddySettings.SpeakScope = SpeakScope.Full;
+        OrbweaverSettings.SpeakScope = SpeakScope.Full;
         CaptureUtterances();
 
         var orb = OrbReading("Fixed the nested-team case.", out var path);
@@ -452,7 +452,7 @@ public class SpeakScopeUiTests : IDisposable
     [AvaloniaFact]
     public async Task TheOrbShowsPreparingWhileTheSummaryIsBeingWritten()
     {
-        ClaudeBuddySettings.SpeakScope = SpeakScope.Summary;
+        OrbweaverSettings.SpeakScope = SpeakScope.Summary;
         CaptureUtterances();
 
         var duringRoundTrip = TextToSpeech.SpeakState.Idle;
@@ -482,7 +482,7 @@ public class SpeakScopeUiTests : IDisposable
     [AvaloniaFact]
     public async Task CancellingDuringTheWaitStopsTheOrbSpeakingToo()
     {
-        ClaudeBuddySettings.SpeakScope = SpeakScope.Summary;
+        OrbweaverSettings.SpeakScope = SpeakScope.Summary;
         CaptureUtterances();
 
         SpeechSummary.SummarizerForTests = _ =>
@@ -517,7 +517,7 @@ public class SpeakScopeUiTests : IDisposable
     [AvaloniaFact]
     public async Task AFailedSummarySaysSoFromEitherButton()
     {
-        ClaudeBuddySettings.SpeakScope = SpeakScope.Summary;
+        OrbweaverSettings.SpeakScope = SpeakScope.Summary;
         SpeechSummary.SummarizerForTests = _ => throw new InvalidOperationException("no binary");
 
         var reply = LongReply();
@@ -551,7 +551,7 @@ public class SpeakScopeUiTests : IDisposable
     [AvaloniaFact]
     public void AnUnboundPanelSpeaksNothing()
     {
-        ClaudeBuddySettings.SpeakScope = SpeakScope.Full;
+        OrbweaverSettings.SpeakScope = SpeakScope.Full;
         CaptureUtterances();
 
         var panel = new ChatPanel();
@@ -606,7 +606,7 @@ public class SpeakScopeUiTests : IDisposable
     [AvaloniaFact]
     public void ThePickerOffersBothModesAndStartsOnTheSavedOne()
     {
-        ClaudeBuddySettings.SpeakScope = SpeakScope.Summary;
+        OrbweaverSettings.SpeakScope = SpeakScope.Summary;
 
         var combo = SettingsWindow.SpeakScopePicker();
 
@@ -614,7 +614,7 @@ public class SpeakScopeUiTests : IDisposable
         Assert.Equal(new[] { SettingsWindow.FullLabel, SettingsWindow.SummaryLabel }, items);
         Assert.Equal(1, combo.SelectedIndex);
 
-        ClaudeBuddySettings.SpeakScope = SpeakScope.Full;
+        OrbweaverSettings.SpeakScope = SpeakScope.Full;
         Assert.Equal(0, SettingsWindow.SpeakScopePicker().SelectedIndex);
     }
 
@@ -622,13 +622,13 @@ public class SpeakScopeUiTests : IDisposable
     [AvaloniaFact]
     public void ChoosingInThePickerRecordsTheMode()
     {
-        ClaudeBuddySettings.SpeakScope = SpeakScope.Full;
+        OrbweaverSettings.SpeakScope = SpeakScope.Full;
         var combo = SettingsWindow.SpeakScopePicker();
 
         combo.SelectedIndex = 1;
-        Assert.Equal(SpeakScope.Summary, ClaudeBuddySettings.SpeakScope);
+        Assert.Equal(SpeakScope.Summary, OrbweaverSettings.SpeakScope);
 
         combo.SelectedIndex = 0;
-        Assert.Equal(SpeakScope.Full, ClaudeBuddySettings.SpeakScope);
+        Assert.Equal(SpeakScope.Full, OrbweaverSettings.SpeakScope);
     }
 }

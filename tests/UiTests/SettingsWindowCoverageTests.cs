@@ -8,7 +8,7 @@ using Avalonia.Interactivity;
 using Avalonia.LogicalTree;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-3: closing the largest remaining coverage gap in SettingsWindow.cs. The
 // three files next door (SettingsWindowRowTests, SettingsWindowPickerTests,
@@ -105,15 +105,15 @@ public class SettingsWindowCoverageTests
     // SessionManager.Instance is always null under the headless test lifetime
     // (App's desktop-lifetime guard never runs — see TestAppBuilder.cs), so
     // this switch's own onChange is a no-op in this suite; what is testable is
-    // that it opens on the ClaudeBuddySettings fallback and that toggling it
+    // that it opens on the OrbweaverSettings fallback and that toggling it
     // does not throw.
     [AvaloniaFact]
     public void ShowOrbsSwitchOpensOnTheSettingsFallbackAndToggleDoesNotThrow()
     {
-        var was = ClaudeBuddySettings.ShowOrbs;
+        var was = OrbweaverSettings.ShowOrbs;
         try
         {
-            ClaudeBuddySettings.ShowOrbs = true;
+            OrbweaverSettings.ShowOrbs = true;
             var window = NewWindow();
             var toggle = SwitchIn(window.OrbsRows()[0]);
 
@@ -124,36 +124,36 @@ public class SettingsWindowCoverageTests
         }
         finally
         {
-            ClaudeBuddySettings.ShowOrbs = was;
+            OrbweaverSettings.ShowOrbs = was;
         }
     }
 
     [AvaloniaFact]
     public void TwoLetterInitialsSwitchWritesItsSetting()
     {
-        var was = ClaudeBuddySettings.TwoLetterGlyphs;
+        var was = OrbweaverSettings.TwoLetterGlyphs;
         try
         {
-            ClaudeBuddySettings.TwoLetterGlyphs = false;
+            OrbweaverSettings.TwoLetterGlyphs = false;
             var window = NewWindow();
             var toggle = SwitchIn(window.OrbsRows()[2]);
 
             toggle.IsChecked = true;
-            Assert.True(ClaudeBuddySettings.TwoLetterGlyphs);
+            Assert.True(OrbweaverSettings.TwoLetterGlyphs);
 
             toggle.IsChecked = false;
-            Assert.False(ClaudeBuddySettings.TwoLetterGlyphs);
+            Assert.False(OrbweaverSettings.TwoLetterGlyphs);
         }
         finally
         {
-            ClaudeBuddySettings.TwoLetterGlyphs = was;
+            OrbweaverSettings.TwoLetterGlyphs = was;
         }
     }
 
     // --- the "Orb colours" rows -------------------------------------------
 
     // CB-153: "Give each session a colour" used to be built twice, back to
-    // back, both bound to ClaudeBuddySettings.AutoColorSessions via the same
+    // back, both bound to OrbweaverSettings.AutoColorSessions via the same
     // OnAutoColorToggled handler — a visible duplicate on screen, and not
     // harmless, since the two copies shared the setting rather than the
     // control and could disagree on screen until the window rebuilt. Down to
@@ -162,13 +162,13 @@ public class SettingsWindowCoverageTests
     [AvaloniaFact]
     public void OrbColourRowsBuildsExactlyOneAutoColorRow()
     {
-        var was = ClaudeBuddySettings.AutoColorSessions;
+        var was = OrbweaverSettings.AutoColorSessions;
         try
         {
             // Set before the window is built, not after: the switch reads the
             // setting as it is constructed, so inheriting whatever the last
             // test left behind would decide this test's outcome for it.
-            ClaudeBuddySettings.AutoColorSessions = false;
+            OrbweaverSettings.AutoColorSessions = false;
 
             var rows = NewWindow().OrbColourRows();
 
@@ -181,11 +181,11 @@ public class SettingsWindowCoverageTests
 
             toggle.IsChecked = true;
 
-            Assert.True(ClaudeBuddySettings.AutoColorSessions);
+            Assert.True(OrbweaverSettings.AutoColorSessions);
         }
         finally
         {
-            ClaudeBuddySettings.AutoColorSessions = was;
+            OrbweaverSettings.AutoColorSessions = was;
         }
     }
 
@@ -239,7 +239,7 @@ public class SettingsWindowCoverageTests
 
     private static void ResetOpenClaw()
     {
-        ClaudeBuddySettings.OpenClawEnabled = false;
+        OrbweaverSettings.OpenClawEnabled = false;
 
         // The host, too, and this is not tidiness. Several of the cases below
         // turn OpenClawEnabled on, and the reply switch's handler calls
@@ -258,11 +258,11 @@ public class SettingsWindowCoverageTests
         // Serialising the classes is not enough on its own, because what leaks
         // is a background task rather than a value. Leaving no host is what
         // makes Restart() inert, which is the property those cases rely on.
-        ClaudeBuddySettings.OpenClawHost = "";
+        OrbweaverSettings.OpenClawHost = "";
 
-        ClaudeBuddySettings.OpenClawHeartbeatMode = ClusterMode.WithChats;
-        ClaudeBuddySettings.OpenClawCronMode = ClusterMode.WithChats;
-        ClaudeBuddySettings.OpenClawReplyEnabled = false;
+        OrbweaverSettings.OpenClawHeartbeatMode = ClusterMode.WithChats;
+        OrbweaverSettings.OpenClawCronMode = ClusterMode.WithChats;
+        OrbweaverSettings.OpenClawReplyEnabled = false;
         OpenClawSessions.SetCertificateRejectedForTests(false);
     }
 
@@ -289,7 +289,7 @@ public class SettingsWindowCoverageTests
         ResetOpenClaw();
         try
         {
-            ClaudeBuddySettings.OpenClawEnabled = true;
+            OrbweaverSettings.OpenClawEnabled = true;
             var window = NewWindow();
 
             var rows = window.OpenClawRows();
@@ -312,7 +312,7 @@ public class SettingsWindowCoverageTests
         ResetOpenClaw();
         try
         {
-            ClaudeBuddySettings.OpenClawEnabled = true;
+            OrbweaverSettings.OpenClawEnabled = true;
             OpenClawSessions.SetCertificateRejectedForTests(true);
             var window = NewWindow();
 
@@ -338,7 +338,7 @@ public class SettingsWindowCoverageTests
         ResetOpenClaw();
         try
         {
-            ClaudeBuddySettings.OpenClawEnabled = true;
+            OrbweaverSettings.OpenClawEnabled = true;
             var window = NewWindow();
             var rows = window.OpenClawRows();
 
@@ -352,18 +352,18 @@ public class SettingsWindowCoverageTests
             // by index rather than by calling the handler, because the mapping
             // from a combo position to a mode is the part that can be wrong.
             heartbeat.SelectedIndex = 0;
-            Assert.Equal(ClusterMode.Hidden, ClaudeBuddySettings.OpenClawHeartbeatMode);
-            Assert.Equal(ClusterMode.WithChats, ClaudeBuddySettings.OpenClawCronMode);
-            Assert.False(ClaudeBuddySettings.OpenClawReplyEnabled);
+            Assert.Equal(ClusterMode.Hidden, OrbweaverSettings.OpenClawHeartbeatMode);
+            Assert.Equal(ClusterMode.WithChats, OrbweaverSettings.OpenClawCronMode);
+            Assert.False(OrbweaverSettings.OpenClawReplyEnabled);
 
             cron.SelectedIndex = 2;
-            Assert.Equal(ClusterMode.OwnShape, ClaudeBuddySettings.OpenClawCronMode);
-            Assert.Equal(ClusterMode.Hidden, ClaudeBuddySettings.OpenClawHeartbeatMode);
+            Assert.Equal(ClusterMode.OwnShape, OrbweaverSettings.OpenClawCronMode);
+            Assert.Equal(ClusterMode.Hidden, OrbweaverSettings.OpenClawHeartbeatMode);
 
             reply.IsChecked = true;
-            Assert.True(ClaudeBuddySettings.OpenClawReplyEnabled);
-            Assert.Equal(ClusterMode.Hidden, ClaudeBuddySettings.OpenClawHeartbeatMode);
-            Assert.Equal(ClusterMode.OwnShape, ClaudeBuddySettings.OpenClawCronMode);
+            Assert.True(OrbweaverSettings.OpenClawReplyEnabled);
+            Assert.Equal(ClusterMode.Hidden, OrbweaverSettings.OpenClawHeartbeatMode);
+            Assert.Equal(ClusterMode.OwnShape, OrbweaverSettings.OpenClawCronMode);
         }
         finally
         {
@@ -382,9 +382,9 @@ public class SettingsWindowCoverageTests
         ResetOpenClaw();
         try
         {
-            ClaudeBuddySettings.OpenClawEnabled = true;
-            ClaudeBuddySettings.OpenClawHeartbeatMode = ClusterMode.OwnShape;
-            ClaudeBuddySettings.OpenClawCronMode = ClusterMode.Hidden;
+            OrbweaverSettings.OpenClawEnabled = true;
+            OrbweaverSettings.OpenClawHeartbeatMode = ClusterMode.OwnShape;
+            OrbweaverSettings.OpenClawCronMode = ClusterMode.Hidden;
 
             var rows = NewWindow().OpenClawRows();
 
@@ -396,7 +396,7 @@ public class SettingsWindowCoverageTests
             Assert.Contains("Circle", ItemsOf(shape).Cast<string>());
 
             shape.SelectedIndex = ItemsOf(shape).Cast<string>().ToList().IndexOf("Star");
-            Assert.Equal("star", ClaudeBuddySettings.OpenClawHeartbeatShape);
+            Assert.Equal("star", OrbweaverSettings.OpenClawHeartbeatShape);
 
             // The cron group is hidden, so no shape picker follows its mode row
             // — row 6 is that mode row, and row 7 is already the reply switch.
@@ -407,8 +407,8 @@ public class SettingsWindowCoverageTests
         }
         finally
         {
-            ClaudeBuddySettings.OpenClawHeartbeatShape =
-                ClaudeBuddySettings.DefaultOpenClawHeartbeatShape;
+            OrbweaverSettings.OpenClawHeartbeatShape =
+                OrbweaverSettings.DefaultOpenClawHeartbeatShape;
             ResetOpenClaw();
         }
     }
@@ -421,9 +421,9 @@ public class SettingsWindowCoverageTests
         ResetOpenClaw();
         try
         {
-            ClaudeBuddySettings.OpenClawEnabled = true;
-            ClaudeBuddySettings.OpenClawHeartbeatMode = ClusterMode.OwnShape;
-            ClaudeBuddySettings.OpenClawCronMode = ClusterMode.OwnShape;
+            OrbweaverSettings.OpenClawEnabled = true;
+            OrbweaverSettings.OpenClawHeartbeatMode = ClusterMode.OwnShape;
+            OrbweaverSettings.OpenClawCronMode = ClusterMode.OwnShape;
 
             var rows = NewWindow().OpenClawRows();
 
@@ -433,14 +433,14 @@ public class SettingsWindowCoverageTests
             var cronShape = ComboIn(rows[7]);
             cronShape.SelectedIndex = ItemsOf(cronShape).Cast<string>().ToList().IndexOf("Grid");
 
-            Assert.Equal("grid", ClaudeBuddySettings.OpenClawCronShape);
+            Assert.Equal("grid", OrbweaverSettings.OpenClawCronShape);
             Assert.Equal(
-                ClaudeBuddySettings.DefaultOpenClawHeartbeatShape,
-                ClaudeBuddySettings.OpenClawHeartbeatShape);
+                OrbweaverSettings.DefaultOpenClawHeartbeatShape,
+                OrbweaverSettings.OpenClawHeartbeatShape);
         }
         finally
         {
-            ClaudeBuddySettings.OpenClawCronShape = ClaudeBuddySettings.DefaultOpenClawCronShape;
+            OrbweaverSettings.OpenClawCronShape = OrbweaverSettings.DefaultOpenClawCronShape;
             ResetOpenClaw();
         }
     }
@@ -456,7 +456,7 @@ public class SettingsWindowCoverageTests
         ResetOpenClaw();
         try
         {
-            ClaudeBuddySettings.OpenClawEnabled = true;
+            OrbweaverSettings.OpenClawEnabled = true;
             var rows = NewWindow().OpenClawRows();
 
             var heartbeat = ComboIn(rows[4]);
@@ -464,7 +464,7 @@ public class SettingsWindowCoverageTests
             // Index 1 is WithChats, which is what it is already showing.
             heartbeat.SelectedIndex = 1;
 
-            Assert.Equal(ClusterMode.WithChats, ClaudeBuddySettings.OpenClawHeartbeatMode);
+            Assert.Equal(ClusterMode.WithChats, OrbweaverSettings.OpenClawHeartbeatMode);
             Assert.Equal(9, rows.Length);
         }
         finally
@@ -481,30 +481,30 @@ public class SettingsWindowCoverageTests
     [AvaloniaFact]
     public void LosingFocusOnTheGatewayHostBoxWithNoChangeIsANoOp()
     {
-        var was = ClaudeBuddySettings.OpenClawHost;
+        var was = OrbweaverSettings.OpenClawHost;
         try
         {
-            ClaudeBuddySettings.OpenClawHost = "192.168.1.50";
+            OrbweaverSettings.OpenClawHost = "192.168.1.50";
             var window = NewWindow();
             var box = (TextBox)window.GatewayHostBox();
 
             box.RaiseEvent(new FocusChangedEventArgs(InputElement.LostFocusEvent));
 
-            Assert.Equal("192.168.1.50", ClaudeBuddySettings.OpenClawHost);
+            Assert.Equal("192.168.1.50", OrbweaverSettings.OpenClawHost);
         }
         finally
         {
-            ClaudeBuddySettings.OpenClawHost = was;
+            OrbweaverSettings.OpenClawHost = was;
         }
     }
 
     [AvaloniaFact]
     public void LosingFocusOnTheGatewayTokenBoxWithNoChangeIsANoOp()
     {
-        var wasHost = ClaudeBuddySettings.OpenClawHost;
+        var wasHost = OrbweaverSettings.OpenClawHost;
         try
         {
-            ClaudeBuddySettings.OpenClawHost = "";
+            OrbweaverSettings.OpenClawHost = "";
             var window = NewWindow();
             var box = (TextBox)window.GatewayTokenBox();
 
@@ -515,7 +515,7 @@ public class SettingsWindowCoverageTests
         }
         finally
         {
-            ClaudeBuddySettings.OpenClawHost = wasHost;
+            OrbweaverSettings.OpenClawHost = wasHost;
         }
     }
 
@@ -523,11 +523,11 @@ public class SettingsWindowCoverageTests
 
     private static void ResetRemoteControl()
     {
-        ClaudeBuddySettings.RemoteControlEnabled = false;
-        ClaudeBuddySettings.SetRemoteControlProfileDirs(
-            new[] { ClaudeBuddySettings.DefaultRemoteControlProfileDir });
-        ClaudeBuddySettings.RemoteControlIdleMinutes = ClaudeBuddySettings.DefaultRemoteControlIdle;
-        ClaudeBuddySettings.RemoteControlServeOnLaunch = false;
+        OrbweaverSettings.RemoteControlEnabled = false;
+        OrbweaverSettings.SetRemoteControlProfileDirs(
+            new[] { OrbweaverSettings.DefaultRemoteControlProfileDir });
+        OrbweaverSettings.RemoteControlIdleMinutes = OrbweaverSettings.DefaultRemoteControlIdle;
+        OrbweaverSettings.RemoteControlServeOnLaunch = false;
     }
 
     // --- Voice rows ------------------------------------------------------------
@@ -535,12 +535,12 @@ public class SettingsWindowCoverageTests
     [AvaloniaFact]
     public void VoiceRowsBuildsWithoutThrowingWhenNothingIsEnabled()
     {
-        var wasNeural = ClaudeBuddySettings.NeuralVoiceEnabled;
-        var wasVoiceInput = ClaudeBuddySettings.VoiceInputEnabled;
+        var wasNeural = OrbweaverSettings.NeuralVoiceEnabled;
+        var wasVoiceInput = OrbweaverSettings.VoiceInputEnabled;
         try
         {
-            ClaudeBuddySettings.NeuralVoiceEnabled = false;
-            ClaudeBuddySettings.VoiceInputEnabled = false;
+            OrbweaverSettings.NeuralVoiceEnabled = false;
+            OrbweaverSettings.VoiceInputEnabled = false;
 
             var window = NewWindow();
             var rows = window.VoiceRows();
@@ -553,8 +553,8 @@ public class SettingsWindowCoverageTests
         }
         finally
         {
-            ClaudeBuddySettings.NeuralVoiceEnabled = wasNeural;
-            ClaudeBuddySettings.VoiceInputEnabled = wasVoiceInput;
+            OrbweaverSettings.NeuralVoiceEnabled = wasNeural;
+            OrbweaverSettings.VoiceInputEnabled = wasVoiceInput;
         }
     }
 
@@ -564,12 +564,12 @@ public class SettingsWindowCoverageTests
     // SettingsWindowRowTests), and switching on when the model is already
     // present. "Present" is faked by dropping an empty file at the exact path
     // NeuralSpeech/SpeechTranscriber check for, which lives under
-    // ClaudeBuddySettings.Directory — the same isolated per-test-run directory
+    // OrbweaverSettings.Directory — the same isolated per-test-run directory
     // TestBootstrap points at, so nothing under a real profile is touched.
     [AvaloniaFact]
     public void NeuralVoiceSwitchesOnWithoutDownloadingWhenAlreadyInstalled()
     {
-        var wasEnabled = ClaudeBuddySettings.NeuralVoiceEnabled;
+        var wasEnabled = OrbweaverSettings.NeuralVoiceEnabled;
         Directory.CreateDirectory(Path.GetDirectoryName(NeuralSpeech.EnginePath)!);
         Directory.CreateDirectory(Path.GetDirectoryName(NeuralSpeech.ModelPath)!);
         File.WriteAllBytes(NeuralSpeech.EnginePath, Array.Empty<byte>());
@@ -581,11 +581,11 @@ public class SettingsWindowCoverageTests
             var window = NewWindow();
             window.OnNeuralVoiceToggled(true);
 
-            Assert.True(ClaudeBuddySettings.NeuralVoiceEnabled);
+            Assert.True(OrbweaverSettings.NeuralVoiceEnabled);
         }
         finally
         {
-            ClaudeBuddySettings.NeuralVoiceEnabled = wasEnabled;
+            OrbweaverSettings.NeuralVoiceEnabled = wasEnabled;
             TextToSpeech.InvalidateVoiceCache();
             try { File.Delete(NeuralSpeech.EnginePath); } catch { }
             try { File.Delete(NeuralSpeech.ModelPath); } catch { }
@@ -595,14 +595,14 @@ public class SettingsWindowCoverageTests
     [AvaloniaFact]
     public void VoiceInputSwitchesOnWithoutDownloadingWhenModelAlreadyDownloaded()
     {
-        var wasEnabled = ClaudeBuddySettings.VoiceInputEnabled;
+        var wasEnabled = OrbweaverSettings.VoiceInputEnabled;
 
         // Mirrors SpeechTranscriber's own private ModelPath (ggml-base.en.bin
-        // under ClaudeBuddySettings.Directory); there is no internal seam for
+        // under OrbweaverSettings.Directory); there is no internal seam for
         // it the way NeuralSpeech exposes one, so the path is reconstructed
         // here rather than referenced.
-        var modelPath = Path.Combine(ClaudeBuddySettings.Directory, "ggml-base.en.bin");
-        Directory.CreateDirectory(ClaudeBuddySettings.Directory);
+        var modelPath = Path.Combine(OrbweaverSettings.Directory, "ggml-base.en.bin");
+        Directory.CreateDirectory(OrbweaverSettings.Directory);
         File.WriteAllBytes(modelPath, Array.Empty<byte>());
         try
         {
@@ -611,11 +611,11 @@ public class SettingsWindowCoverageTests
             var window = NewWindow();
             window.OnVoiceInputToggled(true);
 
-            Assert.True(ClaudeBuddySettings.VoiceInputEnabled);
+            Assert.True(OrbweaverSettings.VoiceInputEnabled);
         }
         finally
         {
-            ClaudeBuddySettings.VoiceInputEnabled = wasEnabled;
+            OrbweaverSettings.VoiceInputEnabled = wasEnabled;
             try { File.Delete(modelPath); } catch { }
         }
     }
@@ -702,7 +702,7 @@ public class SettingsWindowCoverageTests
     {
         const string folder = "cb3-coverage-test-profile";
         var directory = Path.Combine(Path.GetTempPath(), folder);
-        ClaudeBuddySettings.Update(folder, entry =>
+        OrbweaverSettings.Update(folder, entry =>
         {
             entry.Name = "My Profile";
             entry.ShowSwatch = false;
@@ -725,7 +725,7 @@ public class SettingsWindowCoverageTests
         }
         finally
         {
-            ClaudeBuddySettings.RemoveProfile(folder);
+            OrbweaverSettings.RemoveProfile(folder);
         }
     }
 
@@ -806,7 +806,7 @@ public class SettingsWindowCoverageTests
     {
         // The Threw case logs the escaped exception, and nothing in this suite
         // points the log directory anywhere: without this it would write into the
-        // real ~/Library/Logs/ClaudeBuddy. The background task copies the scope
+        // real ~/Library/Logs/Orbweaver. The background task copies the scope
         // when it is started, so disposing it after the click is safe.
         using var logScope = CrashLog.ScopeForTests(
             Path.Combine(Path.GetTempPath(), "cb-ui-hooklog-" + Guid.NewGuid().ToString("N")));

@@ -2,7 +2,7 @@ using System;
 using Avalonia.Headless.XUnit;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // One capture per scenario in tests/UiTests's AccountOrbWindowTests and
 // UsageCardTests. Hand-written, because adding a UiTests case does not add its

@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The rule behind CB-167's turn sounds, with no scan, no settings and no
 // speaker anywhere near it: did this transition mean a turn just finished,

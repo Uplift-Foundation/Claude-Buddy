@@ -4,7 +4,7 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Nothing may read the stored credential except through a budget.
 //
@@ -45,12 +45,12 @@ public class CredentialBudgetTests
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null)
         {
-            if (File.Exists(Path.Combine(dir.FullName, "ClaudeBuddy.csproj"))) return dir.FullName;
+            if (File.Exists(Path.Combine(dir.FullName, "Orbweaver.csproj"))) return dir.FullName;
             dir = dir.Parent;
         }
 
         throw new InvalidOperationException(
-            "Could not find ClaudeBuddy.csproj by walking up from " + AppContext.BaseDirectory);
+            "Could not find Orbweaver.csproj by walking up from " + AppContext.BaseDirectory);
     }
 
     // The shapes a direct read takes in this codebase: `_credentials.Read()`,

@@ -12,9 +12,17 @@ The text from `running_installed() {` to the `esac` that ends the report is
 cut out of the script and run under the script's own shell options, with
 stub `pgrep` and `ps` on PATH so the number of running copies is chosen by
 the test rather than by whatever happens to be running on the machine — a
-developer's Mac usually has a real Buddy up. STOPPED is empty, so the
-relaunch loop between the two is skipped exactly as on a first install, and
-nothing is ever launched.
+developer's Mac usually has a real Buddy up. Nothing is ever launched: `open`
+is a stub too.
+
+CB-256 renamed the executable, so three paths are in the wild (INSTALLED,
+INTERIM and LEGACY below) under two process names. The stub `pgrep` therefore
+answers `-x NAME` by basename, as the real one does: a stub that ignored its
+argument would make a script asking for one name look the same as one asking
+for both. Cases passing `with_stop` also run the step before the install
+(WAS_RUNNING, the keep-alive unload and the stop-installed-buddy.sh call)
+against a stub stop script, so "a phase-2 copy is stopped" is asserted on
+what the script actually asked to stop.
 
 Set BUILD_SCRIPT_UNDER_TEST to run it against another copy of the script.
 """
@@ -27,10 +35,17 @@ import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPT = os.environ.get("BUILD_SCRIPT_UNDER_TEST", os.path.join(HERE, "build-macos-app.sh"))
-INSTALLED = "/Applications/Orbweaver.app/Contents/MacOS/ClaudeBuddy"
-# The pre-CB-255 bundle. --install stops and removes it; a copy still running
-# out of it afterwards is not the new binary and must not be reported as one.
+# The three executable paths of CB-256 §2, C/B/A in the design's table.
+INSTALLED = "/Applications/Orbweaver.app/Contents/MacOS/Orbweaver"  # C: this build
+# B: the phase-2 Orbweaver.app, which still ran the pre-rename executable. It
+# is the bundle --install replaces, so nothing about the folder says it is old.
+INTERIM = "/Applications/Orbweaver.app/Contents/MacOS/ClaudeBuddy"
+# A: the pre-CB-255 bundle. --install stops and removes it; a copy still
+# running out of it afterwards is not the new binary and must not be reported
+# as one.
 LEGACY = "/Applications/Claude Buddy.app/Contents/MacOS/ClaudeBuddy"
+# The pid a relaunch through the stub `open` shows up as.
+RELAUNCHED = 5151
 
 
 def function(text, name):
@@ -38,6 +53,19 @@ def function(text, name):
     (`  name() { ...; }`) or a block closed by `  }` on its own line."""
     m = re.search(r"^  %s\(\) \{(?: [^\n]*\}$|\n.*?^  \}$)" % name, text, re.S | re.M)
     return None if m is None else m.group(0)
+
+
+def stop_step(text):
+    """The step before the install proper: WAS_RUNNING, the keep-alive unload
+    and the stop-installed-buddy.sh call, up to the `fi` closing the
+    "Stopped the running" report. Ends before the rm -rf of /Applications,
+    which must never run here."""
+    m = re.search(r"^  WAS_RUNNING=.*?^  STOPPED=.*?^  fi$", text, re.S | re.M)
+    if m is None:
+        raise AssertionError("build-macos-app.sh has no WAS_RUNNING/stop step")
+    if "rm -rf" in m.group(0):
+        raise AssertionError("the stop step extracted reaches the install's rm -rf")
+    return m.group(0)
 
 
 def tail(text):
@@ -72,7 +100,9 @@ def bash():
 
 
 with open(SCRIPT, encoding="utf-8") as f:
-    TAIL = tail(f.read())
+    TEXT = f.read()
+TAIL = tail(TEXT)
+STOP = stop_step(TEXT)
 
 
 class InstallTail(unittest.TestCase):
@@ -116,31 +146,98 @@ class InstallTail(unittest.TestCase):
         except FileNotFoundError:
             return []
 
-    def run_tail(self, processes, appear_on_call=1, stopped="", was_running="", keepalive=False):
-        """processes: {pid: executable path}, visible to pgrep only from its
-        `appear_on_call`-th call onwards — how launchd's restart looks from the
-        script, counted rather than timed so the case cannot pass or fail on
-        how fast the machine is. pgrep behaves like the real one: prints
-        nothing and exits 1 while there is nothing. `open` is stubbed to record
-        a relaunch, so nothing is ever launched; launchctl answers `list` per
-        `keepalive`."""
-        calls = os.path.join(self.tmp, "pgrep-calls")
-        listing = "".join("echo %d\n" % pid for pid in processes)
-        self.stub("pgrep", ('n=$(( $(cat "%s" 2>/dev/null || echo 0) + 1 )); echo $n > "%s"\n'
-                            '[ $n -ge %d ] || exit 1\n%s%s')
-                  % (self.posix(calls), self.posix(calls), appear_on_call, listing,
-                     "" if processes else "exit 1\n"))
-        cases = "".join('  %d) echo "%s" ;;\n' % (pid, exe) for pid, exe in processes.items())
-        self.stub("ps", 'pid=""\nwhile [ $# -gt 0 ]; do [ "$1" = "-p" ] && pid="$2"; shift; done\n'
-                        'case "$pid" in\n%s  *) exit 1 ;;\nesac\n' % cases)
-        self.stub("launchctl", "exit %d\n" % (0 if keepalive else 1))
+    # The stubs' shell, with @TMP@ and friends filled in per case. One process
+    # table, "pid|exe|first call it is visible on" per line, shared by every
+    # stub so that stopping a copy is visible to each scan after it.
+    PGREP = r'''name=""
+while [ $# -gt 0 ]; do [ "$1" = "-x" ] && name="$2"; shift; done
+echo "$name" >> "@TMP@/pgrep-names"
+f="@TMP@/pgrep-calls-$name"
+n=$(( $(cat "$f" 2>/dev/null || echo 0) + 1 )); echo $n > "$f"
+out=$(awk -F'|' -v want="$name" -v n="$n" '{ k = split($2, p, "/"); if (p[k] == want && n >= $3) print $1 }' "@TMP@/procs")
+[ -n "$out" ] || exit 1
+echo "$out"
+'''
+    PS = r'''pid=""
+while [ $# -gt 0 ]; do [ "$1" = "-p" ] && pid="$2"; shift; done
+out=$(awk -F'|' -v pid="$pid" '$1 == pid { print $2 }' "@TMP@/procs")
+[ -n "$out" ] || exit 1
+echo "$out"
+'''
+    # `unload` takes the keep-alive's own copy down with it, as launchd does.
+    LAUNCHCTL = r'''if [ "$1" = "unload" ]; then
+  awk -F'|' -v owned=" @OWNED@ " 'index(owned, " " $1 " ") == 0' "@TMP@/procs" > "@TMP@/procs.new"
+  mv "@TMP@/procs.new" "@TMP@/procs"
+  exit 0
+fi
+exit @LIST@
+'''
+    # Records what it was asked to stop, prints the pids running from those
+    # paths, and takes them out of the table.
+    STOPPER = r'''#!/bin/sh
+printf '%s\n' "$@" > "@TMP@/stop-args"
+STOP_EXES="$(printf '%s\n' "$@")" awk -F'|' -v rest="@TMP@/procs.new" '
+  BEGIN { n = split(ENVIRON["STOP_EXES"], l, "\n"); for (i = 1; i <= n; i++) want[l[i]] = 1 }
+  ($2 in want) { print $1; next }
+  { print > rest }' "@TMP@/procs"
+touch "@TMP@/procs.new"; mv "@TMP@/procs.new" "@TMP@/procs"
+'''
+
+    def fill(self, text, **values):
+        values.setdefault("TMP", self.posix(self.tmp))
+        for key, value in values.items():
+            text = text.replace("@%s@" % key, str(value))
+        return text
+
+    def run_tail(self, processes, appear_on_call=1, stopped="", was_running="", keepalive=False,
+                 with_stop=False, launchd_owned=(), relaunch_appears=False):
+        """processes: {pid: executable path}, each visible to `pgrep -x <its
+        basename>` only from that name's `appear_on_call`-th call onwards — how
+        launchd's restart looks from the script, counted rather than timed so
+        the case cannot pass or fail on how fast the machine is. pgrep behaves
+        like the real one: prints nothing and exits 1 while there is nothing.
+
+        `open` records a relaunch and, with `relaunch_appears`, puts RELAUNCHED
+        at INSTALLED in the table; launchctl answers `list` per `keepalive`,
+        and its `unload` removes the `launchd_owned` pids. `sleep` is a no-op,
+        since every wait here is counted in calls.
+
+        with_stop runs the stop step ahead of the tail and leaves STOPPED and
+        WAS_RUNNING to it; otherwise they are the strings given."""
+        with open(os.path.join(self.tmp, "procs"), "w", newline="\n") as f:
+            for pid, exe in processes.items():
+                f.write("%d|%s|%d\n" % (pid, exe, appear_on_call))
+        self.stub("pgrep", self.fill(self.PGREP))
+        self.stub("ps", self.fill(self.PS))
+        self.stub("launchctl", self.fill(self.LAUNCHCTL, OWNED=" ".join(map(str, launchd_owned)),
+                                         LIST=0 if keepalive else 1))
         self.opened = os.path.join(self.tmp, "opened")
-        self.stub("open", 'echo "$*" >> "%s"\n' % self.posix(self.opened))
-        script = ("set -euo pipefail\nPATH=%s:$PATH\nSTOPPED=\"%s\"\nWAS_RUNNING=\"%s\"\n"
-                  "APP_NAME=\"Orbweaver\"\nBUNDLE_ID=\"io.github.wtvamp.claudebuddy\"\n"
-                  "INSTALLED_APP=\"/Applications/Orbweaver.app\"\n"
-                  "INSTALLED_EXE=\"%s\"\nLEGACY_EXE=\"%s\"\n%s\necho TAIL-COMPLETED\n") % (
-                      self.bash_path(self.bin), stopped, was_running, INSTALLED, LEGACY, TAIL)
+        appear = self.fill('echo "@PID@|@EXE@|0" >> "@TMP@/procs"\n', PID=RELAUNCHED, EXE=INSTALLED)
+        self.stub("open", 'echo "$*" >> "%s"\n%s' % (self.posix(self.opened), appear if relaunch_appears else ""))
+        self.stub("sleep", "exit 0\n")
+        # The stop script, at the relative path the step calls it by.
+        os.makedirs(os.path.join(self.tmp, "tools"))
+        stopper = os.path.join(self.tmp, "tools", "stop-installed-buddy.sh")
+        with open(stopper, "w", newline="\n") as f:
+            f.write(self.fill(self.STOPPER))
+        os.chmod(stopper, 0o755)
+        # Present only when the keep-alive was registered, as on a real Mac:
+        # the step unloads it only if the file is there.
+        plist = os.path.join(self.tmp, "keepalive.plist")
+        if launchd_owned:
+            open(plist, "w").close()
+        if with_stop:
+            # The stop step calls running_from, which the tail's prelude would
+            # otherwise define only after it.
+            before = "%s\n%s\n" % (function(TEXT, "running_from"), STOP)
+        else:
+            before = 'STOPPED="%s"\nWAS_RUNNING="%s"\n' % (stopped, was_running)
+        script = ("set -euo pipefail\nPATH=%s:$PATH\ncd \"%s\"\n"
+                  "APP_NAME=\"Orbweaver\"\nEXECUTABLE=\"Orbweaver\"\nBUNDLE_ID=\"io.github.wtvamp.claudebuddy\"\n"
+                  "INSTALLED_APP=\"/Applications/Orbweaver.app\"\nKEEPALIVE_PLIST=\"%s\"\n"
+                  "INSTALLED_EXE=\"%s\"\nINTERIM_EXE=\"%s\"\nLEGACY_EXE=\"%s\"\n%s%s\necho TAIL-COMPLETED\n") % (
+                      self.bash_path(self.bin), self.posix(self.tmp), self.posix(plist),
+                      INSTALLED, INTERIM, LEGACY, before, TAIL)
         path = os.path.join(self.tmp, "tail.sh")
         with open(path, "w", newline="\n") as f:
             f.write(script)
@@ -153,6 +250,14 @@ class InstallTail(unittest.TestCase):
 
     def relaunched(self):
         return os.path.exists(self.opened)
+
+    def stop_args(self):
+        with open(os.path.join(self.tmp, "stop-args")) as f:
+            return f.read().splitlines()
+
+    def pgrep_names(self):
+        with open(os.path.join(self.tmp, "pgrep-names")) as f:
+            return set(f.read().split())
 
     def test_with_nothing_running_it_says_how_to_launch_rather_than_failing(self):
         rc, out, err = self.run_tail({})
@@ -254,6 +359,65 @@ class InstallTail(unittest.TestCase):
         self.assertIn("launchctl", self.stub_calls())
         self.assertFalse(self.relaunched(), "launched a Buddy on a machine where none was running")
         self.assertIn("Launch it with", out)
+
+    # ---- CB-256: three executable paths, two process names --------------
+
+    # The case the executable rename exists to get right: a phase-2 copy
+    # running out of Orbweaver.app/Contents/MacOS/ClaudeBuddy — the very
+    # bundle being replaced — is stopped, and the new executable relaunched
+    # in its place and reported as the one running.
+    def test_a_phase2_copy_is_stopped_and_the_new_one_relaunched(self):
+        rc, out, err = self.run_tail({4242: INTERIM}, with_stop=True, relaunch_appears=True)
+        self.assertEqual(0, rc, out + err)
+        self.assertIn(INTERIM, self.stop_args(), "the phase-2 executable was not handed to the stop script")
+        self.assertIn("==> Stopped the running Orbweaver (4242", out)
+        self.assertTrue(self.relaunched(), "the new Orbweaver was not launched in place of the phase-2 copy")
+        self.assertIn("==> Running: pid %d" % RELAUNCHED, out)
+
+    # Every path the stop step knows, in one call, and every copy stopped:
+    # one of each generation running at once is the worst a machine can have.
+    def test_the_stop_step_names_all_three_paths_and_stops_every_generation(self):
+        rc, out, err = self.run_tail({4141: LEGACY, 4242: INTERIM, 4343: INSTALLED},
+                                     with_stop=True, relaunch_appears=True)
+        self.assertEqual(0, rc, out + err)
+        self.assertEqual([INSTALLED, INTERIM, LEGACY], self.stop_args())
+        self.assertIn("==> Stopped the running Orbweaver (4141 4242 4343", out)
+        self.assertIn("==> Running: pid %d" % RELAUNCHED, out)
+        self.assertNotIn("more than one", err)
+
+    # Why running_from asks for both names. The keep-alive was running the
+    # phase-2 copy, so unloading it is what stopped it and the stop script
+    # finds nothing: STOPPED is empty, and only WAS_RUNNING — computed before
+    # the unload, through `pgrep -x ClaudeBuddy` — says one was up. Nothing
+    # reloads the keep-alive here, so if WAS_RUNNING missed it, nothing would
+    # be relaunched and the machine would be left with no Orbweaver at all.
+    def test_a_phase2_copy_the_keepalive_was_running_still_counts_as_running(self):
+        rc, out, err = self.run_tail({4242: INTERIM}, with_stop=True, launchd_owned=(4242,),
+                                     relaunch_appears=True)
+        self.assertEqual(0, rc, out + err)
+        self.assertEqual([], [line for line in out.splitlines() if "Stopped the running" in line])
+        self.assertTrue(self.relaunched(), "a phase-2 copy that was running was not brought back as the new one")
+        self.assertIn("==> Running: pid %d" % RELAUNCHED, out)
+
+    # The other half: this build's own process is called Orbweaver, so
+    # without `pgrep -x Orbweaver` the copy the install put in place would be
+    # invisible to the report. Asserted on the names asked as well as on the
+    # outcome, so a stub that answered regardless could not pass it.
+    def test_both_process_names_are_asked_for(self):
+        rc, out, err = self.run_tail({4242: INSTALLED}, stopped="", was_running="4242")
+        self.assertEqual(0, rc, out + err)
+        self.assertEqual({"Orbweaver", "ClaudeBuddy"}, self.pgrep_names())
+        self.assertIn("==> Running: pid 4242", out)
+
+    # The negative control for the phase-2 cases: a copy still at the
+    # phase-2 path after the install is the old binary, not the new one, and
+    # must not be reported as running — the same rule as for the legacy
+    # bundle above.
+    def test_a_copy_still_running_from_the_phase2_path_does_not_count(self):
+        rc, out, err = self.run_tail({4242: INTERIM}, stopped="", was_running="4242")
+        self.assertEqual(0, rc, out + err)
+        self.assertNotIn("==> Running: pid 4242", out)
+        self.assertTrue(self.relaunched())
 
 
 if __name__ == "__main__":

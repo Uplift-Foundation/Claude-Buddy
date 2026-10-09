@@ -5,7 +5,7 @@ using System.Text.Json.Nodes;
 using System.Text.Json.Serialization.Metadata;
 using Avalonia.Threading;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // The app's first persistent state.
     //
@@ -16,9 +16,9 @@ namespace ClaudeBuddy
     // works, with derived colours and folder names.
     //
     // Profiles are keyed by folder name rather than by path, so moving the
-    // profile root (the CLAUDE_BUDDY_PROFILE_ROOT override) keeps your settings,
+    // profile root (the ORBWEAVER_PROFILE_ROOT override) keeps your settings,
     // and renaming a folder deliberately starts fresh.
-    internal static class ClaudeBuddySettings
+    internal static class OrbweaverSettings
     {
         private const int CurrentVersion = 1;
 
@@ -137,23 +137,24 @@ namespace ClaudeBuddy
         };
 
         // Excluded from coverage: reads the real user profile directory. Every
-        // test in this repo runs with CLAUDE_BUDDY_SETTINGS_DIR pointed elsewhere,
+        // test in this repo runs with ORBWEAVER_SETTINGS_DIR pointed elsewhere,
         // which is the whole point — a suite that read this would be reading, and
         // on a bad day writing, the developer's own settings.json.
         [ExcludeFromCodeCoverage]
         private static string Home => Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
-        // %APPDATA%\ClaudeBuddy on Windows, ~/Library/Application Support/ClaudeBuddy
+        // %APPDATA%\Orbweaver on Windows, ~/Library/Application Support/Orbweaver
         // on macOS. SpecialFolder.ApplicationData resolves to both, so this is one
         // expression rather than a platform branch.
         //
-        // Test seam, same pattern as CLAUDE_BUDDY_PROFILE_ROOT
+        // Test seam, same pattern as ORBWEAVER_PROFILE_ROOT
         // (ClaudeDesktopManager.cs): without it, a test that so much as reads a
         // setting touches the developer's real settings.json, and a test that
         // writes one touches it for good — settings.json does not follow HOME on
-        // macOS, so there is no per-test-run isolation otherwise.
+        // macOS, so there is no per-test-run isolation otherwise. Read through
+        // BrandEnv, so the pre-rename spelling still redirects it.
         public static string Directory =>
-            Environment.GetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR") is { Length: > 0 } scratch
+            BrandEnv.Get(BrandEnv.SettingsDir) is { } scratch
                 ? scratch
                 : Path.Combine(
                     Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
@@ -436,7 +437,7 @@ namespace ClaudeBuddy
             // only way remote sessions arrive now.
             public bool RemoteControlEnabled { get; set; }
 
-            // Talking directly to another machine running Claude Buddy, rather
+            // Talking directly to another machine running Orbweaver, rather
             // than through a hidden Claude Code session relaying text.
             //
             // Off by default, and that is not timidity: switching it on makes
@@ -530,7 +531,7 @@ namespace ClaudeBuddy
             // wrapper, a voice-conversion chain, a Python script, a cloud API, a
             // batch file. The app makes no assumption about it and reports its
             // failures rather than hiding them. Same posture the project already
-            // takes with ClaudeBuddyHook.ps1, which is a user-editable script in
+            // takes with OrbweaverHook.ps1, which is a user-editable script in
             // %APPDATA% wired into Claude Code by hand.
             public string? SpeakCommand { get; set; }
 
@@ -681,7 +682,7 @@ namespace ClaudeBuddy
             // these are Claude Code *CLI* config directory names — e.g.
             // ".claude-work" for a CLAUDE_CONFIG_DIR=~/.claude-work alias
             // managing a second account — that the user has explicitly opted
-            // into also wiring Claude Buddy hooks for, beyond the default
+            // into also wiring Orbweaver hooks for, beyond the default
             // ~/.claude. install-windows-hooks.ps1 reads this same list (via
             // this file) as its default -ProfileDir/-WslProfileDir value, so
             // configuring it here is also what "configure via the installer"
@@ -904,14 +905,14 @@ namespace ClaudeBuddy
                 lock (Gate)
                 {
                     return string.Equals(_model.SpeakScope, "summary", StringComparison.OrdinalIgnoreCase)
-                        ? ClaudeBuddy.SpeakScope.Summary
-                        : ClaudeBuddy.SpeakScope.Full;
+                        ? Orbweaver.SpeakScope.Summary
+                        : Orbweaver.SpeakScope.Full;
                 }
             }
             set
             {
                 Load();
-                lock (Gate) _model.SpeakScope = value == ClaudeBuddy.SpeakScope.Summary ? "summary" : "full";
+                lock (Gate) _model.SpeakScope = value == Orbweaver.SpeakScope.Summary ? "summary" : "full";
                 Save();
             }
         }
@@ -2335,7 +2336,7 @@ namespace ClaudeBuddy
             node is JsonValue value && value.TryGetValue<bool>(out var result) ? result : fallback;
 
         // Test seam: this class is static, so it caches _model and _loaded for
-        // the life of the process. A test that points CLAUDE_BUDDY_SETTINGS_DIR
+        // the life of the process. A test that points ORBWEAVER_SETTINGS_DIR
         // at a fresh directory between cases still needs this to make that
         // directory actually get read again instead of the previous case's
         // cached model. Not for anything else — production code never needs to
@@ -2602,7 +2603,7 @@ namespace ClaudeBuddy
                 // but silently losing it with zero trace is exactly the "no
                 // error, just doesn't work" trap this project's own hook
                 // script goes out of its way to avoid elsewhere (see
-                // ClaudeBuddyHook.ps1's header comment) — so leave a
+                // OrbweaverHook.ps1's header comment) — so leave a
                 // breadcrumb somewhere known-writable rather than nothing.
                 // Added after hitting a real machine where this path
                 // silently failed on every single attempt, with no way to

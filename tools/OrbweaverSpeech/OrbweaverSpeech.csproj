@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!-- The side-car speech engine: a separate process the app downloads on demand
-       and shells out to, never something shipped inside ClaudeBuddy.exe.
+       and shells out to, never something shipped inside Orbweaver.exe.
 
        It lives in its own project because of what it drags in. KokoroSharp's
        dependency graph weighs ~82MB on disk, 66MB of which is MisakiSharp.dll —
@@ -20,7 +20,7 @@
        exe, reflection over every call, and a new state machine to handle
        cancellation that is no longer instantaneous.
 
-       Deliberately not in claudeBuddy.sln: it is not part of the app's build,
+       Deliberately not in Orbweaver.sln: it is not part of the app's build,
        and adding it there would make `dotnet build` at the repo root restore
        82MB of packages nobody asked for. Build it with
        tools/build-speech-engine.ps1. -->
@@ -30,13 +30,13 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <AssemblyName>ClaudeBuddySpeech</AssemblyName>
-    <RootNamespace>ClaudeBuddySpeech</RootNamespace>
+    <AssemblyName>OrbweaverSpeech</AssemblyName>
+    <RootNamespace>OrbweaverSpeech</RootNamespace>
 
-    <!-- Cosmetic: what the file properties of ClaudeBuddySpeech.exe report.
+    <!-- Cosmetic: what the file properties of OrbweaverSpeech.exe report.
          Nothing depends on it. The version that matters — the one in the bundle's
          filename, in the release URL and in the %APPDATA% path — comes from
-         ClaudeBuddy.csproj's <Version>, which the README calls the single source
+         Orbweaver.csproj's <Version>, which the README calls the single source
          of truth; build-speech-engine.ps1 reads it from there and NeuralSpeech
          derives the same value from the app assembly, so the two cannot drift. -->
     <Version>0.3.0-beta</Version>

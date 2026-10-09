@@ -1,7 +1,7 @@
 using System;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The rules behind CB-198's orb size: the per-platform floor, clamping, the
 // per-orb override winning over the slider, which presets the Size menu offers,

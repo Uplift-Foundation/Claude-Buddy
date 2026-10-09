@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-147, against real trees: a persona picture may now be written relative to
 // two different places — the directory of the markdown file that named it, or
@@ -30,7 +30,7 @@ public class PersonaWorkspaceRootFileTests : IDisposable
     {
         Directory.CreateDirectory(_root);
 
-        // AsyncLocal rather than CLAUDE_BUDDY_LOG_DIR: _logDir is asserted
+        // AsyncLocal rather than ORBWEAVER_LOG_DIR: _logDir is asserted
         // about below, so it must not be a name any parallel test can see.
         // See CrashLog.ScopeForTests for the whole argument.
         _logScope = CrashLog.ScopeForTests(_logDir);

@@ -1,7 +1,7 @@
 using System.IO;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The set of CLI processes this app started for itself, and the scan actually
 // leaving them out.
@@ -81,7 +81,7 @@ public class InternalSessionScanTests : IDisposable
         try { Directory.Delete(_dir, recursive: true); } catch { }
     }
 
-    // One line, exactly as ClaudeBuddyHook.sh's printf writes it. Written from
+    // One line, exactly as OrbweaverHook.sh's printf writes it. Written from
     // the real format rather than prettified: a fixture that reformats what the
     // hook produces is testing a file nothing ever creates.
     private void WriteStatus(string sessionId, int pid) =>

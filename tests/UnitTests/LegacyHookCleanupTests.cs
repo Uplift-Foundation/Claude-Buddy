@@ -2,9 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using Xunit;
-using Verdict = ClaudeBuddy.LegacyHookCleanup.Verdict;
+using Verdict = Orbweaver.LegacyHookCleanup.Verdict;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-255 §1: when a legacy hook-script folder may be deleted. The rule is
 // pure and every arm is a case here; the IO half is driven against real temp
@@ -143,9 +143,12 @@ public class LegacyHookCleanupTests
 
     // --- Skipped -----------------------------------------------------------
 
+    // Either variable in either spelling (CB-256).
     [Theory]
-    [InlineData("CLAUDE_BUDDY_SETTINGS_DIR")]
-    [InlineData("CLAUDE_BUDDY_STATUS_ROOT")]
+    [InlineData("ORBWEAVER_SETTINGS_DIR")]
+    [InlineData("ORBWEAVER_STATUS_ROOT")]
+    [InlineData(BrandEnv.LegacyPrefix + BrandEnv.SettingsDir)]
+    [InlineData(BrandEnv.LegacyPrefix + BrandEnv.StatusRoot)]
     public void EitherTestOverrideSkipsTheWholeStep(string variable)
     {
         Assert.True(LegacyHookCleanup.Skipped(name => name == variable ? "/sandbox" : null));

@@ -1,11 +1,11 @@
 using System;
 using System.IO;
 using Avalonia.Media;
-using ClaudeBuddy;
-using ClaudeBuddy.Tests;
+using Orbweaver;
+using Orbweaver.Tests;
 using Xunit;
 
-namespace ClaudeBuddy.IntegrationTests;
+namespace Orbweaver.IntegrationTests;
 
 // The downgrade loop, pinned against real directories.
 //
@@ -29,11 +29,11 @@ namespace ClaudeBuddy.IntegrationTests;
 // App Management consent to pass would be a test nobody could run.
 //
 // Own collection for the same reason OrphanedCloneLayoutTests has one: this
-// moves CLAUDE_BUDDY_BUNDLE_ROOT, which is process-wide.
+// moves ORBWEAVER_BUNDLE_ROOT, which is process-wide.
 [Collection("BundleRoot")]
 public class CloneSurvivesSelfUpdateTests : IDisposable
 {
-    private const string RootVariable = "CLAUDE_BUDDY_BUNDLE_ROOT";
+    private const string RootVariable = "ORBWEAVER_BUNDLE_ROOT";
 
     private readonly string? _before = Environment.GetEnvironmentVariable(RootVariable);
     private readonly string _root = Path.Combine(

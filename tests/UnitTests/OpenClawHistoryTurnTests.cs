@@ -3,7 +3,7 @@ using System.Linq;
 using System.Text.Json;
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 // One page of the gateway's chat.history, turned into turns the panel can draw.
 //

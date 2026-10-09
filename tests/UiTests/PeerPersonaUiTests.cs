@@ -5,7 +5,7 @@ using Avalonia.Media;
 using SkiaSharp;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // A persona that belongs to a session on another machine, drawn on this one.
 //
@@ -98,7 +98,7 @@ public class PeerPersonaUiTests : IDisposable
             [sessionId] = new("Homebody", null, null, null, null, Array.Empty<string>()),
         });
 
-        ClaudeBuddySettings.TwoLetterGlyphs = true;
+        OrbweaverSettings.TwoLetterGlyphs = true;
         var orb = NewOrb(sessionId);
 
         orb.UpdateFrom(Remote());
@@ -144,7 +144,7 @@ public class PeerPersonaUiTests : IDisposable
     [AvaloniaFact]
     public void AnUnreadablePeerPortraitLeavesTheOrbWearingItsLetters()
     {
-        ClaudeBuddySettings.TwoLetterGlyphs = true;
+        OrbweaverSettings.TwoLetterGlyphs = true;
         var sessionId = PublishPeer(
             new MirrorProtocol.PeerPersona("Faraday", Avatar: new byte[] { 0, 1, 2, 3, 4 }));
         var orb = NewOrb(sessionId);
@@ -217,7 +217,7 @@ public class PeerPersonaUiTests : IDisposable
     [AvaloniaFact]
     public void ARemoteSessionWithNoPersonaKeepsTheTitleItAlwaysHad()
     {
-        ClaudeBuddySettings.TwoLetterGlyphs = true;
+        OrbweaverSettings.TwoLetterGlyphs = true;
         PeerPersonas.SetForTests(new Dictionary<string, MirrorProtocol.PeerPersona>());
 
         var orb = NewOrb("rc:peer-account:" + Guid.NewGuid());

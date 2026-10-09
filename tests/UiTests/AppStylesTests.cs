@@ -6,7 +6,7 @@ using Avalonia.Media;
 using Avalonia.Styling;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // App.Initialize's one decision: which theme this build wears.
 //

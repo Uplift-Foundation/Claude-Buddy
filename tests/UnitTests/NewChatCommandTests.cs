@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests
+namespace Orbweaver.Tests
 {
     // The shell command and Windows launch description for CB-168's "start a
     // new chat" — pure, so quoting edge cases (a space, an apostrophe, a

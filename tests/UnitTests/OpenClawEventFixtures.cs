@@ -1,4 +1,4 @@
-namespace ClaudeBuddy.Tests
+namespace Orbweaver.Tests
 {
     // Real event sequences off a live OpenClaw gateway (2026.9.2), captured on
     // 25 Sep 2026 with `tools/openclaw-probe -- events`, which subscribes the way

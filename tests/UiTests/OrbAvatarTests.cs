@@ -3,7 +3,7 @@ using Avalonia.Media;
 using SkiaSharp;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // An agent's own picture, drawn as the orb itself.
 //
@@ -136,14 +136,14 @@ public class OrbAvatarTests
     [AvaloniaFact]
     public void APairedPeerProfileVoiceReachesTheAgentOrbWithoutReplacingItsIdentity()
     {
-        var savedPin = ClaudeBuddySettings.OpenClawFingerprint;
+        var savedPin = OrbweaverSettings.OpenClawFingerprint;
         var agent = Agent();
         const string pin = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         var neural = new TextToSpeech.VoiceOption(
             TextToSpeech.SpeakEngine.Neural, "af_bella", "af_bella (Kokoro)");
         try
         {
-            ClaudeBuddySettings.OpenClawFingerprint = pin;
+            OrbweaverSettings.OpenClawFingerprint = pin;
             OpenClawSessions.SetIdentitiesForTests(
                 new Dictionary<string, OpenClawSessions.AgentIdentity>
                 {
@@ -162,7 +162,7 @@ public class OrbAvatarTests
         }
         finally
         {
-            ClaudeBuddySettings.OpenClawFingerprint = savedPin;
+            OrbweaverSettings.OpenClawFingerprint = savedPin;
             PublishNothing();
         }
     }

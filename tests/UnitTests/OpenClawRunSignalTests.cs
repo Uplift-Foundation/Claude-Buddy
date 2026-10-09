@@ -1,7 +1,7 @@
 using System.Text.Json;
 using Xunit;
 
-namespace ClaudeBuddy.Tests
+namespace Orbweaver.Tests
 {
     // CB-169: one case per arm of the rule that decides whether an OpenClaw
     // event is evidence of a session generating. Pure — no statics, no clock —

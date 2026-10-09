@@ -2,7 +2,7 @@ using System;
 using Avalonia;
 using Avalonia.Media;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Where a usage ring's arc starts and stops, and what colour it is.
     //

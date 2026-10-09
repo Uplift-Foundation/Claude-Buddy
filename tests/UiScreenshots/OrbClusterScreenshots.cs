@@ -8,7 +8,7 @@ using Avalonia.LogicalTree;
 using Avalonia.Media;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // What CB-14 actually looks like, on both runners.
 //
@@ -185,15 +185,15 @@ public class OrbClusterScreenshots
     [AvaloniaFact]
     public void TheOpenClawSectionShowsBothModeRowsAndBothShapeRows()
     {
-        var enabled = ClaudeBuddySettings.OpenClawEnabled;
-        var heartbeats = ClaudeBuddySettings.OpenClawHeartbeatMode;
-        var crons = ClaudeBuddySettings.OpenClawCronMode;
+        var enabled = OrbweaverSettings.OpenClawEnabled;
+        var heartbeats = OrbweaverSettings.OpenClawHeartbeatMode;
+        var crons = OrbweaverSettings.OpenClawCronMode;
 
         try
         {
-            ClaudeBuddySettings.OpenClawEnabled = true;
-            ClaudeBuddySettings.OpenClawHeartbeatMode = ClusterMode.OwnShape;
-            ClaudeBuddySettings.OpenClawCronMode = ClusterMode.OwnShape;
+            OrbweaverSettings.OpenClawEnabled = true;
+            OrbweaverSettings.OpenClawHeartbeatMode = ClusterMode.OwnShape;
+            OrbweaverSettings.OpenClawCronMode = ClusterMode.OwnShape;
 
             var ctor = typeof(SettingsWindow).GetConstructor(
                 BindingFlags.NonPublic | BindingFlags.Instance,
@@ -245,9 +245,9 @@ public class OrbClusterScreenshots
         }
         finally
         {
-            ClaudeBuddySettings.OpenClawCronMode = crons;
-            ClaudeBuddySettings.OpenClawHeartbeatMode = heartbeats;
-            ClaudeBuddySettings.OpenClawEnabled = enabled;
+            OrbweaverSettings.OpenClawCronMode = crons;
+            OrbweaverSettings.OpenClawHeartbeatMode = heartbeats;
+            OrbweaverSettings.OpenClawEnabled = enabled;
         }
     }
 }

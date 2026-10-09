@@ -5,14 +5,14 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // How the cloud arm gets a credential, and the rules it handles one under.
     //
     // **This is the first credential this application has ever held.** Every
     // other account-scoped path in the app — UsagePoller above all — deliberately
     // never touches one: it spawns `claude -p` and writes a control request, so
-    // the CLI owns the token and a compromise of Claude Buddy is not a token
+    // the CLI owns the token and a compromise of Orbweaver is not a token
     // disclosure. That posture is not being relaxed. CB-164 established there is
     // no control-protocol subtype for cloud sessions, so the cloud roster cannot
     // be reached that way, and this file is the scoped exception rather than a
@@ -462,8 +462,8 @@ namespace ClaudeBuddy
 
         // Whether this process is forbidden from asking the OS for a credential.
         //
-        // The same env-var seam shape as CLAUDE_BUDDY_SETTINGS_DIR,
-        // CLAUDE_BUDDY_PROFILE_ROOT and CLAUDE_BUDDY_BUNDLE_ROOT, and for the same
+        // The same env-var seam shape as ORBWEAVER_SETTINGS_DIR,
+        // ORBWEAVER_PROFILE_ROOT and ORBWEAVER_BUNDLE_ROOT, and for the same
         // reason all three exist: without it a test reaches something real that
         // belongs to the person running it. Those three protect a settings file, a
         // profile directory and an icon cache. This one protects their Keychain,
@@ -479,7 +479,7 @@ namespace ClaudeBuddy
         // poll loop and a chat path several layers up, and a flag that has to be
         // passed correctly from each of them is a flag that will eventually not be.
         internal static bool CredentialStoreDisabled =>
-            Environment.GetEnvironmentVariable("CLAUDE_BUDDY_NO_CREDENTIAL_STORE") is { Length: > 0 };
+            BrandEnv.Get(BrandEnv.NoCredentialStore) is not null;
 
         // Read the credential, or give up.
         //

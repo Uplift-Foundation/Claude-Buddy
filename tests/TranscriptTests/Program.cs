@@ -1,5 +1,5 @@
-using ClaudeBuddy;
-using ClaudeBuddy.Tests;
+using Orbweaver;
+using Orbweaver.Tests;
 
 // Two things that turn text nobody controls into things the panel shows, and
 // both fail quietly when they fail.

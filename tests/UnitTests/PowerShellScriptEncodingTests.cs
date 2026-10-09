@@ -1,7 +1,7 @@
 using System.Text;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Windows PowerShell 5.1 reads a .ps1 with no BOM as the ANSI codepage, not
 // UTF-8. An em dash (E2 80 94) then decodes to three characters, one of which

@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-171 and CB-173. Which session kinds wear a drawn badge rather than a
 // typed one, and which mark each of them draws.
