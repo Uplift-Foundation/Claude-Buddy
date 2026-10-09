@@ -143,9 +143,12 @@ public class LegacyHookCleanupTests
 
     // --- Skipped -----------------------------------------------------------
 
+    // Either variable in either spelling (CB-256).
     [Theory]
-    [InlineData("CLAUDE_BUDDY_SETTINGS_DIR")]
-    [InlineData("CLAUDE_BUDDY_STATUS_ROOT")]
+    [InlineData("ORBWEAVER_SETTINGS_DIR")]
+    [InlineData("ORBWEAVER_STATUS_ROOT")]
+    [InlineData(BrandEnv.LegacyPrefix + BrandEnv.SettingsDir)]
+    [InlineData(BrandEnv.LegacyPrefix + BrandEnv.StatusRoot)]
     public void EitherTestOverrideSkipsTheWholeStep(string variable)
     {
         Assert.True(LegacyHookCleanup.Skipped(name => name == variable ? "/sandbox" : null));

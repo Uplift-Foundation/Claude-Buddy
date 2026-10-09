@@ -38,10 +38,10 @@ public class OpenClawIdentityTests
     // assembly reads settings through the same property.
     private static void InIsolation(Action<string> body)
     {
-        var previous = Environment.GetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR");
+        var previous = Environment.GetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR");
         var scratch = Path.Combine(Path.GetTempPath(), "cb-identity-" + Guid.NewGuid());
 
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", scratch);
+        Environment.SetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR", scratch);
         OpenClawIdentity.ResetForTests();
 
         try
@@ -50,7 +50,7 @@ public class OpenClawIdentityTests
         }
         finally
         {
-            Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", previous);
+            Environment.SetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR", previous);
             OpenClawIdentity.ResetForTests();
             try { Directory.Delete(scratch, recursive: true); } catch { }
         }
@@ -288,13 +288,13 @@ public class OpenClawIdentityTests
     [Fact]
     public void AnIdentityThatCannotBePersistedStillWorksForThisRun()
     {
-        var previous = Environment.GetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR");
+        var previous = Environment.GetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR");
         var blocker = Path.Combine(Path.GetTempPath(), "cb-identity-blocked-" + Guid.NewGuid());
         File.WriteAllText(blocker, "not a directory");
 
         try
         {
-            Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", blocker);
+            Environment.SetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR", blocker);
             OpenClawIdentity.ResetForTests();
 
             var identity = OpenClawIdentity.Current();
@@ -307,7 +307,7 @@ public class OpenClawIdentityTests
         }
         finally
         {
-            Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", previous);
+            Environment.SetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR", previous);
             OpenClawIdentity.ResetForTests();
             try { File.Delete(blocker); } catch { }
         }

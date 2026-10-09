@@ -5,7 +5,7 @@ namespace Orbweaver.Tests;
 
 // ClaudeBuddySettings is a static class: one model shared by the whole
 // process, guarded by its own lock but with no isolation between test
-// cases. Every test here repoints CLAUDE_BUDDY_SETTINGS_DIR and calls
+// cases. Every test here repoints ORBWEAVER_SETTINGS_DIR and calls
 // ReloadForTests() before touching anything, and the whole class is
 // [Collection("Settings")] so xUnit never runs two of them at once — without
 // that, two settings tests running in parallel would stomp each other's
@@ -27,7 +27,7 @@ public class SettingsRoundTripTests
 
     private static void PointSettingsAt(string dir)
     {
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
+        Environment.SetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR", dir);
         OrbweaverSettings.ReloadForTests();
     }
 

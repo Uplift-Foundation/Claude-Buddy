@@ -48,7 +48,7 @@ public class NewChatWindowScreenshots : IDisposable
     public void Dispose() => ClearSeams();
 
     // CB-201's own review flag: AccountPickerWithTwoProfiles used to point
-    // CLAUDE_BUDDY_SETTINGS_DIR at its own fresh directory but never put it
+    // ORBWEAVER_SETTINGS_DIR at its own fresh directory but never put it
     // back, and ClearSeams only resets the delegate seams, not the settings
     // dir or ClaudeCodeProfileDirs itself. xUnit constructs a fresh instance
     // per test method but does not guarantee method order, so whichever
@@ -64,7 +64,7 @@ public class NewChatWindowScreenshots : IDisposable
     {
         var dir = Path.Combine(Path.GetTempPath(), "cb-newchat-screenshots-" + Guid.NewGuid());
         Directory.CreateDirectory(dir);
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
+        Environment.SetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR", dir);
         OrbweaverSettings.ReloadForTests();
     }
 

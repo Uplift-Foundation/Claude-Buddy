@@ -33,7 +33,7 @@ public class PersonaAvatarValueFileTests : IDisposable
     {
         Directory.CreateDirectory(_root);
 
-        // AsyncLocal rather than CLAUDE_BUDDY_LOG_DIR: _logDir is asserted
+        // AsyncLocal rather than ORBWEAVER_LOG_DIR: _logDir is asserted
         // about below, so it must not be a name any parallel test can see.
         // See CrashLog.ScopeForTests for the whole argument.
         _logScope = CrashLog.ScopeForTests(_logDir);
@@ -105,7 +105,7 @@ public class PersonaAvatarValueFileTests : IDisposable
     private static LocalPersona.Persona Resolve(string project) =>
         LocalPersona.Resolve(project, SessionSource.ClaudeCode, Array.Empty<string>());
 
-    // CLAUDE_BUDDY_LOG_DIR is one process-wide variable and the classes that
+    // ORBWEAVER_LOG_DIR is one process-wide variable and the classes that
     // are not in this collection go on resolving personas of their own while
     // these run, so "the log is empty" is not a claim this suite can make and
     // "the log says this about my value" is. Every case names something

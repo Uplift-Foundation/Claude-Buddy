@@ -15,7 +15,7 @@ namespace Orbweaver.Tests;
 //
 // In [Collection("Settings")] because one case round-trips settings.json
 // through ClaudeBuddySettings, which moves the process-wide
-// CLAUDE_BUDDY_SETTINGS_DIR.
+// ORBWEAVER_SETTINGS_DIR.
 [Collection("Settings")]
 public class DataDirMigrationTests : IDisposable
 {
@@ -308,11 +308,11 @@ public class DataDirMigrationTests : IDisposable
     {
         var root = DataRoot;
         Directory.CreateDirectory(root.Legacy);
-        var previous = Environment.GetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR");
+        var previous = Environment.GetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR");
 
         try
         {
-            Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", root.Legacy);
+            Environment.SetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR", root.Legacy);
             OrbweaverSettings.ReloadForTests();
             OrbweaverSettings.SpeechVolume = 0.35;
             OrbweaverSettings.FlushPendingSave();
@@ -320,17 +320,17 @@ public class DataDirMigrationTests : IDisposable
 
             RunOn(root);
 
-            Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", root.New);
+            Environment.SetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR", root.New);
             OrbweaverSettings.ReloadForTests();
             Assert.Equal(0.35, OrbweaverSettings.SpeechVolume);
 
-            Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", root.Legacy);
+            Environment.SetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR", root.Legacy);
             OrbweaverSettings.ReloadForTests();
             Assert.Equal(0.35, OrbweaverSettings.SpeechVolume);
         }
         finally
         {
-            Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", previous);
+            Environment.SetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR", previous);
             OrbweaverSettings.ReloadForTests();
         }
     }
@@ -354,7 +354,7 @@ public class DataDirMigrationTests : IDisposable
     }
 
     // The real entry point under this suite's environment (TestBootstrap sets
-    // CLAUDE_BUDDY_SETTINGS_DIR): a no-op that does not throw.
+    // ORBWEAVER_SETTINGS_DIR): a no-op that does not throw.
     [Fact]
     public void The_real_entry_point_is_a_no_op_under_the_test_environment()
     {

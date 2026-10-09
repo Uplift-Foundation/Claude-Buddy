@@ -19,7 +19,7 @@ namespace Orbweaver.Tests;
 // that a settings file containing a key this build has never heard of still has
 // that key afterwards.
 // Joins the Settings collection, without which this class and
-// SettingsRoundTripTests race for one process-wide CLAUDE_BUDDY_SETTINGS_DIR
+// SettingsRoundTripTests race for one process-wide ORBWEAVER_SETTINGS_DIR
 // and both read whichever directory won. That is not theoretical: these tests
 // passed alone and failed two-of-four inside `dotnet test tests/Tests.sln -c
 // Release` until the attribute went on.
@@ -36,7 +36,7 @@ public class AccountUsageSettingsTests
 
     private static void PointSettingsAt(string dir)
     {
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
+        Environment.SetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR", dir);
         OrbweaverSettings.ReloadForTests();
     }
 

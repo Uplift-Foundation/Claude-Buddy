@@ -388,7 +388,7 @@ public class OrbSoundSubmenuTests : IDisposable
     // migrates, but that the orb genuinely stays quiet afterward, through
     // the real scan → TurnSoundPolicy → ChimePlayer path.
     //
-    // Its own settings directory (CLAUDE_BUDDY_SETTINGS_DIR +
+    // Its own settings directory (ORBWEAVER_SETTINGS_DIR +
     // ClaudeBuddySettings.ReloadForTests()) rather than this file's usual
     // _clearedKeys cleanup — the same isolation TurnSoundScanTests uses,
     // since a real SessionManager scan reads ClaudeBuddySettings.
@@ -404,7 +404,7 @@ public class OrbSoundSubmenuTests : IDisposable
         try
         {
             Environment.SetEnvironmentVariable(
-                "CLAUDE_BUDDY_SETTINGS_DIR", Path.Combine(dir, "settings"));
+                "ORBWEAVER_SETTINGS_DIR", Path.Combine(dir, "settings"));
             OrbweaverSettings.ReloadForTests();
             TurnSounds.ResetForTests();
 

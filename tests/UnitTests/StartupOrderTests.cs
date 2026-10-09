@@ -293,7 +293,7 @@ public class StartupOrderTests
     // The interface units B, C and F build against (CB-255 §7): each step's
     // real body is static, takes nothing and never throws, and under the test
     // suites' environment overrides (TestBootstrap sets
-    // CLAUDE_BUDDY_SETTINGS_DIR) it does nothing to a real folder. While those
+    // ORBWEAVER_SETTINGS_DIR) it does nothing to a real folder. While those
     // files are still stubs this pins the shape; once each is real it keeps
     // pinning "no-throw under the test env".
     [Fact]

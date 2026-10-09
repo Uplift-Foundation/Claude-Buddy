@@ -85,7 +85,7 @@ public sealed class PythonUnixFactAttribute : FactAttribute
 // every push — which is why the env var is required rather than merely
 // respected. Run it deliberately:
 //
-//   CLAUDE_BUDDY_LIVE_BRIDGE_TESTS=1 dotnet test tests/IntegrationTests/ClaudeBuddy.IntegrationTests.csproj
+//   ORBWEAVER_LIVE_BRIDGE_TESTS=1 dotnet test tests/IntegrationTests/Orbweaver.IntegrationTests.csproj
 //
 // The rest of the suite drives hook scripts, which are free and local; this is
 // the first thing here with a bill attached, so it does not get to be quiet
@@ -100,18 +100,12 @@ public sealed class LiveBridgeFactAttribute : FactAttribute
             return;
         }
 
-        if (Environment.GetEnvironmentVariable("CLAUDE_BUDDY_LIVE_BRIDGE_TESTS") != "1")
+        // Through BrandEnv, so a shell that still exports the pre-rename
+        // spelling opts in too.
+        if (BrandEnv.Get(BrandEnv.LiveBridgeTests) != "1")
         {
-            Skip = "opt-in: starts a real Claude Code session and spends quota (set CLAUDE_BUDDY_LIVE_BRIDGE_TESTS=1)";
-            return;
+            Skip = $"opt-in: starts a real Claude Code session and spends quota (set {BrandEnv.Name(BrandEnv.LiveBridgeTests)}=1)";
         }
-
-        // Keeps these relays out of the installed app's way. The relay name is a
-        // machine-wide mutex per account, so without a tag a test kills the
-        // running app's relay, the app takes it back, and they trade it until one
-        // loses a race — observed as the same test passing and failing on
-        // consecutive runs.
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_RC_BRIDGE_TAG", "test");
     }
 }
 
@@ -136,10 +130,10 @@ public sealed class MacOpenFactAttribute : FactAttribute
         }
 
         Skip = LaunchSkipReason(Environment.GetEnvironmentVariable("CI"),
-            Environment.GetEnvironmentVariable(LaunchOptIn));
+            BrandEnv.Get(BrandEnv.LaunchTests));
     }
 
-    internal const string LaunchOptIn = "CLAUDE_BUDDY_LAUNCH_TESTS";
+    internal const string LaunchOptIn = BrandEnv.Prefix + BrandEnv.LaunchTests;
 
     // These cases launch real app bundles through LaunchServices, and a launch
     // lands in the session of whoever is logged in — on a developer's Mac that

@@ -25,7 +25,7 @@ public class SettingsDeferredTimerTests
     {
         var dir = Path.Combine(Path.GetTempPath(), "cb-deferred-ui-" + Guid.NewGuid());
         Directory.CreateDirectory(dir);
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
+        Environment.SetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR", dir);
         OrbweaverSettings.ReloadForTests();
         return dir;
     }

@@ -25,7 +25,7 @@ public class ClaudeDesktopManagerTests
 {
     // ---- scratch -------------------------------------------------------
 
-    private const string RootVariable = "CLAUDE_BUDDY_PROFILE_ROOT";
+    private const string RootVariable = "ORBWEAVER_PROFILE_ROOT";
 
     // A profile root nobody else owns, pointed at through the env-var seam
     // ClaudeDesktopManager already has for exactly this (ProfileRoot's own

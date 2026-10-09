@@ -49,7 +49,7 @@ public class TurnSoundScanTests : IDisposable
         // another test would make every case here read as "silent for the
         // wrong reason".
         Environment.SetEnvironmentVariable(
-            "CLAUDE_BUDDY_SETTINGS_DIR",
+            "ORBWEAVER_SETTINGS_DIR",
             Path.Combine(Path.GetTempPath(), "cb-turnsound-settings-" + Guid.NewGuid()));
         OrbweaverSettings.ReloadForTests();
 

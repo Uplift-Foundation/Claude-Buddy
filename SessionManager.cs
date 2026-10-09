@@ -380,8 +380,8 @@ namespace Orbweaver
         // every future writer of either global remembers to join, and this is a
         // scan that no longer reads either.
         //
-        // Same pattern, and the same argument, as CLAUDE_BUDDY_SETTINGS_DIR and
-        // CLAUDE_BUDDY_PROFILE_ROOT.
+        // Same pattern, and the same argument, as ORBWEAVER_SETTINGS_DIR and
+        // ORBWEAVER_PROFILE_ROOT.
         private readonly Func<IReadOnlyList<string>> _userConfigDirs;
 
         public SessionManager()

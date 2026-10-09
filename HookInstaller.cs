@@ -190,7 +190,7 @@ namespace Orbweaver
         //
         // environment overrides the child's variables; a null value removes one.
         // It exists so a test can point the real installers at a scratch HOME and
-        // CLAUDE_BUDDY_SETTINGS_DIR without touching the test process's own.
+        // ORBWEAVER_SETTINGS_DIR without touching the test process's own.
         internal static HookInstallResult Run(
             string file, string[] arguments, string label,
             int timeoutMs = TimeoutMs,

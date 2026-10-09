@@ -26,7 +26,7 @@ public class SettingsListParsingTests
     {
         var dir = NewSettingsDir();
         File.WriteAllText(Path.Combine(dir, "settings.json"), json);
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
+        Environment.SetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR", dir);
         OrbweaverSettings.ReloadForTests();
     }
 

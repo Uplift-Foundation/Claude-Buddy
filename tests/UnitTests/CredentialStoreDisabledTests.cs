@@ -34,13 +34,13 @@ namespace Orbweaver.Tests;
 // run beside one of them, the "single source" below was two, and develop's
 // Windows leg went red at cfc4141c with exactly that. Forced on purpose by
 // holding ".claude-board" while calling the test: the same two roots, the same
-// failure. And two tests here clear CLAUDE_BUDDY_NO_CREDENTIAL_STORE for a
+// failure. And two tests here clear ORBWEAVER_NO_CREDENTIAL_STORE for a
 // moment, which while it lasts lets a class building real credential sources
 // reach the real store; the classes that do are in this collection too.
 [Collection("Settings")]
 public class CredentialStoreDisabledTests
 {
-    private const string Variable = "CLAUDE_BUDDY_NO_CREDENTIAL_STORE";
+    private const string Variable = "ORBWEAVER_NO_CREDENTIAL_STORE";
 
     // The bootstrap sets it for the whole assembly, so this is the state every
     // other test in this suite actually runs under. Asserting it here is what

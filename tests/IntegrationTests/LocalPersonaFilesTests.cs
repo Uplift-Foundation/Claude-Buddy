@@ -227,7 +227,7 @@ public class LocalPersonaFilesTests : IDisposable
 
     // The other side of the same boundary: one byte over is enough to refuse.
     // What the refusal actually says is PersonaRealFileTests' half of this
-    // pair, since that suite (not this one) isolates CLAUDE_BUDDY_LOG_DIR and
+    // pair, since that suite (not this one) isolates ORBWEAVER_LOG_DIR and
     // can read persona.log back without racing every other test that refuses
     // a picture on purpose.
     [Fact]

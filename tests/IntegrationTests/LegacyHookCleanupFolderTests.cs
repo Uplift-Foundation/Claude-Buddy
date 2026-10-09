@@ -217,7 +217,7 @@ namespace Orbweaver.Tests
             var ripe = Folder(Path.Combine("home", ".claude", "claude-buddy"), markerAgeDays: 20);
 
             var results = LegacyHookCleanup.Run(
-                n => n == "CLAUDE_BUDDY_SETTINGS_DIR" ? "/sandbox" : null,
+                n => n == "ORBWEAVER_SETTINGS_DIR" ? "/sandbox" : null,
                 onWindows: false, home, Path.Combine(_root, "local"), Now);
 
             Assert.Empty(results);

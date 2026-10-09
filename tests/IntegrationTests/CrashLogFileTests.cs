@@ -20,7 +20,7 @@ public class CrashLogFileTests : IDisposable
     {
         _dir = Path.Combine(Path.GetTempPath(), "cb-crashlog-" + Guid.NewGuid().ToString("N"));
 
-        // A scope, not CLAUDE_BUDDY_LOG_DIR, and this class is the one that
+        // A scope, not ORBWEAVER_LOG_DIR, and this class is the one that
         // paid for the difference. Writes_the_entry_into_a_directory_it_creates
         // asserts _dir does not exist yet; setting the environment variable
         // published _dir to every test running in parallel, and any of the

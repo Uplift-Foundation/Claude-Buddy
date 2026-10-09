@@ -29,7 +29,7 @@ public class PersonaWalkLevelRootFileTests : IDisposable
     {
         Directory.CreateDirectory(_root);
 
-        // AsyncLocal rather than CLAUDE_BUDDY_LOG_DIR, for the reason
+        // AsyncLocal rather than ORBWEAVER_LOG_DIR, for the reason
         // PersonaWorkspaceRootFileTests gives: _logDir is asserted about.
         _logScope = CrashLog.ScopeForTests(_logDir);
         PersonaLog.ResetForTests();

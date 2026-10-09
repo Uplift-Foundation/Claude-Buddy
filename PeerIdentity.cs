@@ -176,7 +176,7 @@ namespace Orbweaver
 
         // A test seam, and the only one this file needs: everything else is
         // deterministic given a certificate and a directory, and the directory
-        // already moves with CLAUDE_BUDDY_SETTINGS_DIR.
+        // already moves with ORBWEAVER_SETTINGS_DIR.
         internal static void ForgetForTests()
         {
             lock (Gate) _cached = null;

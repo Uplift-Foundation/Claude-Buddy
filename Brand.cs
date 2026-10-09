@@ -42,9 +42,9 @@ namespace Orbweaver
     // - The hook scripts, installers and build scripts. They are shell,
     //   PowerShell and Inno, and can't read a C# constant; they carry their
     //   own copies of the names below and are renamed alongside them.
-    // - The CLAUDE_BUDDY_* environment variables. Almost all are test seams,
-    //   and renaming one breaks every script that sets it — that is its own
-    //   decision, not part of moving literals.
+    // - The environment variables. They are ORBWEAVER_* since phase 3 and the
+    //   pre-rename spelling still works; BrandEnv owns both prefixes, so they
+    //   are not literals here.
     // - The CLAUDEBUDDY_* ones (no underscore) that ChimePlayer and TextToSpeech
     //   hand to a user's own chime and speak commands. Those are a contract
     //   with scripts the user wrote, so they keep their names on purpose.

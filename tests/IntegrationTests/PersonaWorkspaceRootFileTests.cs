@@ -30,7 +30,7 @@ public class PersonaWorkspaceRootFileTests : IDisposable
     {
         Directory.CreateDirectory(_root);
 
-        // AsyncLocal rather than CLAUDE_BUDDY_LOG_DIR: _logDir is asserted
+        // AsyncLocal rather than ORBWEAVER_LOG_DIR: _logDir is asserted
         // about below, so it must not be a name any parallel test can see.
         // See CrashLog.ScopeForTests for the whole argument.
         _logScope = CrashLog.ScopeForTests(_logDir);
