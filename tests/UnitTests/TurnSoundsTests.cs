@@ -14,7 +14,7 @@ namespace Orbweaver.Tests;
 // No Avalonia needed here — Deliver has no dispatcher dependency of its
 // own (that lives in the callback SessionManager hands it, exercised in
 // tests/UiTests instead). [Collection("Settings")] because Snapshot()
-// reads ClaudeBuddySettings, which every class in that collection can
+// reads OrbweaverSettings, which every class in that collection can
 // otherwise leave in a state this file did not choose.
 [Collection("Settings")]
 public class TurnSoundsTests : IDisposable

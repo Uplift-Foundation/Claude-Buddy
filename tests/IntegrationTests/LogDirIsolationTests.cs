@@ -200,7 +200,7 @@ public class LogDirIsolationTests : IDisposable
         // The forgetful case, stated as a test so it stays true: a class that
         // sets up no isolation at all writes to the assembly-wide scratch
         // directory TestBootstrap points the variable at, never to the
-        // developer's own ~/Library/Logs/ClaudeBuddy.
+        // developer's own ~/Library/Logs/Orbweaver.
         var floor = Environment.GetEnvironmentVariable("ORBWEAVER_LOG_DIR");
 
         Assert.False(string.IsNullOrEmpty(floor));

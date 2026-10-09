@@ -106,7 +106,7 @@ public class SettingsWindowScreenshots
     }
 
     // The Claude Desktop group, which CB-4 added a row to: the switch that
-    // decides whether Claude Buddy claims Claude Desktop's URL schemes.
+    // decides whether Orbweaver claims Claude Desktop's URL schemes.
     //
     // Captured on its own rather than trusting the whole-window shot above,
     // because that one renders at the window's own height and this group sits

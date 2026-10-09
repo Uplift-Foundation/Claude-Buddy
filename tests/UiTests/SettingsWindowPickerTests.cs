@@ -137,7 +137,7 @@ public class SettingsWindowPickerTests
     [AvaloniaFact]
     public void EveryOfferedShapeIsOneTheArrangementKnows()
     {
-        // Set explicitly, because ClaudeBuddySettings is a process-wide static and
+        // Set explicitly, because OrbweaverSettings is a process-wide static and
         // the picker deliberately adds an unrecognised saved shape to its own
         // list. Without this the case inherited whatever the previous test left
         // behind and then asserted the geometry knows it — which is how it first

@@ -920,7 +920,7 @@ public class ClaudeDesktopManagerTests
         Assert.Equal("dark", after.RootElement.GetProperty("userThemeMode").GetString());
 
         // And no temporary left beside it.
-        Assert.False(File.Exists(path + ".claude-buddy.tmp"));
+        Assert.False(File.Exists(path + $".{Brand.Slug}.tmp"));
     }
 
     [Fact]
@@ -961,7 +961,7 @@ public class ClaudeDesktopManagerTests
 
         Assert.Equal("config rewrite unsafe", ClaudeDesktopManager.WriteThemeMode(directory, "dark"));
         Assert.Equal(original, File.ReadAllText(path));
-        Assert.False(File.Exists(path + ".claude-buddy.tmp"));
+        Assert.False(File.Exists(path + $".{Brand.Slug}.tmp"));
     }
 
     [Fact]
@@ -1112,7 +1112,7 @@ public class ClaudeDesktopManagerTests
     }
 
     // The numbering reuses a gap rather than climbing forever, which is exactly
-    // why ClaudeBuddySettings.RemoveProfile has to forget a deleted profile's
+    // why OrbweaverSettings.RemoveProfile has to forget a deleted profile's
     // name and colour: otherwise the next Claude-Profile-2 inherits them.
     [Fact]
     public void TheNumberingFillsInAGapRatherThanClimbing()

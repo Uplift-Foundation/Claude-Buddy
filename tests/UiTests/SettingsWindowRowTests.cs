@@ -64,7 +64,7 @@ public class SettingsWindowRowTests : IDisposable
 
     // The same, for a setting with three values rather than two. Every mode is
     // written and read back, and the pass ends on the default rather than
-    // wherever the last case left it — ClaudeBuddySettings is process-wide, and
+    // wherever the last case left it — OrbweaverSettings is process-wide, and
     // a mode left on Hidden would take heartbeat orbs off the screen for every
     // test in the collection that runs afterwards.
     private static void Cycles(

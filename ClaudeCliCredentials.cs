@@ -12,7 +12,7 @@ namespace Orbweaver
     // **This is the first credential this application has ever held.** Every
     // other account-scoped path in the app — UsagePoller above all — deliberately
     // never touches one: it spawns `claude -p` and writes a control request, so
-    // the CLI owns the token and a compromise of Claude Buddy is not a token
+    // the CLI owns the token and a compromise of Orbweaver is not a token
     // disclosure. That posture is not being relaxed. CB-164 established there is
     // no control-protocol subtype for cloud sessions, so the cloud roster cannot
     // be reached that way, and this file is the scoped exception rather than a

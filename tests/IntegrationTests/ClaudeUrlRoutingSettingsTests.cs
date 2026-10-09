@@ -6,7 +6,7 @@ namespace Orbweaver.Tests;
 // The two settings the URL router keeps, through a real settings.json.
 //
 // Both matter beyond the usual round-trip check. RouteClaudeUrls decides
-// whether Claude Buddy claims a *system-wide* URL scheme, so a value that
+// whether Orbweaver claims a *system-wide* URL scheme, so a value that
 // failed to persist would either leave the schemes claimed after the user
 // turned it off, or re-claim them on every launch after they said no.
 // PreviousClaudeUrlHandler is what makes that claim reversible at all — lose

@@ -6,7 +6,7 @@ namespace Orbweaver.Tests;
 // CLI chosen — round-tripped through a real settings.json.
 //
 // Same collection and repointing dance as SettingsListsAndProfilesTests, for
-// the reason its own header gives: ClaudeBuddySettings is one static model
+// the reason its own header gives: OrbweaverSettings is one static model
 // for the whole process.
 [Collection("Settings")]
 public class NewChatSettingsTests

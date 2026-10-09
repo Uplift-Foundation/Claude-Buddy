@@ -11,7 +11,7 @@ namespace Orbweaver.Tests;
 //
 // **In the Settings collection, and split out of the file tests for that reason
 // alone.** SourcesFor asks ClaudeConfigRoots.All for every root, and All also
-// walks ClaudeBuddySettings.ClaudeCodeProfileDirs — one process-wide static.
+// walks OrbweaverSettings.ClaudeCodeProfileDirs — one process-wide static.
 // SettingsListsAndProfilesTests adds ".claude-work" to that list, so when the
 // two classes overlapped the answer here was three accounts where two were
 // written to disk. It surfaced on CB-226's PR: TwoRootsAreTwoAccountsOneFoundOneSignedOut

@@ -5,11 +5,11 @@ using Xunit;
 
 namespace Orbweaver.Tests;
 
-// ClaudeBuddySettings.IsSettingsSectionCollapsed / SetSettingsSectionCollapsed —
+// OrbweaverSettings.IsSettingsSectionCollapsed / SetSettingsSectionCollapsed —
 // the model behind CB-166's fold state, with no window in front of it.
 //
 // In the Settings collection for the reason SettingsCollection.cs gives:
-// ClaudeBuddySettings is one process-wide static, and running these alongside
+// OrbweaverSettings is one process-wide static, and running these alongside
 // anything else that touches it is exactly the once-in-five failure that rule
 // exists to remove.
 [Collection("Settings")]

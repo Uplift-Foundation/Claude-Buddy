@@ -81,7 +81,7 @@ public class InternalSessionScanTests : IDisposable
         try { Directory.Delete(_dir, recursive: true); } catch { }
     }
 
-    // One line, exactly as ClaudeBuddyHook.sh's printf writes it. Written from
+    // One line, exactly as OrbweaverHook.sh's printf writes it. Written from
     // the real format rather than prettified: a fixture that reformats what the
     // hook produces is testing a file nothing ever creates.
     private void WriteStatus(string sessionId, int pid) =>

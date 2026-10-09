@@ -5,10 +5,10 @@ using System.Runtime.CompilerServices;
 namespace Orbweaver.Tests;
 
 // Runs once, before any test in this assembly, no matter which test class
-// happens to run first. ClaudeBuddySettings.Directory reads
+// happens to run first. OrbweaverSettings.Directory reads
 // ORBWEAVER_SETTINGS_DIR when it's set and falls back to the developer's
 // real %APPDATA%/~/Library/... path otherwise — any test that touches a
-// ClaudeBuddySettings property (even indirectly, e.g. via OrbColors or
+// OrbweaverSettings property (even indirectly, e.g. via OrbColors or
 // ClaudeDesktopColors, both of which read through to settings) would
 // otherwise read and possibly overwrite Owner's real settings.json.
 internal static class TestBootstrap
@@ -42,7 +42,7 @@ internal static class TestBootstrap
 
         // Where StatusDirectory.Path() puts settings-errors.log — left unset,
         // every suite run appends failure traces to the developer's real
-        // $TMPDIR/claude_buddy/settings-errors.log (CB-17).
+        // $TMPDIR/orbweaver/settings-errors.log (CB-17).
         //
         // ORBWEAVER_STATUS_ROOT, not TMPDIR: moving TMPDIR from inside the
         // test process breaks the coverage collector's IPC and cost this repo

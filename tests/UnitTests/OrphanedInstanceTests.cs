@@ -14,7 +14,7 @@ namespace Orbweaver.UnitTests;
 // function that takes the three facts it needs and nothing else.
 public class OrphanedInstanceTests
 {
-    private const string Root = "/Users/x/Library/Application Support/ClaudeBuddy/bundles";
+    private const string Root = "/Users/x/Library/Application Support/Orbweaver/bundles";
     private const string DefaultFolder = "Claude";
 
     private static string Clone(string folder) => $"{Root}/{folder}/Claude.app";
@@ -91,9 +91,9 @@ public class OrphanedInstanceTests
     // user's Application Support and neighbouring paths share its prefix, so a
     // StartsWith test here would be wrong in a way nothing else would catch.
     [Theory]
-    [InlineData("/Users/x/Library/Application Support/ClaudeBuddy/bundles-old/Claude-Board/Claude.app")]
-    [InlineData("/Users/x/Library/Application Support/ClaudeBuddy/Claude.app")]
-    [InlineData("/Users/x/Library/Application Support/ClaudeBuddy/bundles/Claude-Board/nested/Claude.app")]
+    [InlineData("/Users/x/Library/Application Support/Orbweaver/bundles-old/Claude-Board/Claude.app")]
+    [InlineData("/Users/x/Library/Application Support/Orbweaver/Claude.app")]
+    [InlineData("/Users/x/Library/Application Support/Orbweaver/bundles/Claude-Board/nested/Claude.app")]
     [InlineData("/Applications/Claude.app/Contents/Frameworks/Claude.app")]
     public void OnlyABundleDirectlyUnderTheRootCounts(string bundle)
     {
@@ -142,7 +142,7 @@ public class OrphanedInstanceTests
     // for a drive-rooted path too. Pinned here as well so each CI leg verifies
     // the other platform's shapes: the rule is a function of nothing but its
     // arguments, and these cases are what keep it that way.
-    private const string WinRoot = @"C:\Users\x\AppData\Local\ClaudeBuddy\bundles";
+    private const string WinRoot = @"C:\Users\x\AppData\Local\Orbweaver\bundles";
 
     [Fact]
     public void ADriveRootedCloneParsesTheSameAsAPosixOne()

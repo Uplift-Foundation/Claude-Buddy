@@ -14,7 +14,7 @@ namespace Orbweaver.Tests;
 // scratch folder.
 //
 // In [Collection("Settings")] because one case round-trips settings.json
-// through ClaudeBuddySettings, which moves the process-wide
+// through OrbweaverSettings, which moves the process-wide
 // ORBWEAVER_SETTINGS_DIR.
 [Collection("Settings")]
 public class DataDirMigrationTests : IDisposable
@@ -299,8 +299,8 @@ public class DataDirMigrationTests : IDisposable
         Assert.True(File.Exists(Path.Combine(support, "Orbweaver", SettingsFile)));
     }
 
-    // Settings round-trip through the moved file: written by ClaudeBuddySettings
-    // into the legacy folder, read back by ClaudeBuddySettings from the new one
+    // Settings round-trip through the moved file: written by OrbweaverSettings
+    // into the legacy folder, read back by OrbweaverSettings from the new one
     // — and the snapshot left behind reads back too, which is the downgrade
     // story.
     [Fact]

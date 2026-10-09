@@ -4,12 +4,12 @@ using System.Text;
 
 namespace Orbweaver
 {
-    // Where the hooks leave a session's status file, and where Claude Buddy
+    // Where the hooks leave a session's status file, and where Orbweaver
     // looks for it.
     //
     // **These have to be the same directory, and on a launchd-started Mac they
     // were not.** The hooks run from the user's shell, where `TMPDIR` is set to
-    // the per-user temp directory macOS gives every login session. Claude Buddy
+    // the per-user temp directory macOS gives every login session. Orbweaver
     // asks .NET for `Path.GetTempPath()`, which on Unix reads `TMPDIR` and falls
     // back to `/tmp` when it is unset — and a launchd agent's environment does
     // not carry `TMPDIR` at all. `launchctl print` on the mini listed none, and

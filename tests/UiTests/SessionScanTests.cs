@@ -1979,7 +1979,7 @@ public class SessionScanTests
     {
         // Path two, and the subtler one: the hook does not *decide* term_program,
         // it interpolates $TERM_PROGRAM out of its environment
-        // (ClaudeBuddyHook.sh). A daemon started from inside a terminal passes
+        // (OrbweaverHook.sh). A daemon started from inside a terminal passes
         // that down to every job it hosts, so a background file can name a
         // terminal with no sibling and no inheritance involved at all. This
         // machine's daemon happens to be launchd-parented, which is why the

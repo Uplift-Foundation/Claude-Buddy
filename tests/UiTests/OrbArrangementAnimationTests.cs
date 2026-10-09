@@ -421,7 +421,7 @@ public class OrbArrangementAnimationTests
     // case OrbArrangement.CentreFor's single/multi-group split makes
     // structurally different, and the one the ticket's own diagnosis singled
     // out as least understood. Heartbeat sessions get their own shape once
-    // ClaudeBuddySettings.OpenClawHeartbeatMode is on, so ending the only
+    // OrbweaverSettings.OpenClawHeartbeatMode is on, so ending the only
     // heartbeat orb collapses two groups into one mid-arrangement.
     [AvaloniaFact]
     public void AnOrbEndingThatCollapsesAGroupStillLeavesTheSurvivorsInPlace()

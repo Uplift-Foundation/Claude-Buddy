@@ -2,7 +2,7 @@ using Xunit;
 
 namespace Orbweaver.Tests;
 
-// ClaudeBuddyHook.sh and ClaudeBuddyHook.ps1 are twins of each other, one per
+// OrbweaverHook.sh and OrbweaverHook.ps1 are twins of each other, one per
 // platform, and only one of the two interpreters exists on any given CI
 // runner or dev machine. These skip rather than fail to compile/run on the
 // wrong OS, so a `dotnet test` run reports "skipped" for the twin that

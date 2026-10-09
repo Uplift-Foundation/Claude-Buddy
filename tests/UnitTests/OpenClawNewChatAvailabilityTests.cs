@@ -5,7 +5,7 @@ namespace Orbweaver.Tests;
 // OpenClawNewChat.AvailabilityFor/ReasonFor: whether the new-chat dialog's
 // OpenClaw radio item is a live choice, and what it says under itself when
 // it isn't. Pure and settings-free, so every branch is reachable with no
-// gateway and no ClaudeBuddySettings singleton in the picture — see the
+// gateway and no OrbweaverSettings singleton in the picture — see the
 // header comment on OpenClawNewChatAvailability.cs for why that separation
 // matters here specifically.
 public class OpenClawNewChatAvailabilityTests
@@ -26,8 +26,8 @@ public class OpenClawNewChatAvailabilityTests
             OpenClawNewChat.AvailabilityFor(enabled: true, host: "", replyEnabled: true));
     }
 
-    // ClaudeBuddySettings.OpenClawHost reads back "" rather than null when
-    // unset (ClaudeBuddySettings.cs:886) — this is the shape AvailabilityFor
+    // OrbweaverSettings.OpenClawHost reads back "" rather than null when
+    // unset (OrbweaverSettings.cs:886) — this is the shape AvailabilityFor
     // actually receives, not a null, so it's exercised directly rather than
     // trusting IsNullOrWhiteSpace to cover both the same way.
     [Fact]

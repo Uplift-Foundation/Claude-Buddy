@@ -24,7 +24,7 @@ namespace Orbweaver.Tests;
 // needed to tell them apart was parsed, and then discarded.
 //
 // [Collection("Settings")] because constructing an OrbWindow reads a colour
-// setting in a field initializer, and ClaudeBuddySettings is a process-wide
+// setting in a field initializer, and OrbweaverSettings is a process-wide
 // static — see tests/UiTests/SettingsCollection.cs.
 [Collection("Settings")]
 public class OrbWindowPresenceTests

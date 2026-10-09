@@ -18,7 +18,7 @@ namespace Orbweaver.Tests;
 // for the font-cache reason NewChatWindowTests' header gives. Every test
 // clears the singleton instead, through OpenForTests.
 //
-// [Collection("Settings")]: the window reads ClaudeBuddySettings while being
+// [Collection("Settings")]: the window reads OrbweaverSettings while being
 // built, and OverrideFor reads the two hotkey settings directly.
 [Collection("Settings")]
 public class HotkeyActionsTests : IDisposable

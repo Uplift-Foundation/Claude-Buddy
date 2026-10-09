@@ -27,7 +27,7 @@ namespace Orbweaver.Tests;
 // a click, and ResolvedGestures answers that without needing it to do anything.
 //
 // [Collection("Settings")] because these tests write the three click-action
-// settings, and ClaudeBuddySettings is a process-wide static — see
+// settings, and OrbweaverSettings is a process-wide static — see
 // tests/UiTests/SettingsCollection.cs.
 [Collection("Settings")]
 public class OrbWindowTeamClickTests

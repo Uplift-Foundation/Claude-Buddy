@@ -37,7 +37,7 @@ namespace Orbweaver.Tests;
 // caused genuine test-case-cleanup failures in two unrelated suites. No
 // case here ever waits on the real 250ms tick; SettingsWindow.
 // FlushPendingPreviewForTests fires it immediately, the same seam
-// ClaudeBuddySettings.FlushPendingSave plays for its own debounced write,
+// OrbweaverSettings.FlushPendingSave plays for its own debounced write,
 // and SettingsDeferredTimerTests is the sibling suite proving that shape.
 // What still needs a wait afterward is the Task.Run itself — WaitForPreview
 // Async below, adapted from TurnSoundScanTests.WaitForChimeAsync.
@@ -671,7 +671,7 @@ public class SoundSettingsRowTests : IDisposable
     }
 
     // SoundRows() wires each row's preview button to a getter closing over
-    // the *live* setting (`() => ClaudeBuddySettings.TurnFinishedSound`,
+    // the *live* setting (`() => OrbweaverSettings.TurnFinishedSound`,
     // not a snapshot taken when the row was built) — unlike
     // ThePreviewButtonReplaysWhateverIsCurrentlySelected above, which drives
     // PreviewButton directly with its own throwaway getter and so never

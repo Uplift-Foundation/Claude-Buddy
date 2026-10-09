@@ -35,7 +35,7 @@ namespace Orbweaver.Tests;
 // next class a live window nothing had told it about.
 //
 // [Collection("Settings")] because the text-scale case writes
-// ClaudeBuddySettings.ChatTextScale, which is process-wide.
+// OrbweaverSettings.ChatTextScale, which is process-wide.
 [Collection("Settings")]
 public class ChatPanelPinTests : IDisposable
 {

@@ -2,7 +2,7 @@ using Xunit;
 
 namespace Orbweaver.UiTests;
 
-// Every test class that reads or writes ClaudeBuddySettings runs in this
+// Every test class that reads or writes OrbweaverSettings runs in this
 // collection, which means one at a time.
 //
 // The settings model is a process-wide static, and almost everything visual in

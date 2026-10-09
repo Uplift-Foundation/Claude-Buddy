@@ -45,9 +45,9 @@ namespace Orbweaver
         //
         // ORBWEAVER_BUNDLE_ROOT redirects it, the same scratch-override
         // pattern as ORBWEAVER_PROFILE_ROOT in ClaudeDesktopManager and
-        // ORBWEAVER_SETTINGS_DIR in ClaudeBuddySettings. Without it the only
+        // ORBWEAVER_SETTINGS_DIR in OrbweaverSettings. Without it the only
         // way to test what is in this file is to write into the real
-        // ~/Library/Application Support/ClaudeBuddy/bundles — the actual cache,
+        // ~/Library/Application Support/Orbweaver/bundles — the actual cache,
         // on the machine running the tests, holding real cloned .app bundles
         // whose icons a user is looking at. That the override did not exist is
         // why nothing here was covered.

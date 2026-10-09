@@ -22,7 +22,7 @@ internal static class ScreenshotHelper
     // invoked from, so Directory.GetCurrentDirectory() lands nowhere near
     // where ci.yml's artifact-upload step expects TestResults/ to be. Walk
     // up from the running assembly to the repo root instead, the same way
-    // tests/IntegrationTests's hook-script tests locate ClaudeBuddyHook.sh.
+    // tests/IntegrationTests's hook-script tests locate OrbweaverHook.sh.
     public static readonly string OutputDir =
         Path.Combine(FindRepoRoot(), "TestResults", "screenshots");
 

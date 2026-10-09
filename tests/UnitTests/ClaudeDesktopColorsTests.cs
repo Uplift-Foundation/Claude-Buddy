@@ -4,7 +4,7 @@ using Xunit;
 namespace Orbweaver.Tests;
 
 // A handful of assertions on ClaudeDesktopColors.cs's public surface. For(),
-// NameFor() and HexFor() all read through ClaudeBuddySettings.For(folderName)
+// NameFor() and HexFor() all read through OrbweaverSettings.For(folderName)
 // first, which is safe here only because TestBootstrap has already pointed
 // ORBWEAVER_SETTINGS_DIR at an isolated temp directory.
 [Collection("Settings")]

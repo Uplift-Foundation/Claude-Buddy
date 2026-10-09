@@ -79,7 +79,7 @@ namespace Orbweaver.Tests
         }
 
         // Any CLAUDE_CONFIG_DIR-style profile name works the same way — see
-        // ClaudeBuddySettings.ClaudeCodeProfileDirs.
+        // OrbweaverSettings.ClaudeCodeProfileDirs.
         [Fact]
         public void ANonDefaultProfileDirectoryIsHonoured()
         {

@@ -6,7 +6,7 @@ namespace Orbweaver.Tests;
 // the per-profile store.
 //
 // Same collection and the same repointing dance as SettingsRoundTripTests, and
-// for the reason its header gives: ClaudeBuddySettings is a static class with one
+// for the reason its header gives: OrbweaverSettings is a static class with one
 // model for the whole process, so two of these running at once would stomp each
 // other's environment variable.
 //

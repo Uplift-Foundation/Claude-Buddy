@@ -906,7 +906,7 @@ public class MirrorEdgeCaseTests : IDisposable
         // asserted by *reading* both, not by flipping one.
         //
         // Flipping it is what the first version did, and CI caught it on the
-        // Windows leg: ClaudeBuddySettings is process-global, its setters write
+        // Windows leg: OrbweaverSettings is process-global, its setters write
         // settings.json through a debounced save, and SettingsRoundTripTests
         // next door asserts a pending write is *not* on disk yet. That whole
         // class is [Collection("Settings")] precisely so no two settings tests

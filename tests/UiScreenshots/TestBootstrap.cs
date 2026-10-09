@@ -58,7 +58,7 @@ internal static class TestBootstrap
 
         // Where StatusDirectory.Path() puts settings-errors.log — left unset,
         // every suite run appends failure traces to the developer's real
-        // $TMPDIR/claude_buddy/settings-errors.log (CB-17).
+        // $TMPDIR/orbweaver/settings-errors.log (CB-17).
         //
         // ORBWEAVER_STATUS_ROOT, not TMPDIR: moving TMPDIR from inside the
         // test process breaks the coverage collector's IPC and cost this repo

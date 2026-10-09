@@ -7,8 +7,8 @@ namespace Orbweaver.UnitTests;
 // NeuralSpeech's view of what is on disk: which engine binary it would run, and
 // the three flags that decide whether the feature is offered, downloaded or used.
 //
-// All of it is File.Exists over paths under ClaudeBuddySettings.Directory, which
-// CLAUDE_BUDDY_SETTINGS_DIR redirects — so these are real files in a temp
+// All of it is File.Exists over paths under OrbweaverSettings.Directory, which
+// ORBWEAVER_SETTINGS_DIR redirects — so these are real files in a temp
 // directory rather than a mocked filesystem. Nothing here starts the engine; the
 // process launch and the 300MB download are excluded, and separate.
 //

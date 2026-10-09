@@ -9,7 +9,7 @@ namespace Orbweaver.Tests;
 //
 // Covered here rather than only as a property because the failure this guards
 // against is a *file* failure and cannot be seen in memory. Every setting has to
-// be listed in ClaudeBuddySettings.KnownKeys as well as being loaded and saved;
+// be listed in OrbweaverSettings.KnownKeys as well as being loaded and saved;
 // miss that one line and the key round-trips through _unknownKeys *as well as*
 // being written properly, which JsonObject rejects as a duplicate. The comment
 // on _unknownKeys records what that class of mistake has already cost here — an
@@ -140,7 +140,7 @@ public class AccountUsageSettingsTests
     // GrokAutoRefreshEnabled, added by CB-96, through the same file round trip.
     // The comment at the top of this class names exactly the failure this
     // guards against: a setting present in the model but missing from
-    // ClaudeBuddySettings.KnownKeys round-trips through _unknownKeys as well
+    // OrbweaverSettings.KnownKeys round-trips through _unknownKeys as well
     // as being written properly, which JsonObject rejects as a duplicate key —
     // a failure that shows up only against a real file, never in memory.
     [Fact]

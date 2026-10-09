@@ -34,10 +34,10 @@ namespace Orbweaver
     //
     // It runs from Startup.Run's `migrateUserData` step: after both mutex names
     // are held (so no second instance, old or new, can be moving the same
-    // folder) and before anything reads ClaudeBuddySettings, PeerIdentity or
+    // folder) and before anything reads OrbweaverSettings, PeerIdentity or
     // NeuralSpeech. Checked rather than assumed for the two steps that run
     // before it: neither CrashLog.cs nor SingleInstance.cs refers to
-    // ClaudeBuddySettings at all. CrashLog.Install does not create its
+    // OrbweaverSettings at all. CrashLog.Install does not create its
     // directory either — only a write does — but a crash or a persona refusal
     // could have created the new Logs folder before now, which is why the Logs
     // rule below is a merge rather than move-or-nothing.
@@ -124,7 +124,7 @@ namespace Orbweaver
 
         // Where the two roots are on each platform, given the folders the OS
         // reports. Each new path is built exactly as its reader builds it —
-        // ClaudeBuddySettings.Directory for the data root, CrashLog's default
+        // OrbweaverSettings.Directory for the data root, CrashLog's default
         // directory for Logs — so the migration fills precisely the folder the
         // app is about to read.
         //

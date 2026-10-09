@@ -15,7 +15,7 @@ namespace Orbweaver.Tests;
 
 // The collapse half of CB-166: a real gesture on the header, moving the
 // chevron and the body's IsVisible, and persisting through
-// ClaudeBuddySettings — measured through the actual click handler rather
+// OrbweaverSettings — measured through the actual click handler rather
 // than by calling SettingsSection.IsOpen directly, which is exactly the
 // seam the production click handler sits behind.
 //

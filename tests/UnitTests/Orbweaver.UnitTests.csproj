@@ -27,7 +27,7 @@
          console exe with no test SDK, so it contributes nothing to
          tools/coverage.sh and OrbArrangement.cs read 0.0% while being the most
          exhaustively verified file in the repo (20736 cases). Compiling the
-         sweep in here runs those same cases against the ClaudeBuddy.dll this
+         sweep in here runs those same cases against the Orbweaver.dll this
          suite already references, which puts the lines in the denominator.
 
          Compiled in rather than referenced because tests/ArrangementTests is an

@@ -36,7 +36,7 @@ namespace Orbweaver
     // nothing is written, which is exactly where the app was before.
     internal static class CrashLog
     {
-        // ~/Library/Logs/ClaudeBuddy on macOS, %LOCALAPPDATA%\ClaudeBuddy\Logs on
+        // ~/Library/Logs/Orbweaver on macOS, %LOCALAPPDATA%\Orbweaver\Logs on
         // Windows — each platform's own answer to "where do logs go", rather than
         // a directory of this app's invention next to settings.json.
         //

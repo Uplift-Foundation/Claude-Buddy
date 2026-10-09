@@ -109,7 +109,7 @@ jobs:
       - name: Integration tests (xUnit)
         run: dotnet test tests/IntegrationTests -c Release --logger "trx;LogFileName=integration-tests.trx" --results-directory TestResults
 
-      # xUnit v3 now (see tests/UiTests/ClaudeBuddy.UiTests.csproj's own
+      # xUnit v3 now (see tests/UiTests/Orbweaver.UiTests.csproj's own
       # comment for why), which drops the old VSTest-hosted `dotnet test`
       # path outright on the .NET 10 SDK — `--logger`/`--results-directory`
       # are silently ignored under Microsoft Testing Platform, so trx

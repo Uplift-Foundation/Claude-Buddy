@@ -8,7 +8,7 @@ namespace Orbweaver.Tests;
 //
 // The parse itself is ordinary. What is not ordinary is the last test in this
 // file, and it is the reason the others exist at all: this is the first
-// credential Claude Buddy has ever held, and the rule the code is written to is
+// credential Orbweaver has ever held, and the rule the code is written to is
 // that nothing token-derived reaches a string a user or a log can see. A rule
 // like that is easy to state and easy to break by accident six months later in a
 // well-meaning "add the token to the error message so we can debug it" — so the

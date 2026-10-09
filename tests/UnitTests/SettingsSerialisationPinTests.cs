@@ -156,7 +156,7 @@ public class SettingsSerialisationPinTests
         const string source = """
             public class Writes
             {
-                void M() { ClaudeBuddySettings.AddClaudeCodeProfileDir(".x"); }
+                void M() { OrbweaverSettings.AddClaudeCodeProfileDir(".x"); }
             }
 
             public class OnlyMentions

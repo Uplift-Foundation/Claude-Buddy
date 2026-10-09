@@ -64,7 +64,7 @@ namespace Orbweaver.Tests
         }
 
         // This is the Windows desktop-app case from CB-157: an npm install puts
-        // claude.exe in ~/.local/bin, while Claude Buddy cannot rely on the
+        // claude.exe in ~/.local/bin, while Orbweaver cannot rely on the
         // launching session's PATH to find it.
         [Fact]
         public void AWindowsExecutableInLocalBinIsFoundWithoutPath()

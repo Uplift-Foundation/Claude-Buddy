@@ -16,7 +16,7 @@ namespace Orbweaver.Tests;
 // reflection instead, and never Close()s the windows it builds (the same
 // font-cache corruption SettingsWindowSmokeTest documents).
 //
-// [Collection("Settings")]: this window reads ClaudeBuddySettings
+// [Collection("Settings")]: this window reads OrbweaverSettings
 // (NewChatRecentFolders, NewChatLastCli), which is process-wide.
 [Collection("Settings")]
 public class NewChatWindowTests : IDisposable

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Draws Claude Buddy's icons so the repo doesn't need binary art checked in
+"""Draws Orbweaver's icons so the repo doesn't need binary art checked in
 by hand. Regenerate with:
 
     python3 tools/make-icons.py

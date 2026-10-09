@@ -12,7 +12,7 @@
          UseAppHost=true, set here (not left to Microsoft.NET.Test.Sdk.targets'
          default) so the SDK's _IsExecutable/RID-inference logic sees it before
          that default fires, and SelfContained is set to match
-         ClaudeBuddy.csproj so MSBuild's NETSDK1151 self-contained
+         Orbweaver.csproj so MSBuild's NETSDK1151 self-contained
          cross-check between the two referenced executables doesn't fire. -->
     <OutputType>Exe</OutputType>
     <UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>
@@ -34,7 +34,7 @@
          binary-incompatible way that fails every test at discovery. -->
     <PackageReference Include="xunit.v3" Version="3.2.2" />
     <PackageReference Include="xunit.runner.visualstudio" Version="4.0.0" />
-    <!-- 12.1.1, matching the app: ClaudeBuddy.csproj moved to Avalonia 12.1.1
+    <!-- 12.1.1, matching the app: Orbweaver.csproj moved to Avalonia 12.1.1
          to reach the real fix for the FontManager concurrency race
          (AvaloniaUI/Avalonia#21269, never backported to 11.3.x) needed by
          tests/UiScreenshots, and a test project referencing the app can no

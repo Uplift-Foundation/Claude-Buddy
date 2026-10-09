@@ -3,15 +3,15 @@ using System.Runtime.CompilerServices;
 namespace Orbweaver.Tests;
 
 // Runs once, before any test in this assembly, and before the first access
-// to ClaudeBuddySettings from any of them. Points the settings store at a
+// to OrbweaverSettings from any of them. Points the settings store at a
 // throwaway directory instead of the real
-// %APPDATA%/ClaudeBuddy (Windows) or ~/Library/Application Support/ClaudeBuddy
+// %APPDATA%/Orbweaver (Windows) or ~/Library/Application Support/Orbweaver
 // (macOS) — settings.json does not follow HOME on macOS, so without this an
 // integration test run would read and could overwrite the developer's own
 // settings.
 //
 // One directory for the whole assembly, not one per test. Most tests here
-// never touch ClaudeBuddySettings at all (hook-script and TranscriptReader
+// never touch OrbweaverSettings at all (hook-script and TranscriptReader
 // tests are pure file/process tests), and the ones that do are the P1
 // SettingsRoundTripTests, which are collected under [Collection("Settings")]
 // and repoint this env var themselves before calling ReloadForTests() — see
@@ -54,7 +54,7 @@ internal static class TestBootstrap
         // PersonaLog.Record → Directory.CreateDirectory(CrashLog.Directory).
         // Dozens of cases here do that incidentally while asserting something
         // else entirely. Left unset, every one of them wrote into the
-        // developer's real ~/Library/Logs/ClaudeBuddy unless some *other*
+        // developer's real ~/Library/Logs/Orbweaver unless some *other*
         // class happened to have the variable pointed elsewhere at that moment
         // — and when one did, the write landed in that class's scratch
         // directory instead, which is how CrashLogFileTests' assertion that its
@@ -73,7 +73,7 @@ internal static class TestBootstrap
 
         // Where StatusDirectory.Path() puts settings-errors.log. Left unset,
         // every suite run appended Save/Load failure traces to the real
-        // $TMPDIR/claude_buddy/settings-errors.log on the developer's machine —
+        // $TMPDIR/orbweaver/settings-errors.log on the developer's machine —
         // a user-facing diagnostic file growing without bound from test noise
         // (CB-17).
         //

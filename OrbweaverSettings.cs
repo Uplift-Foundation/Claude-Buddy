@@ -143,7 +143,7 @@ namespace Orbweaver
         [ExcludeFromCodeCoverage]
         private static string Home => Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
-        // %APPDATA%\ClaudeBuddy on Windows, ~/Library/Application Support/ClaudeBuddy
+        // %APPDATA%\Orbweaver on Windows, ~/Library/Application Support/Orbweaver
         // on macOS. SpecialFolder.ApplicationData resolves to both, so this is one
         // expression rather than a platform branch.
         //
@@ -437,7 +437,7 @@ namespace Orbweaver
             // only way remote sessions arrive now.
             public bool RemoteControlEnabled { get; set; }
 
-            // Talking directly to another machine running Claude Buddy, rather
+            // Talking directly to another machine running Orbweaver, rather
             // than through a hidden Claude Code session relaying text.
             //
             // Off by default, and that is not timidity: switching it on makes
@@ -531,7 +531,7 @@ namespace Orbweaver
             // wrapper, a voice-conversion chain, a Python script, a cloud API, a
             // batch file. The app makes no assumption about it and reports its
             // failures rather than hiding them. Same posture the project already
-            // takes with ClaudeBuddyHook.ps1, which is a user-editable script in
+            // takes with OrbweaverHook.ps1, which is a user-editable script in
             // %APPDATA% wired into Claude Code by hand.
             public string? SpeakCommand { get; set; }
 
@@ -682,7 +682,7 @@ namespace Orbweaver
             // these are Claude Code *CLI* config directory names — e.g.
             // ".claude-work" for a CLAUDE_CONFIG_DIR=~/.claude-work alias
             // managing a second account — that the user has explicitly opted
-            // into also wiring Claude Buddy hooks for, beyond the default
+            // into also wiring Orbweaver hooks for, beyond the default
             // ~/.claude. install-windows-hooks.ps1 reads this same list (via
             // this file) as its default -ProfileDir/-WslProfileDir value, so
             // configuring it here is also what "configure via the installer"
@@ -2603,7 +2603,7 @@ namespace Orbweaver
                 // but silently losing it with zero trace is exactly the "no
                 // error, just doesn't work" trap this project's own hook
                 // script goes out of its way to avoid elsewhere (see
-                // ClaudeBuddyHook.ps1's header comment) — so leave a
+                // OrbweaverHook.ps1's header comment) — so leave a
                 // breadcrumb somewhere known-writable rather than nothing.
                 // Added after hitting a real machine where this path
                 // silently failed on every single attempt, with no way to

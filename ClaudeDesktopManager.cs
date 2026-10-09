@@ -134,7 +134,7 @@ namespace Orbweaver
 
         // %APPDATA% on Windows, ~/Library/Application Support on macOS.
         // Environment.SpecialFolder.ApplicationData already resolves
-        // correctly on both — that's how ClaudeBuddySettings.Directory does
+        // correctly on both — that's how OrbweaverSettings.Directory does
         // it — so this only needs a scratch-override branch, not a platform
         // one.
         public static string ProfileRoot =>
@@ -977,10 +977,10 @@ namespace Orbweaver
             }
 
             // open(1) rather than starting Contents/MacOS/Claude
-            // directly: a direct child would inherit Claude Buddy's
+            // directly: a direct child would inherit Orbweaver's
             // whole environment, land in its process group (so Ctrl-C
             // during a dotnet run would SIGHUP every instance), and
-            // have its privacy prompts attributed to Claude Buddy,
+            // have its privacy prompts attributed to Orbweaver,
             // whose ad-hoc signature changes on every build.
             return Run("/usr/bin/open", LaunchArguments(clone, AppPath(), isDefault, directory));
         }
@@ -1796,7 +1796,7 @@ namespace Orbweaver
         // than climbing forever.
         //
         // Split out of NewProfile because reusing a gap is a decision with a
-        // consequence elsewhere — ClaudeBuddySettings.RemoveProfile's own comment
+        // consequence elsewhere — OrbweaverSettings.RemoveProfile's own comment
         // says a name left behind would be inherited by the next profile that
         // reused it, and this is what makes reuse happen.
         internal static string NextProfileName(string root)

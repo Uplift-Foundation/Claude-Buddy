@@ -20,14 +20,14 @@
          exe's Details tab disagreed with its own ProductVersion (CB-205);
          tests/UnitTests/AssemblyVersionTests.cs fails if that comes back.
          It is the same cut tools/build-macos-app.sh makes for
-         CFBundleVersion and tools/ClaudeBuddy.iss for VersionInfoVersion.
+         CFBundleVersion and tools/Orbweaver.iss for VersionInfoVersion.
          Version flows into AssemblyInformationalVersion, which is what
          actually shows the prerelease label. Version must stay a literal
          element here: the packaging scripts and release.yml parse it. -->
     <Version>0.5.10-beta</Version>
     <AssemblyVersion>$(Version.Split('-')[0]).0</AssemblyVersion>
     <FileVersion>$(Version.Split('-')[0]).0</FileVersion>
-    <Product>Claude Buddy</Product>
+    <Product>Orbweaver</Product>
     <Authors>Kawika Miller, Repo Owner</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/Uplift-Foundation/Claude-Buddy</PackageProjectUrl>
@@ -36,7 +36,7 @@
     <RollForward>LatestMajor</RollForward>
     <!-- Single-file, self-contained output when publishing; pick the RID on
          the command line: dotnet publish -c Release -r win-x64|osx-arm64|osx-x64 -->
-    <!-- Embedded as the Win32 icon resource, so ClaudeBuddy.exe has a real icon
+    <!-- Embedded as the Win32 icon resource, so Orbweaver.exe has a real icon
          in Explorer, the Start menu and the notification area's overflow. The
          SDK does this cross-platform, so a Mac can still produce the win-x64
          build. Ignored when targeting macOS, which uses Resources/*.icns. -->
@@ -75,7 +75,7 @@
     <!-- The new xUnit suites reference this project rather than compiling
          individual shipped files (the tests/ArrangementTests-style
          <Compile Include>), because they need SessionManager and
-         ClaudeBuddySettings, whose dependency closures are too large to pull
+         OrbweaverSettings, whose dependency closures are too large to pull
          in that way. A ProjectReference alone gives them only public types,
          so this grants the three of them the internal ones too — the same
          private-pure-logic (SessionManager's scan rules, AgentTeam's
@@ -113,7 +113,7 @@
          was fixed upstream but explicitly never backported to 11.3.x
          (backported-12.0.x only). Reaching that fix for real screenshot
          testing meant the whole app had to move, not just a test project:
-         ClaudeBuddy.dll's compiled XAML/markup-extension IL is bound to
+         Orbweaver.dll's compiled XAML/markup-extension IL is bound to
          whichever major version of Avalonia.Markup.Xaml.dll the CLR actually
          loads in-process, and a test host referencing a different major
          version than the app it hosts fails every XAML-backed control with

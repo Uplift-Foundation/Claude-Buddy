@@ -11,7 +11,7 @@ namespace Orbweaver.Tests;
 // that nothing else in this suite depends on.
 //
 // [Collection("Settings")] because every case here reads and writes
-// ClaudeBuddySettings.OrbTurnSounds, which is process-wide the same way
+// OrbweaverSettings.OrbTurnSounds, which is process-wide the same way
 // every other settings-touching suite in this collection is.
 [Collection("Settings")]
 public class OrbSoundSubmenuTests : IDisposable
@@ -389,9 +389,9 @@ public class OrbSoundSubmenuTests : IDisposable
     // the real scan → TurnSoundPolicy → ChimePlayer path.
     //
     // Its own settings directory (ORBWEAVER_SETTINGS_DIR +
-    // ClaudeBuddySettings.ReloadForTests()) rather than this file's usual
+    // OrbweaverSettings.ReloadForTests()) rather than this file's usual
     // _clearedKeys cleanup — the same isolation TurnSoundScanTests uses,
-    // since a real SessionManager scan reads ClaudeBuddySettings.
+    // since a real SessionManager scan reads OrbweaverSettings.
     // TurnSoundsEnabled and friends beyond just OrbTurnSounds, and mixing a
     // scan-level case into a suite that otherwise only pokes individual
     // settings keys is exactly where a leftover value from a sibling test
@@ -498,7 +498,7 @@ public class OrbSoundSubmenuTests : IDisposable
     // so migrating *into* one used to look like a safe migration onto an
     // unoccupied key, write nothing there, and still clear the real
     // override out from under the old key on the way out. Reachable on a
-    // real machine: ClaudeBuddyHook.sh:70 writes cwd with no fallback, so
+    // real machine: OrbweaverHook.sh:70 writes cwd with no fallback, so
     // one status write missing it is enough to blank the key for a single
     // poll.
     [AvaloniaFact]

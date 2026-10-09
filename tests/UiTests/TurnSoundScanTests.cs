@@ -45,7 +45,7 @@ public class TurnSoundScanTests : IDisposable
         // A fresh settings directory per test, the same isolation
         // SessionScanTests' sibling suites use — this class does not touch
         // it directly, but Snapshot() inside TurnSounds reads
-        // ClaudeBuddySettings, and a stale TurnSoundsEnabled=false left by
+        // OrbweaverSettings, and a stale TurnSoundsEnabled=false left by
         // another test would make every case here read as "silent for the
         // wrong reason".
         Environment.SetEnvironmentVariable(

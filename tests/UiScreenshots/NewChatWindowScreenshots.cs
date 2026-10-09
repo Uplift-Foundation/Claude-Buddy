@@ -17,7 +17,7 @@ namespace Orbweaver.Tests;
 // constructor directly and is never closed (SettingsWindowSmokeTest's own
 // comment on the FontManager corruption a stray Close() caused once).
 //
-// [Collection("Settings")]: the window reads ClaudeBuddySettings
+// [Collection("Settings")]: the window reads OrbweaverSettings
 // (NewChatRecentFolders, NewChatLastCli, the OpenClaw settings the fourth
 // row's availability depends on), which is process-wide — see
 // SettingsCollection.cs.

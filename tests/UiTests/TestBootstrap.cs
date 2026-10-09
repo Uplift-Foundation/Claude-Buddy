@@ -25,13 +25,13 @@ namespace Orbweaver.Tests;
 
 // Runs before any test in this assembly touches a single line of app code.
 //
-// ClaudeBuddySettings.Directory is a static property read lazily, but the
-// model behind it (ClaudeBuddySettings.Load) is cached for the process once
-// read — see ClaudeBuddySettings.ReloadForTests's own comment. The danger
+// OrbweaverSettings.Directory is a static property read lazily, but the
+// model behind it (OrbweaverSettings.Load) is cached for the process once
+// read — see OrbweaverSettings.ReloadForTests's own comment. The danger
 // this heads off is real and cheap to hit by accident: OrbWindow's
 // constructor has a field initializer,
 // `private readonly SolidColorBrush _orbBrush = new(OrbColors.Idle);`,
-// which reads ClaudeBuddySettings.IdleColor the moment an OrbWindow is
+// which reads OrbweaverSettings.IdleColor the moment an OrbWindow is
 // constructed — before a test method's own body runs a single statement.
 // Point ORBWEAVER_SETTINGS_DIR at a fresh, private scratch directory
 // before that happens, or the very first OrbWindow built anywhere in this
@@ -40,7 +40,7 @@ namespace Orbweaver.Tests;
 // [ModuleInitializer] runs once per assembly load, ahead of any test
 // collection, and ahead of the Avalonia headless bootstrap in
 // TestAppBuilder — both of which is required, since AppBuilder.Configure
-// touches ClaudeBuddySettings too (App.axaml.cs reads it while composing
+// touches OrbweaverSettings too (App.axaml.cs reads it while composing
 // styles).
 internal static class TestBootstrap
 {
@@ -75,7 +75,7 @@ internal static class TestBootstrap
 
         // Where StatusDirectory.Path() puts settings-errors.log — left unset,
         // every suite run appends failure traces to the developer's real
-        // $TMPDIR/claude_buddy/settings-errors.log (CB-17).
+        // $TMPDIR/orbweaver/settings-errors.log (CB-17).
         //
         // ORBWEAVER_STATUS_ROOT, not TMPDIR: moving TMPDIR from inside the
         // test process breaks the coverage collector's IPC and cost this repo

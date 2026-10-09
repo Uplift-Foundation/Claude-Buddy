@@ -33,7 +33,7 @@ namespace Orbweaver.Tests
         private static long JustNow => Ms(Now.AddSeconds(-5));
 
         // Both settings Parse reads are set on every call rather than left to
-        // whatever ran before. ClaudeBuddySettings is a process-wide static and
+        // whatever ran before. OrbweaverSettings is a process-wide static and
         // xUnit orders a class's tests as it pleases, so a test that mutated
         // them would silently change the meaning of every test after it — which
         // is exactly what the first draft of this file did: half of these failed

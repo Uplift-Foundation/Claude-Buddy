@@ -22,7 +22,7 @@ namespace Orbweaver.Tests;
 // is why OrbAvatarTests exists at all, and this is the same seam one registry
 // over.
 //
-// [Collection("Settings")] because half of these read ClaudeBuddySettings while
+// [Collection("Settings")] because half of these read OrbweaverSettings while
 // constructing a window (OrbWindow picks up a colour in a field initializer)
 // and TwoLetterGlyphs is a setting these tests set outright.
 [Collection("Settings")]

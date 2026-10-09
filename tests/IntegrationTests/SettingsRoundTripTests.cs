@@ -3,7 +3,7 @@ using Xunit;
 
 namespace Orbweaver.Tests;
 
-// ClaudeBuddySettings is a static class: one model shared by the whole
+// OrbweaverSettings is a static class: one model shared by the whole
 // process, guarded by its own lock but with no isolation between test
 // cases. Every test here repoints ORBWEAVER_SETTINGS_DIR and calls
 // ReloadForTests() before touching anything, and the whole class is
@@ -34,7 +34,7 @@ public class SettingsRoundTripTests
     [Fact]
     public void SettingWithADirectSetter_IsWrittenToDiskImmediately()
     {
-        // TwoLetterGlyphs's setter calls Save() directly (ClaudeBuddySettings.cs
+        // TwoLetterGlyphs's setter calls Save() directly (OrbweaverSettings.cs
         // ~line 601), not SaveSoon() — no debounce, so it should be on disk the
         // instant the setter returns.
         var dir = NewSettingsDir();
@@ -202,7 +202,7 @@ public class SettingsRoundTripTests
         }
     }
 
-    // The single most valuable untested piece of ClaudeBuddySettings.cs, per
+    // The single most valuable untested piece of OrbweaverSettings.cs, per
     // its own comment on _unknownKeys (~line 38): Save() rebuilds the whole
     // document from the in-memory model, so any key it doesn't know about
     // would otherwise be silently deleted the next time anything is saved —
@@ -272,7 +272,7 @@ public class SettingsRoundTripTests
 
     // IdleColor/GeneratingColor/WaitingColor are the only three setters that
     // go through SaveSoon() instead of Save() directly (grep confirms — see
-    // ClaudeBuddySettings.cs ~line 630-646), because the colour pickers raise
+    // OrbweaverSettings.cs ~line 630-646), because the colour pickers raise
     // a change event on every pointer move and a direct Save() per event
     // would thrash the disk. SaveSoon() debounces via a DispatcherTimer.
     //

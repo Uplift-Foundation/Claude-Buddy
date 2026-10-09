@@ -105,7 +105,7 @@ public class SettingsWindowCoverageTests
     // SessionManager.Instance is always null under the headless test lifetime
     // (App's desktop-lifetime guard never runs — see TestAppBuilder.cs), so
     // this switch's own onChange is a no-op in this suite; what is testable is
-    // that it opens on the ClaudeBuddySettings fallback and that toggling it
+    // that it opens on the OrbweaverSettings fallback and that toggling it
     // does not throw.
     [AvaloniaFact]
     public void ShowOrbsSwitchOpensOnTheSettingsFallbackAndToggleDoesNotThrow()
@@ -153,7 +153,7 @@ public class SettingsWindowCoverageTests
     // --- the "Orb colours" rows -------------------------------------------
 
     // CB-153: "Give each session a colour" used to be built twice, back to
-    // back, both bound to ClaudeBuddySettings.AutoColorSessions via the same
+    // back, both bound to OrbweaverSettings.AutoColorSessions via the same
     // OnAutoColorToggled handler — a visible duplicate on screen, and not
     // harmless, since the two copies shared the setting rather than the
     // control and could disagree on screen until the window rebuilt. Down to
@@ -564,7 +564,7 @@ public class SettingsWindowCoverageTests
     // SettingsWindowRowTests), and switching on when the model is already
     // present. "Present" is faked by dropping an empty file at the exact path
     // NeuralSpeech/SpeechTranscriber check for, which lives under
-    // ClaudeBuddySettings.Directory — the same isolated per-test-run directory
+    // OrbweaverSettings.Directory — the same isolated per-test-run directory
     // TestBootstrap points at, so nothing under a real profile is touched.
     [AvaloniaFact]
     public void NeuralVoiceSwitchesOnWithoutDownloadingWhenAlreadyInstalled()
@@ -598,7 +598,7 @@ public class SettingsWindowCoverageTests
         var wasEnabled = OrbweaverSettings.VoiceInputEnabled;
 
         // Mirrors SpeechTranscriber's own private ModelPath (ggml-base.en.bin
-        // under ClaudeBuddySettings.Directory); there is no internal seam for
+        // under OrbweaverSettings.Directory); there is no internal seam for
         // it the way NeuralSpeech exposes one, so the path is reconstructed
         // here rather than referenced.
         var modelPath = Path.Combine(OrbweaverSettings.Directory, "ggml-base.en.bin");
@@ -806,7 +806,7 @@ public class SettingsWindowCoverageTests
     {
         // The Threw case logs the escaped exception, and nothing in this suite
         // points the log directory anywhere: without this it would write into the
-        // real ~/Library/Logs/ClaudeBuddy. The background task copies the scope
+        // real ~/Library/Logs/Orbweaver. The background task copies the scope
         // when it is started, so disposing it after the click is safe.
         using var logScope = CrashLog.ScopeForTests(
             Path.Combine(Path.GetTempPath(), "cb-ui-hooklog-" + Guid.NewGuid().ToString("N")));

@@ -11,7 +11,7 @@ namespace Orbweaver.Tests;
 // members), because real transcripts reach tens of MB and the scan runs every
 // two seconds.
 //
-// That window is shared with ClaudeBuddyHook.sh on purpose — the hook decides a
+// That window is shared with OrbweaverHook.sh on purpose — the hook decides a
 // title from the same 256KB — so the two cannot disagree about what a session is
 // called within it. Where they *do* differ is stated and asserted below.
 //
