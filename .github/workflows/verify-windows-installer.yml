@@ -121,7 +121,7 @@ jobs:
           # the hook as ..\OrbweaverHook.ps1 relative to itself, so tools\ sitting
           # one level below the hook is what makes it work unmodified.
           $expected = @(
-            (Join-Path $app 'ClaudeBuddy.exe'),
+            (Join-Path $app 'Orbweaver.exe'),
             (Join-Path $app 'OrbweaverHook.ps1'),
             (Join-Path $app 'tools\install-hooks.ps1'),
             (Join-Path $app 'tools\install-windows-hooks.ps1'),
@@ -286,19 +286,20 @@ jobs:
           Write-Host 'Hook produces and removes the status file exactly as the app expects.'
 
       # CloseApplications=force is what lets an upgrade replace a running
-      # ClaudeBuddy.exe. Best-effort: a GUI app may not start on a headless
+      # Orbweaver.exe (and PrepareToInstall's taskkill now stops it first
+      # anyway). Best-effort: a GUI app may not start on a headless
       # runner, and that is a runner limitation rather than an installer bug, so
       # this reports without failing the job.
       - name: Reinstall over a running instance (best effort)
         continue-on-error: true
         shell: pwsh
         run: |
-          $app = Join-Path $env:LOCALAPPDATA 'Programs\Orbweaver\ClaudeBuddy.exe'
+          $app = Join-Path $env:LOCALAPPDATA 'Programs\Orbweaver\Orbweaver.exe'
           $proc = Start-Process -FilePath $app -PassThru
           Start-Sleep -Seconds 8
 
           if ($proc.HasExited) {
-            Write-Host "::warning::ClaudeBuddy.exe exited on its own (code $($proc.ExitCode)) — headless runner, so the Restart Manager path was not exercised."
+            Write-Host "::warning::Orbweaver.exe exited on its own (code $($proc.ExitCode)) — headless runner, so the Restart Manager path was not exercised."
             exit 0
           }
 
@@ -311,7 +312,7 @@ jobs:
           if (Test-Path $log) { Get-Content $log | Select-String -Pattern 'Restart Manager|in use|Closing|process' | Select-Object -Last 15 }
 
           if ($p.ExitCode -ne 0) { Write-Host "::error::Upgrade over a running instance failed with $($p.ExitCode)"; exit 1 }
-          Get-Process ClaudeBuddy -ErrorAction SilentlyContinue | Stop-Process -Force
+          Get-Process Orbweaver -ErrorAction SilentlyContinue | Stop-Process -Force
           Write-Host 'Upgrade over a running instance succeeded.'
 
       - name: Uninstall silently and check it cleaned up
@@ -327,13 +328,13 @@ jobs:
           Start-Process -FilePath $uninstaller -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' | Out-Null
           $deadline = (Get-Date).AddMinutes(3)
           while ((Get-Date) -lt $deadline) {
-            if (-not (Test-Path (Join-Path $app 'ClaudeBuddy.exe'))) { break }
+            if (-not (Test-Path (Join-Path $app 'Orbweaver.exe'))) { break }
             Start-Sleep -Seconds 3
           }
           Start-Sleep -Seconds 5
 
           $failures = @()
-          if (Test-Path (Join-Path $app 'ClaudeBuddy.exe')) { $failures += 'ClaudeBuddy.exe still present after uninstall' }
+          if (Test-Path (Join-Path $app 'Orbweaver.exe')) { $failures += 'Orbweaver.exe still present after uninstall' }
 
           $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{4046CFD2-79A9-4270-8302-21B87A92C0A5}_is1'
           if (Test-Path $key) { $failures += 'Apps & Features entry survived uninstall' }
@@ -498,6 +499,30 @@ jobs:
           if ($failures.Count) { $failures | ForEach-Object { Write-Host "::error::$_" }; exit 1 }
           Write-Host 'Pre-rename install in place.'
 
+      # CB-256: the case the exe rename can break. Restart Manager is only asked
+      # about files the installer is about to write, and ClaudeBuddy.exe is no
+      # longer one of them, so stopping a running pre-rename build falls to
+      # PrepareToInstall in tools/Orbweaver.iss. Left running, it keeps the
+      # legacy single-instance mutex and every launch of the new exe exits on
+      # it. So give the upgrade a running old build to stop. Whether a GUI app
+      # stays up on a hosted runner is the runner's business, not a finding;
+      # the marker tells the checks below whether the stop was really tested.
+      # (The runner reaps leftover processes at the end of the job, not of the
+      # step, so this one is still there when the next step runs.)
+      - name: Start the pre-rename app so the upgrade has a process to stop
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:LOCALAPPDATA 'Programs\ClaudeBuddy\ClaudeBuddy.exe'
+          $proc = Start-Process -FilePath $exe -PassThru
+          Start-Sleep -Seconds 10
+          if ($proc.HasExited) {
+            Write-Host "::warning::ClaudeBuddy.exe exited on its own (code $($proc.ExitCode)); the upgrade's stop-the-old-exe path is not exercised on this run"
+          } else {
+            Write-Host "  ok      ClaudeBuddy.exe running as pid $($proc.Id)"
+            New-Item -ItemType File -Path (Join-Path $env:RUNNER_TEMP 'legacy-running') -Force | Out-Null
+          }
+          exit 0
+
       - name: Upgrade with this installer
         shell: pwsh
         run: |
@@ -538,7 +563,7 @@ jobs:
           $app = Join-Path $env:LOCALAPPDATA 'Programs\ClaudeBuddy'
           $startMenu = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
           foreach ($path in @(
-            (Join-Path $app 'ClaudeBuddy.exe'),
+            (Join-Path $app 'Orbweaver.exe'),
             (Join-Path $app 'OrbweaverHook.ps1'),
             (Join-Path $env:LOCALAPPDATA 'Orbweaver\OrbweaverHook.ps1'),
             (Join-Path $startMenu 'Orbweaver\Orbweaver.lnk'),
@@ -552,6 +577,11 @@ jobs:
           }
           foreach ($path in @(
             (Join-Path $env:LOCALAPPDATA 'Programs\Orbweaver'),
+            # CB-256: the pre-rename exe, which [InstallDelete] removes and
+            # which can only be removed if PrepareToInstall stopped it first.
+            # Left behind it is a second, older copy of the app beside the new
+            # one, and every hand-made shortcut still launches it.
+            (Join-Path $app 'ClaudeBuddy.exe'),
             (Join-Path $app 'ClaudeBuddyHook.ps1'),
             (Join-Path $startMenu 'Claude Buddy'),
             (Join-Path $startMenu 'Startup\Claude Buddy.lnk'))) {
@@ -596,6 +626,51 @@ jobs:
           }
           else { Write-Host '::warning::OrbweaverCrashKeepAlive absent, but task registration never worked on this runner either' }
 
+          # CB-256: the task has to name the new exe twice over. The action is
+          # what it launches; the trigger's filter is which crash it reacts to,
+          # and Event 1000 names the faulting image -- a filter still naming
+          # ClaudeBuddy.exe would leave a task that looks right and never fires.
+          if ($newTask) {
+            # NULs stripped in case schtasks hands back UTF-16 rather than the
+            # console code page; anything before the first '<' is not XML.
+            $xmlText = ((& schtasks.exe /query /tn 'OrbweaverCrashKeepAlive' /xml 2>$null) -join "`n") -replace "`0", ''
+            $taskXml = $null
+            if ($xmlText.IndexOf('<') -ge 0) {
+              try { $taskXml = [xml]($xmlText.Substring($xmlText.IndexOf('<'))) } catch { $failures += "OrbweaverCrashKeepAlive's XML does not parse: $_" }
+            } else { $failures += 'schtasks /query /xml returned no XML for OrbweaverCrashKeepAlive' }
+            if ($taskXml) {
+              # SelectNodes, not property paths (see CLAUDE.md on pwsh and XML).
+              $ns = New-Object System.Xml.XmlNamespaceManager($taskXml.NameTable)
+              $ns.AddNamespace('t', 'http://schemas.microsoft.com/windows/2004/02/mit/task')
+              $subscriptions = @($taskXml.SelectNodes('//t:Triggers/t:EventTrigger/t:Subscription', $ns) | ForEach-Object { $_.InnerText })
+              $commands = @($taskXml.SelectNodes('//t:Actions/t:Exec/t:Command', $ns) | ForEach-Object { $_.InnerText.Trim().Trim('"') })
+              Write-Host "  task filter: $($subscriptions -join ' | ')"
+              Write-Host "  task action: $($commands -join ' | ')"
+
+              if ($subscriptions.Count -ne 1) { $failures += "expected one event trigger on OrbweaverCrashKeepAlive, found $($subscriptions.Count)" }
+              elseif ($subscriptions[0] -notmatch "Data\[@Name='AppName'\]\s*=\s*'Orbweaver\.exe'") { $failures += "OrbweaverCrashKeepAlive's event filter does not name Orbweaver.exe: $($subscriptions[0])" }
+              elseif ($subscriptions[0] -match 'ClaudeBuddy\.exe') { $failures += "OrbweaverCrashKeepAlive's event filter still names ClaudeBuddy.exe" }
+              else { Write-Host '  ok      task filter names Orbweaver.exe' }
+
+              if ($commands.Count -ne 1) { $failures += "expected one action on OrbweaverCrashKeepAlive, found $($commands.Count)" }
+              elseif ($commands[0] -notlike '*\Orbweaver.exe') { $failures += "OrbweaverCrashKeepAlive launches '$($commands[0])', not Orbweaver.exe" }
+              elseif (-not (Test-Path -LiteralPath $commands[0])) { $failures += "OrbweaverCrashKeepAlive launches '$($commands[0])', which does not exist" }
+              else { Write-Host '  ok      task action launches the installed Orbweaver.exe' }
+            }
+          }
+
+          # CB-256: nothing of the old build may still be running. A silent
+          # install skips the post-install launch (skipifsilent), so the
+          # exactly-one-Orbweaver check belongs to the launch step below; here
+          # more than one would already be two copies racing for the mutex.
+          $legacyProcs = @(Get-Process ClaudeBuddy -ErrorAction SilentlyContinue)
+          if ($legacyProcs.Count) { $failures += "$($legacyProcs.Count) ClaudeBuddy process(es) still running after the upgrade; the installer did not stop the pre-rename exe" }
+          elseif (Test-Path (Join-Path $env:RUNNER_TEMP 'legacy-running')) { Write-Host '  ok      the running ClaudeBuddy.exe was stopped by the upgrade' }
+          else { Write-Host '::warning::no ClaudeBuddy process after the upgrade, but none survived to be stopped either' }
+          $newProcs = @(Get-Process Orbweaver -ErrorAction SilentlyContinue)
+          Write-Host "  Orbweaver processes after the installer closed: $($newProcs.Count)"
+          if ($newProcs.Count -gt 1) { $failures += "$($newProcs.Count) Orbweaver processes running after the upgrade" }
+
           # The installer must not have created the new data folder itself: the
           # app moves the old one there on first run, and the keep-alive gate
           # and the extra profile above were read through the fallback.
@@ -606,9 +681,10 @@ jobs:
           if ($failures.Count) { $failures | ForEach-Object { Write-Host "::error::$_" }; exit 1 }
           Write-Host 'Upgrade replaced every pre-rename name and re-wired both profiles.'
           # A step's exit code is the last native command's, and the last one run
-          # above is the probe for the new task, which exits 1 when the task is
-          # not there (a case this step already judges and tolerates). Without
-          # this the step failed after printing success.
+          # above is a schtasks probe of the new task -- the plain query, which
+          # exits 1 when the task is not there (a case this step already judges
+          # and tolerates), or the /xml query after it. Without this the step
+          # failed after printing success.
           exit 0
 
       # The installer only reads the pre-rename data folder; moving it is the
@@ -618,7 +694,7 @@ jobs:
       - name: Launch once and check the data folder moved
         shell: pwsh
         run: |
-          $exe = Join-Path $env:LOCALAPPDATA 'Programs\ClaudeBuddy\ClaudeBuddy.exe'
+          $exe = Join-Path $env:LOCALAPPDATA 'Programs\ClaudeBuddy\Orbweaver.exe'
           $newSettings = Join-Path $env:APPDATA 'Orbweaver\settings.json'
           $proc = Start-Process -FilePath $exe -PassThru
           $deadline = (Get-Date).AddSeconds(90)
@@ -627,10 +703,24 @@ jobs:
           }
           # A moment more for the snapshot copied back after the move.
           Start-Sleep -Seconds 5
-          if ($proc.HasExited) { Write-Host "app exited on its own with code $($proc.ExitCode)" }
-          Get-Process ClaudeBuddy -ErrorAction SilentlyContinue | Stop-Process -Force
+          $exitedEarly = $proc.HasExited
+          if ($exitedEarly) { Write-Host "app exited on its own with code $($proc.ExitCode)" }
 
+          # CB-256: one copy of the app, under the new name, and nothing of the
+          # old one. Counted before the cleanup below kills it. If the app gave
+          # up on this runner, at most one may remain (the keep-alive task can
+          # restart a crashed copy); the data-folder check below is then what
+          # says whether it got the mutex before it went.
           $failures = @()
+          $running = @(Get-Process Orbweaver -ErrorAction SilentlyContinue)
+          $legacyRunning = @(Get-Process ClaudeBuddy -ErrorAction SilentlyContinue)
+          Write-Host "  running -- Orbweaver: $($running.Count)  ClaudeBuddy: $($legacyRunning.Count)"
+          if (-not $exitedEarly -and $running.Count -ne 1) { $failures += "expected exactly one Orbweaver process, found $($running.Count)" }
+          if ($exitedEarly -and $running.Count -gt 1) { $failures += "$($running.Count) Orbweaver processes running" }
+          if ($legacyRunning.Count) { $failures += "$($legacyRunning.Count) ClaudeBuddy process(es) running beside the new build" }
+
+          Get-Process Orbweaver -ErrorAction SilentlyContinue | Stop-Process -Force
+
           if (Test-Path -LiteralPath $newSettings) {
             $moved = Get-Content -LiteralPath $newSettings -Raw | ConvertFrom-Json
             Write-Host "  ok      $newSettings"
@@ -660,13 +750,15 @@ jobs:
           Start-Process -FilePath (Join-Path $app 'unins000.exe') -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' | Out-Null
           $deadline = (Get-Date).AddMinutes(3)
           while ((Get-Date) -lt $deadline) {
-            if (-not (Test-Path (Join-Path $app 'ClaudeBuddy.exe'))) { break }
+            if (-not (Test-Path (Join-Path $app 'Orbweaver.exe'))) { break }
             Start-Sleep -Seconds 3
           }
           Start-Sleep -Seconds 5
 
           $failures = @()
-          if (Test-Path (Join-Path $app 'ClaudeBuddy.exe')) { $failures += 'ClaudeBuddy.exe still present after uninstall' }
+          foreach ($exeName in @('Orbweaver.exe', 'ClaudeBuddy.exe')) {
+            if (Test-Path (Join-Path $app $exeName)) { $failures += "$exeName still present after uninstall" }
+          }
 
           foreach ($task in @('OrbweaverCrashKeepAlive', 'ClaudeBuddyCrashKeepAlive')) {
             $null = & schtasks.exe /query /tn $task 2>&1
