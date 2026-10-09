@@ -118,6 +118,5 @@ tools/install-grok-hooks.sh	10	legacy arm: names the pre-rename thing a phase 2 
 tools/install-hooks.sh	12	legacy arm: names the pre-rename thing a phase 2 migration recognises (legacy bundle candidates, log and settings fallback) and the CLAUDE_BUDDY_ shim
 tools/install-macos-hooks.sh	11	legacy arm: names the pre-rename thing a phase 2 migration recognises (legacy folder, strip pattern, settings fallback) and the CLAUDE_BUDDY_ shim
 tools/install-windows-hooks.ps1	16	legacy arm: names the pre-rename thing a phase 2 migration recognises (legacy folder, strip pattern, settings fallback) and the CLAUDE_BUDDY_ shim
-tools/phase3-rename.py	36	the rename script names every old identifier it rewrites; deleted in this PR's last commit
 tools/stop-installed-buddy.sh	6	legacy arm: stops the legacy executable path too, and the CLAUDE_BUDDY_ shim
 tools/test-build-macos-app.py	7	legacy fixtures: the three executable paths (legacy bundle, phase 2 bundle, current) the install tail must handle
