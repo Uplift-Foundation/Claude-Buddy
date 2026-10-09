@@ -4,7 +4,7 @@
 Why a script instead of a flag: `dotnet test tests/Tests.sln` runs three
 projects on **two different test platforms**, and they emit coverage two
 different ways (see tools/coverage.sh). That leaves three cobertura files
-measuring the *same* ClaudeBuddy assembly, and no single number in any of them
+measuring the *same* Orbweaver assembly, and no single number in any of them
 is the truth — a line exercised only by a UI test is reported as unhit by the
 unit-test run.
 

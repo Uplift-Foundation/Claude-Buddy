@@ -49,7 +49,7 @@ namespace Orbweaver
     // lives somewhere a unit test can reach it without constructing anything.
     //
     // GlobalHotkeys (the platform-facing half) is what actually reads
-    // ClaudeBuddySettings and calls into a native hook; this class never
+    // OrbweaverSettings and calls into a native hook; this class never
     // touches either.
     public static class HotkeyRegistry
     {

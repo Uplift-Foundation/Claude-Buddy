@@ -329,7 +329,7 @@ namespace Orbweaver
         // flip — only Body()'s content changes, so a query typed mid-edit
         // survives every one of the many things in this window that call
         // Rebuild(). The query itself is deliberately never read from or
-        // written to ClaudeBuddySettings: it's a transient view of the page,
+        // written to OrbweaverSettings: it's a transient view of the page,
         // not a preference.
         private TextBox? _filterBox;
         private TextBlock? _emptyState;
@@ -481,7 +481,7 @@ namespace Orbweaver
 
             // View state and nothing else: setting this moves the chevron and
             // the body's visibility, full stop. It does not touch
-            // ClaudeBuddySettings, on purpose — see the type-level comment
+            // OrbweaverSettings, on purpose — see the type-level comment
             // above. The header's click handler is the only writer, and it
             // writes before it gets here (see Group()'s Click handler).
             public bool IsOpen
@@ -531,7 +531,7 @@ namespace Orbweaver
             //
             // A section holding a match force-expands so the match is actually
             // visible, and does it through IsOpen rather than
-            // ClaudeBuddySettings — IsOpen's own setter writes nothing (see the
+            // OrbweaverSettings — IsOpen's own setter writes nothing (see the
             // type-level comment above), so a search never persists a fold it
             // only changed to show a result. Clearing the filter restores
             // whatever was on disk before the search touched anything.
@@ -788,7 +788,7 @@ namespace Orbweaver
         //
         // CB-153: "Give each session a colour" used to be built twice, back to
         // back, each its own Switch bound to the same
-        // ClaudeBuddySettings.AutoColorSessions and the same OnAutoColorToggled
+        // OrbweaverSettings.AutoColorSessions and the same OnAutoColorToggled
         // handler, with two help strings hand-edited slightly differently at
         // some point (compare "that has none" / "with none", "so there its
         // orb" / "so a Codex orb"). On screen that read as one switch that
@@ -1097,7 +1097,7 @@ namespace Orbweaver
             return slider;
         }
 
-        // Off by default (see ClaudeBuddySettings.VoiceInputEnabled) —
+        // Off by default (see OrbweaverSettings.VoiceInputEnabled) —
         // turning it on is what triggers the one-time Whisper model download,
         // never the first mic click on an orb, so the multi-hundred-MB
         // fetch is always something the user just asked for here.
@@ -3151,7 +3151,7 @@ namespace Orbweaver
 
         // How long a preview waits for the selection to settle before it
         // actually plays — see PreviewSound's own comment for why, and
-        // ClaudeBuddySettings.SaveDelay a few hundred lines up in that file
+        // OrbweaverSettings.SaveDelay a few hundred lines up in that file
         // for the sibling problem (a colour wheel drag) this same shape of
         // fix already solves there.
         private static readonly TimeSpan PreviewDebounce = TimeSpan.FromMilliseconds(250);
@@ -3163,7 +3163,7 @@ namespace Orbweaver
         // (AccountOrbsTests, SettingsWindowCoverageTests) — a stray
         // background continuation still winding down its delay after a
         // test's own teardown reached into shared Avalonia state it no
-        // longer owned. ClaudeBuddySettings' own deferred-write timer
+        // longer owned. OrbweaverSettings' own deferred-write timer
         // (_deferred, a few hundred lines up in that file) solves the
         // identical "debounce something that changes fast" problem the
         // same way for exactly that reason, and its own comment there is
@@ -3245,7 +3245,7 @@ namespace Orbweaver
         }
 
         // internal: a test calls this instead of waiting out the real 250ms
-        // — the identical role ClaudeBuddySettings.FlushPendingSave plays
+        // — the identical role OrbweaverSettings.FlushPendingSave plays
         // for the deferred write, and named the same way on purpose.
         internal static void FlushPendingPreviewForTests()
         {
@@ -3262,7 +3262,7 @@ namespace Orbweaver
         // the moment any other test anywhere in the process has triggered a
         // preview first — which, given xUnit does not guarantee run order,
         // is not a case a test can otherwise arrange to be first.
-        // ClaudeBuddySettings' identical _deferred field has the same shape
+        // OrbweaverSettings' identical _deferred field has the same shape
         // and no equivalent reset; this is the local fix for it rather than
         // leaving the arm permanently unreachable.
         internal static void ResetPreviewDebounceForTests()
@@ -3745,7 +3745,7 @@ namespace Orbweaver
         // "put it back how it shipped" is a single intention.
         //
         // It writes null rather than today's default hex — see
-        // ClaudeBuddySettings.IdleColor for why that distinction matters — and then
+        // OrbweaverSettings.IdleColor for why that distinction matters — and then
         // rebuilds instead of assigning each picker's Color back, because
         // assigning Color raises ColorChanged, which would write the default hex
         // straight into the file that was just cleared. Rebuilding re-seeds every

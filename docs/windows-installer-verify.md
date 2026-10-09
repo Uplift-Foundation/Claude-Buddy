@@ -47,6 +47,11 @@ was cut from the fork before the packaging work was upstreamed, so it is the onl
 place those bytes exist. Later versions will come from
 `Uplift-Foundation/Claude-Buddy`.
 
+That release predates the rename from Claude Buddy to Orbweaver, so its wizard
+and its Apps & Features entry still say "Claude Buddy" and it installs
+`ClaudeBuddy.exe`. The wording below is what a current build shows; when you
+test `v0.1.0-beta` itself, read "Orbweaver" as "Claude Buddy".
+
 Then double-click it. Not `/SILENT` — the point is the wizard.
 
 - Does SmartScreen appear, and what exactly does it say? It's unsigned, so a
@@ -59,12 +64,12 @@ Then double-click it. Not `/SILENT` — the point is the wizard.
   (`LicenseFile` points at a `.txt` copy specifically because Inno picks text vs
   RTF by extension.)
 - Are both task checkboxes present, ticked, and readable — "Wire up Claude Code
-  hooks (required for orbs to appear)" and "Start Claude Buddy automatically when
+  hooks (required for orbs to appear)" and "Start Orbweaver automatically when
   I sign in"? Is the wording clear enough that someone wouldn't untick the first
   one by accident?
 - Does the hook step flash a console window? It runs `SW_HIDE`, so it shouldn't.
   A visible flash is cosmetic but worth knowing.
-- Finish with "Start Claude Buddy now" ticked.
+- Finish with "Start Orbweaver now" ticked.
 
 ## 2. Does it actually work afterwards
 
@@ -79,12 +84,12 @@ Then double-click it. Not `/SILENT` — the point is the wizard.
 - Exit the session: does the orb disappear?
 
 If orbs never appear, that's the whole point of this check — dig into why. Look
-at `%TEMP%\claude_buddy\` for status files, and run `/hooks` in the session to
+at `%TEMP%\orbweaver\` for status files, and run `/hooks` in the session to
 see whether the entries registered.
 
 ## 3. Sign out and back in
 
-Does Claude Buddy start by itself? That's the startup shortcut. Confirm there's
+Does Orbweaver start by itself? That's the startup shortcut. Confirm there's
 exactly **one** instance, not two.
 
 ## 4. Uninstall from Apps & Features
@@ -92,7 +97,7 @@ exactly **one** instance, not two.
 Not the `unins000.exe` path CI already covers — go through Settings → Apps, the
 way a person would.
 
-- Is the entry named "Claude Buddy" with a sensible version and the orb icon?
+- Is the entry named "Orbweaver" with a sensible version and the orb icon?
 - Does uninstalling remove the notification-area icon, i.e. was the running app
   actually stopped?
 - Afterwards, does a Claude Code session still start cleanly with no hook errors?

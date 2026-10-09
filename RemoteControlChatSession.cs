@@ -8,7 +8,7 @@ namespace Orbweaver
     // whole point of this class.
     //
     // **Live view** is what you get when the other machine is also running
-    // Claude Buddy. That Buddy reads the session's transcript off its own disk
+    // Orbweaver. That Buddy reads the session's transcript off its own disk
     // and sends it here in hashed pieces, so this panel shows the same
     // conversation the person sitting in front of that machine sees — verbatim,
     // byte for byte, parsed by the same ChatTranscript a local panel uses. What
@@ -91,7 +91,7 @@ namespace Orbweaver
             // opens empty and an empty panel reads as broken.
             //
             // It also survives the one case that surprised me in testing: the
-            // history is in memory, so restarting Claude Buddy empties it. With
+            // history is in memory, so restarting Orbweaver empties it. With
             // this line the panel still explains itself after a restart instead
             // of being a blank box.
             //

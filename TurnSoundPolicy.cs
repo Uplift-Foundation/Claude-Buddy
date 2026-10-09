@@ -40,7 +40,7 @@ namespace Orbweaver
 
     // Everything this decision needs to know about what the user has asked
     // for, gathered up front by the caller so this stays a function of its
-    // arguments rather than a reader of ClaudeBuddySettings. The two resolver
+    // arguments rather than a reader of OrbweaverSettings. The two resolver
     // delegates carry the filesystem lookup and the platform default name
     // together, because "null means the platform default" is a fact about
     // *which trigger* the setting belongs to (Ping for attention, Glass for

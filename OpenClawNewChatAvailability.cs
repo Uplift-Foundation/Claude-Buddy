@@ -23,7 +23,7 @@ namespace Orbweaver
 
     public static class OpenClawNewChat
     {
-        // host is ClaudeBuddySettings.OpenClawHost, which is "" rather than
+        // host is OrbweaverSettings.OpenClawHost, which is "" rather than
         // null when unset — checked with IsNullOrWhiteSpace rather than a
         // null check for that reason.
         public static OpenClawNewChatAvailability AvailabilityFor(

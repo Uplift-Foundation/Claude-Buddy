@@ -23,7 +23,7 @@ var port = OrbweaverSettings.OpenClawPort;
 
 if (string.IsNullOrWhiteSpace(host))
 {
-    Console.Error.WriteLine("No gateway address in settings. Turn OpenClaw on in Claude Buddy first.");
+    Console.Error.WriteLine("No gateway address in settings. Turn OpenClaw on in Orbweaver first.");
     return 1;
 }
 

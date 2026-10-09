@@ -51,7 +51,7 @@ cd "$(dirname "$0")/.."
 # it measured anything (CB-229, found on the Windows box). Same digest either way.
 if command -v shasum >/dev/null 2>&1; then HASHER=shasum; else HASHER=sha1sum; fi
 CHECKOUT_KEY="$(printf '%s' "$PWD" | $HASHER | cut -c1-16)"
-OUT="${TMPDIR:-/tmp}/claude-buddy-coverage/$CHECKOUT_KEY"
+OUT="${TMPDIR:-/tmp}/orbweaver-coverage/$CHECKOUT_KEY"
 rm -rf "$OUT"
 mkdir -p "$OUT"
 

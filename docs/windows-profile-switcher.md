@@ -51,9 +51,10 @@ The pieces:
   `~/Library/Application Support`. On Windows the default profile is
   `%APPDATA%\Claude`, so the root is `%APPDATA%`. Note `Environment.SpecialFolder.
   ApplicationData` already resolves correctly on both platforms — that's how
-  `ClaudeBuddySettings` does it.
+  `OrbweaverSettings` does it.
 - **Discovery** mostly ports as-is: directories named `Claude` / `Claude-*` under
-  the root, excluding `Claude-3p` (the app's own sidecar) and `ClaudeBuddy` (ours).
+  the root, excluding `Claude-3p` (the app's own sidecar) and `Orbweaver` (ours; it was
+  `ClaudeBuddy` before the rename).
   `LooksLikeProfile`'s marker-file heuristic is platform-neutral; check the marker
   names actually appear in a real Windows profile and adjust if not.
 - **Launch.** New Windows path: resolve the AUMID, then `ActivateApplication` with
@@ -100,7 +101,7 @@ the deliverable.
 
 ## Verify before claiming done
 
-Rebuild (`dotnet publish ClaudeBuddy.csproj -c Release -r win-x64 -o publish`) and
+Rebuild (`dotnet publish Orbweaver.csproj -c Release -r win-x64 -o publish`) and
 check, with screenshots as evidence:
 
 1. The Claude Desktop section appears in the tray menu and lists the real

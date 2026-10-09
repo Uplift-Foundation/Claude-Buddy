@@ -362,7 +362,7 @@ namespace Orbweaver
         // Records a choice made in the settings window, writing both which engine
         // speaks and that engine's own voice key. The per-engine keys are kept
         // separate so switching away from an engine and back remembers what was
-        // chosen there — see the comments on them in ClaudeBuddySettings.
+        // chosen there — see the comments on them in OrbweaverSettings.
         public static void SelectVoice(VoiceOption option)
         {
             switch (option.Engine)
@@ -959,7 +959,7 @@ namespace Orbweaver
             return startInfo;
         }
 
-        // Whatever the user pointed ClaudeBuddySettings.SpeakCommand at. Returns
+        // Whatever the user pointed OrbweaverSettings.SpeakCommand at. Returns
         // false only when no command is configured — a configured command that
         // fails to launch returns true, having reported why, because falling
         // through to a system voice would disguise the problem.

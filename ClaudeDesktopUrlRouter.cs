@@ -3,7 +3,7 @@ using System.Diagnostics.CodeAnalysis;
 
 namespace Orbweaver
 {
-    // Claude Buddy as the handler for Claude Desktop's URL schemes, forwarding
+    // Orbweaver as the handler for Claude Desktop's URL schemes, forwarding
     // each link to the profile it belongs to.
     //
     // ClaudeDesktopUrlRouting has the why and the decision; this file is the

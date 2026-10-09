@@ -49,7 +49,7 @@ namespace Orbweaver
             "/usr/bin/claude"
         };
 
-        // A background-orb click starts Claude Buddy as a desktop app, not from
+        // A background-orb click starts Orbweaver as a desktop app, not from
         // the shell that installed Claude. On Windows that means its PATH can
         // omit ~/.local/bin, while npm's actual file there is claude.exe. Match
         // Windows' ordinary bare-command resolution explicitly rather than

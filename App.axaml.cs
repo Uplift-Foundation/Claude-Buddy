@@ -71,7 +71,7 @@ namespace Orbweaver
                 // QA round 3 (CB-167), finding 5: TrayController.Shutdown
                 // (the tray menu's own Quit) used to be the only place that
                 // called ChimePlayer.StopAll, so the orb menu's own "Exit
-                // Claude Buddy" (OrbWindow.Exit_Click) and the OS's Cmd-Q
+                // Orbweaver" (OrbWindow.Exit_Click) and the OS's Cmd-Q
                 // both skipped it — either one could leave a chime still
                 // mid-playback after the app itself was gone. Every one of
                 // those paths ends the same way, by calling this lifetime's
@@ -119,7 +119,7 @@ namespace Orbweaver
                 // Claude Desktop's URL schemes resolve to a bundle *id*, and
                 // every tinted clone shares Claude Desktop's — so a sign-in
                 // callback cannot say which profile it belongs to and always
-                // lands in Default. Claude Buddy claims the schemes and
+                // lands in Default. Orbweaver claims the schemes and
                 // forwards each link to the right instance instead; see
                 // ClaudeDesktopUrlRouting. A no-op off macOS, and a no-op with
                 // fewer than two profiles, where there is nothing to route.
@@ -154,7 +154,7 @@ namespace Orbweaver
                 _ = NeuralSpeech.EnsureCurrentAsync()
                     .ContinueWith(_ => TextToSpeech.InvalidateVoiceCache(), TaskScheduler.Default);
 
-                // Development entry point: `ClaudeBuddy --settings` opens the
+                // Development entry point: `Orbweaver --settings` opens the
                 // settings window at launch. It is otherwise only reachable by
                 // clicking the status-bar menu, which is awkward when the thing
                 // being changed *is* that window.

@@ -362,7 +362,7 @@ namespace Orbweaver
         // that launchd started. Same directory, same idea, one file.
         //
         //     ssh mini
-        //     echo 123456 > "~/Library/Application Support/ClaudeBuddy/pair-open"
+        //     echo 123456 > "~/Library/Application Support/Orbweaver/pair-open"
         //
         // Then pair from the machine that does have a screen. The file is read
         // once and deleted, and the window it opens lapses on its own — so a

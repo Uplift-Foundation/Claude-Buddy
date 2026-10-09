@@ -423,7 +423,7 @@ namespace Orbweaver
             // resize. PositionChanged is what the platform gives back instead,
             // and it fires for every kind of move — Reposition() included — so
             // the guard is what keeps this from writing a save for a panel
-            // that only followed its orb. ClaudeBuddySettings.
+            // that only followed its orb. OrbweaverSettings.
             // SetPinnedChatPanelPosition already no-ops when the position
             // hasn't actually changed, so a native drag's stream of identical
             // in-between events costs nothing once it settles.
@@ -1710,7 +1710,7 @@ namespace Orbweaver
             // Once per drag, not once per pixel: OnResizePointerMoved fires
             // continuously and this writes a file. Saved against the orb rather
             // than the session so the size follows the agent across runs — see
-            // ChatPanelSizes in ClaudeBuddySettings for why a session id would
+            // ChatPanelSizes in OrbweaverSettings for why a session id would
             // not have survived one.
             if (_owner is { } owner)
             {

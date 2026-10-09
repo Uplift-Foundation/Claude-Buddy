@@ -60,7 +60,7 @@ namespace Orbweaver
         // Wait for macOS to finish making *us* the active app before trying to
         // activate anything else.
         //
-        // Clicking an orb activates Claude Buddy — it is a click on one of its
+        // Clicking an orb activates Orbweaver — it is a click on one of its
         // windows, and macOS asks no further questions. That activation is
         // asynchronous, and it lands after the click handler has already run
         // its tmux queries and told the terminal to come forward: the terminal
@@ -117,7 +117,7 @@ namespace Orbweaver
         // macOS swallows the click that activates an inactive app: the window
         // under the pointer comes forward, but its view never sees the
         // mouseDown unless it answers YES to acceptsFirstMouse:. Avalonia's
-        // AvnView doesn't, and Claude Buddy is a background app that is almost
+        // AvnView doesn't, and Orbweaver is a background app that is almost
         // never the active one — so clicking an orb *did nothing the first
         // time* and only worked on a second click. Reported as "it needs a
         // double click across desktops", which is exactly the shape of this

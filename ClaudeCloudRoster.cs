@@ -18,7 +18,7 @@ namespace Orbweaver
     //
     // **Measured across 578 real rows: 573 were `environment_kind: bridge`.**
     // Those are the user's own *local* sessions, registered for remote control,
-    // which Claude Buddy already draws orbs for from its hooks. Five were
+    // which Orbweaver already draws orbs for from its hooks. Five were
     // `anthropic_cloud`, one of them not archived. So `Keep` is not a nicety —
     // getting it wrong doubles every local orb, and the doubling would look like
     // a layout bug rather than a filter bug.

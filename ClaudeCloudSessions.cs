@@ -28,7 +28,7 @@ namespace Orbweaver
     //
     // **The roster is mostly not cloud sessions.** Measured on a real account:
     // 578 rows, of which 573 were `environment_kind: bridge` — the user's own
-    // *local* sessions, registered for remote control, which Claude Buddy
+    // *local* sessions, registered for remote control, which Orbweaver
     // already draws orbs for from its hooks. Drawing those again would double
     // every local orb. Five rows were genuinely `anthropic_cloud`, one of them
     // not archived. So the filter is not a nicety; it is the difference between

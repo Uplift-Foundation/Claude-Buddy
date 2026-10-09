@@ -74,7 +74,7 @@ namespace Orbweaver
         public Color LinkColor { get; private set; } = PlainLink;
 
         // Seeded from the settings-backed colour at field-init time, the same way
-        // SessionManager seeds OrbsVisible from ClaudeBuddySettings.ShowOrbs.
+        // SessionManager seeds OrbsVisible from OrbweaverSettings.ShowOrbs.
         private readonly SolidColorBrush _orbBrush = new(OrbColors.Idle);
 
         // The two halves of this orb's identity, for the chat panel's header.
@@ -1027,7 +1027,7 @@ namespace Orbweaver
 
         // This orb's own override if it has one, the global slider if not.
         // Keyed by SoundKey — the per-agent key the override is stored under,
-        // see ClaudeBuddySettings.OrbSizes.
+        // see OrbweaverSettings.OrbSizes.
         internal bool ApplyEffectiveOrbSize() =>
             ApplyOrbSize(OrbSizing.Effective(OrbweaverSettings.OrbSizeFor(SoundKey), OrbweaverSettings.OrbSize));
 
@@ -3442,7 +3442,7 @@ namespace Orbweaver
         }
 
         // Reads the other trigger's current override so writing one never
-        // clobbers the other — ClaudeBuddySettings.SetOrbTurnSound takes
+        // clobbers the other — OrbweaverSettings.SetOrbTurnSound takes
         // both fields together, and OrbTurnSound has no "leave unchanged"
         // value of its own to pass instead.
         private void SetFinishedSoundOverride(string? value)
@@ -3480,7 +3480,7 @@ namespace Orbweaver
         // migration onto an unoccupied key, write nothing there, and still
         // clear the override out from under the old key on the way out.
         // Reachable on a real machine, not a contrived edge case: the hook
-        // writes cwd with no fallback (ClaudeBuddyHook.sh:70), so a single
+        // writes cwd with no fallback (OrbweaverHook.sh:70), so a single
         // status write missing it is enough to blank the key for one poll.
         // Skipped entirely instead — the window keeps using its last real
         // key, the same resilience a missing title already gets by falling
