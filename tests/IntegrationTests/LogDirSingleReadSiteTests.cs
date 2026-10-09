@@ -109,7 +109,7 @@ public class LogDirSingleReadSiteTests
     {
         var directory = Path.GetDirectoryName(thisFile);
 
-        while (directory is not null && !File.Exists(Path.Combine(directory, "ClaudeBuddy.csproj")))
+        while (directory is not null && !File.Exists(Path.Combine(directory, "Orbweaver.csproj")))
         {
             directory = Path.GetDirectoryName(directory);
         }

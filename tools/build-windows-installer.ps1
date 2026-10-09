@@ -63,7 +63,7 @@ Push-Location $repoRoot
 try {
     # The csproj owns the version; parsing it here keeps the installer filename,
     # the Add/Remove Programs entry and the compiled assembly from drifting apart.
-    $csproj = Join-Path $repoRoot 'ClaudeBuddy.csproj'
+    $csproj = Join-Path $repoRoot 'Orbweaver.csproj'
     # -Raw so the XML cast gets one string rather than an array of lines.
     # PropertyGroup may be a collection, hence filtering for the one that
     # actually carries a Version.
@@ -123,7 +123,7 @@ try {
 
     Write-Host "==> Compiling installer"
     # ISCC wants its options ahead of the script filename.
-    & $iscc "/DVersion=$version" (Join-Path $PSScriptRoot 'ClaudeBuddy.iss') | Out-Null
+    & $iscc "/DVersion=$version" (Join-Path $PSScriptRoot 'Orbweaver.iss') | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed ($LASTEXITCODE)" }
 
     $setup = Join-Path $repoRoot "dist\Orbweaver-$version-win-x64-setup.exe"

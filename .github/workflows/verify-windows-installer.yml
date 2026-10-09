@@ -23,7 +23,7 @@ on:
         type: string
   pull_request:
     paths:
-      - 'tools/ClaudeBuddy.iss'
+      - 'tools/Orbweaver.iss'
       - 'tools/build-windows-installer.ps1'
       - 'tools/install-windows-hooks.ps1'
       - 'tools/install-codex-hooks.ps1'

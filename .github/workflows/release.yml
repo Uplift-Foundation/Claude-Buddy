@@ -1,6 +1,6 @@
 name: Release
 
-# Tag-driven: push a v-tag whose number matches <Version> in ClaudeBuddy.csproj
+# Tag-driven: push a v-tag whose number matches <Version> in Orbweaver.csproj
 # and this builds, signs and publishes the installers.
 #
 #   git tag v0.1.0-beta && git push origin v0.1.0-beta
@@ -29,12 +29,12 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
           set -euo pipefail
-          CSPROJ_VERSION="$(sed -n 's|.*<Version>\(.*\)</Version>.*|\1|p' ClaudeBuddy.csproj | head -1)"
+          CSPROJ_VERSION="$(sed -n 's|.*<Version>\(.*\)</Version>.*|\1|p' Orbweaver.csproj | head -1)"
           TAG_VERSION="${GITHUB_REF_NAME#v}"
           echo "csproj: $CSPROJ_VERSION"
           echo "tag:    $TAG_VERSION"
           if [ "$CSPROJ_VERSION" != "$TAG_VERSION" ]; then
-            echo "::error::Tag $GITHUB_REF_NAME does not match <Version>$CSPROJ_VERSION</Version> in ClaudeBuddy.csproj"
+            echo "::error::Tag $GITHUB_REF_NAME does not match <Version>$CSPROJ_VERSION</Version> in Orbweaver.csproj"
             exit 1
           fi
 

@@ -34,7 +34,7 @@ try {
     # the engine ships in the app's own release under the same tag. NeuralSpeech
     # derives the version it asks for from the app assembly, so taking it from
     # anywhere else here is how the filename and the URL drift apart.
-    $appProject = Join-Path $repoRoot 'ClaudeBuddy.csproj'
+    $appProject = Join-Path $repoRoot 'Orbweaver.csproj'
     $version = ([xml](Get-Content -LiteralPath $appProject -Raw)).Project.PropertyGroup.Version |
         Where-Object { $_ } | Select-Object -First 1
     if (-not $version) { throw "Could not read <Version> from $appProject" }

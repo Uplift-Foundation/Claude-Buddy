@@ -57,8 +57,8 @@ done
 # the app's own release under the same tag. NeuralSpeech derives the version it
 # asks for from the app assembly, so taking it from anywhere else here is how the
 # filename and the URL drift apart.
-VERSION="$(sed -n 's|.*<Version>\(.*\)</Version>.*|\1|p' ClaudeBuddy.csproj | head -1)"
-[[ -n "$VERSION" ]] || { echo "Could not read <Version> from ClaudeBuddy.csproj" >&2; exit 1; }
+VERSION="$(sed -n 's|.*<Version>\(.*\)</Version>.*|\1|p' Orbweaver.csproj | head -1)"
+[[ -n "$VERSION" ]] || { echo "Could not read <Version> from Orbweaver.csproj" >&2; exit 1; }
 
 PROJECT="tools/ClaudeBuddySpeech/ClaudeBuddySpeech.csproj"
 BUILD="tools/ClaudeBuddySpeech/bin/Release/net10.0/$RID"

@@ -59,10 +59,10 @@ public class SettingsSerialisationPinTests
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null)
         {
-            if (File.Exists(Path.Combine(dir.FullName, "ClaudeBuddy.csproj"))) return dir.FullName;
+            if (File.Exists(Path.Combine(dir.FullName, "Orbweaver.csproj"))) return dir.FullName;
             dir = dir.Parent;
         }
-        throw new InvalidOperationException("Could not find ClaudeBuddy.csproj above " + AppContext.BaseDirectory);
+        throw new InvalidOperationException("Could not find Orbweaver.csproj above " + AppContext.BaseDirectory);
     }
 
     // The source with every // comment removed, so a sentence mentioning

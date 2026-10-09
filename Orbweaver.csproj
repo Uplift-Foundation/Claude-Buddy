@@ -40,7 +40,7 @@
          in Explorer, the Start menu and the notification area's overflow. The
          SDK does this cross-platform, so a Mac can still produce the win-x64
          build. Ignored when targeting macOS, which uses Resources/*.icns. -->
-    <ApplicationIcon>Assets/ClaudeBuddy.ico</ApplicationIcon>
+    <ApplicationIcon>Assets/Orbweaver.ico</ApplicationIcon>
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>

@@ -55,8 +55,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-VERSION="$(sed -n 's|.*<Version>\(.*\)</Version>.*|\1|p' ClaudeBuddy.csproj | head -1)"
-[[ -n "$VERSION" ]] || { echo "Could not read <Version> from ClaudeBuddy.csproj" >&2; exit 1; }
+VERSION="$(sed -n 's|.*<Version>\(.*\)</Version>.*|\1|p' Orbweaver.csproj | head -1)"
+[[ -n "$VERSION" ]] || { echo "Could not read <Version> from Orbweaver.csproj" >&2; exit 1; }
 
 SIGN_IDENTITY="${MACOS_SIGNING_IDENTITY:-}"
 APP="$DIST/$APP_NAME.app"

@@ -18,12 +18,12 @@ public class SpeechEngineContractTests
     private static string RepositoryRoot([CallerFilePath] string thisFile = "")
     {
         var directory = Path.GetDirectoryName(thisFile);
-        while (directory is not null && !File.Exists(Path.Combine(directory, "ClaudeBuddy.csproj")))
+        while (directory is not null && !File.Exists(Path.Combine(directory, "Orbweaver.csproj")))
         {
             directory = Path.GetDirectoryName(directory);
         }
 
-        return directory ?? throw new DirectoryNotFoundException("no ClaudeBuddy.csproj above " + thisFile);
+        return directory ?? throw new DirectoryNotFoundException("no Orbweaver.csproj above " + thisFile);
     }
 
     private static string Read(params string[] parts) =>
@@ -47,7 +47,7 @@ public class SpeechEngineContractTests
     {
         Assert.Contains("\"" + SpeechEngineContract.VolumeEnvVar + "\"",
             Read("tools", "ClaudeBuddySpeech", "SpeechEngineContract.cs"));
-        Assert.Contains(@"tools\ClaudeBuddySpeech\SpeechEngineContract.cs", Read("ClaudeBuddy.csproj"));
+        Assert.Contains(@"tools\ClaudeBuddySpeech\SpeechEngineContract.cs", Read("Orbweaver.csproj"));
     }
 
     // The contract stamp (CB-200 second review): the engine's csproj writes

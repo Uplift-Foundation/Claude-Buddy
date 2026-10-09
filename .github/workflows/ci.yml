@@ -318,7 +318,7 @@ jobs:
           retention-days: 14
 
       - name: Build
-        run: dotnet publish ClaudeBuddy.csproj -c Release -r ${{ matrix.rid }} -p:DebugType=none --nologo
+        run: dotnet publish Orbweaver.csproj -c Release -r ${{ matrix.rid }} -p:DebugType=none --nologo
 
       # Packaging is where the fiddly, platform-specific work lives (inside-out
       # codesigning, Inno Setup), so exercise it here rather than discovering a

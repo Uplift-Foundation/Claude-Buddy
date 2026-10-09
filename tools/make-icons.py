@@ -9,7 +9,7 @@ Outputs (PNG, RGBA, straight alpha — except the .ico, noted below):
   Assets/tray-generating.png
   Assets/tray-waiting.png
   Assets/appicon-1024.png     source art for the .app bundle's .icns
-  Assets/ClaudeBuddy.ico      multi-size Windows icon: the .exe's embedded icon
+  Assets/Orbweaver.ico        multi-size Windows icon: the .exe's embedded icon
                               (csproj ApplicationIcon) and the installer's
                               SetupIconFile
 
@@ -37,7 +37,7 @@ ASSETS = os.path.join(HERE, "Assets")
 # geometry here and a custom-colored icon follows; change these colors and only
 # the shipped defaults move.
 #
-# appicon-1024.png and ClaudeBuddy.ico stay on these colors whatever the user
+# appicon-1024.png and Orbweaver.ico stay on these colors whatever the user
 # picks. Those are baked into the .app's .icns at build time and into the .exe's
 # Win32 resources, and neither can follow a live setting.
 IDLE = (0x5B, 0x7A, 0x94)
@@ -204,7 +204,7 @@ def main():
     # entries stay crisp — Explorer and the Start menu pick whichever size they
     # need, and 16px is the one that shows up most.
     shader = appicon_shader()
-    ico = os.path.join(ASSETS, "ClaudeBuddy.ico")
+    ico = os.path.join(ASSETS, "Orbweaver.ico")
     write_ico(ico, [(s, png_bytes(s, render(s, shader))) for s in (16, 32, 48, 64, 128, 256)])
     print("wrote", os.path.relpath(ico, HERE))
 

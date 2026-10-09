@@ -53,8 +53,8 @@ INSTALL=0
 
 # The csproj owns the version; parse it out rather than keeping a second copy
 # here that would silently drift from the one compiled into the binary.
-VERSION="$(sed -n 's|.*<Version>\(.*\)</Version>.*|\1|p' ClaudeBuddy.csproj | head -1)"
-[[ -n "$VERSION" ]] || { echo "Could not read <Version> from ClaudeBuddy.csproj" >&2; exit 1; }
+VERSION="$(sed -n 's|.*<Version>\(.*\)</Version>.*|\1|p' Orbweaver.csproj | head -1)"
+[[ -n "$VERSION" ]] || { echo "Could not read <Version> from Orbweaver.csproj" >&2; exit 1; }
 
 # CFBundleVersion must be a plain dotted number — a "-beta" suffix in it makes
 # the bundle unlaunchable — so strip any prerelease label for that key while
@@ -62,7 +62,7 @@ VERSION="$(sed -n 's|.*<Version>\(.*\)</Version>.*|\1|p' ClaudeBuddy.csproj | he
 VERSION_NUMERIC="${VERSION%%-*}"
 
 SIGN_IDENTITY="${MACOS_SIGNING_IDENTITY:-}"
-ENTITLEMENTS="tools/ClaudeBuddy.entitlements"
+ENTITLEMENTS="tools/Orbweaver.entitlements"
 
 # Default to this Mac's architecture; override for cross-building.
 case "$(uname -m)" in
@@ -85,7 +85,7 @@ echo "==> Publishing ($RID)"
 # Multi-file on purpose: PublishSingleFile (the csproj default, for handing
 # someone one loose executable) would self-extract native libs to a temp dir
 # at every launch, which is exactly what a .app bundle exists to avoid.
-dotnet publish ClaudeBuddy.csproj -c Release -r "$RID" \
+dotnet publish Orbweaver.csproj -c Release -r "$RID" \
   -p:PublishSingleFile=false \
   -p:DebugType=none \
   -o "$DIST/publish-$RID" \

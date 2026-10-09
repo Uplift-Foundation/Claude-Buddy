@@ -31,13 +31,13 @@ internal static class ScreenshotHelper
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null)
         {
-            if (File.Exists(Path.Combine(dir.FullName, "ClaudeBuddy.csproj")))
+            if (File.Exists(Path.Combine(dir.FullName, "Orbweaver.csproj")))
                 return dir.FullName;
             dir = dir.Parent;
         }
 
         throw new InvalidOperationException(
-            "Could not find ClaudeBuddy.csproj by walking up from " + AppContext.BaseDirectory);
+            "Could not find Orbweaver.csproj by walking up from " + AppContext.BaseDirectory);
     }
 
     static ScreenshotHelper()

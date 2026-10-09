@@ -22,7 +22,7 @@
 
          PeerLink and RemoteMirrorClient are internal, so ClaudeBuddy.csproj
          grants this assembly InternalsVisibleTo alongside the test ones. -->
-    <ProjectReference Include="../../ClaudeBuddy.csproj" />
+    <ProjectReference Include="../../Orbweaver.csproj" />
   </ItemGroup>
 
 </Project>
