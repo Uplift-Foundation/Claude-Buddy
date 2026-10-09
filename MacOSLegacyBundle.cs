@@ -24,7 +24,9 @@ namespace Orbweaver
     // called "Claude Buddy.app" is only a name. So the rule moves a bundle only
     // when its Info.plist says it is this app — CFBundleIdentifier is
     // Brand.MacBundleId *and* CFBundleExecutable is the executable every build
-    // of Claude Buddy shipped — and leaves anything else exactly where it is,
+    // of Claude Buddy shipped (ClaudeBuddy; the phase-3 rename to Orbweaver
+    // changed the new bundle, not that history) — and leaves anything else
+    // exactly where it is,
     // including anything whose plist cannot be read or is not the XML form our
     // build script writes. Wrongly leaving our own old bundle costs a duplicate
     // in /Applications; wrongly moving somebody else's costs them their app.
@@ -51,10 +53,15 @@ namespace Orbweaver
     // of passing a different sink.
     internal static class MacOSLegacyBundle
     {
-        // What the old bundle was called, and the executable inside it. The
-        // executable is the same in the new bundle until phase 3 renames it —
-        // but this is a statement about what *shipped*, so it stays this
-        // string after that rename too.
+        // What the old bundle was called, and the executable inside it. Phase 3
+        // (CB-256) renamed the executable in the new bundle to Orbweaver, and
+        // this is deliberately not Brand.AssemblyName: it is a statement about
+        // what *shipped* in Claude Buddy.app, whose CFBundleExecutable is
+        // ClaudeBuddy forever. It cannot start matching the new bundle — the
+        // rule only ever looks at LegacyBundleName paths — and the phase-2
+        // Orbweaver.app, which also ran ClaudeBuddy, lives at the new name
+        // and is simply overwritten by the drag, so it is never a candidate.
+        // (Equal to Brand.Legacy.Executable, by the same history.)
         internal const string LegacyBundleName = "Claude Buddy.app";
         internal const string LegacyExecutable = "ClaudeBuddy";
 
