@@ -246,7 +246,7 @@ jobs:
         run: |
           set -euo pipefail
           ARGS=(release create "$TAG" artifacts/*
-                --title "Claude Buddy $TAG"
+                --title "Orbweaver $TAG"
                 # Guards against publishing a release for a tag that was never
                 # actually pushed to the repo.
                 --verify-tag)

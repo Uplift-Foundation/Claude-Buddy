@@ -11,22 +11,62 @@ namespace ClaudeBuddy.Tests;
 // expectations deliberately; one that doesn't fails here first.
 public class BrandTests
 {
+    //
+    // CB-255 (phase 2) is that deliberate update: the names a user's disk and
+    // OS hold flip to Orbweaver, each with its migration. SpeechEngineName and
+    // AssemblyName are binary names and stay until phase 3; MacBundleId never
+    // moves.
     [Theory]
-    [InlineData(nameof(Brand.DisplayName), Brand.DisplayName, "Claude Buddy")]
-    [InlineData(nameof(Brand.ShortName), Brand.ShortName, "Buddy")]
-    [InlineData(nameof(Brand.DataDirName), Brand.DataDirName, "ClaudeBuddy")]
-    [InlineData(nameof(Brand.StatusFolderName), Brand.StatusFolderName, "claude_buddy")]
-    [InlineData(nameof(Brand.Slug), Brand.Slug, "claude-buddy")]
-    [InlineData(nameof(Brand.HookScriptPowerShell), Brand.HookScriptPowerShell, "ClaudeBuddyHook.ps1")]
-    [InlineData(nameof(Brand.HookScriptShell), Brand.HookScriptShell, "ClaudeBuddyHook.sh")]
-    [InlineData(nameof(Brand.SingleInstanceMutexName), Brand.SingleInstanceMutexName, "ClaudeBuddy_SingleInstance_Mutex")]
+    [InlineData(nameof(Brand.DisplayName), Brand.DisplayName, "Orbweaver")]
+    [InlineData(nameof(Brand.ShortName), Brand.ShortName, "Orbweaver")]
+    [InlineData(nameof(Brand.DataDirName), Brand.DataDirName, "Orbweaver")]
+    [InlineData(nameof(Brand.StatusFolderName), Brand.StatusFolderName, "orbweaver")]
+    [InlineData(nameof(Brand.Slug), Brand.Slug, "orbweaver")]
+    [InlineData(nameof(Brand.HookScriptPowerShell), Brand.HookScriptPowerShell, "OrbweaverHook.ps1")]
+    [InlineData(nameof(Brand.HookScriptShell), Brand.HookScriptShell, "OrbweaverHook.sh")]
+    [InlineData(nameof(Brand.SingleInstanceMutexName), Brand.SingleInstanceMutexName, "Orbweaver_SingleInstance_Mutex")]
     [InlineData(nameof(Brand.SpeechEngineName), Brand.SpeechEngineName, "ClaudeBuddySpeech")]
     [InlineData(nameof(Brand.MacBundleId), Brand.MacBundleId, "io.github.wtvamp.claudebuddy")]
-    [InlineData(nameof(Brand.HotkeyWindowClass), Brand.HotkeyWindowClass, "ClaudeBuddyGlobalHotkeyWindow")]
+    [InlineData(nameof(Brand.HotkeyWindowClass), Brand.HotkeyWindowClass, "OrbweaverGlobalHotkeyWindow")]
     [InlineData(nameof(Brand.AssemblyName), Brand.AssemblyName, "ClaudeBuddy")]
     public void EachNameIsTheShippedString(string member, string actual, string shipped)
     {
         Assert.True(actual == shipped, $"Brand.{member} is \"{actual}\", shipped as \"{shipped}\"");
+    }
+
+    // The names every migration recognises an old install by. Unlike the rows
+    // above, these never get a deliberate update: they are what builds before
+    // CB-255 wrote to users' disks, settings and mutex namespace, and a drift
+    // here means the data-dir move, the legacy mutex claim, the legacy status
+    // folder watch and the hook-entry strip all silently stop finding what
+    // they exist to migrate.
+    [Theory]
+    [InlineData(nameof(Brand.Legacy.DisplayName), Brand.Legacy.DisplayName, "Claude Buddy")]
+    [InlineData(nameof(Brand.Legacy.DataDirName), Brand.Legacy.DataDirName, "ClaudeBuddy")]
+    [InlineData(nameof(Brand.Legacy.StatusFolderName), Brand.Legacy.StatusFolderName, "claude_buddy")]
+    [InlineData(nameof(Brand.Legacy.Slug), Brand.Legacy.Slug, "claude-buddy")]
+    [InlineData(nameof(Brand.Legacy.HookScriptPowerShell), Brand.Legacy.HookScriptPowerShell, "ClaudeBuddyHook.ps1")]
+    [InlineData(nameof(Brand.Legacy.HookScriptShell), Brand.Legacy.HookScriptShell, "ClaudeBuddyHook.sh")]
+    [InlineData(nameof(Brand.Legacy.SingleInstanceMutexName), Brand.Legacy.SingleInstanceMutexName, "ClaudeBuddy_SingleInstance_Mutex")]
+    public void EachLegacyNameIsTheStringOldBuildsShipped(string member, string actual, string shipped)
+    {
+        Assert.True(actual == shipped, $"Brand.Legacy.{member} is \"{actual}\", shipped as \"{shipped}\"");
+    }
+
+    // A Legacy member equal to its current twin would make a migration a
+    // no-op that reads as working — "move ClaudeBuddy to ClaudeBuddy". Every
+    // Legacy name is one that changed; that is the only reason it exists.
+    [Theory]
+    [InlineData(Brand.Legacy.DisplayName, Brand.DisplayName)]
+    [InlineData(Brand.Legacy.DataDirName, Brand.DataDirName)]
+    [InlineData(Brand.Legacy.StatusFolderName, Brand.StatusFolderName)]
+    [InlineData(Brand.Legacy.Slug, Brand.Slug)]
+    [InlineData(Brand.Legacy.HookScriptPowerShell, Brand.HookScriptPowerShell)]
+    [InlineData(Brand.Legacy.HookScriptShell, Brand.HookScriptShell)]
+    [InlineData(Brand.Legacy.SingleInstanceMutexName, Brand.SingleInstanceMutexName)]
+    public void EachLegacyNameDiffersFromTheCurrentOne(string legacy, string current)
+    {
+        Assert.NotEqual(legacy, current);
     }
 
     // Every avares:// URI is built from Brand.AssemblyName, but the assembly is
@@ -44,15 +84,16 @@ public class BrandTests
     [Fact]
     public void DerivedNamesAreTheShippedStrings()
     {
-        Assert.Equal("Exit Claude Buddy", OrbWindow.ExitMenuHeader);
-        Assert.Equal("isn't a terminal Buddy can type into", TerminalTyping.CantTypePhrase);
-        Assert.Equal("**(via Claude Buddy)** ", OpenClawSender.MirrorPrefix);
-        Assert.Equal("Claude Buddy on mini", SessionMessenger.FromName("mini"));
+        Assert.Equal("Exit Orbweaver", OrbWindow.ExitMenuHeader);
+        Assert.Equal("isn't a terminal Orbweaver can type into", TerminalTyping.CantTypePhrase);
+        Assert.Equal("**(via Orbweaver)** ", OpenClawSender.MirrorPrefix);
+        Assert.Equal("Orbweaver on mini", SessionMessenger.FromName("mini"));
         Assert.Equal(
             "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"clientInfo\":" +
-            "{\"name\":\"claude-buddy\",\"title\":\"Claude Buddy\",\"version\":\"1\"}}}",
+            "{\"name\":\"orbweaver\",\"title\":\"Orbweaver\",\"version\":\"1\"}}}",
             CodexAppServerUsage.InitializeRequest);
-        Assert.Equal("ClaudeBuddy_SingleInstance_Mutex", SingleInstance.MutexName);
-        Assert.Equal("claude_buddy", StatusDirectory.FolderName);
+        Assert.Equal("Orbweaver_SingleInstance_Mutex", SingleInstance.MutexName);
+        Assert.Equal("ClaudeBuddy_SingleInstance_Mutex", SingleInstance.LegacyMutexName);
+        Assert.Equal("orbweaver", StatusDirectory.FolderName);
     }
 }

@@ -1,9 +1,10 @@
-# Builds the Claude Buddy Windows installer.
+# Builds the Orbweaver Windows installer.
 #
 #   .\tools\build-windows-installer.ps1
 #   .\tools\build-windows-installer.ps1 -SkipPublish   # reuse an existing publish
 #
-# Produces dist\ClaudeBuddy-<version>-win-x64-setup.exe.
+# Produces dist\Orbweaver-<version>-win-x64-setup.exe. The exe inside it is still
+# ClaudeBuddy.exe; that name moves with the assembly, not with the installer.
 #
 # Requires the .NET SDK and Inno Setup 6 (iscc.exe). Install Inno with either:
 #   winget install -e --id JRSoftware.InnoSetup
@@ -53,7 +54,7 @@ function Invoke-SignTool {
     # after the certificate itself expires.
     & $signtool sign /sha1 $Thumbprint /fd sha256 `
         /tr http://timestamp.digicert.com /td sha256 `
-        /d 'Claude Buddy' $Path
+        /d 'Orbweaver' $Path
     if ($LASTEXITCODE -ne 0) { throw "signtool failed on $Path ($LASTEXITCODE)" }
 }
 
@@ -125,7 +126,7 @@ try {
     & $iscc "/DVersion=$version" (Join-Path $PSScriptRoot 'ClaudeBuddy.iss') | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed ($LASTEXITCODE)" }
 
-    $setup = Join-Path $repoRoot "dist\ClaudeBuddy-$version-win-x64-setup.exe"
+    $setup = Join-Path $repoRoot "dist\Orbweaver-$version-win-x64-setup.exe"
     if (-not (Test-Path -LiteralPath $setup)) { throw "Installer not produced at $setup" }
 
     if ($thumbprint) {

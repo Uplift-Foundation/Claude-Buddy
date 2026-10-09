@@ -22,14 +22,14 @@ namespace ClaudeBuddy.Tests;
 public class HookRecordsTerminalHandleTests
 {
     private static readonly string RepoRoot = FindRepoRoot();
-    private static readonly string HookScript = Path.Combine(RepoRoot, "ClaudeBuddyHook.sh");
+    private static readonly string HookScript = Path.Combine(RepoRoot, "OrbweaverHook.sh");
 
     private static string FindRepoRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null)
         {
-            if (File.Exists(Path.Combine(dir.FullName, "ClaudeBuddyHook.sh"))) return dir.FullName;
+            if (File.Exists(Path.Combine(dir.FullName, "OrbweaverHook.sh"))) return dir.FullName;
             dir = dir.Parent;
         }
 
@@ -94,7 +94,7 @@ public class HookRecordsTerminalHandleTests
         Assert.Equal("", stderr);
 
         return File.ReadAllText(
-            Path.Combine(tmp.FullName, "claude_buddy", sessionId + ".txt"));
+            Path.Combine(tmp.FullName, "orbweaver", sessionId + ".txt"));
     }
 
     [UnixFact]

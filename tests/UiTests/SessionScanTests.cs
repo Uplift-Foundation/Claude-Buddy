@@ -3234,4 +3234,186 @@ public class SessionScanTests
 
         Assert.Contains("theirs", OrbIds(Scan(scratch)));
     }
+
+    // --- CB-255 §1: the legacy status folder, watched beside the new one ---
+    //
+    // A session alive across the upgrade still calls the pre-Orbweaver hook,
+    // which still writes the pre-Orbweaver folder. The live scan reads both
+    // and keeps one file per session, newest first; the rule itself is
+    // NewestPerSession, covered in tests/UnitTests/StatusFolderMergeTests.
+    // These prove the scan is wired to it, and that the two things that write
+    // or delete a session's file by id find the file where it actually is.
+
+    private static SessionManager ScanBoth(Scratch current, Scratch legacy)
+    {
+        ClaudeBuddySettings.ClaudeCodeEnabled = true;
+        ClaudeBuddySettings.CodexEnabled = true;
+
+        var manager = new SessionManager(current.Dir, null, legacyStatusDir: legacy.Dir);
+        manager.ScanAndUpdate();
+        return manager;
+    }
+
+    [AvaloniaFact]
+    public void ASessionOnlyTheLegacyHookWroteGetsAnOrb()
+    {
+        using var current = new Scratch();
+        using var legacy = new Scratch();
+        current.Write("after-upgrade", cli: "codex");
+        legacy.Write("before-upgrade");
+
+        var manager = ScanBoth(current, legacy);
+
+        Assert.Equal(
+            new[] { "after-upgrade", "before-upgrade" },
+            OrbIds(manager).OrderBy(id => id, StringComparer.Ordinal));
+    }
+
+    // The negative control: the same legacy file, scanned by a manager that
+    // was not handed the legacy folder, draws nothing.
+    [AvaloniaFact]
+    public void WithoutTheLegacyFolderItsSessionsAreNotRead()
+    {
+        using var current = new Scratch();
+        using var legacy = new Scratch();
+        legacy.Write("before-upgrade");
+
+        Assert.Empty(OrbIds(Scan(current)));
+    }
+
+    [AvaloniaFact]
+    public void TheNewerCopyOfAResumedSessionIsTheOneOnScreen()
+    {
+        using var current = new Scratch();
+        using var legacy = new Scratch();
+        var now = DateTime.UtcNow;
+        current.Write("resumed", state: "idle", title: "stale", written: now.AddSeconds(-30));
+        legacy.Write("resumed", state: "generating", title: "fresh", written: now);
+
+        var manager = ScanBoth(current, legacy);
+
+        Assert.Equal("fresh", manager.StatusFor("resumed")!.Title);
+        Assert.Single(OrbIds(manager));
+
+        // And the loser is left alone on disk.
+        Assert.True(File.Exists(Path.Combine(current.Dir, "resumed.txt")));
+    }
+
+    [AvaloniaFact]
+    public void TheAutoColourMarkerIsKeptInBothFolders()
+    {
+        var before = ClaudeBuddySettings.AutoColorSessions;
+        try
+        {
+            using var current = new Scratch();
+            using var legacy = new Scratch();
+
+            ClaudeBuddySettings.AutoColorSessions = true;
+            var manager = ScanBoth(current, legacy);
+            Assert.True(File.Exists(Path.Combine(current.Dir, ".auto-color")));
+            Assert.True(File.Exists(Path.Combine(legacy.Dir, ".auto-color")));
+
+            ClaudeBuddySettings.AutoColorSessions = false;
+            manager.ScanAndUpdate();
+            Assert.False(File.Exists(Path.Combine(current.Dir, ".auto-color")));
+            Assert.False(File.Exists(Path.Combine(legacy.Dir, ".auto-color")));
+        }
+        finally
+        {
+            ClaudeBuddySettings.AutoColorSessions = before;
+        }
+    }
+
+    // A legacy folder that is not there — every old session has restarted —
+    // neither stops the new folder's marker nor gets created to hold one.
+    [AvaloniaFact]
+    public void AMissingLegacyFolderNeitherBlocksTheMarkerNorIsCreated()
+    {
+        var before = ClaudeBuddySettings.AutoColorSessions;
+        try
+        {
+            using var current = new Scratch();
+            var missing = Path.Combine(Path.GetTempPath(), "cb-scan-missing-" + Guid.NewGuid());
+
+            ClaudeBuddySettings.AutoColorSessions = true;
+            new SessionManager(current.Dir, null, legacyStatusDir: missing).SyncAutoColorMarker();
+
+            Assert.True(File.Exists(Path.Combine(current.Dir, ".auto-color")));
+            Assert.False(Directory.Exists(missing));
+        }
+        finally
+        {
+            ClaudeBuddySettings.AutoColorSessions = before;
+        }
+    }
+
+    // Resetting a legacy session rewrites the legacy file. Rebuilding the
+    // path from the new folder would instead write a second, newer copy
+    // there — which would then win every scan and hide the real one.
+    [AvaloniaFact]
+    public void ResettingALegacySessionRewritesTheLegacyFile()
+    {
+        using var current = new Scratch();
+        using var legacy = new Scratch();
+        legacy.Write("old", state: "waiting", title: "kept");
+
+        var manager = ScanBoth(current, legacy);
+        manager.ResetSessionToIdle("old");
+
+        var onDisk = System.Text.Json.JsonSerializer.Deserialize<SessionStatus>(
+            File.ReadAllText(Path.Combine(legacy.Dir, "old.txt")));
+        Assert.Equal("idle", onDisk!.State);
+        Assert.Equal("kept", onDisk.Title);
+        Assert.False(File.Exists(Path.Combine(current.Dir, "old.txt")));
+    }
+
+    [AvaloniaFact]
+    public void DismissingALegacySessionDeletesTheLegacyFile()
+    {
+        using var current = new Scratch();
+        using var legacy = new Scratch();
+        legacy.Write("old");
+
+        var manager = ScanBoth(current, legacy);
+        manager.DismissSession("old");
+
+        Assert.False(File.Exists(Path.Combine(legacy.Dir, "old.txt")));
+    }
+
+    // Dismissing a session with a copy in each folder removes both. Deleting
+    // only the winner would hand the screen back to the older copy on the
+    // very next scan — a dismissed orb that comes straight back, still dead.
+    [AvaloniaFact]
+    public void DismissingASessionWithACopyInEachFolderRemovesBoth()
+    {
+        using var current = new Scratch();
+        using var legacy = new Scratch();
+        var now = DateTime.UtcNow;
+        current.Write("resumed", written: now);
+        legacy.Write("resumed", written: now.AddSeconds(-30));
+
+        var manager = ScanBoth(current, legacy);
+        manager.DismissSession("resumed");
+
+        Assert.False(File.Exists(Path.Combine(current.Dir, "resumed.txt")));
+        Assert.False(File.Exists(Path.Combine(legacy.Dir, "resumed.txt")));
+
+        manager.ScanAndUpdate();
+        Assert.Empty(OrbIds(manager));
+    }
+
+    // A session no read has seen yet still resolves to the new folder, which
+    // is where any file this app creates for it belongs.
+    [AvaloniaFact]
+    public void ASessionNoScanHasSeenIsResetInTheNewFolder()
+    {
+        using var current = new Scratch();
+        using var legacy = new Scratch();
+
+        var manager = new SessionManager(current.Dir, null, legacyStatusDir: legacy.Dir);
+        manager.ResetSessionToIdle("unseen");
+
+        Assert.True(File.Exists(Path.Combine(current.Dir, "unseen.txt")));
+        Assert.False(File.Exists(Path.Combine(legacy.Dir, "unseen.txt")));
+    }
 }

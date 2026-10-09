@@ -27,7 +27,17 @@ import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPT = os.environ.get("BUILD_SCRIPT_UNDER_TEST", os.path.join(HERE, "build-macos-app.sh"))
-INSTALLED = "/Applications/Claude Buddy.app/Contents/MacOS/ClaudeBuddy"
+INSTALLED = "/Applications/Orbweaver.app/Contents/MacOS/ClaudeBuddy"
+# The pre-CB-255 bundle. --install stops and removes it; a copy still running
+# out of it afterwards is not the new binary and must not be reported as one.
+LEGACY = "/Applications/Claude Buddy.app/Contents/MacOS/ClaudeBuddy"
+
+
+def function(text, name):
+    """One of the script's helper functions, as written: a one-liner
+    (`  name() { ...; }`) or a block closed by `  }` on its own line."""
+    m = re.search(r"^  %s\(\) \{(?: [^\n]*\}$|\n.*?^  \}$)" % name, text, re.S | re.M)
+    return None if m is None else m.group(0)
 
 
 def tail(text):
@@ -38,15 +48,15 @@ def tail(text):
     if m is None:
         raise AssertionError("build-macos-app.sh has no CB-206 install tail")
     body = m.group(0)
+    if function(text, "running_installed") is None:
+        raise AssertionError("build-macos-app.sh has no running_installed")
     prelude = ""
-    if "running_installed() {" not in body:
-        f = re.search(r"^  running_installed\(\) \{.*?(?:^  \}$|done; \}$)", text, re.S | re.M)
-        if f is None:
-            raise AssertionError("build-macos-app.sh has no running_installed")
-        prelude += f.group(0) + "\n"
-    k = re.search(r"^  keepalive_loaded\(\) \{.*?\}$", text, re.M)
-    if k is not None:
-        prelude += k.group(0) + "\n"
+    # running_from is what running_installed calls since CB-255; optional so
+    # this still runs against a copy of the script from before it.
+    for name in ("running_from", "running_installed", "keepalive_loaded"):
+        f = function(text, name)
+        if f is not None and f not in body:
+            prelude += f + "\n"
     return prelude + body
 
 
@@ -127,9 +137,10 @@ class InstallTail(unittest.TestCase):
         self.opened = os.path.join(self.tmp, "opened")
         self.stub("open", 'echo "$*" >> "%s"\n' % self.posix(self.opened))
         script = ("set -euo pipefail\nPATH=%s:$PATH\nSTOPPED=\"%s\"\nWAS_RUNNING=\"%s\"\n"
-                  "APP_NAME=\"Claude Buddy\"\nBUNDLE_ID=\"io.github.wtvamp.claudebuddy\"\n"
-                  "INSTALLED_EXE=\"%s\"\n%s\necho TAIL-COMPLETED\n") % (
-                      self.bash_path(self.bin), stopped, was_running, INSTALLED, TAIL)
+                  "APP_NAME=\"Orbweaver\"\nBUNDLE_ID=\"io.github.wtvamp.claudebuddy\"\n"
+                  "INSTALLED_APP=\"/Applications/Orbweaver.app\"\n"
+                  "INSTALLED_EXE=\"%s\"\nLEGACY_EXE=\"%s\"\n%s\necho TAIL-COMPLETED\n") % (
+                      self.bash_path(self.bin), stopped, was_running, INSTALLED, LEGACY, TAIL)
         path = os.path.join(self.tmp, "tail.sh")
         with open(path, "w", newline="\n") as f:
             f.write(script)
@@ -146,7 +157,7 @@ class InstallTail(unittest.TestCase):
     def test_with_nothing_running_it_says_how_to_launch_rather_than_failing(self):
         rc, out, err = self.run_tail({})
         self.assertEqual(0, rc, "the install tail failed with no Buddy running:\n" + out + err)
-        self.assertIn('Launch it with: open -a "Claude Buddy"', out)
+        self.assertIn('Launch it with: open -a "Orbweaver"', out)
         self.assertIn("TAIL-COMPLETED", out)
 
     def test_a_copy_running_from_another_path_does_not_count_and_does_not_fail(self):
@@ -164,7 +175,27 @@ class InstallTail(unittest.TestCase):
     def test_two_installed_copies_are_warned_about(self):
         rc, out, err = self.run_tail({4242: INSTALLED, 4343: INSTALLED})
         self.assertEqual(0, rc, out + err)
-        self.assertIn("more than one Claude Buddy is running: 4242 4343", err)
+        self.assertIn("more than one Orbweaver is running: 4242 4343", err)
+
+    # CB-255: the first install after the rename. A copy still running out of
+    # the legacy Claude Buddy.app is the old binary, not the one just
+    # installed, so it is neither "Running" nor a second copy — and with a
+    # Buddy recorded as running before, the new one is relaunched.
+    def test_a_copy_still_running_from_the_legacy_bundle_does_not_count(self):
+        rc, out, err = self.run_tail({4242: LEGACY}, stopped="", was_running="4242")
+        self.assertEqual(0, rc, out + err)
+        self.assertNotIn("==> Running: pid 4242", out)
+        self.assertNotIn("more than one", err)
+        self.assertTrue(self.relaunched(), "the new Orbweaver was not launched in place of the legacy copy")
+        with open(self.opened) as f:
+            self.assertIn("/Applications/Orbweaver.app", f.read())
+
+    # The control: the same pid at the new path is the install working.
+    def test_the_same_copy_at_the_new_path_counts(self):
+        rc, out, err = self.run_tail({4242: INSTALLED}, stopped="", was_running="4242")
+        self.assertEqual(0, rc, out + err)
+        self.assertIn("==> Running: pid 4242", out)
+        self.assertFalse(self.relaunched())
 
     # The lead's install, exactly: on a machine opted in to the keep-alive,
     # unloading it is what stopped the old Buddy, so stop-installed-buddy.sh

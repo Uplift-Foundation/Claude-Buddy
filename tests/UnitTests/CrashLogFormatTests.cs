@@ -139,8 +139,8 @@ public class CrashLogFormatTests
             Environment.SetEnvironmentVariable("CLAUDE_BUDDY_LOG_DIR", null);
 
             var expected = OperatingSystem.IsWindows()
-                ? Path.Combine("ClaudeBuddy", "Logs")
-                : Path.Combine("Library", "Logs", "ClaudeBuddy");
+                ? Path.Combine("Orbweaver", "Logs")
+                : Path.Combine("Library", "Logs", "Orbweaver");
 
             Assert.EndsWith(expected, CrashLog.Directory);
             Assert.EndsWith("crash.log", CrashLog.Path_);

@@ -168,6 +168,75 @@ public class NewChatWindowTests : IDisposable
         Assert.True(reasonText.IsVisible);
     }
 
+    // CB-255 §1: a machine still wired to the pre-Orbweaver hook copy — a DMG
+    // user who never re-ran "Install Hooks.command", or a Windows box whose
+    // installer has not re-wired — has working hooks, and the dialog must not
+    // tell it otherwise. Driven through the real rule (HookCopyCandidates +
+    // AnyExists via NewChatAvailability.Evaluate) against a temp tree holding
+    // only the legacy copy, on both platforms' layouts; only the CLI lookup is
+    // faked, since a real one would depend on what this machine has on PATH.
+    //
+    // The Windows Claude Code row is the pre-existing bug this also fixed
+    // (filed against CB-168): its copy lives under %LOCALAPPDATA%, and the
+    // dialog used to look under ~/.claude and warn on every wired machine.
+    [AvaloniaTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void NoHookWarningWhenOnlyTheLegacyCopyIsInstalled(bool onWindows)
+    {
+        FreshSettings();
+        var root = Path.Combine(Path.GetTempPath(), "cb-newchat-legacyhook-" + Guid.NewGuid().ToString("N"));
+        var home = Path.Combine(root, "home");
+        var local = Path.Combine(root, "local");
+        try
+        {
+            foreach (var cli in NewChatAvailability.AllClis)
+            {
+                var legacyCopy = NewChatHookState.HookCopyCandidates(cli, onWindows, home, local, _ => null)[1];
+                Directory.CreateDirectory(Path.GetDirectoryName(legacyCopy)!);
+                File.WriteAllText(legacyCopy, "");
+            }
+
+            NewChatAvailability.CurrentForTests = () => NewChatAvailability.Evaluate(
+                _ => "/usr/local/bin/cli",
+                cli => NewChatHookState.AnyExists(
+                    NewChatHookState.HookCopyCandidates(cli, onWindows, home, local, _ => null)));
+
+            var window = NewWindow();
+
+            foreach (var cli in NewChatAvailability.AllClis)
+            {
+                Assert.Null(window.ReasonTextFor(cli));
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { /* best effort */ }
+        }
+    }
+
+    // The negative control: the same rule over an empty tree does warn, so
+    // the case above is the legacy copies' doing and not a dialog that never
+    // shows the warning.
+    [AvaloniaFact]
+    public void TheHookWarningIsShownWhenNeitherCopyIsInstalled()
+    {
+        FreshSettings();
+        var root = Path.Combine(Path.GetTempPath(), "cb-newchat-nohook-" + Guid.NewGuid().ToString("N"));
+
+        NewChatAvailability.CurrentForTests = () => NewChatAvailability.Evaluate(
+            _ => "/usr/local/bin/cli",
+            cli => NewChatHookState.AnyExists(
+                NewChatHookState.HookCopyCandidates(cli, onWindows: false, root, root, _ => null)));
+
+        var window = NewWindow();
+
+        var reasonText = window.ReasonTextFor(NewChatCli.ClaudeCode);
+        Assert.NotNull(reasonText);
+        Assert.Equal(NewChatAvailability.HookMissingWarning, reasonText!.Text);
+        Assert.True(reasonText.IsVisible);
+    }
+
     [AvaloniaFact]
     public void ThePrefilledCliIsSelectedOverTheLastChoiceAndTheFirstEnabledRow()
     {

@@ -4,7 +4,7 @@ using Xunit;
 
 namespace ClaudeBuddy.Tests;
 
-// Which process ClaudeBuddyHook.sh decides is "this session", judged by staging
+// Which process OrbweaverHook.sh decides is "this session", judged by staging
 // the parent it walks up to.
 //
 // Separate from HookScriptShTests because it needs a process tree rather than
@@ -36,20 +36,20 @@ namespace ClaudeBuddy.Tests;
 public class HookPidWalkShTests
 {
     private static readonly string RepoRoot = FindRepoRoot();
-    private static readonly string HookScript = Path.Combine(RepoRoot, "ClaudeBuddyHook.sh");
+    private static readonly string HookScript = Path.Combine(RepoRoot, "OrbweaverHook.sh");
 
     private static string FindRepoRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null)
         {
-            if (File.Exists(Path.Combine(dir.FullName, "ClaudeBuddyHook.sh")))
+            if (File.Exists(Path.Combine(dir.FullName, "OrbweaverHook.sh")))
                 return dir.FullName;
             dir = dir.Parent;
         }
 
         throw new InvalidOperationException(
-            "Could not find ClaudeBuddyHook.sh by walking up from " + AppContext.BaseDirectory);
+            "Could not find OrbweaverHook.sh by walking up from " + AppContext.BaseDirectory);
     }
 
     // Stands in for the process that runs a session. Two things are needed here
@@ -157,7 +157,7 @@ public class HookPidWalkShTests
         string stderr = process.StandardError.ReadToEnd();
         process.WaitForExit();
 
-        var statusFile = Path.Combine(tmp.FullName.TrimEnd('/'), "claude_buddy", sessionId + ".txt");
+        var statusFile = Path.Combine(tmp.FullName.TrimEnd('/'), "orbweaver", sessionId + ".txt");
         var recorded = 0;
         if (File.Exists(statusFile))
         {

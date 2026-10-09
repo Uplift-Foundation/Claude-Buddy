@@ -731,6 +731,23 @@ public class OpenClawHistoryTurnTests
         Assert.Null(turn.Speaker);
     }
 
+    // Shape three again, as a current build mirrors it.
+    [Fact]
+    public void OurOwnMirrorFromTheCurrentBuildAlsoComesBackAsMine()
+    {
+        var turns = Turns("""
+        [{"role":"user","content":"**(via Orbweaver)** anyone free to look at the build?",
+          "timestamp":1787000001100,
+          "__openclaw":{"senderIsOwner":false,"senderId":"100000000000000002",
+                        "senderName":"Quillbot","senderUsername":"Quillbot","seq":3}}]
+        """);
+
+        var turn = Assert.Single(turns);
+        Assert.True(turn.Mine);
+        Assert.Equal("anyone free to look at the build?", turn.Text);
+        Assert.Null(turn.Speaker);
+    }
+
     // Shape four: another agent's message relayed through the channel. Named,
     // which the ticket did not expect — the relay carries the bot's Discord
     // display name, so this is attributable rather than anonymous.
@@ -805,6 +822,12 @@ public class OpenClawHistoryTurnTests
     public void AMirrorCarryingOnlyItsPrefixIsNotATurn()
     {
         Assert.Empty(Turns("""[{"role":"user","content":"**(via Claude Buddy)**   "}]"""));
+    }
+
+    [Fact]
+    public void ACurrentMirrorCarryingOnlyItsPrefixIsNotATurn()
+    {
+        Assert.Empty(Turns("""[{"role":"user","content":"**(via Orbweaver)**   "}]"""));
     }
 
     // An assistant turn is never asked. It is the agent whose transcript this

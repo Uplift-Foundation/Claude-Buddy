@@ -21,13 +21,13 @@ public class BrandMarkupTests
     [AvaloniaFact]
     public void TheApplicationIsNamedFromBrand()
     {
-        Assert.Equal("Claude Buddy", Application.Current!.Name);
+        Assert.Equal(Brand.DisplayName, Application.Current!.Name);
     }
 
     [AvaloniaFact]
     public void AnOrbWindowIsTitledFromBrand()
     {
-        Assert.Equal("Claude Buddy", new OrbWindow("brand-markup-title").Title);
+        Assert.Equal(Brand.DisplayName, new OrbWindow("brand-markup-title").Title);
     }
 
     [AvaloniaFact]
@@ -37,6 +37,6 @@ public class BrandMarkupTests
         var menu = orb.GetLogicalDescendants().OfType<Control>()
             .Select(c => c.ContextMenu).First(m => m is not null)!;
 
-        Assert.Contains(menu.Items.OfType<MenuItem>(), item => item.Header as string == "Exit Claude Buddy");
+        Assert.Contains(menu.Items.OfType<MenuItem>(), item => item.Header as string == $"Exit {Brand.DisplayName}");
     }
 }

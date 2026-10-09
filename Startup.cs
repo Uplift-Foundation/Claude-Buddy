@@ -116,6 +116,26 @@ namespace ClaudeBuddy
         // for the loser, so there is no dispatcher left for anything to shut
         // down.
         //
+        // `migrateUserData` (CB-255) sits straight after the claim and before
+        // `claimUiThread`, and again both sides matter. After, because it moves
+        // the user's data folder from the legacy name to the new one, and two
+        // processes moving one directory at once is exactly the race the claim
+        // — on both mutex names, see SingleInstance.ClaimNames — exists to
+        // prevent; a duplicate never gets this far. Before everything else,
+        // because `serveOnLaunch` is the first thing that reads settings, the
+        // peer identity and the speech engine's folder, and all three have to
+        // find the migrated folder rather than create an empty new one.
+        // `installCrashLog` is the one step ahead of it that can touch the new
+        // folder (the log directory is computed per access), which is why the
+        // migration merges logs rather than assuming the new folder is absent.
+        //
+        // `retireLegacy` (CB-255) runs after the migration — the legacy hook
+        // folder on Windows also holds the legacy Logs folder, which the
+        // migration has to have moved out first — and after `claimUiThread`, so
+        // that nothing it grows into (the macOS stale-bundle cleanup raises a
+        // tray notice) can be the first thing to touch the dispatcher. It is
+        // still ahead of `serveOnLaunch` and well ahead of `startUi`.
+        //
         // Passed as delegates rather than called directly because every one of
         // them is unrunnable in a test — a real relay, a real screen-lock query,
         // a real named mutex, and a lifetime that owns the process until it
@@ -124,7 +144,9 @@ namespace ClaudeBuddy
         internal static void Run(
             Action installCrashLog,
             Func<bool> claimSingleInstance,
+            Action migrateUserData,
             Action claimUiThread,
+            Action retireLegacy,
             Action serveOnLaunch,
             Action waitForUnlock,
             Action startUi)
@@ -138,7 +160,9 @@ namespace ClaudeBuddy
                 // normal return from Main, so the process exits 0.
                 return;
             }
+            migrateUserData();
             claimUiThread();
+            retireLegacy();
             serveOnLaunch();
             waitForUnlock();
             startUi();

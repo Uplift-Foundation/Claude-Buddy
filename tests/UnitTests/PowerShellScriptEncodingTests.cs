@@ -54,11 +54,11 @@ public class PowerShellScriptEncodingTests
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null)
         {
-            if (File.Exists(Path.Combine(dir.FullName, "ClaudeBuddyHook.ps1"))) return dir.FullName;
+            if (File.Exists(Path.Combine(dir.FullName, "OrbweaverHook.ps1"))) return dir.FullName;
             dir = dir.Parent;
         }
         throw new InvalidOperationException(
-            "Could not find ClaudeBuddyHook.ps1 by walking up from " + AppContext.BaseDirectory);
+            "Could not find OrbweaverHook.ps1 by walking up from " + AppContext.BaseDirectory);
     }
 
     private static IEnumerable<string> ScriptsUnder(string root)

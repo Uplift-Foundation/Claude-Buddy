@@ -28,6 +28,26 @@ namespace ClaudeBuddy
     {
         internal const string FolderName = Brand.StatusFolderName;
 
+        // The folder the pre-Orbweaver hooks write, and the one the app goes
+        // on watching beside FolderName (CB-255 §1). Claude Code and Codex
+        // read their hooks at session start, so a session that was alive
+        // across the upgrade keeps calling the old script, and the old script
+        // keeps writing here until that session restarts. Not watching it
+        // would be "Orbweaver shows no orbs" for every session that predates
+        // the install — the canonical silent failure, on upgrade day.
+        //
+        // Same root as FolderName, always: the old hook and the new one agree
+        // with the app about TMPDIR exactly as before, and only the last path
+        // segment moved. Goes with the rest of Brand.Legacy in the cleanup
+        // after phase 3, and not sooner than two releases after phase 2.
+        internal const string LegacyFolderName = Brand.Legacy.StatusFolderName;
+
+        // Both folders under one root, new first. Pure, so the "same root"
+        // rule above is a test rather than a promise: Path() and LegacyPath()
+        // are each this, applied to the real root.
+        internal static (string Current, string Legacy) Under(string root) =>
+            (System.IO.Path.Combine(root, FolderName), System.IO.Path.Combine(root, LegacyFolderName));
+
         // The name macOS gives the per-user temp directory, and what `TMPDIR`
         // holds in any ordinary shell. Asked of the C library rather than
         // guessed, because it contains a per-boot, per-user token.
@@ -97,6 +117,10 @@ namespace ClaudeBuddy
 
         // The directory itself.
         [ExcludeFromCodeCoverage]
-        internal static string Path() => System.IO.Path.Combine(Path0(), FolderName);
+        internal static string Path() => Under(Path0()).Current;
+
+        // The folder pre-Orbweaver hooks write — see LegacyFolderName.
+        [ExcludeFromCodeCoverage]
+        internal static string LegacyPath() => Under(Path0()).Legacy;
     }
 }

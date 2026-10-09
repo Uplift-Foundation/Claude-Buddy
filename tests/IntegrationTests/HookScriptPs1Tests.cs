@@ -4,7 +4,7 @@ using Xunit;
 
 namespace ClaudeBuddy.Tests;
 
-// Exercises ClaudeBuddyHook.ps1 -- the PowerShell twin of ClaudeBuddyHook.sh --
+// Exercises OrbweaverHook.ps1 -- the PowerShell twin of OrbweaverHook.sh --
 // as a real subprocess, under BOTH interpreters (CB-227). Every Windows
 // install registers the hook as `powershell.exe -NoProfile -ExecutionPolicy
 // Bypass -File ...` (Windows PowerShell 5.1), so 5.1 is the interpreter that
@@ -22,20 +22,20 @@ namespace ClaudeBuddy.Tests;
 public class HookScriptPs1Tests
 {
     private static readonly string RepoRoot = FindRepoRoot();
-    private static readonly string HookScript = Path.Combine(RepoRoot, "ClaudeBuddyHook.ps1");
+    private static readonly string HookScript = Path.Combine(RepoRoot, "OrbweaverHook.ps1");
 
     private static string FindRepoRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null)
         {
-            if (File.Exists(Path.Combine(dir.FullName, "ClaudeBuddyHook.ps1")))
+            if (File.Exists(Path.Combine(dir.FullName, "OrbweaverHook.ps1")))
                 return dir.FullName;
             dir = dir.Parent;
         }
 
         throw new InvalidOperationException(
-            "Could not find ClaudeBuddyHook.ps1 by walking up from " + AppContext.BaseDirectory);
+            "Could not find OrbweaverHook.ps1 by walking up from " + AppContext.BaseDirectory);
     }
 
     private sealed record HookResult(int ExitCode, string Stdout, string Stderr);
@@ -120,7 +120,7 @@ public class HookScriptPs1Tests
         Assert.Equal("", result.Stderr);
     }
 
-    private static string StatusDir(string tempDir) => Path.Combine(tempDir, "claude_buddy");
+    private static string StatusDir(string tempDir) => Path.Combine(tempDir, "orbweaver");
 
     private static string StatusFile(string tempDir, string sessionId) =>
         Path.Combine(StatusDir(tempDir), sessionId + ".txt");
@@ -131,7 +131,7 @@ public class HookScriptPs1Tests
     // Windows) with the explicit goal — per its own comment — of agreeing
     // with the bash twin's `cksum` byte-for-byte, so the same project
     // directory gets the same colour on either platform. This is a direct
-    // C# port of ClaudeBuddyHook.ps1's Get-CksumCrc, used to build the
+    // C# port of OrbweaverHook.ps1's Get-CksumCrc, used to build the
     // golden expectation for the auto-color test below without guessing a
     // magic number.
     //

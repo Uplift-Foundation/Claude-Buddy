@@ -28,7 +28,8 @@ on:
       - 'tools/install-windows-hooks.ps1'
       - 'tools/install-codex-hooks.ps1'
       - 'tools/install-hooks.ps1'
-      - 'ClaudeBuddyHook.ps1'
+      - 'tools/install-grok-hooks.ps1'
+      - 'OrbweaverHook.ps1'
       - '.github/workflows/verify-windows-installer.yml'
 
 jobs:
@@ -60,6 +61,15 @@ jobs:
           gh release download '${{ inputs.release_tag }}' --repo '${{ github.repository }}' --pattern '*-win-x64-setup.exe' --dir dist
           Get-ChildItem dist
         shell: pwsh
+
+      # Handed to the upgrade job below, so it tests this exact installer
+      # without publishing the app a second time.
+      - name: Keep the installer for the upgrade job
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-installer
+          path: dist/*-win-x64-setup.exe
+          if-no-files-found: error
 
       # A settings.json that already holds unrelated config and another tool's
       # hook. The installer must add to this, not flatten it — losing someone's
@@ -105,14 +115,14 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $failures = @()
-          $app = Join-Path $env:LOCALAPPDATA 'Programs\ClaudeBuddy'
+          $app = Join-Path $env:LOCALAPPDATA 'Programs\Orbweaver'
 
           # The layout matters beyond tidiness: install-windows-hooks.ps1 resolves
-          # the hook as ..\ClaudeBuddyHook.ps1 relative to itself, so tools\ sitting
+          # the hook as ..\OrbweaverHook.ps1 relative to itself, so tools\ sitting
           # one level below the hook is what makes it work unmodified.
           $expected = @(
             (Join-Path $app 'ClaudeBuddy.exe'),
-            (Join-Path $app 'ClaudeBuddyHook.ps1'),
+            (Join-Path $app 'OrbweaverHook.ps1'),
             (Join-Path $app 'tools\install-hooks.ps1'),
             (Join-Path $app 'tools\install-windows-hooks.ps1'),
             (Join-Path $app 'tools\install-codex-hooks.ps1'),
@@ -121,9 +131,9 @@ jobs:
             (Join-Path $app 'unins000.exe'),
             # The hook is copied out of the install dir on purpose, so it keeps
             # working if the app is moved or removed.
-            (Join-Path $env:LOCALAPPDATA 'ClaudeBuddy\ClaudeBuddyHook.ps1'),
-            (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Claude Buddy\Claude Buddy.lnk'),
-            (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Startup\Claude Buddy.lnk')
+            (Join-Path $env:LOCALAPPDATA 'Orbweaver\OrbweaverHook.ps1'),
+            (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Orbweaver\Orbweaver.lnk'),
+            (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Startup\Orbweaver.lnk')
           )
 
           foreach ($path in $expected) {
@@ -145,7 +155,7 @@ jobs:
 
           # No UAC prompt is a feature, and it only holds while nothing lands in
           # Program Files.
-          if (Test-Path (Join-Path $env:ProgramFiles 'ClaudeBuddy')) {
+          if ((Test-Path (Join-Path $env:ProgramFiles 'Orbweaver')) -or (Test-Path (Join-Path $env:ProgramFiles 'ClaudeBuddy'))) {
             $failures += 'installed into Program Files — this is supposed to be a per-user install'
           }
 
@@ -177,14 +187,14 @@ jobs:
           foreach ($event in $settings.hooks.PSObject.Properties.Name) {
             foreach ($group in @($settings.hooks.$event)) {
               foreach ($h in @($group.hooks)) {
-                if ($h.command -like '*ClaudeBuddyHook.ps1*') { $ours++ } else { $foreign++ }
+                if ($h.command -like '*OrbweaverHook.ps1*') { $ours++ } else { $foreign++ }
               }
             }
           }
-          Write-Host "Claude Buddy hook entries: $ours   other tools' entries: $foreign"
+          Write-Host "Orbweaver hook entries: $ours   other tools' entries: $foreign"
 
           # 8 entries over 6 events: Notification carries three matchers.
-          if ($ours -ne 8) { $failures += "expected 8 Claude Buddy hook entries, found $ours" }
+          if ($ours -ne 8) { $failures += "expected 8 Orbweaver hook entries, found $ours" }
           if ($foreign -ne 1) { $failures += "expected the pre-existing foreign hook to survive, found $foreign" }
 
           foreach ($event in @('SessionStart','UserPromptSubmit','PreToolUse','Stop','SessionEnd','Notification')) {
@@ -193,7 +203,7 @@ jobs:
             }
           }
 
-          $backup = "$settingsPath.claudebuddy-backup"
+          $backup = "$settingsPath.orbweaver-backup"
           if (Test-Path $backup) { Write-Host "  ok      backup written: $backup" }
           else { $failures += 'no settings.json backup was written' }
 
@@ -225,10 +235,10 @@ jobs:
           function Get-HookCommand($event) {
             foreach ($group in @($settings.hooks.$event)) {
               foreach ($h in @($group.hooks)) {
-                if ($h.command -like '*ClaudeBuddyHook.ps1*') { return $h.command }
+                if ($h.command -like '*OrbweaverHook.ps1*') { return $h.command }
               }
             }
-            throw "no Claude Buddy command found for $event"
+            throw "no Orbweaver command found for $event"
           }
 
           $sessionId = 'ci-verify-1111-2222-3333'
@@ -238,7 +248,7 @@ jobs:
             transcript_path = ''
           } | ConvertTo-Json -Compress
 
-          $statusFile = Join-Path $env:TEMP "claude_buddy\$sessionId.txt"
+          $statusFile = Join-Path $env:TEMP "orbweaver\$sessionId.txt"
           if (Test-Path $statusFile) { Remove-Item $statusFile -Force }
 
           # cmd /c so the command line is parsed by a shell, as it is when Claude
@@ -250,7 +260,7 @@ jobs:
 
           if (-not (Test-Path $statusFile)) {
             Write-Host "::error::The hook ran but wrote no status file at $statusFile — orbs would never appear."
-            Get-ChildItem (Join-Path $env:TEMP 'claude_buddy') -ErrorAction SilentlyContinue
+            Get-ChildItem (Join-Path $env:TEMP 'orbweaver') -ErrorAction SilentlyContinue
             exit 1
           }
 
@@ -283,7 +293,7 @@ jobs:
         continue-on-error: true
         shell: pwsh
         run: |
-          $app = Join-Path $env:LOCALAPPDATA 'Programs\ClaudeBuddy\ClaudeBuddy.exe'
+          $app = Join-Path $env:LOCALAPPDATA 'Programs\Orbweaver\ClaudeBuddy.exe'
           $proc = Start-Process -FilePath $app -PassThru
           Start-Sleep -Seconds 8
 
@@ -308,7 +318,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $app = Join-Path $env:LOCALAPPDATA 'Programs\ClaudeBuddy'
+          $app = Join-Path $env:LOCALAPPDATA 'Programs\Orbweaver'
           $uninstaller = Join-Path $app 'unins000.exe'
 
           # Inno's uninstaller copies itself to temp and relaunches, so -Wait
@@ -329,8 +339,8 @@ jobs:
           if (Test-Path $key) { $failures += 'Apps & Features entry survived uninstall' }
 
           foreach ($lnk in @(
-            (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Claude Buddy\Claude Buddy.lnk'),
-            (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Startup\Claude Buddy.lnk'))) {
+            (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Orbweaver\Orbweaver.lnk'),
+            (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Startup\Orbweaver.lnk'))) {
             if (Test-Path -LiteralPath $lnk) { $failures += "shortcut survived uninstall: $lnk" }
           }
 
@@ -341,12 +351,12 @@ jobs:
           foreach ($event in $settings.hooks.PSObject.Properties.Name) {
             foreach ($group in @($settings.hooks.$event)) {
               foreach ($h in @($group.hooks)) {
-                if ($h.command -like '*ClaudeBuddyHook.ps1*') { $ours++ } else { $foreign++ }
+                if ($h.command -like '*OrbweaverHook.ps1*') { $ours++ } else { $foreign++ }
               }
             }
           }
           Write-Host "after uninstall — ours: $ours  foreign: $foreign"
-          if ($ours -ne 0) { $failures += "$ours Claude Buddy hook entries left in settings.json" }
+          if ($ours -ne 0) { $failures += "$ours Orbweaver hook entries left in settings.json" }
           if ($foreign -ne 1) { $failures += "uninstall damaged another tool's hooks (foreign=$foreign)" }
           if ($settings.model -ne 'opus') { $failures += 'uninstall clobbered model' }
 
@@ -361,4 +371,344 @@ jobs:
           path: |
             ${{ runner.temp }}/install.log
             ${{ runner.temp }}/upgrade.log
+          if-no-files-found: ignore
+
+  # CB-255: the Claude Buddy -> Orbweaver rename, as an existing user meets it.
+  # The job above starts from a clean machine, which is the one case the rename
+  # cannot break. This one installs the last real pre-rename release first, so
+  # every leftover is the genuine article -- its Start Menu group, Startup
+  # shortcut, keep-alive task, hook copy and legacy-wired settings.json --
+  # and then upgrades over it with this ref's installer, which is the path
+  # Inno's AppId, UsePreviousAppDir and UsePreviousGroup actually take. Faking
+  # that debris by hand would not reproduce the Start Menu group being reused.
+  upgrade:
+    needs: verify
+    # Still worth running when the clean-install job failed after handing over
+    # its installer: the two cover different breakage.
+    if: ${{ !cancelled() }}
+    runs-on: windows-latest
+    env:
+      # Pinned, not "latest": once an Orbweaver build is published, latest
+      # stops being a pre-rename install and this job would silently stop
+      # testing the migration it exists for.
+      LEGACY_TAG: v0.5.10-beta
+
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: windows-installer
+          path: dist
+
+      - name: Download the pre-rename release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path legacy -Force | Out-Null
+          gh release download $env:LEGACY_TAG --repo '${{ github.repository }}' --pattern 'ClaudeBuddy-*-win-x64-setup.exe' --dir legacy
+          Get-ChildItem legacy, dist
+
+      # What an existing user's machine holds: Claude Code settings with another
+      # tool's hook in them, a second Claude Code profile saved in the app's
+      # settings, and "Serve on launch" on -- the setting that gates the
+      # keep-alive task. All of it in the pre-rename %APPDATA%\ClaudeBuddy,
+      # because that is where the app keeps it until the new build first runs.
+      - name: Seed an existing user's settings
+        shell: pwsh
+        run: |
+          $utf8 = New-Object System.Text.UTF8Encoding($false)
+
+          $claude = Join-Path $env:USERPROFILE '.claude'
+          New-Item -ItemType Directory -Path $claude -Force | Out-Null
+          $seed = @{
+            model       = 'opus'
+            permissions = @{ allow = @('Bash(ls:*)') }
+            hooks       = @{ Stop = @(@{ hooks = @(@{ type = 'command'; command = 'some-other-tool.ps1' }) }) }
+          } | ConvertTo-Json -Depth 10
+          [System.IO.File]::WriteAllText((Join-Path $claude 'settings.json'), $seed, $utf8)
+
+          $work = Join-Path $env:USERPROFILE '.claude-work'
+          New-Item -ItemType Directory -Path $work -Force | Out-Null
+          [System.IO.File]::WriteAllText((Join-Path $work 'settings.json'), (@{ model = 'sonnet' } | ConvertTo-Json), $utf8)
+
+          $appData = Join-Path $env:APPDATA 'ClaudeBuddy'
+          New-Item -ItemType Directory -Path $appData -Force | Out-Null
+          $app = @{ claudeCodeProfileDirs = @('.claude-work'); remoteControlServeOnLaunch = $true } | ConvertTo-Json
+          [System.IO.File]::WriteAllText((Join-Path $appData 'settings.json'), $app, $utf8)
+          Get-Content (Join-Path $appData 'settings.json')
+
+      - name: Install the pre-rename release and check it left what an upgrade inherits
+        shell: pwsh
+        run: |
+          $setup = (Get-ChildItem legacy\ClaudeBuddy-*-win-x64-setup.exe | Select-Object -First 1).FullName
+          $log = Join-Path $env:RUNNER_TEMP 'legacy-install.log'
+          $p = Start-Process -FilePath $setup -Wait -PassThru `
+                 -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/LOG=$log"
+          if ($p.ExitCode -ne 0) { Write-Host "::error::pre-rename installer exited $($p.ExitCode)"; exit 1 }
+
+          function Get-HookCounts($path) {
+            $c = @{ new = 0; legacy = 0; foreign = 0 }
+            $s = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+            foreach ($eventName in $s.hooks.PSObject.Properties.Name) {
+              foreach ($group in @($s.hooks.$eventName)) {
+                foreach ($h in @($group.hooks)) {
+                  if ($h.command -like '*OrbweaverHook.ps1*') { $c.new++ }
+                  elseif ($h.command -like '*ClaudeBuddyHook.ps1*') { $c.legacy++ }
+                  else { $c.foreign++ }
+                }
+              }
+            }
+            $c
+          }
+
+          # These are preconditions, not findings: if one fails, the pinned
+          # release did not set the machine up the way this job assumes, and
+          # the upgrade checks below would prove nothing either way.
+          $failures = @()
+          foreach ($path in @(
+            (Join-Path $env:LOCALAPPDATA 'Programs\ClaudeBuddy\ClaudeBuddy.exe'),
+            (Join-Path $env:LOCALAPPDATA 'Programs\ClaudeBuddy\ClaudeBuddyHook.ps1'),
+            (Join-Path $env:LOCALAPPDATA 'ClaudeBuddy\ClaudeBuddyHook.ps1'),
+            (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Claude Buddy\Claude Buddy.lnk'),
+            (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Startup\Claude Buddy.lnk'))) {
+            if (Test-Path -LiteralPath $path) { Write-Host "  ok      $path" } else { $failures += "precondition: missing $path" }
+          }
+          foreach ($cfgDir in @('.claude', '.claude-work')) {
+            $c = Get-HookCounts (Join-Path $env:USERPROFILE "$cfgDir\settings.json")
+            Write-Host "  $cfgDir -- legacy: $($c.legacy)  new: $($c.new)  foreign: $($c.foreign)"
+            if ($c.legacy -ne 8) { $failures += "precondition: expected 8 legacy hook entries in $cfgDir, found $($c.legacy)" }
+          }
+
+          # The old installer registers its keep-alive task here because Serve
+          # on launch is on. Whether Task Scheduler accepts it on a hosted runner
+          # is the runner's business, so a refusal gets a stand-in under the
+          # legacy name -- the point is that the upgrade deletes that name, and
+          # a stand-in exercises that delete just as well. The marker file tells
+          # the next step whether task registration works here at all.
+          $null = & schtasks.exe /query /tn 'ClaudeBuddyCrashKeepAlive' 2>&1
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host '  ok      legacy keep-alive task registered by the pre-rename installer'
+            New-Item -ItemType File -Path (Join-Path $env:RUNNER_TEMP 'tasks-work') -Force | Out-Null
+          } else {
+            Write-Host '::warning::the pre-rename installer did not register its keep-alive task here; adding a stand-in under the legacy name'
+            $null = & schtasks.exe /create /tn 'ClaudeBuddyCrashKeepAlive' /tr 'cmd.exe /c exit 0' /sc once /st 23:59 /f 2>&1
+            if ($LASTEXITCODE -ne 0) { $failures += 'precondition: could not register even a stand-in legacy task' }
+          }
+
+          if ($failures.Count) { $failures | ForEach-Object { Write-Host "::error::$_" }; exit 1 }
+          Write-Host 'Pre-rename install in place.'
+
+      - name: Upgrade with this installer
+        shell: pwsh
+        run: |
+          $setup = (Get-ChildItem dist\*-win-x64-setup.exe | Select-Object -First 1).FullName
+          Write-Host "Installer: $setup"
+          $log = Join-Path $env:RUNNER_TEMP 'rename-upgrade.log'
+          $p = Start-Process -FilePath $setup -Wait -PassThru `
+                 -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/LOG=$log"
+          if (Test-Path $log) { Get-Content $log | Select-Object -Last 60 }
+          if ($p.ExitCode -ne 0) { Write-Host "::error::upgrade installer exited $($p.ExitCode)"; exit 1 }
+
+      - name: Check the upgrade migrated the name everywhere it lives
+        shell: pwsh
+        run: |
+          $failures = @()
+
+          function Get-HookCounts($path) {
+            $c = @{ new = 0; legacy = 0; foreign = 0; atNewCopy = 0 }
+            $newCopy = Join-Path $env:LOCALAPPDATA 'Orbweaver\OrbweaverHook.ps1'
+            $s = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+            foreach ($eventName in $s.hooks.PSObject.Properties.Name) {
+              foreach ($group in @($s.hooks.$eventName)) {
+                foreach ($h in @($group.hooks)) {
+                  if ($h.command -like '*OrbweaverHook.ps1*') {
+                    $c.new++
+                    if ($h.command.IndexOf($newCopy, [StringComparison]::OrdinalIgnoreCase) -ge 0) { $c.atNewCopy++ }
+                  }
+                  elseif ($h.command -like '*ClaudeBuddyHook.ps1*') { $c.legacy++ }
+                  else { $c.foreign++ }
+                }
+              }
+            }
+            $c
+          }
+
+          # An upgrade stays in the directory it found (UsePreviousAppDir);
+          # only a fresh install lands in Programs\Orbweaver.
+          $app = Join-Path $env:LOCALAPPDATA 'Programs\ClaudeBuddy'
+          $startMenu = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
+          foreach ($path in @(
+            (Join-Path $app 'ClaudeBuddy.exe'),
+            (Join-Path $app 'OrbweaverHook.ps1'),
+            (Join-Path $env:LOCALAPPDATA 'Orbweaver\OrbweaverHook.ps1'),
+            (Join-Path $startMenu 'Orbweaver\Orbweaver.lnk'),
+            (Join-Path $startMenu 'Startup\Orbweaver.lnk'),
+            # Kept on purpose: a Claude Code session started before the upgrade
+            # still calls this copy until it restarts. The marker is what lets
+            # the app retire the folder later.
+            (Join-Path $env:LOCALAPPDATA 'ClaudeBuddy\ClaudeBuddyHook.ps1'),
+            (Join-Path $env:LOCALAPPDATA 'ClaudeBuddy\.superseded'))) {
+            if (Test-Path -LiteralPath $path) { Write-Host "  ok      $path" } else { $failures += "missing after upgrade: $path"; Write-Host "  MISSING $path" }
+          }
+          foreach ($path in @(
+            (Join-Path $env:LOCALAPPDATA 'Programs\Orbweaver'),
+            (Join-Path $app 'ClaudeBuddyHook.ps1'),
+            (Join-Path $startMenu 'Claude Buddy'),
+            (Join-Path $startMenu 'Startup\Claude Buddy.lnk'))) {
+            if (Test-Path -LiteralPath $path) { $failures += "left behind by the upgrade: $path"; Write-Host "  STALE   $path" } else { Write-Host "  gone    $path" }
+          }
+
+          $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{4046CFD2-79A9-4270-8302-21B87A92C0A5}_is1'
+          $entry = Get-ItemProperty $key -ErrorAction SilentlyContinue
+          if (-not $entry) { $failures += 'Apps & Features entry missing after upgrade' }
+          elseif ($entry.DisplayName -ne 'Orbweaver') { $failures += "Apps & Features still says '$($entry.DisplayName)'" }
+          else { Write-Host "  ok      Apps & Features: $($entry.DisplayName) $($entry.DisplayVersion)" }
+
+          # Both profiles: the default one, and the extra one, which the hook
+          # installer only knows about by reading the app's settings -- still in
+          # the pre-rename folder at this point, since the new app has not run.
+          foreach ($cfgDir in @('.claude', '.claude-work')) {
+            $path = Join-Path $env:USERPROFILE "$cfgDir\settings.json"
+            $c = Get-HookCounts $path
+            Write-Host "  $cfgDir -- new: $($c.new) (at the new copy: $($c.atNewCopy))  legacy: $($c.legacy)  foreign: $($c.foreign)"
+            if ($c.new -ne 8) { $failures += "$cfgDir has $($c.new) Orbweaver hook entries, expected 8" }
+            if ($c.atNewCopy -ne 8) { $failures += "$cfgDir has hook entries not pointing at %LOCALAPPDATA%\Orbweaver\OrbweaverHook.ps1" }
+            if ($c.legacy -ne 0) { $failures += "$cfgDir still has $($c.legacy) pre-rename hook entries" }
+            if (-not (Test-Path -LiteralPath "$path.orbweaver-backup")) { $failures += "no .orbweaver-backup beside $cfgDir\settings.json" }
+          }
+          $main = Get-Content -LiteralPath (Join-Path $env:USERPROFILE '.claude\settings.json') -Raw | ConvertFrom-Json
+          if ($main.model -ne 'opus') { $failures += 'upgrade clobbered model in .claude' }
+          if ((Get-HookCounts (Join-Path $env:USERPROFILE '.claude\settings.json')).foreign -ne 1) { $failures += "upgrade damaged another tool's hook" }
+          $work = Get-Content -LiteralPath (Join-Path $env:USERPROFILE '.claude-work\settings.json') -Raw | ConvertFrom-Json
+          if ($work.model -ne 'sonnet') { $failures += 'upgrade clobbered model in .claude-work' }
+
+          # The keep-alive task under the new name only. The legacy name must be
+          # gone whatever Task Scheduler thinks of this runner; the new one is
+          # only required where the pre-rename installer proved registration
+          # works here, since the same schtasks /xml call creates both.
+          $null = & schtasks.exe /query /tn 'ClaudeBuddyCrashKeepAlive' 2>&1
+          if ($LASTEXITCODE -eq 0) { $failures += 'legacy ClaudeBuddyCrashKeepAlive task survived the upgrade' } else { Write-Host '  gone    task ClaudeBuddyCrashKeepAlive' }
+          $null = & schtasks.exe /query /tn 'OrbweaverCrashKeepAlive' 2>&1
+          $newTask = ($LASTEXITCODE -eq 0)
+          if ($newTask) { Write-Host '  ok      task OrbweaverCrashKeepAlive' }
+          elseif (Test-Path (Join-Path $env:RUNNER_TEMP 'tasks-work')) {
+            $failures += 'OrbweaverCrashKeepAlive not registered, although Serve on launch is on in the pre-rename settings'
+          }
+          else { Write-Host '::warning::OrbweaverCrashKeepAlive absent, but task registration never worked on this runner either' }
+
+          # The installer must not have created the new data folder itself: the
+          # app moves the old one there on first run, and the keep-alive gate
+          # and the extra profile above were read through the fallback.
+          if (Test-Path (Join-Path $env:APPDATA 'Orbweaver')) {
+            Write-Host "::warning::%APPDATA%\Orbweaver already exists before the app ran; the checks above may have read it rather than the fallback"
+          }
+
+          if ($failures.Count) { $failures | ForEach-Object { Write-Host "::error::$_" }; exit 1 }
+          Write-Host 'Upgrade replaced every pre-rename name and re-wired both profiles.'
+          # A step's exit code is the last native command's, and the last one run
+          # above is the probe for the new task, which exits 1 when the task is
+          # not there (a case this step already judges and tolerates). Without
+          # this the step failed after printing success.
+          exit 0
+
+      # The installer only reads the pre-rename data folder; moving it is the
+      # app's job, on its first launch after the upgrade, right after it claims
+      # the single-instance mutex. That runs before any window exists, so a
+      # headless runner reaches it even if the app gives up later on.
+      - name: Launch once and check the data folder moved
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:LOCALAPPDATA 'Programs\ClaudeBuddy\ClaudeBuddy.exe'
+          $newSettings = Join-Path $env:APPDATA 'Orbweaver\settings.json'
+          $proc = Start-Process -FilePath $exe -PassThru
+          $deadline = (Get-Date).AddSeconds(90)
+          while ((Get-Date) -lt $deadline -and -not (Test-Path -LiteralPath $newSettings) -and -not $proc.HasExited) {
+            Start-Sleep -Seconds 2
+          }
+          # A moment more for the snapshot copied back after the move.
+          Start-Sleep -Seconds 5
+          if ($proc.HasExited) { Write-Host "app exited on its own with code $($proc.ExitCode)" }
+          Get-Process ClaudeBuddy -ErrorAction SilentlyContinue | Stop-Process -Force
+
+          $failures = @()
+          if (Test-Path -LiteralPath $newSettings) {
+            $moved = Get-Content -LiteralPath $newSettings -Raw | ConvertFrom-Json
+            Write-Host "  ok      $newSettings"
+            # The seeded values, not defaults: proof this is the user's file.
+            if (@($moved.claudeCodeProfileDirs) -notcontains '.claude-work') { $failures += 'moved settings.json lost claudeCodeProfileDirs' }
+            if ($moved.remoteControlServeOnLaunch -ne $true) { $failures += 'moved settings.json lost remoteControlServeOnLaunch' }
+          } else {
+            $failures += "no $newSettings after launching the app"
+            $crash = Join-Path $env:LOCALAPPDATA 'Orbweaver\Logs\crash.log'
+            if (Test-Path $crash) { Get-Content $crash | Select-Object -Last 40 }
+          }
+
+          # What a downgrade reads: the snapshot left in the old folder.
+          $legacy = Join-Path $env:APPDATA 'ClaudeBuddy'
+          foreach ($name in @('settings.json', 'MIGRATED-TO-ORBWEAVER.txt')) {
+            $path = Join-Path $legacy $name
+            if (Test-Path -LiteralPath $path) { Write-Host "  ok      $path" } else { $failures += "no legacy snapshot file: $path" }
+          }
+
+          if ($failures.Count) { $failures | ForEach-Object { Write-Host "::error::$_" }; exit 1 }
+          Write-Host 'The app moved the data folder and left the downgrade snapshot behind.'
+
+      - name: Uninstall and check both names are gone
+        shell: pwsh
+        run: |
+          $app = Join-Path $env:LOCALAPPDATA 'Programs\ClaudeBuddy'
+          Start-Process -FilePath (Join-Path $app 'unins000.exe') -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' | Out-Null
+          $deadline = (Get-Date).AddMinutes(3)
+          while ((Get-Date) -lt $deadline) {
+            if (-not (Test-Path (Join-Path $app 'ClaudeBuddy.exe'))) { break }
+            Start-Sleep -Seconds 3
+          }
+          Start-Sleep -Seconds 5
+
+          $failures = @()
+          if (Test-Path (Join-Path $app 'ClaudeBuddy.exe')) { $failures += 'ClaudeBuddy.exe still present after uninstall' }
+
+          foreach ($task in @('OrbweaverCrashKeepAlive', 'ClaudeBuddyCrashKeepAlive')) {
+            $null = & schtasks.exe /query /tn $task 2>&1
+            if ($LASTEXITCODE -eq 0) { $failures += "keep-alive task $task survived uninstall" }
+          }
+
+          $startMenu = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
+          foreach ($lnk in @(
+            (Join-Path $startMenu 'Orbweaver\Orbweaver.lnk'),
+            (Join-Path $startMenu 'Startup\Orbweaver.lnk'),
+            (Join-Path $startMenu 'Claude Buddy\Claude Buddy.lnk'),
+            (Join-Path $startMenu 'Startup\Claude Buddy.lnk'))) {
+            if (Test-Path -LiteralPath $lnk) { $failures += "shortcut survived uninstall: $lnk" }
+          }
+
+          foreach ($cfgDir in @('.claude', '.claude-work')) {
+            $s = Get-Content -LiteralPath (Join-Path $env:USERPROFILE "$cfgDir\settings.json") -Raw | ConvertFrom-Json
+            $ours = 0
+            foreach ($eventName in $s.hooks.PSObject.Properties.Name) {
+              foreach ($group in @($s.hooks.$eventName)) {
+                foreach ($h in @($group.hooks)) {
+                  if ($h.command -like '*OrbweaverHook.ps1*' -or $h.command -like '*ClaudeBuddyHook.ps1*') { $ours++ }
+                }
+              }
+            }
+            Write-Host "  $cfgDir -- hook entries of ours left: $ours"
+            if ($ours -ne 0) { $failures += "$ours hook entries of ours left in $cfgDir\settings.json" }
+          }
+
+          if ($failures.Count) { $failures | ForEach-Object { Write-Host "::error::$_" }; exit 1 }
+          Write-Host 'Uninstall removed both names: tasks, shortcuts and hook wiring.'
+          # The verdict is $failures above. Without this the step inherits the
+          # exit code of the last native probe, a schtasks query for a task that
+          # is meant to be gone, which is 1.
+          exit 0
+
+      - name: Collect logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-upgrade-logs
+          path: |
+            ${{ runner.temp }}/legacy-install.log
+            ${{ runner.temp }}/rename-upgrade.log
           if-no-files-found: ignore

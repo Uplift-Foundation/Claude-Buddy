@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Installs the Claude Buddy hook into Claude Code's macOS settings.
+# Installs the Orbweaver hook into Claude Code's macOS settings.
 #
 # The bash twin of tools/install-windows-hooks.ps1, and the reason it exists is
 # the same: the hook is what makes orbs appear, and an app with no hook wired up
@@ -18,8 +18,17 @@
 # install-windows-hooks.ps1 has always done; the two had drifted, and the macOS
 # side was the half that silently left a second account unwired.
 #
-# Safe to re-run: it strips any existing Claude Buddy entries before adding
-# fresh ones, so it converges rather than accumulating duplicates.
+# Safe to re-run: it strips any existing entries of ours before adding fresh
+# ones, so it converges rather than accumulating duplicates.
+#
+# "Ours" is either hook filename: OrbweaverHook.sh, or the ClaudeBuddyHook.sh
+# every install before the rename wrote (CB-255). Stripping both in one pass is
+# what moves an upgraded machine off the old script without a separate
+# migration step, and what keeps a re-run convergent either way. The old
+# ~/.claude/claude-buddy folder is deliberately left on disk: a Claude Code
+# session already running read its hooks at start and keeps calling the old
+# path until it is restarted. The folder gets a .superseded marker instead,
+# which is what the app's LegacyHookCleanup reads to retire it 14 days later.
 #
 # Runs from either the repo (tools/install-macos-hooks.sh, hook script one level
 # up) or from inside the installed app bundle (Contents/Resources, hook script
@@ -31,7 +40,7 @@ set -euo pipefail
 UNINSTALL=0
 NO_PROFILES=0
 EXTRA_PROFILES=()
-HOOK_DIR="$HOME/.claude/claude-buddy"
+HOOK_DIR="$HOME/.claude/orbweaver"
 SETTINGS="$HOME/.claude/settings.json"
 
 while [[ $# -gt 0 ]]; do
@@ -53,25 +62,37 @@ done
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
 # Alongside (installed app bundle) wins over one level up (repo checkout).
-if [[ -f "$HERE/ClaudeBuddyHook.sh" ]]; then
-  SOURCE="$HERE/ClaudeBuddyHook.sh"
-elif [[ -f "$HERE/../ClaudeBuddyHook.sh" ]]; then
-  SOURCE="$HERE/../ClaudeBuddyHook.sh"
+if [[ -f "$HERE/OrbweaverHook.sh" ]]; then
+  SOURCE="$HERE/OrbweaverHook.sh"
+elif [[ -f "$HERE/../OrbweaverHook.sh" ]]; then
+  SOURCE="$HERE/../OrbweaverHook.sh"
 else
   SOURCE=""
 fi
 
-INSTALLED="$HOOK_DIR/ClaudeBuddyHook.sh"
+INSTALLED="$HOOK_DIR/OrbweaverHook.sh"
+# Where every install before the rename put the script: the sibling named
+# claude-buddy, so a custom --hook-dir finds its own legacy twin.
+LEGACY_HOOK_DIR="$(dirname "$HOOK_DIR")/claude-buddy"
 
 if [[ $UNINSTALL -eq 0 ]]; then
   if [[ -z "$SOURCE" ]]; then
-    echo "Can't find ClaudeBuddyHook.sh next to $HERE or one level up." >&2
+    echo "Can't find OrbweaverHook.sh next to $HERE or one level up." >&2
     exit 1
   fi
   mkdir -p "$HOOK_DIR"
   cp "$SOURCE" "$INSTALLED"
   chmod +x "$INSTALLED"
   echo "Hook installed: $INSTALLED"
+
+  # Mark, never delete, and only when absent: refreshing the mtime on every
+  # re-run (the Settings window reapplies hooks on every colour toggle) would
+  # keep the 14-day clock from ever running out. Only where the legacy folder
+  # exists, so a fresh machine never grows one.
+  if [[ -d "$LEGACY_HOOK_DIR" && ! -e "$LEGACY_HOOK_DIR/.superseded" ]]; then
+    : > "$LEGACY_HOOK_DIR/.superseded"
+    echo "Marked $LEGACY_HOOK_DIR as superseded; Orbweaver retires it once nothing calls it."
+  fi
 fi
 
 if [[ ! -f "$SETTINGS" ]]; then
@@ -82,7 +103,7 @@ if [[ ! -f "$SETTINGS" ]]; then
   echo "Created $SETTINGS"
 fi
 
-BACKUP="$SETTINGS.claudebuddy-backup"
+BACKUP="$SETTINGS.orbweaver-backup"
 cp "$SETTINGS" "$BACKUP"
 echo "Backed up settings to $BACKUP"
 
@@ -107,7 +128,7 @@ function run(argv) {
   // The literal string $HOME, not this shell's expansion of it: hook commands
   // run through a shell, so keeping it unexpanded makes settings.json portable
   // across machines and usernames. This matches claude-hooks-snippet-macos.json.
-  const script = '"$HOME/.claude/claude-buddy/ClaudeBuddyHook.sh"';
+  const script = '"$HOME/.claude/orbweaver/OrbweaverHook.sh"';
 
   const raw = readUtf8(settingsPath).trim();
   const settings = raw === '' ? {} : JSON.parse(raw);
@@ -130,6 +151,8 @@ function run(argv) {
 
   // Strip our own entries wherever they appear, so re-running repairs rather
   // than duplicating and --uninstall leaves other tools' hooks untouched.
+  // Either filename is ours, so the pre-rename ClaudeBuddyHook.sh entries go
+  // in the same pass: that is the whole of the re-wire on an upgraded machine.
   for (const name of Object.keys(hooks)) {
     const groups = [].concat(hooks[name] || []);
     const kept = [];
@@ -138,7 +161,8 @@ function run(argv) {
       if (!group || typeof group !== 'object') continue;
       const inner = [].concat(group.hooks || []).filter(function (h) {
         return h && typeof h.command === 'string' &&
-               h.command.indexOf('ClaudeBuddyHook.sh') === -1;
+               h.command.indexOf('ClaudeBuddyHook.') === -1 &&
+               h.command.indexOf('OrbweaverHook.') === -1;
       });
       if (inner.length > 0) { group.hooks = inner; kept.push(group); }
     }
@@ -168,7 +192,7 @@ MODE=$([[ $UNINSTALL -eq 1 ]] && echo uninstall || echo install)
 # Write via a temp file and mv, so an interrupted run can't leave a truncated
 # settings.json behind — losing the user's model and permissions to a failed
 # hook install would be a bad trade.
-TMP="$(mktemp "${TMPDIR:-/tmp}/claudebuddy-settings.XXXXXX")"
+TMP="$(mktemp "${TMPDIR:-/tmp}/orbweaver-settings.XXXXXX")"
 trap 'rm -f "$TMP"' EXIT
 
 # No BOM and no trailing newline games: System.Text.Json, which both Claude Code
@@ -186,8 +210,8 @@ mv "$TMP" "$SETTINGS"
 trap - EXIT
 
 if [[ $UNINSTALL -eq 1 ]]; then
-  echo "Removed Claude Buddy hooks from $SETTINGS."
-  echo "The installed hook script was left in place; delete $HOOK_DIR if you want it gone."
+  echo "Removed Orbweaver hooks from $SETTINGS."
+  echo "The installed hook script was left in place; delete $HOOK_DIR (and $LEGACY_HOOK_DIR, if present) if you want it gone."
 else
   echo "Wired 8 hook entries into $SETTINGS"
   echo
@@ -213,8 +237,20 @@ fi
 # A read that fails says so on stderr and carries on with no extra profiles,
 # rather than the old `2>/dev/null`, which made "osascript could not read the
 # list" indistinguishable from "nobody added a profile".
+# With no override, Orbweaver's folder first, then the pre-rename ClaudeBuddy
+# one: on upgrade day this runs before the new app has started and moved the
+# folder, and reading only the new path then would quietly wire zero extra
+# profiles. When CLAUDE_BUDDY_SETTINGS_DIR is set it is the only path read, so a
+# test instance never falls through to the real list.
 saved_profiles() {
-  local settings="${CLAUDE_BUDDY_SETTINGS_DIR:-$HOME/Library/Application Support/ClaudeBuddy}/settings.json"
+  local settings
+  if [[ -n "${CLAUDE_BUDDY_SETTINGS_DIR:-}" ]]; then
+    settings="$CLAUDE_BUDDY_SETTINGS_DIR/settings.json"
+  else
+    local support="$HOME/Library/Application Support"
+    settings="$support/Orbweaver/settings.json"
+    [[ -f "$settings" ]] || settings="$support/ClaudeBuddy/settings.json"
+  fi
   [[ -f "$settings" ]] || return 0
 
   osascript -l JavaScript -e '

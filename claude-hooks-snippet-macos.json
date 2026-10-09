@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$HOME/.claude/claude-buddy/ClaudeBuddyHook.sh\" waiting"
+            "command": "bash \"$HOME/.claude/orbweaver/OrbweaverHook.sh\" waiting"
           }
         ]
       },
@@ -15,7 +15,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$HOME/.claude/claude-buddy/ClaudeBuddyHook.sh\" waiting"
+            "command": "bash \"$HOME/.claude/orbweaver/OrbweaverHook.sh\" waiting"
           }
         ]
       },
@@ -24,7 +24,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$HOME/.claude/claude-buddy/ClaudeBuddyHook.sh\" generating"
+            "command": "bash \"$HOME/.claude/orbweaver/OrbweaverHook.sh\" generating"
           }
         ]
       }
@@ -34,7 +34,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$HOME/.claude/claude-buddy/ClaudeBuddyHook.sh\" idle"
+            "command": "bash \"$HOME/.claude/orbweaver/OrbweaverHook.sh\" idle"
           }
         ]
       }
@@ -44,7 +44,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$HOME/.claude/claude-buddy/ClaudeBuddyHook.sh\" generating"
+            "command": "bash \"$HOME/.claude/orbweaver/OrbweaverHook.sh\" generating"
           }
         ]
       }
@@ -55,7 +55,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$HOME/.claude/claude-buddy/ClaudeBuddyHook.sh\" generating"
+            "command": "bash \"$HOME/.claude/orbweaver/OrbweaverHook.sh\" generating"
           }
         ]
       }
@@ -65,7 +65,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$HOME/.claude/claude-buddy/ClaudeBuddyHook.sh\" idle"
+            "command": "bash \"$HOME/.claude/orbweaver/OrbweaverHook.sh\" idle"
           }
         ]
       }
@@ -75,7 +75,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$HOME/.claude/claude-buddy/ClaudeBuddyHook.sh\" ended"
+            "command": "bash \"$HOME/.claude/orbweaver/OrbweaverHook.sh\" ended"
           }
         ]
       }

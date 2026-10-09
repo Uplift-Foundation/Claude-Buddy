@@ -86,7 +86,7 @@ public class HookInstallerScriptsTests : IDisposable
         var result = RunInstaller("install-macos-hooks.sh", withSettingsDirVariable: true);
 
         Assert.Equal(HookInstallOutcome.Ok, result.Outcome);
-        Assert.Contains("ClaudeBuddyHook", File.ReadAllText(Home(".claude-wanted", "settings.json")));
+        Assert.Contains("OrbweaverHook", File.ReadAllText(Home(".claude-wanted", "settings.json")));
         Assert.False(Directory.Exists(Home(".claude-decoy")));
     }
 
@@ -98,7 +98,7 @@ public class HookInstallerScriptsTests : IDisposable
         var result = RunInstaller("install-macos-hooks.sh", withSettingsDirVariable: false);
 
         Assert.Equal(HookInstallOutcome.Ok, result.Outcome);
-        Assert.Contains("ClaudeBuddyHook", File.ReadAllText(Home(".claude-decoy", "settings.json")));
+        Assert.Contains("OrbweaverHook", File.ReadAllText(Home(".claude-decoy", "settings.json")));
         Assert.False(Directory.Exists(Home(".claude-wanted")));
     }
 
@@ -133,7 +133,7 @@ public class HookInstallerScriptsTests : IDisposable
         var result = RunInstaller("install-grok-hooks.sh", withSettingsDirVariable: true);
 
         Assert.Equal(HookInstallOutcome.Ok, result.Outcome);
-        Assert.True(File.Exists(Home(".grok-wanted", "hooks", "claude-buddy.json")));
+        Assert.True(File.Exists(Home(".grok-wanted", "hooks", "orbweaver.json")));
         Assert.False(Directory.Exists(Home(".grok-decoy")));
     }
 
@@ -144,7 +144,7 @@ public class HookInstallerScriptsTests : IDisposable
 
         RunInstaller("install-grok-hooks.sh", withSettingsDirVariable: false);
 
-        Assert.True(File.Exists(Home(".grok-decoy", "hooks", "claude-buddy.json")));
+        Assert.True(File.Exists(Home(".grok-decoy", "hooks", "orbweaver.json")));
         Assert.False(Directory.Exists(Home(".grok-wanted")));
     }
 
@@ -222,8 +222,8 @@ public class HookInstallerScriptsTests : IDisposable
 
         var result = RunInstaller("install-grok-hooks.sh", withSettingsDirVariable: true);
 
-        Assert.DoesNotContain("Removed Claude Buddy hooks", result.Output);
-        Assert.Contains("Wired Claude Buddy hooks", result.Output);
+        Assert.DoesNotContain("Removed Orbweaver hooks", result.Output);
+        Assert.Contains("Wired Orbweaver hooks", result.Output);
     }
 
     // The silent failure this ticket could not rule out: a list that cannot be
@@ -240,7 +240,7 @@ public class HookInstallerScriptsTests : IDisposable
         Assert.Equal(HookInstallOutcome.Failed, result.Outcome);
         Assert.Equal(HookInstaller.SavedListUnreadableExit, result.ExitCode);
         Assert.Contains("could not read the saved profile list", result.Error);
-        Assert.Contains("ClaudeBuddyHook", File.ReadAllText(Home(".claude", "settings.json")));
+        Assert.Contains("OrbweaverHook", File.ReadAllText(Home(".claude", "settings.json")));
         Assert.Contains("      warning: could not read the saved profile list", File.ReadAllText(HookInstallerLog.Path_));
         Assert.Contains("the saved profile list could not be read",
             HookInstaller.StatusMessage(result, ".claude-wanted"));
@@ -289,7 +289,7 @@ public class HookInstallerScriptsTests : IDisposable
 
         Assert.Equal(HookInstaller.SavedListUnreadableExit, result.ExitCode);
         Assert.Contains("could not read the saved profile list", result.Error);
-        Assert.Contains("ClaudeBuddyHook", File.ReadAllText(Home(".claude", "settings.json")));
+        Assert.Contains("OrbweaverHook", File.ReadAllText(Home(".claude", "settings.json")));
         Assert.False(Directory.Exists(Home(".claude-wanted")));
     }
 
@@ -316,7 +316,7 @@ public class HookInstallerScriptsTests : IDisposable
         Assert.Equal(HookInstallOutcome.Ok, result.Outcome);
         Assert.Contains("Skipping profile '../escape'", result.Error);
         Assert.Contains("Skipping profile '../escape'", File.ReadAllText(HookInstallerLog.Path_));
-        Assert.Contains("ClaudeBuddyHook", File.ReadAllText(Home(".claude-ok", "settings.json")));
+        Assert.Contains("OrbweaverHook", File.ReadAllText(Home(".claude-ok", "settings.json")));
     }
 
     // Skipped unless asked for: run against the installed app bundle rather than
@@ -380,7 +380,7 @@ public class HookInstallerScriptsTests : IDisposable
             });
 
         Assert.Equal(HookInstallOutcome.Ok, result.Outcome);
-        Assert.Contains("ClaudeBuddyHook", File.ReadAllText(Home(".claude-wanted", "settings.json")));
+        Assert.Contains("OrbweaverHook", File.ReadAllText(Home(".claude-wanted", "settings.json")));
         Assert.False(Directory.Exists(Home(".claude-decoy")));
     }
 }
