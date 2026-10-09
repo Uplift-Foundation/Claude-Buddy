@@ -117,6 +117,9 @@ public class HookInstallerScriptsTests : IDisposable
 
         Assert.Equal(HookInstallOutcome.Ok, result.Outcome);
         Assert.Contains("OrbweaverHook", File.ReadAllText(Home(".claude-wanted", "settings.json")));
+        // The Settings card's own check, on what the real installer wrote: an
+        // OrbweaverHook.sh profile, which IsWiredIn used to call un-wired.
+        Assert.True(HookInstaller.IsWiredIn(".claude-wanted", _home));
         Assert.False(Directory.Exists(Home(".claude-decoy")));
     }
 
@@ -422,6 +425,12 @@ public class HookInstallerScriptsTests : IDisposable
     // The Windows installer's copy of the seam, in each spelling (CB-256): the
     // new name, the pre-rename one, and both pointed at different lists, where
     // the new name's must win. Runs on the Windows leg only.
+    //
+    // It also asserts HookInstaller.IsWiredIn on what the real installer wrote,
+    // which is the check the Settings card makes after a run. That check used to
+    // look only for the pre-rename script name, so this profile — wired with
+    // OrbweaverHook.ps1 — read as un-wired; the only test that asserted it
+    // returned early unless an installed bundle was on the machine.
     [WindowsOnlyTheory]
     [InlineData(Spelling.New)]
     [InlineData(Spelling.Legacy)]
@@ -452,6 +461,7 @@ public class HookInstallerScriptsTests : IDisposable
 
         Assert.Equal(HookInstallOutcome.Ok, result.Outcome);
         Assert.Contains("OrbweaverHook", File.ReadAllText(Home(".claude-wanted", "settings.json")));
+        Assert.True(HookInstaller.IsWiredIn(".claude-wanted", _home));
         Assert.False(Directory.Exists(Home(".claude-decoy")));
         Assert.False(Directory.Exists(Home(".claude-legacy")));
     }
