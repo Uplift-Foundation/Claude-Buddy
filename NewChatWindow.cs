@@ -129,7 +129,7 @@ namespace Orbweaver
         // availability, the agent list, starting the conversation, and
         // finding the orb the scan eventually creates for it. Same shape as
         // every other seam here: a test points these at a canned answer
-        // instead of ClaudeBuddySettings/OpenClawSessions/SessionManager.
+        // instead of OrbweaverSettings/OpenClawSessions/SessionManager.
         internal static Func<OpenClawNewChatAvailability>? OpenClawAvailabilityForTests;
         internal static Func<IReadOnlyList<(string Id, string Name)>>? KnownAgentsForTests;
 

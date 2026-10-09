@@ -60,7 +60,7 @@ namespace Orbweaver
         // structure) means the two surfaces can never disagree about whether a
         // distro is wired. Plain file I/O — no subprocess call needed just to
         // check status. profileDirName defaults to the standard '.claude';
-        // any CLAUDE_CONFIG_DIR-style name (see ClaudeBuddySettings.
+        // any CLAUDE_CONFIG_DIR-style name (see OrbweaverSettings.
         // ClaudeCodeProfileDirs) works the same way.
         // Excluded from coverage: resolves a path through the registry and reads a
         // file inside a live distro; what it looks for in that text is
@@ -135,7 +135,7 @@ namespace Orbweaver
             return TryRun(@"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe", 45_000, args);
         }
 
-        // Call after ClaudeBuddySettings.Add/RemoveClaudeCodeProfileDir, so an
+        // Call after OrbweaverSettings.Add/RemoveClaudeCodeProfileDir, so an
         // edit to the extra-profile list takes effect immediately rather than
         // silently doing nothing until every already-wired surface is
         // manually re-toggled — matching this window's "changes apply

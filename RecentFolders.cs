@@ -21,7 +21,7 @@ namespace Orbweaver
         // remote-control session has no local folder to offer here, and
         // SessionStatus.IsLocalCli is exactly the test the rest of the app
         // already uses to draw that line. `saved` is whatever
-        // ClaudeBuddySettings.NewChatRecentFolders last held, oldest choice
+        // OrbweaverSettings.NewChatRecentFolders last held, oldest choice
         // first is not assumed: callers pass it in whatever order they kept
         // it, and this method preserves that order for the part it doesn't
         // already know is live.
@@ -35,7 +35,7 @@ namespace Orbweaver
             if (max <= 0) return Array.Empty<string>();
 
             // Case-insensitive dedup only on Windows, matching the rest of
-            // this app's path handling (ClaudeBuddySettings' own
+            // this app's path handling (OrbweaverSettings' own
             // RemoteControlProfileDirs comment and ClaudeCodeProfileDirs
             // callers do the same) — macOS and Linux paths are case-sensitive
             // by default, so folding case there could merge two genuinely

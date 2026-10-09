@@ -1,6 +1,6 @@
 namespace Orbweaver
 {
-    // ClaudeBuddySettings is compiled in for its gateway fields, and reaches
+    // OrbweaverSettings is compiled in for its gateway fields, and reaches
     // for a default voice name from each speech engine on the way past. The
     // real ones pull in Whisper, PvRecorder and the platform audio stack, none
     // of which a probe that reads JSON off a socket has any use for.
@@ -25,7 +25,7 @@ namespace Orbweaver
         public const int DefaultPort = 7677;
     }
 
-    // ClaudeBuddySettings.SpeakScope is typed against this enum (added by the
+    // OrbweaverSettings.SpeakScope is typed against this enum (added by the
     // turn-sounds feature, CB-168 found the probe broken by it again). The
     // real type lives in SpeechSummary.cs, which also drags in ClaudeBinary
     // and InternalSessions — window/process-adjacent, and unrelated to what

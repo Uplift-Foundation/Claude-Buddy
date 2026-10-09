@@ -14,7 +14,7 @@ namespace Orbweaver
     // default-coloured artwork, which the tray uses directly when a colour has
     // never been changed and as an alpha mask when it has.
     //
-    // A projection over ClaudeBuddySettings rather than a cache of it. The
+    // A projection over OrbweaverSettings rather than a cache of it. The
     // settings model is already in memory once Load() has run, so reading
     // through costs a property get, and there is no second copy to fall out of
     // step. Nothing here notifies, either: whoever writes a colour calls
@@ -76,7 +76,7 @@ namespace Orbweaver
         // The only writer. Keeps the state -> setting mapping beside For() above
         // rather than spreading a third switch through the settings window.
         // A null hex means "back to the built-in colour", which is not the same
-        // as writing today's default — see ClaudeBuddySettings.IdleColor.
+        // as writing today's default — see OrbweaverSettings.IdleColor.
         public static void Set(string state, string? hex)
         {
             switch (state)

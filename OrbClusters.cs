@@ -43,7 +43,7 @@ namespace Orbweaver
         Hidden,
 
         // An orb, gathered into the same shape as everything else. What the app
-        // has always done, and still the default — see ClaudeBuddySettings.
+        // has always done, and still the default — see OrbweaverSettings.
         WithChats,
 
         // An orb, gathered into a shape of its own, drawn beside the chats'

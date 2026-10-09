@@ -83,12 +83,12 @@ class CoverageShFunctions(unittest.TestCase):
 
     def test_vstest_fail_lines_give_the_test_names(self):
         log = (b"[xUnit.net 00:00:00.00] xUnit.net VSTest Adapter v2.8.2\n"
-               b"[xUnit.net 00:00:04.59]     ClaudeBuddy.Tests.PersonaRealFileTests.APictureOneByteOverTheCap [FAIL]\n"
-               b"  Failed ClaudeBuddy.Tests.PersonaRealFileTests.APictureOneByteOverTheCap [12 ms]\n"
-               b"[xUnit.net 00:00:05.10]     ClaudeBuddy.Tests.X.ATheory(value: \"a b\") [FAIL]\n"
+               b"[xUnit.net 00:00:04.59]     Orbweaver.Tests.PersonaRealFileTests.APictureOneByteOverTheCap [FAIL]\n"
+               b"  Failed Orbweaver.Tests.PersonaRealFileTests.APictureOneByteOverTheCap [12 ms]\n"
+               b"[xUnit.net 00:00:05.10]     Orbweaver.Tests.X.ATheory(value: \"a b\") [FAIL]\n"
                b"Failed!  - Failed:     2, Passed:   799, Skipped:    14, Total:   815\n")
-        self.assertEqual(["ClaudeBuddy.Tests.PersonaRealFileTests.APictureOneByteOverTheCap",
-                          'ClaudeBuddy.Tests.X.ATheory(value: "a b")'], self.names_in(log))
+        self.assertEqual(["Orbweaver.Tests.PersonaRealFileTests.APictureOneByteOverTheCap",
+                          'Orbweaver.Tests.X.ATheory(value: "a b")'], self.names_in(log))
 
     def report(self, xml):
         path = os.path.join(self.tmp, "ui.xunit.xml")
@@ -107,14 +107,14 @@ class CoverageShFunctions(unittest.TestCase):
         # report: id before name, result after it.
         path = self.report(
             '<assembly name="x"><collection>'
-            '<test id="1" name="ClaudeBuddy.Tests.ZzForcedRed.ZzThis" result="Fail" time="0.007" type="T" method="M">'
+            '<test id="1" name="Orbweaver.Tests.ZzForcedRed.ZzThis" result="Fail" time="0.007" type="T" method="M">'
             '<failure><message>forced</message></failure></test>'
-            '<test id="2" name="ClaudeBuddy.Tests.Y.ATheory(value: &quot;a &amp; b&quot;)" result="Fail" time="0.1">'
+            '<test id="2" name="Orbweaver.Tests.Y.ATheory(value: &quot;a &amp; b&quot;)" result="Fail" time="0.1">'
             '</test>'
-            '<test id="3" name="ClaudeBuddy.Tests.Y.Fine" result="Pass" time="0.1"></test>'
+            '<test id="3" name="Orbweaver.Tests.Y.Fine" result="Pass" time="0.1"></test>'
             '</collection></assembly>')
-        self.assertEqual(['ClaudeBuddy.Tests.Y.ATheory(value: "a & b")',
-                          "ClaudeBuddy.Tests.ZzForcedRed.ZzThis"], self.names_from(path))
+        self.assertEqual(['Orbweaver.Tests.Y.ATheory(value: "a & b")',
+                          "Orbweaver.Tests.ZzForcedRed.ZzThis"], self.names_from(path))
 
     def test_a_green_report_and_a_missing_one_name_nothing(self):
         # The control for the case above, and the no-report case a suite that
@@ -125,9 +125,9 @@ class CoverageShFunctions(unittest.TestCase):
         self.assertEqual([], self.names_from(path, os.path.join(self.tmp, "absent.xunit.xml")))
 
     def test_crlf_output_from_windows_gives_the_same_names_without_carriage_returns(self):
-        log = (b"[xUnit.net 00:00:04.59]     ClaudeBuddy.Tests.A.B [FAIL]\r\n"
-               b"[xUnit.net 00:00:04.61]     ClaudeBuddy.Tests.C.D [FAIL]\r\n")
-        self.assertEqual(["ClaudeBuddy.Tests.A.B", "ClaudeBuddy.Tests.C.D"], self.names_in(log))
+        log = (b"[xUnit.net 00:00:04.59]     Orbweaver.Tests.A.B [FAIL]\r\n"
+               b"[xUnit.net 00:00:04.61]     Orbweaver.Tests.C.D [FAIL]\r\n")
+        self.assertEqual(["Orbweaver.Tests.A.B", "Orbweaver.Tests.C.D"], self.names_in(log))
 
     def test_a_green_log_names_nothing_not_even_the_summary_counts(self):
         # The control: summary lines say "failed" and "Failed" too, and must

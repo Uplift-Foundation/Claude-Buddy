@@ -76,7 +76,7 @@ namespace Orbweaver
                 }
 
                 // Rename over the target, same crash-safety reasoning as
-                // ClaudeBuddySettings.Save: a process killed mid-download must
+                // OrbweaverSettings.Save: a process killed mid-download must
                 // never leave a half-written file that ModelDownloaded reports
                 // as present.
                 File.Move(tempPath, ModelPath, overwrite: true);

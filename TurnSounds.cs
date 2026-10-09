@@ -89,7 +89,7 @@ namespace Orbweaver
         // Test seam: a scan-level test wants a clean rate-limit clock and no
         // timer left armed from a previous case, without sleeping two real
         // seconds to clear either — the same reason
-        // ClaudeBuddySettings.ReloadForTests exists.
+        // OrbweaverSettings.ReloadForTests exists.
         // The tail of the chime chain as it stands, so a test can await "everything
         // enqueued so far has played" instead of sleeping.
         internal static Task ChimesEnqueuedSoFar()

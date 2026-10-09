@@ -402,7 +402,7 @@ namespace Orbweaver
         // five minutes, so "Forever" meant 59 permanent orbs.
         //
         // So the two questions are separated: this bounds which sessions exist
-        // as far as Claude Buddy is concerned, and the lifetime setting still
+        // as far as Orbweaver is concerned, and the lifetime setting still
         // decides how long one of those lingers after it goes quiet.
         // Read per scan rather than cached, so changing it in Settings takes
         // effect on the next poll rather than at the next launch.
@@ -769,7 +769,7 @@ namespace Orbweaver
         public static IReadOnlyList<Session> Snapshot() =>
             OrbweaverSettings.OpenClawEnabled ? _snapshot : Array.Empty<Session>();
 
-        // A test seam, in the same spirit as ClaudeBuddySettings.ReloadForTests
+        // A test seam, in the same spirit as OrbweaverSettings.ReloadForTests
         // and OpenClawIdentity.ResetForTests: the poll loop above is the only
         // thing that publishes a snapshot, and it is excluded from coverage
         // because it needs a live gateway. Without this, everything downstream of

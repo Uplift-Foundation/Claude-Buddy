@@ -38,12 +38,12 @@ never been run. That's the gap you're closing.
 ## Setup
 
 The repo is already cloned at `C:\cb`, built, and checked out on the
-`windows-verification` branch, with `publish\ClaudeBuddy.exe` present. The Mac
+`windows-verification` branch, with `publish\Orbweaver.exe` present. The Mac
 side did that over SSH. Rebuild if you change code:
 
 ```
 cd C:\cb
-dotnet publish ClaudeBuddy.csproj -c Release -r win-x64 -o publish
+dotnet publish Orbweaver.csproj -c Release -r win-x64 -o publish
 ```
 
 The project targets net8.0 with `RollForward=LatestMajor`; the .NET 10 SDK here
@@ -76,7 +76,7 @@ Screenshots are the ground truth when the two disagree.
 
 ## What to verify
 
-Run `publish\ClaudeBuddy.exe`. Expect no main window — that's correct, it's a
+Run `publish\Orbweaver.exe`. Expect no main window — that's correct, it's a
 notification-area app. Record PASS / FAIL / INCONCLUSIVE plus details for each:
 
 1. **It starts and stays up.** Still running after ~15s. If it exits, run it from
@@ -86,12 +86,12 @@ notification-area app. Record PASS / FAIL / INCONCLUSIVE plus details for each:
    and does it read as a coloured ring?
 3. **Right-click menu.** Record the exact item list. Expect the session list (or
    "No Claude Code sessions"), `Show orbs`, `Reset all sessions to idle`,
-   `Settings…`, `Quit Claude Buddy`. There should be **no** Claude Desktop
+   `Settings…`, `Quit Orbweaver`. There should be **no** Claude Desktop
    section — that's macOS-only, and its absence here is correct.
 4. **Orbs.** An orb should appear near the top-right per session, showing the
    first letter of the chat name, falling back to the folder name; violet while
    Claude works, slate when idle, gone when the session ends.
-   - The state comes from `ClaudeBuddyHook.ps1` writing a status file. Test the
+   - The state comes from `OrbweaverHook.ps1` writing a status file. Test the
      app by invoking that hook yourself with a synthetic payload and watching
      what the app does — that isolates the app from Claude Code's own hook
      wiring and is fully deterministic.
@@ -114,7 +114,7 @@ notification-area app. Record PASS / FAIL / INCONCLUSIVE plus details for each:
    change and Windows may have its own quirk), show "No profiles found"
    (correct here), show both global toggles, and close on `Done`.
 7. **Settings persist.** Turn `Show orbs` off, quit, relaunch, confirm it's still
-   off. Then check `%APPDATA%\ClaudeBuddy\settings.json` is valid JSON with **no**
+   off. Then check `%APPDATA%\Orbweaver\settings.json` is valid JSON with **no**
    UTF-8 BOM — it's read by `System.Text.Json`, which rejects a leading BOM as an
    invalid start of value.
 8. **Idle CPU.** With a couple of orbs up, sample the process's CPU over several

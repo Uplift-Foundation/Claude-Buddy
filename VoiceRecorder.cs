@@ -8,7 +8,7 @@ namespace Orbweaver
     // sample rate is fixed at 16kHz mono, which is exactly what Whisper.net
     // wants, so there is no resampling step anywhere in this path.
     //
-    // Only ever constructed when ClaudeBuddySettings.VoiceInputEnabled is on
+    // Only ever constructed when OrbweaverSettings.VoiceInputEnabled is on
     // (see OrbWindow) — nothing here runs, and no mic permission prompt fires,
     // until a user has explicitly opted in.
     // Excluded from coverage: the constructor calls PvRecorder.Create, which

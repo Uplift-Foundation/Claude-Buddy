@@ -16,7 +16,7 @@ No feature work starts from a chat message alone. A request becomes a CB ticket 
 
 ### The team
 
-Features are built by an **agent team**, not one session doing everything — the same mechanism this app draws orbs for, with each member spawned as its own `claude` process carrying `--agent-name`, `--team-name` and `--parent-session-id`, the last of which `AgentTeam.cs` reads off the process to link a member to its lead. Building Claude Buddy with the thing Claude Buddy visualises is deliberate: a team that looks wrong on the board is a free bug report.
+Features are built by an **agent team**, not one session doing everything — the same mechanism this app draws orbs for, with each member spawned as its own `claude` process carrying `--agent-name`, `--team-name` and `--parent-session-id`, the last of which `AgentTeam.cs` reads off the process to link a member to its lead. Building Orbweaver with the thing Orbweaver visualises is deliberate: a team that looks wrong on the board is a free bug report.
 
 - **Product manager** — writes the requirement, owns the ticket's status, calls done.
 - **Architect** / **engineer** — build a refined ticket. As many of each as the work genuinely splits into, one per independent surface.
@@ -49,7 +49,7 @@ Those are the `model:` values the Agent and Workflow tools accept; `effort:` is 
 
 Engineers and architects build, QA tests, back and forth until it stops coming back. QA's half is **Every feature ships with its tests** below — unit, integration and UI covering 100% of the lines the branch adds — so "QA passed" means those are green, not that somebody had a look.
 
-**A feature works on Windows and macOS or it is not a feature.** CI enforces the shape: `macos-latest`/`osx-arm64` and `windows-latest`/`win-x64`, every suite on both legs. Parity is more than a green build, though — a feature no install path wires up is equally unfinished, so check `tools/build-macos-dmg.sh`, `tools/build-macos-app.sh`'s Resources copy, `tools/ClaudeBuddy.iss`, `tools/install-hooks.sh`/`.ps1` and the README install section, and confirm any platform gate is real (WSL) rather than accidental.
+**A feature works on Windows and macOS or it is not a feature.** CI enforces the shape: `macos-latest`/`osx-arm64` and `windows-latest`/`win-x64`, every suite on both legs. Parity is more than a green build, though — a feature no install path wires up is equally unfinished, so check `tools/build-macos-dmg.sh`, `tools/build-macos-app.sh`'s Resources copy, `tools/Orbweaver.iss`, `tools/install-hooks.sh`/`.ps1` and the README install section, and confirm any platform gate is real (WSL) rather than accidental.
 
 ### PR, screenshots, and the call on done
 
@@ -96,7 +96,7 @@ That is not hypothetical. 0.4.3-beta was cut because seventeen merged PRs had be
 So the sequence below runs to the end, in one go, by whoever started it:
 
 1. **Branch** `release/<version>` off `develop`.
-2. **Bump `<Version>`** in `ClaudeBuddy.csproj` — the single source of truth the packaging scripts and `release.yml`'s `check-version` gate both parse. **Patch only** (`0.5.0-beta` → `0.5.1-beta`) unless you are told to bump the minor or major.
+2. **Bump `<Version>`** in `Orbweaver.csproj` — the single source of truth the packaging scripts and `release.yml`'s `check-version` gate both parse. **Patch only** (`0.5.0-beta` → `0.5.1-beta`) unless you are told to bump the minor or major.
 3. **Write `.github/release-notes/v<version>.md`**, which the workflow publishes with the tag. Without it the release gets generated notes and a warning.
 4. **Open the PR against `main`** and let CI go green on *both* rids.
 5. **Merge it to `main`.**
@@ -213,7 +213,7 @@ The three machines, and all three matter for a different reason:
 
 That Windows box is also the ComfyUI host, so `curl http://192.168.1.24:8000/system_stats` is a quick liveness check for it.
 
-**A green CI leg is not an install.** `windows-latest` runs tests against a checkout; it never runs `tools/ClaudeBuddy.iss`, never puts an icon in a tray, and never shows anybody a window. The parity rule above — a feature no install path wires up is unfinished — is about exactly the gap between those two things, and the only way to close it is to install the thing.
+**A green CI leg is not an install.** `windows-latest` runs tests against a checkout; it never runs `tools/Orbweaver.iss`, never puts an icon in a tray, and never shows anybody a window. The parity rule above — a feature no install path wires up is unfinished — is about exactly the gap between those two things, and the only way to close it is to install the thing.
 
 **Say which machines you actually installed on, and which you did not.** Same rule as everywhere else here: "installed on all three" when one of them was asleep is worse than "installed on the MacBook and the mini, Windows box was off". If a machine is unreachable, say so and carry on rather than silently dropping it.
 
@@ -247,7 +247,7 @@ dotnet run --project tools/openclaw-probe -- sessions
 
 Note the probe is itself subject to the gate, because `dotnet` is a third-party binary. **A failing probe alongside a working app is expected, not a contradiction** — it says the terminal lacks the grant, not that the app does. `OpenClawGateway.ExplainConnectFailure` now appends a hint naming the settings pane, so the app says this itself rather than only reporting the errno. CB-38 has the full diagnosis.
 
-`<Version>` in `ClaudeBuddy.csproj` is the single source of truth for the shipped version.
+`<Version>` in `Orbweaver.csproj` is the single source of truth for the shipped version.
 
 ## Every feature ships with its tests
 
@@ -274,7 +274,7 @@ Where a line genuinely cannot be covered — an OS call with no seam, a `catch` 
 To see the number:
 
 ```bash
-dotnet add tests/UnitTests/ClaudeBuddy.UnitTests.csproj package coverlet.collector
+dotnet add tests/UnitTests/Orbweaver.UnitTests.csproj package coverlet.collector
 dotnet test tests/UnitTests --collect:"XPlat Code Coverage"
 # tests/UnitTests/TestResults/<guid>/coverage.cobertura.xml
 ```
@@ -318,13 +318,13 @@ The wrong sentence survived because it read like a finding and was never checked
 
 ## The automated suite
 
-Three xUnit suites — `tests/UnitTests`, `tests/IntegrationTests`, `tests/UiTests` — join the three above rather than replacing them: one command, `dotnet test tests/Tests.sln`, runs all three; `claudeBuddy.sln` stays app-only and `Tests.sln` holds only these, so neither `dotnet build` nor `dotnet test` at the root can trip over the other's projects. CI runs every suite — including `tests/UiScreenshots`, which renders through real Skia rather than the null renderer — on both runners, before packaging.
+Three xUnit suites — `tests/UnitTests`, `tests/IntegrationTests`, `tests/UiTests` — join the three above rather than replacing them: one command, `dotnet test tests/Tests.sln`, runs all three; `Orbweaver.sln` stays app-only and `Tests.sln` holds only these, so neither `dotnet build` nor `dotnet test` at the root can trip over the other's projects. CI runs every suite — including `tests/UiScreenshots`, which renders through real Skia rather than the null renderer — on both runners, before packaging.
 
-They reference `ClaudeBuddy.csproj` with a `<ProjectReference>` rather than `<Compile Include>`-ing individual files, because `SessionManager` and `ClaudeBuddySettings` have dependency closures too large for that — and `<InternalsVisibleTo>` in `ClaudeBuddy.csproj` grants exactly these three assemblies visibility into anything `internal`.
+They reference `Orbweaver.csproj` with a `<ProjectReference>` rather than `<Compile Include>`-ing individual files, because `SessionManager` and `OrbweaverSettings` have dependency closures too large for that — and `<InternalsVisibleTo>` in `Orbweaver.csproj` grants exactly these three assemblies visibility into anything `internal`.
 
-`UnitTests` covers more pure logic the same way as `ArrangementTests`/ `GlyphTests`, most valuably `SessionManager`'s `Superseded` and `InheritTerminalInfo` — the rules deciding which status file is the live orb and which sibling donates terminal coordinates to one that has none. `IntegrationTests` runs `ClaudeBuddyHook.sh`/`.ps1` as real subprocesses, asserting the invariant Codex depends on (exit 0, empty stdout/stderr — its hook stdout is parsed as strict JSON and exit 2 means deny), plus `TranscriptReader`'s tail/truncation rules and `ClaudeBuddySettings`' unknown-key round-trip. The `OpenArgumentDeliveryTests` cases that launch app bundles through LaunchServices skip on a developer's Mac, because every launch leaves a tile in the logged-in user's Dock, and run only in CI (`CI=true`) or with `CLAUDE_BUDDY_LAUNCH_TESTS=1` (CB-246). `UiTests` runs headless via `Avalonia.Headless.XUnit`, using the real `App` class as its own host (its `OnFrameworkInitializationCompleted` guard is never true under a headless lifetime, so the mutex/`SessionManager.Start()`/tray body never runs) — covers `OrbFlyout`'s real clicks, `OrbWindow.UpdateFrom`, and `ChatPanel` driven by `FakeChatSession` (an in-memory `IRemoteChatSession`, the reason that interface exists per its own header comment). It never synthesizes a click on an orb itself: that reaches `TerminalFocuser`, which fires real `tmux`/`ps`/`osascript` off-thread with no OS guard at its own entry point.
+`UnitTests` covers more pure logic the same way as `ArrangementTests`/ `GlyphTests`, most valuably `SessionManager`'s `Superseded` and `InheritTerminalInfo` — the rules deciding which status file is the live orb and which sibling donates terminal coordinates to one that has none. `IntegrationTests` runs `OrbweaverHook.sh`/`.ps1` as real subprocesses, asserting the invariant Codex depends on (exit 0, empty stdout/stderr — its hook stdout is parsed as strict JSON and exit 2 means deny), plus `TranscriptReader`'s tail/truncation rules and `OrbweaverSettings`' unknown-key round-trip. The `OpenArgumentDeliveryTests` cases that launch app bundles through LaunchServices skip on a developer's Mac, because every launch leaves a tile in the logged-in user's Dock, and run only in CI (`CI=true`) or with `ORBWEAVER_LAUNCH_TESTS=1` (CB-246). Every `ORBWEAVER_*` variable in this repo used to be spelled `CLAUDE_BUDDY_*`; the old spelling still works as a fallback, and the new one wins when both are set. `UiTests` runs headless via `Avalonia.Headless.XUnit`, using the real `App` class as its own host (its `OnFrameworkInitializationCompleted` guard is never true under a headless lifetime, so the mutex/`SessionManager.Start()`/tray body never runs) — covers `OrbFlyout`'s real clicks, `OrbWindow.UpdateFrom`, and `ChatPanel` driven by `FakeChatSession` (an in-memory `IRemoteChatSession`, the reason that interface exists per its own header comment). It never synthesizes a click on an orb itself: that reaches `TerminalFocuser`, which fires real `tmux`/`ps`/`osascript` off-thread with no OS guard at its own entry point.
 
-All three point `CLAUDE_BUDDY_SETTINGS_DIR` at a fresh temp directory via a `[ModuleInitializer]` before anything else runs — even constructing an `OrbWindow` reads a colour setting in a field initializer. That env var is checked in `ClaudeBuddySettings.Directory` before `SpecialFolder.ApplicationData`, the same pattern as `CLAUDE_BUDDY_PROFILE_ROOT` in `ClaudeDesktopManager.cs` and `CLAUDE_BUDDY_BUNDLE_ROOT` in `ClaudeDesktopBundles.cs`, which redirects the cloned-bundle cache so a test never writes into the live one; without it a test reads and writes the real settings.json.
+All three point `ORBWEAVER_SETTINGS_DIR` at a fresh temp directory via a `[ModuleInitializer]` before anything else runs — even constructing an `OrbWindow` reads a colour setting in a field initializer. That env var is checked in `OrbweaverSettings.Directory` before `SpecialFolder.ApplicationData`, the same pattern as `ORBWEAVER_PROFILE_ROOT` in `ClaudeDesktopManager.cs` and `ORBWEAVER_BUNDLE_ROOT` in `ClaudeDesktopBundles.cs`, which redirects the cloned-bundle cache so a test never writes into the live one; without it a test reads and writes the real settings.json.
 
 ## Coverage
 
@@ -345,7 +345,7 @@ Learn the signature, because it reads as a regression rather than as an error. C
 
 The three console suites still contribute nothing *as suites* — `ArrangementTests`, `GlyphTests`, `TranscriptTests` are plain exes, not test-SDK projects. Their **cases** do count now: CB-3 moved each matrix into a class that `UnitTests` compiles in and runs (`ArrangementSweep`, `GlyphSuite`, `TranscriptSuite`), so `OrbArrangement` no longer reads 0% while being the most exhaustively verified file here. Run the exes for the grouped failure report.
 
-Any new UI test class that reads or writes `ClaudeBuddySettings` goes in `[Collection("Settings")]`. The settings model is a process-wide static that almost everything visual reads while being constructed, so parallel classes race to a different set of *executed lines* rather than to a failure — three runs of an identical binary once reported 1914, 2024 and 1914 covered lines in SettingsWindow.cs. See `tests/UiTests/SettingsCollection.cs`.
+Any new UI test class that reads or writes `OrbweaverSettings` goes in `[Collection("Settings")]`. The settings model is a process-wide static that almost everything visual reads while being constructed, so parallel classes race to a different set of *executed lines* rather than to a failure — three runs of an identical binary once reported 1914, 2024 and 1914 covered lines in SettingsWindow.cs. See `tests/UiTests/SettingsCollection.cs`.
 
 And read the headline as coverage **of what remains**: an excluded file and a deleted one look identical in a report. `merge-coverage.py` reads the attributes back out of the sources and prints what was held out, what is excluded inside measured files, and what is absent for no stated reason.
 
@@ -365,13 +365,13 @@ This was Windows-only until it wasn't, on the reasoning that "neither concept ex
 
 ## Grok Build specifically
 
-`docs/grok-findings.md` is the record for Grok Build — the ACP `updates.jsonl` stream, `summary.json` titles, hook payload spellings, and the credits-config shape. Read it before changing `GrokTranscript.cs`, `ClaudeBuddyHook.sh` or `tools/install-grok-hooks.sh`, and add to it rather than to a commit message when you measure something new.
+`docs/grok-findings.md` is the record for Grok Build — the ACP `updates.jsonl` stream, `summary.json` titles, hook payload spellings, and the credits-config shape. Read it before changing `GrokTranscript.cs`, `OrbweaverHook.sh` or `tools/install-grok-hooks.sh`, and add to it rather than to a commit message when you measure something new.
 
-Grok also fires Claude Buddy's Claude Code hooks via its compatibility layer. The hook itself treats `GROK_SESSION_ID` as the source of truth so those sessions are labelled `cli:grok` rather than `cli:claude`, and it never writes an `agent-color` record into Grok's transcript.
+Grok also fires Orbweaver's Claude Code hooks via its compatibility layer. The hook itself treats `GROK_SESSION_ID` as the source of truth so those sessions are labelled `cli:grok` rather than `cli:claude`, and it never writes an `agent-color` record into Grok's transcript.
 
 ## Codex specifically
 
-`docs/codex-findings.md` is the reference for everything measured about the Codex CLI — the rollout format, the hook events and their payloads, the TUI's approval prompt, and a clearly separated list of what has *not* been verified. Read it before changing `CodexTranscript.cs`, `ClaudeBuddyHook.sh` or `tools/install-codex-hooks.sh`, and add to it rather than to a commit message when you measure something new.
+`docs/codex-findings.md` is the reference for everything measured about the Codex CLI — the rollout format, the hook events and their payloads, the TUI's approval prompt, and a clearly separated list of what has *not* been verified. Read it before changing `CodexTranscript.cs`, `OrbweaverHook.sh` or `tools/install-codex-hooks.sh`, and add to it rather than to a commit message when you measure something new.
 
 Two things about Codex support are worth knowing before you are surprised by them:
 

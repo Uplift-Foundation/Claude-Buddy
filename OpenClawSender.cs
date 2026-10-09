@@ -23,7 +23,7 @@ namespace Orbweaver
     //
     //   * The operator typing in Discord — senderIsOwner true, plus their
     //     Discord id, display name and username.
-    //   * The operator typing here, in Claude Buddy — no sender fields at all,
+    //   * The operator typing here, in Orbweaver — no sender fields at all,
     //     and a top-level idempotencyKey of "<guid>:user". That suffix is what
     //     separates it from the agent's own reply, which carries
     //     "cli-assistant:<guid>" and is assistant-role anyway.
@@ -50,7 +50,7 @@ namespace Orbweaver
     // controls and nobody else documents.
     internal static class OpenClawSender
     {
-        // What a message Claude Buddy posts to a channel wears at the front.
+        // What a message Orbweaver posts to a channel wears at the front.
         //
         // Fixed rather than composed, and it lives here rather than at the
         // composer, because it is read back as well as written: the copies that
@@ -110,7 +110,7 @@ namespace Orbweaver
             // words as somebody else's.
             //
             // Nothing else is *expected* to write this prefix, and the only
-            // thing Claude Buddy mirrors is a message the person at the keyboard
+            // thing Orbweaver mirrors is a message the person at the keyboard
             // just typed. Expected, not guaranteed: anyone in the channel can
             // type those characters, and if they do their words are drawn as the
             // operator's — blue and right-aligned — beating an explicit

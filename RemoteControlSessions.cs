@@ -8,7 +8,7 @@ namespace Orbweaver
     // for free.
     //
     // **Everything here arrives over the direct link** (PeerSessions and
-    // PeerMirrorHost) from a Claude Buddy running on the far machine. This class
+    // PeerMirrorHost) from an Orbweaver running on the far machine. This class
     // used to be the home of the Remote Control relay — a live Claude Code
     // session per account, polled for its peer list — and 937de9ec deleted that
     // relay. CB-238 then deleted what it left behind here: the table the relays

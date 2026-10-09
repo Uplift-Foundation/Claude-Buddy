@@ -259,7 +259,7 @@ namespace Orbweaver
         OpenClaw,
 
         // A session on another machine, served over the direct link by the
-        // Claude Buddy running there (see PeerSessions). It is not local
+        // Orbweaver running there (see PeerSessions). It is not local
         // and there is no terminal here to focus, which is the distinction
         // IsLocalCli draws and the only one the rest of the app cares about.
         RemoteControl,
@@ -277,8 +277,8 @@ namespace Orbweaver
         ClaudeCloud
     }
 
-    // Watches %TEMP%\claude_buddy\<session_id>.txt (one per running Claude
-    // Code session, written by ClaudeBuddyHook.ps1) and keeps one OrbWindow
+    // Watches %TEMP%\orbweaver\<session_id>.txt (one per running Claude
+    // Code session, written by OrbweaverHook.ps1) and keeps one OrbWindow
     // per session in sync. A session is considered gone once its file is
     // deleted (SessionEnd hook, on graceful exit) or hasn't been touched in
     // StaleAfter (fallback for Ctrl+C and other ungraceful termination,
@@ -380,8 +380,8 @@ namespace Orbweaver
         // every future writer of either global remembers to join, and this is a
         // scan that no longer reads either.
         //
-        // Same pattern, and the same argument, as CLAUDE_BUDDY_SETTINGS_DIR and
-        // CLAUDE_BUDDY_PROFILE_ROOT.
+        // Same pattern, and the same argument, as ORBWEAVER_SETTINGS_DIR and
+        // ORBWEAVER_PROFILE_ROOT.
         private readonly Func<IReadOnlyList<string>> _userConfigDirs;
 
         public SessionManager()
@@ -545,7 +545,7 @@ namespace Orbweaver
         //
         // Per manager rather than static, so a test that shortens it cannot
         // change what another test class running beside it does — the same
-        // hazard ClaudeBuddySettings' process-wide statics create for the UI
+        // hazard OrbweaverSettings' process-wide statics create for the UI
         // suites, and cheaper to avoid here than to serialise around.
         internal TimeSpan SweepGrace { get; set; } = TimeSpan.FromMinutes(10);
 
@@ -3989,7 +3989,7 @@ namespace Orbweaver
 
             // QA (CB-167): an empty PositionKeyFor is a deliberate "no key"
             // — a local session with no cwd, per PositionKeyFor's own early
-            // return — and the accessors on ClaudeBuddySettings already read
+            // return — and the accessors on OrbweaverSettings already read
             // an empty key as "no override, don't bother looking." Appending
             // the agent name onto that empty string used to turn it into
             // "\n<agent>", a real, non-empty key with no cwd in it at all —
