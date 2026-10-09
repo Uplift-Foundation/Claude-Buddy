@@ -7,7 +7,7 @@ using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // How a turn's text becomes the row's actual content: every Markdown block
 // kind BuildBlock knows how to draw, every inline style Line() knows how to

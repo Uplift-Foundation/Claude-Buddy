@@ -1,4 +1,4 @@
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // One event this scan noticed, already reduced to what the policy needs
     // to act on it: which kind of signal, which key its override (if any) is
@@ -50,7 +50,7 @@ namespace ClaudeBuddy
         bool MasterEnabled,
         string? DefaultFinishedSetting,
         string? DefaultAttentionSetting,
-        Func<string, ClaudeBuddySettings.OrbTurnSound?> OverrideFor,
+        Func<string, OrbweaverSettings.OrbTurnSound?> OverrideFor,
         Func<string?, string?> ResolveFinishedSound,
         Func<string?, string?> ResolveAttentionSound);
 

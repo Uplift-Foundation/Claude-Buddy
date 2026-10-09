@@ -5,7 +5,7 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // The optional high-quality speech engine: a neural TTS model (Kokoro) run by
     // a separate downloaded process. See TextToSpeech, which routes to it when the
@@ -87,7 +87,7 @@ namespace ClaudeBuddy
             "https://github.com/Uplift-Foundation/Claude-Buddy/releases/download/"
             + $"v{EngineVersion}/{Brand.SpeechEngineName}-{EngineVersion}-{EngineRid}.zip";
 
-        internal static string Root => Path.Combine(ClaudeBuddySettings.Directory, "speech-engine");
+        internal static string Root => Path.Combine(OrbweaverSettings.Directory, "speech-engine");
 
         // Voices the user added themselves, kept deliberately *outside* Root: an
         // engine upgrade deletes and replaces the whole versioned directory, so
@@ -111,7 +111,7 @@ namespace ClaudeBuddy
         // prefix falls through to the American English list and shows up
         // normally.
         public static string UserVoicesDirectory =>
-            Path.Combine(ClaudeBuddySettings.Directory, "voices");
+            Path.Combine(OrbweaverSettings.Directory, "voices");
         internal static string ModelPath => Path.Combine(Root, "kokoro-fp16.onnx");
         internal static string EngineExeName =>
             OperatingSystem.IsWindows() ? $"{Brand.SpeechEngineName}.exe" : Brand.SpeechEngineName;
@@ -285,7 +285,7 @@ namespace ClaudeBuddy
         // What TextToSpeech asks before routing anything here. Usable rather than
         // Installed, so a version bump costs an older engine for a few minutes
         // instead of costing the user their voice.
-        public static bool Available => Usable && ClaudeBuddySettings.NeuralVoiceEnabled;
+        public static bool Available => Usable && OrbweaverSettings.NeuralVoiceEnabled;
 
         public static string DefaultVoiceName => "af_heart";
 
@@ -462,7 +462,7 @@ namespace ClaudeBuddy
         [ExcludeFromCodeCoverage]
         public static Task EnsureCurrentAsync()
         {
-            if (!ClaudeBuddySettings.NeuralVoiceEnabled) return Task.CompletedTask;
+            if (!OrbweaverSettings.NeuralVoiceEnabled) return Task.CompletedTask;
 
             // Already current: nothing to fetch, but this is the moment to
             // reclaim anything a previous version left behind. Without this the
@@ -558,7 +558,7 @@ namespace ClaudeBuddy
         // overload is the one Start calls, and it is where the Speech level
         // is read — the other mutant QA planted was that read replaced with 1.
         internal static ProcessStartInfo StartInfoFor(string engine, string? voice, double? rate) =>
-            StartInfoFor(engine, voice, rate, ClaudeBuddySettings.SpeechVolume);
+            StartInfoFor(engine, voice, rate, OrbweaverSettings.SpeechVolume);
 
         internal static ProcessStartInfo StartInfoFor(string engine, string? voice, double? rate, double volume)
         {

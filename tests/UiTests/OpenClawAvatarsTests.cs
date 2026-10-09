@@ -2,7 +2,7 @@ using Avalonia.Headless.XUnit;
 using SkiaSharp;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Decoding an agent's picture into the frames an orb wears.
 //

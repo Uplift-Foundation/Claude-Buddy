@@ -4,8 +4,8 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <RollForward>LatestMajor</RollForward>
-    <AssemblyName>ClaudeBuddy.IntegrationTests</AssemblyName>
-    <RootNamespace>ClaudeBuddy.Tests</RootNamespace>
+    <AssemblyName>Orbweaver.IntegrationTests</AssemblyName>
+    <RootNamespace>Orbweaver.Tests</RootNamespace>
     <IsPackable>false</IsPackable>
   </PropertyGroup>
   <ItemGroup>

@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Covers RemoteControlSessions.Remote — the record the orb scan actually reads,
 // and the only part of that class testable without starting a real Claude Code

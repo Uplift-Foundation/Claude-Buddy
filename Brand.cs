@@ -1,4 +1,4 @@
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Every name this app goes by, in one place.
     //
@@ -105,7 +105,7 @@ namespace ClaudeBuddy
         // Not a free choice: it follows <AssemblyName> in the csproj, and
         // BrandTests checks the two agree so a rename can't break the tray icon
         // by changing one and not the other.
-        internal const string AssemblyName = "ClaudeBuddy";
+        internal const string AssemblyName = "Orbweaver";
 
         // The names that shipped before phase 2, for the migrations and
         // compatibility arms that have to recognise them. Pinned to the old
@@ -124,6 +124,9 @@ namespace ClaudeBuddy
             internal const string HookScriptPowerShell = "ClaudeBuddyHook.ps1";
             internal const string HookScriptShell = "ClaudeBuddyHook.sh";
             internal const string SingleInstanceMutexName = "ClaudeBuddy_SingleInstance_Mutex";
+            // The executable every build before phase 3 shipped as: ClaudeBuddy.exe
+            // on Windows, Contents/MacOS/ClaudeBuddy in the macOS bundle.
+            internal const string Executable = "ClaudeBuddy";
         }
     }
 }

@@ -4,7 +4,7 @@ using Avalonia.Headless.XUnit;
 using Avalonia.Threading;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-220: the usage (account) orbs have a switch of their own, apart from the
 // session orbs, while "Show orbs" — the tray item, the Settings switch and
@@ -84,17 +84,17 @@ public class UsageOrbsVisibilityTests : IDisposable
     {
         // The upgrade case: someone who had every orb hidden must not get the
         // usage orbs back just because they grew a switch of their own.
-        Assert.Null(ClaudeBuddySettings.ShowUsageOrbsStored);
-        Assert.True(ClaudeBuddySettings.ShowUsageOrbs);
+        Assert.Null(OrbweaverSettings.ShowUsageOrbsStored);
+        Assert.True(OrbweaverSettings.ShowUsageOrbs);
 
-        ClaudeBuddySettings.ShowOrbs = false;
-        Assert.False(ClaudeBuddySettings.ShowUsageOrbs);
-        Assert.Null(ClaudeBuddySettings.ShowUsageOrbsStored);
+        OrbweaverSettings.ShowOrbs = false;
+        Assert.False(OrbweaverSettings.ShowUsageOrbs);
+        Assert.Null(OrbweaverSettings.ShowUsageOrbsStored);
 
         // Once set it is its own answer, whatever ShowOrbs says.
-        ClaudeBuddySettings.ShowUsageOrbs = true;
-        Assert.True(ClaudeBuddySettings.ShowUsageOrbs);
-        Assert.False(ClaudeBuddySettings.ShowOrbs);
+        OrbweaverSettings.ShowUsageOrbs = true;
+        Assert.True(OrbweaverSettings.ShowUsageOrbs);
+        Assert.False(OrbweaverSettings.ShowOrbs);
     }
 
     [AvaloniaFact]
@@ -103,7 +103,7 @@ public class UsageOrbsVisibilityTests : IDisposable
         // AccountOrbs used to start visible with nothing telling it otherwise,
         // so the first poll after a launch with orbs hidden drew a usage orb
         // anyway. The manager now seeds it from the setting.
-        ClaudeBuddySettings.ShowOrbs = false;
+        OrbweaverSettings.ShowOrbs = false;
 
         var manager = NewManager();
 
@@ -116,8 +116,8 @@ public class UsageOrbsVisibilityTests : IDisposable
     [AvaloniaFact]
     public void AnExplicitUsageSettingWinsOverShowOrbsAtStartup()
     {
-        ClaudeBuddySettings.ShowOrbs = false;
-        ClaudeBuddySettings.ShowUsageOrbs = true;
+        OrbweaverSettings.ShowOrbs = false;
+        OrbweaverSettings.ShowUsageOrbs = true;
 
         var manager = NewManager();
 
@@ -139,9 +139,9 @@ public class UsageOrbsVisibilityTests : IDisposable
 
         Assert.False(orb.IsVisible);
         Assert.False(manager.UsageOrbsVisible);
-        Assert.False(ClaudeBuddySettings.ShowUsageOrbs);
+        Assert.False(OrbweaverSettings.ShowUsageOrbs);
         Assert.True(manager.OrbsVisible);
-        Assert.True(ClaudeBuddySettings.ShowOrbs);
+        Assert.True(OrbweaverSettings.ShowOrbs);
 
         // Asked for what it already is: nothing moves and nothing is written.
         manager.SetUsageOrbsVisible(false);
@@ -149,7 +149,7 @@ public class UsageOrbsVisibilityTests : IDisposable
 
         manager.SetUsageOrbsVisible(true);
         Assert.True(orb.IsVisible);
-        Assert.True(ClaudeBuddySettings.ShowUsageOrbs);
+        Assert.True(OrbweaverSettings.ShowUsageOrbs);
     }
 
     [AvaloniaFact]
@@ -165,7 +165,7 @@ public class UsageOrbsVisibilityTests : IDisposable
 
         Assert.True(orb.IsVisible);
         Assert.False(manager.OrbsVisible);
-        Assert.False(ClaudeBuddySettings.ShowOrbs);
+        Assert.False(OrbweaverSettings.ShowOrbs);
     }
 
     [AvaloniaFact]
@@ -181,14 +181,14 @@ public class UsageOrbsVisibilityTests : IDisposable
         Assert.False(manager.OrbsVisible);
         Assert.False(manager.UsageOrbsVisible);
         Assert.False(orb.IsVisible);
-        Assert.False(ClaudeBuddySettings.ShowOrbs);
-        Assert.Equal(false, ClaudeBuddySettings.ShowUsageOrbsStored);
+        Assert.False(OrbweaverSettings.ShowOrbs);
+        Assert.Equal(false, OrbweaverSettings.ShowUsageOrbsStored);
 
         manager.SetOrbsVisible(true);
 
         Assert.True(manager.UsageOrbsVisible);
         Assert.True(orb.IsVisible);
-        Assert.Equal(true, ClaudeBuddySettings.ShowUsageOrbsStored);
+        Assert.Equal(true, OrbweaverSettings.ShowUsageOrbsStored);
     }
 
     [AvaloniaFact]
@@ -212,7 +212,7 @@ public class UsageOrbsVisibilityTests : IDisposable
     {
         // A settings-window switch for a usage source calls this. It used to
         // pass OrbsVisible, which would put hidden usage orbs back up.
-        ClaudeBuddySettings.AccountUsageEnabled = true;
+        OrbweaverSettings.AccountUsageEnabled = true;
         var manager = NewManager();
         var orb = ShowAccountOrb(manager);
         manager.SetUsageOrbsVisible(false);

@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests
+namespace Orbweaver.Tests
 {
     // Serialises every test class in this assembly whose assertions depend on
     // CLAUDE_CONFIG_DIR holding still — not just the ones that call

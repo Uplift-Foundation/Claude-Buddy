@@ -1,7 +1,7 @@
 using System.Text;
 using Xunit;
 
-namespace ClaudeBuddy.Tests
+namespace Orbweaver.Tests
 {
     // Which bytes of a transcript the chat panel reads, and how a partial one is
     // carried across reads.

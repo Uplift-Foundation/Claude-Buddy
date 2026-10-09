@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Covers reading the roster: the envelope, the filter, the state, the link, and
 // the two ways an empty answer can be a bug rather than an answer.

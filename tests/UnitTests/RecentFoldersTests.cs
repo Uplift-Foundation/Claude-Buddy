@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // RecentFolders.Merge: the "New chat…" dialog's folder combo. Live local-CLI
 // cwds first, then whatever was saved before, de-duplicated and capped.

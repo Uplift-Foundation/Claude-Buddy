@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests
+namespace Orbweaver.Tests
 {
     // Serialises every test class that touches ClaudeBuddySettings.
     //

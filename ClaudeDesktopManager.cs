@@ -7,7 +7,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Avalonia.Threading;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     internal enum ProfileActivity
     {
@@ -274,7 +274,7 @@ namespace ClaudeBuddy
                     // or hide a swatch and the menu has to repaint, which it only
                     // does when this string changes.
                     var folder = Path.GetFileName(p.Directory);
-                    var settings = ClaudeBuddySettings.For(folder);
+                    var settings = OrbweaverSettings.For(folder);
                     var colour = ClaudeDesktopColors.NameFor(folder, p.IsDefault);
                     // InstanceCount belongs here even though it's a count: it's
                     // stable while the processes are, and without it a profile
@@ -305,7 +305,7 @@ namespace ClaudeBuddy
                 var isRunning = scan.Running.TryGetValue(directory, out var group);
                 var (activity, message) = ResolveTransient(directory, isRunning, now);
 
-                var chosenName = ClaudeBuddySettings.For(name).Name;
+                var chosenName = OrbweaverSettings.For(name).Name;
 
                 // Keyed on the folder rather than the directory: an orphan is
                 // identified by the clone it runs from, and clones are named for
@@ -946,7 +946,7 @@ namespace ClaudeBuddy
             // and all. A failure here just means no colour — we fall back
             // to the real bundle rather than not launching.
             var folder = Path.GetFileName(directory);
-            var profileSettings = ClaudeBuddySettings.For(folder);
+            var profileSettings = OrbweaverSettings.For(folder);
 
             // Default gets a tinted clone too, but only once you've
             // actually picked a colour for it. Left on "auto" it launches
@@ -1400,7 +1400,7 @@ namespace ClaudeBuddy
 
                 // On "auto" there is nothing to tint Default with — it goes back
                 // to the installed bundle, so drop any clone it had.
-                if (isDefault && ClaudeBuddySettings.For(folder).Color is not { Length: > 0 })
+                if (isDefault && OrbweaverSettings.For(folder).Color is not { Length: > 0 })
                 {
                     ClaudeDesktopBundles.Remove(folder);
                     return;
@@ -1909,7 +1909,7 @@ namespace ClaudeBuddy
             var folder = Path.GetFileName(directory);
 
             try { ClaudeDesktopBundles.Remove(folder); } catch { }
-            ClaudeBuddySettings.RemoveProfile(folder);
+            OrbweaverSettings.RemoveProfile(folder);
         }
 
         // Excluded from coverage: moves a real directory to the Trash or the

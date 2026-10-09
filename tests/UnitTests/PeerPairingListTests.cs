@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 // What the pairing list shows, and what each row says about itself.
 //

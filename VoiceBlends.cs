@@ -1,6 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // The half of a blended voice that touches a disk: reading the constituent
     // voice tensors, averaging them, and writing the result into the directory

@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using Xunit;
 
-namespace ClaudeBuddy.Tests
+namespace Orbweaver.Tests
 {
     // "Is this pid still running?", which SessionManager asks a few times every
     // couple of seconds to decide whether an orb's session is still there.

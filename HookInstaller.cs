@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Re-running the hook installers from inside the app.
     //

@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // TranscriptReader.cs reads only the last TailBytes (262144, private const —
 // hardcoded here since InternalsVisibleTo does not reach private members)
@@ -362,8 +362,8 @@ public class TranscriptReaderTests
         var dir = Path.Combine(Path.GetTempPath(), "cb-multihome-settings-" + Guid.NewGuid());
         Directory.CreateDirectory(dir);
         Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
-        ClaudeBuddySettings.ReloadForTests();
-        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-work");
+        OrbweaverSettings.ReloadForTests();
+        OrbweaverSettings.AddClaudeCodeProfileDir(".claude-work");
 
         try
         {
@@ -391,8 +391,8 @@ public class TranscriptReaderTests
         var dir = Path.Combine(Path.GetTempPath(), "cb-multihome2-settings-" + Guid.NewGuid());
         Directory.CreateDirectory(dir);
         Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
-        ClaudeBuddySettings.ReloadForTests();
-        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-work");
+        OrbweaverSettings.ReloadForTests();
+        OrbweaverSettings.AddClaudeCodeProfileDir(".claude-work");
 
         try
         {

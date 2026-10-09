@@ -4,7 +4,7 @@ using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using Microsoft.Win32.SafeHandles;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Best-effort "take me to that session's terminal" for a left-click on
     // an orb. Silently does nothing when the status file predates the hook

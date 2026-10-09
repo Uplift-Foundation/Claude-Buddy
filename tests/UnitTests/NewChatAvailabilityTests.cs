@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests
+namespace Orbweaver.Tests
 {
     // CB-168's new-chat dialog decides, for each CLI, whether it's enabled and
     // why not — or, if it is enabled, whether to warn that no orb will appear

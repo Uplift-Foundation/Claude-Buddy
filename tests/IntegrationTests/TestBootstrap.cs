@@ -1,6 +1,6 @@
 using System.Runtime.CompilerServices;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Runs once, before any test in this assembly, and before the first access
 // to ClaudeBuddySettings from any of them. Points the settings store at a

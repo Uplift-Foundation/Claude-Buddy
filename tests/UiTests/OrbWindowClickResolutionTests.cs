@@ -1,7 +1,7 @@
 using Avalonia.Headless.XUnit;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // What a click *resolves to*, deliberately kept separate from OrbWindow's own
 // pointer handling (OnPointerPressed/Moved/Released), which OrbWindowUpdateFromTests'
@@ -46,14 +46,14 @@ public class OrbWindowClickResolutionTests
     [AvaloniaFact]
     public void ActionForReadsTheMatchingSettingPerClickCount()
     {
-        var click = ClaudeBuddySettings.ClickAction;
-        var dbl = ClaudeBuddySettings.DoubleClickAction;
-        var triple = ClaudeBuddySettings.TripleClickAction;
+        var click = OrbweaverSettings.ClickAction;
+        var dbl = OrbweaverSettings.DoubleClickAction;
+        var triple = OrbweaverSettings.TripleClickAction;
         try
         {
-            ClaudeBuddySettings.ClickAction = "chat";
-            ClaudeBuddySettings.DoubleClickAction = "speak";
-            ClaudeBuddySettings.TripleClickAction = "none";
+            OrbweaverSettings.ClickAction = "chat";
+            OrbweaverSettings.DoubleClickAction = "speak";
+            OrbweaverSettings.TripleClickAction = "none";
 
             Assert.Equal("chat", OrbWindow.ActionFor(1));
             Assert.Equal("speak", OrbWindow.ActionFor(2));
@@ -66,9 +66,9 @@ public class OrbWindowClickResolutionTests
         }
         finally
         {
-            ClaudeBuddySettings.ClickAction = click;
-            ClaudeBuddySettings.DoubleClickAction = dbl;
-            ClaudeBuddySettings.TripleClickAction = triple;
+            OrbweaverSettings.ClickAction = click;
+            OrbweaverSettings.DoubleClickAction = dbl;
+            OrbweaverSettings.TripleClickAction = triple;
         }
     }
 
@@ -77,27 +77,27 @@ public class OrbWindowClickResolutionTests
     [AvaloniaFact]
     public void AWaitIsOnlyOwedWhenALongerGestureDiffersFromThisOne()
     {
-        var click = ClaudeBuddySettings.ClickAction;
-        var dbl = ClaudeBuddySettings.DoubleClickAction;
-        var triple = ClaudeBuddySettings.TripleClickAction;
+        var click = OrbweaverSettings.ClickAction;
+        var dbl = OrbweaverSettings.DoubleClickAction;
+        var triple = OrbweaverSettings.TripleClickAction;
         try
         {
             // Every gesture bound to the same thing: no reason to ever wait.
-            ClaudeBuddySettings.ClickAction = "chat";
-            ClaudeBuddySettings.DoubleClickAction = "chat";
-            ClaudeBuddySettings.TripleClickAction = "chat";
+            OrbweaverSettings.ClickAction = "chat";
+            OrbweaverSettings.DoubleClickAction = "chat";
+            OrbweaverSettings.TripleClickAction = "chat";
             Assert.False(OrbWindow.AwaitsMoreClicks(1));
             Assert.False(OrbWindow.AwaitsMoreClicks(2));
 
             // Triple click is nothing, and the single click is already
             // waiting on a double that differs — but the triple click itself
             // has nothing longer left to wait for.
-            ClaudeBuddySettings.TripleClickAction = "none";
+            OrbweaverSettings.TripleClickAction = "none";
             Assert.False(OrbWindow.AwaitsMoreClicks(3));
 
             // A double click bound to something else: the single click has to
             // wait to find out which one the user meant.
-            ClaudeBuddySettings.DoubleClickAction = "speak";
+            OrbweaverSettings.DoubleClickAction = "speak";
             Assert.True(OrbWindow.AwaitsMoreClicks(1));
 
             // The double click itself has nothing bound to the triple that
@@ -105,14 +105,14 @@ public class OrbWindowClickResolutionTests
             Assert.False(OrbWindow.AwaitsMoreClicks(2));
 
             // A triple bound to something new makes the double wait too.
-            ClaudeBuddySettings.TripleClickAction = "chat";
+            OrbweaverSettings.TripleClickAction = "chat";
             Assert.True(OrbWindow.AwaitsMoreClicks(2));
         }
         finally
         {
-            ClaudeBuddySettings.ClickAction = click;
-            ClaudeBuddySettings.DoubleClickAction = dbl;
-            ClaudeBuddySettings.TripleClickAction = triple;
+            OrbweaverSettings.ClickAction = click;
+            OrbweaverSettings.DoubleClickAction = dbl;
+            OrbweaverSettings.TripleClickAction = triple;
         }
     }
 
@@ -121,10 +121,10 @@ public class OrbWindowClickResolutionTests
     [AvaloniaFact]
     public void RunClickActionChatOpensTheChatPanel()
     {
-        var click = ClaudeBuddySettings.ClickAction;
+        var click = OrbweaverSettings.ClickAction;
         try
         {
-            ClaudeBuddySettings.ClickAction = "chat";
+            OrbweaverSettings.ClickAction = "chat";
             var orb = NewGatewayOrb();
 
             // SessionManager.Instance is null, so RemoteChatFor answers null
@@ -135,17 +135,17 @@ public class OrbWindowClickResolutionTests
         }
         finally
         {
-            ClaudeBuddySettings.ClickAction = click;
+            OrbweaverSettings.ClickAction = click;
         }
     }
 
     [AvaloniaFact]
     public void RunClickActionSpeakCallsTheSpeakHandler()
     {
-        var click = ClaudeBuddySettings.ClickAction;
+        var click = OrbweaverSettings.ClickAction;
         try
         {
-            ClaudeBuddySettings.ClickAction = "speak";
+            OrbweaverSettings.ClickAction = "speak";
             var orb = NewGatewayOrb();
 
             // No status yet fed with anything speakable, so this resolves to
@@ -155,24 +155,24 @@ public class OrbWindowClickResolutionTests
         }
         finally
         {
-            ClaudeBuddySettings.ClickAction = click;
+            OrbweaverSettings.ClickAction = click;
         }
     }
 
     [AvaloniaFact]
     public void RunClickActionNoneDoesNothing()
     {
-        var click = ClaudeBuddySettings.ClickAction;
+        var click = OrbweaverSettings.ClickAction;
         try
         {
-            ClaudeBuddySettings.ClickAction = "none";
+            OrbweaverSettings.ClickAction = "none";
             var orb = NewGatewayOrb();
 
             orb.RunClickAction(1);
         }
         finally
         {
-            ClaudeBuddySettings.ClickAction = click;
+            OrbweaverSettings.ClickAction = click;
         }
     }
 
@@ -183,19 +183,19 @@ public class OrbWindowClickResolutionTests
     [AvaloniaFact]
     public void RunClickActionDefaultGoesToTheSessionForANonLocalStatus()
     {
-        var click = ClaudeBuddySettings.ClickAction;
+        var click = OrbweaverSettings.ClickAction;
         try
         {
             // Anything not "chat"/"speak"/"none" takes the default arm —
             // matching whatever ships as the real default is the point.
-            ClaudeBuddySettings.ClickAction = "terminal";
+            OrbweaverSettings.ClickAction = "terminal";
             var orb = NewGatewayOrb();
 
             orb.RunClickAction(1);
         }
         finally
         {
-            ClaudeBuddySettings.ClickAction = click;
+            OrbweaverSettings.ClickAction = click;
         }
     }
 
@@ -225,23 +225,23 @@ public class OrbWindowClickResolutionTests
     [AvaloniaFact]
     public void ASingleClickWithNothingLongerBoundRunsImmediately()
     {
-        var click = ClaudeBuddySettings.ClickAction;
-        var dbl = ClaudeBuddySettings.DoubleClickAction;
-        var triple = ClaudeBuddySettings.TripleClickAction;
+        var click = OrbweaverSettings.ClickAction;
+        var dbl = OrbweaverSettings.DoubleClickAction;
+        var triple = OrbweaverSettings.TripleClickAction;
         try
         {
-            ClaudeBuddySettings.ClickAction = "none";
-            ClaudeBuddySettings.DoubleClickAction = "none";
-            ClaudeBuddySettings.TripleClickAction = "none";
+            OrbweaverSettings.ClickAction = "none";
+            OrbweaverSettings.DoubleClickAction = "none";
+            OrbweaverSettings.TripleClickAction = "none";
 
             var orb = NewGatewayOrb();
             orb.OnClicked(1);
         }
         finally
         {
-            ClaudeBuddySettings.ClickAction = click;
-            ClaudeBuddySettings.DoubleClickAction = dbl;
-            ClaudeBuddySettings.TripleClickAction = triple;
+            OrbweaverSettings.ClickAction = click;
+            OrbweaverSettings.DoubleClickAction = dbl;
+            OrbweaverSettings.TripleClickAction = triple;
         }
     }
 
@@ -252,12 +252,12 @@ public class OrbWindowClickResolutionTests
     [AvaloniaFact]
     public async System.Threading.Tasks.Task AWaitingClickRunsOnceTheMultiClickWindowElapses()
     {
-        var click = ClaudeBuddySettings.ClickAction;
-        var dbl = ClaudeBuddySettings.DoubleClickAction;
+        var click = OrbweaverSettings.ClickAction;
+        var dbl = OrbweaverSettings.DoubleClickAction;
         try
         {
-            ClaudeBuddySettings.ClickAction = "chat";
-            ClaudeBuddySettings.DoubleClickAction = "speak";
+            OrbweaverSettings.ClickAction = "chat";
+            OrbweaverSettings.DoubleClickAction = "speak";
 
             var orb = NewGatewayOrb();
             orb.OnClicked(1);
@@ -275,8 +275,8 @@ public class OrbWindowClickResolutionTests
         }
         finally
         {
-            ClaudeBuddySettings.ClickAction = click;
-            ClaudeBuddySettings.DoubleClickAction = dbl;
+            OrbweaverSettings.ClickAction = click;
+            OrbweaverSettings.DoubleClickAction = dbl;
         }
     }
 

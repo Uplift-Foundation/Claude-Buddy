@@ -1,7 +1,7 @@
 using System.Text;
 using Xunit;
 
-namespace ClaudeBuddy.Tests
+namespace Orbweaver.Tests
 {
     // The three parsers that read a macOS process's own command line and
     // environment out of a KERN_PROCARGS2 buffer.

@@ -5,8 +5,8 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <AssemblyName>ClaudeBuddy</AssemblyName>
-    <RootNamespace>ClaudeBuddy</RootNamespace>
+    <AssemblyName>Orbweaver</AssemblyName>
+    <RootNamespace>Orbweaver</RootNamespace>
     <!-- The single source of truth for the shipped version. The packaging
          scripts and the release workflow all parse this element out of this
          file rather than carrying their own copy, so a release is a one-line
@@ -80,10 +80,10 @@
          so this grants the three of them the internal ones too — the same
          private-pure-logic (SessionManager's scan rules, AgentTeam's
          sanitizers) that made them worth testing in the first place. -->
-    <InternalsVisibleTo Include="ClaudeBuddy.UnitTests" />
-    <InternalsVisibleTo Include="ClaudeBuddy.IntegrationTests" />
-    <InternalsVisibleTo Include="ClaudeBuddy.UiTests" />
-    <InternalsVisibleTo Include="ClaudeBuddy.UiScreenshots" />
+    <InternalsVisibleTo Include="Orbweaver.UnitTests" />
+    <InternalsVisibleTo Include="Orbweaver.IntegrationTests" />
+    <InternalsVisibleTo Include="Orbweaver.UiTests" />
+    <InternalsVisibleTo Include="Orbweaver.UiScreenshots" />
 
     <!-- And tools/peer-probe, for the same reason and by the same rule.
          PeerLink and RemoteMirrorClient are internal, and their closure is not

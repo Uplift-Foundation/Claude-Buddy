@@ -2,7 +2,7 @@ using Avalonia.Headless.XUnit;
 using SkiaSharp;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // OpenClawAvatars.ForFile — the path-taking entry point CB-135 added so a local
 // persona need not keep its picture's bytes.

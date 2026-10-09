@@ -5,7 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Covers one tick of the cloud arm: which credential state stops it, which cycle
 // is due, what it asks for, and — the one that matters most — what it publishes

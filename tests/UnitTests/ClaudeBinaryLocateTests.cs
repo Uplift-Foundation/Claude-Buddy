@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests
+namespace Orbweaver.Tests
 {
     // Where the `claude` CLI is.
     //

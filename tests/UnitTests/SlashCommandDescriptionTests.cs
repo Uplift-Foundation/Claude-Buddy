@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 // The description a slash command shows in the popup, parsed from the file that
 // defines it.

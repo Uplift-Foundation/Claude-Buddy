@@ -2,7 +2,7 @@ using Avalonia.Headless.XUnit;
 using SkiaSharp;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The visible half of CB-163: an orb for a session on *another* machine,
 // wearing the persona that machine resolved, drawn through real Skia.

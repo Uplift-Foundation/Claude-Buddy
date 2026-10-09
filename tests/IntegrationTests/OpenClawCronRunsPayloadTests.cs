@@ -2,7 +2,7 @@ using System.Collections.Generic;
 using System.Text.Json;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-115: cron.runs, end to end against a fixture shaped like a real
 // gateway's answer — the seam CLAUDE.md says to cover twice, the same reason

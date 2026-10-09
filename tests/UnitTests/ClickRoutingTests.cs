@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Where a click goes when the terminal the hook recorded could not be brought
 // forward.

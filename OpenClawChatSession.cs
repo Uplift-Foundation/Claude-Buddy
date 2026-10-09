@@ -2,7 +2,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using Avalonia.Threading;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // One turn as the history parser hands it over: what TurnsFromHistory reads
     // out of a page of chat.history, and what SetHistory and PrependHistory put
@@ -267,7 +267,7 @@ namespace ClaudeBuddy
             };
             Add(mine);
 
-            if (!ClaudeBuddySettings.OpenClawReplyEnabled)
+            if (!OrbweaverSettings.OpenClawReplyEnabled)
             {
                 // A System turn rather than an exception: the person has just
                 // typed a sentence, and losing it behind a dialog would be a
@@ -797,7 +797,7 @@ namespace ClaudeBuddy
         public Task<bool> LoadOlderAsync(CancellationToken ct) =>
             OpenClawSessions.LoadOlderAsync(this, ct);
 
-        public string ComposerHint => ClaudeBuddySettings.OpenClawReplyEnabled
+        public string ComposerHint => OrbweaverSettings.OpenClawReplyEnabled
             ? "Message…"
             : "Replying is off";
 

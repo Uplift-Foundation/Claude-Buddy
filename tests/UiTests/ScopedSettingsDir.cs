@@ -1,4 +1,4 @@
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // A settings directory of the test's own for as long as it is held, and the
 // previous one back afterwards.
@@ -23,16 +23,16 @@ internal sealed class ScopedSettingsDir : IDisposable
         Dir = Path.Combine(Path.GetTempPath(), $"cb-{purpose}-" + Guid.NewGuid());
         Directory.CreateDirectory(Dir);
         Environment.SetEnvironmentVariable(Variable, Dir);
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
     }
 
     public string Dir { get; }
 
     public void Dispose()
     {
-        ClaudeBuddySettings.FlushPendingSave();
+        OrbweaverSettings.FlushPendingSave();
         Environment.SetEnvironmentVariable(Variable, _previous);
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
         try { Directory.Delete(Dir, recursive: true); } catch { }
     }
 }

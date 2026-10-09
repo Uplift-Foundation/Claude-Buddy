@@ -3,7 +3,7 @@ using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Text;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // What the speaker reads: the whole reply, or two or three sentences of it.
     //
@@ -533,7 +533,7 @@ namespace ClaudeBuddy
             {
                 home ??= Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
                 var configDir = ClaudeProfile.ConfigDirFor(
-                    home, accountDir, ClaudeBuddySettings.DefaultRemoteControlProfileDir);
+                    home, accountDir, OrbweaverSettings.DefaultRemoteControlProfileDir);
 
                 if (configDir is null) startInfo.Environment.Remove("CLAUDE_CONFIG_DIR");
                 else startInfo.Environment["CLAUDE_CONFIG_DIR"] = configDir;

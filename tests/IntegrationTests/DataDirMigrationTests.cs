@@ -1,7 +1,7 @@
 using Xunit;
-using static ClaudeBuddy.DataDirMigration;
+using static Orbweaver.DataDirMigration;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-255 §2: the data-dir migration's executor against real folders.
 //
@@ -313,25 +313,25 @@ public class DataDirMigrationTests : IDisposable
         try
         {
             Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", root.Legacy);
-            ClaudeBuddySettings.ReloadForTests();
-            ClaudeBuddySettings.SpeechVolume = 0.35;
-            ClaudeBuddySettings.FlushPendingSave();
+            OrbweaverSettings.ReloadForTests();
+            OrbweaverSettings.SpeechVolume = 0.35;
+            OrbweaverSettings.FlushPendingSave();
             Assert.True(File.Exists(Path.Combine(root.Legacy, SettingsFile)));
 
             RunOn(root);
 
             Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", root.New);
-            ClaudeBuddySettings.ReloadForTests();
-            Assert.Equal(0.35, ClaudeBuddySettings.SpeechVolume);
+            OrbweaverSettings.ReloadForTests();
+            Assert.Equal(0.35, OrbweaverSettings.SpeechVolume);
 
             Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", root.Legacy);
-            ClaudeBuddySettings.ReloadForTests();
-            Assert.Equal(0.35, ClaudeBuddySettings.SpeechVolume);
+            OrbweaverSettings.ReloadForTests();
+            Assert.Equal(0.35, OrbweaverSettings.SpeechVolume);
         }
         finally
         {
             Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", previous);
-            ClaudeBuddySettings.ReloadForTests();
+            OrbweaverSettings.ReloadForTests();
         }
     }
 

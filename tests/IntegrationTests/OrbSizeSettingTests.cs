@@ -1,7 +1,7 @@
 using System.Text.Json.Nodes;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-198's two size settings — the global orbSize and the per-orb orbSizes map
 // — through a real settings file.
@@ -23,7 +23,7 @@ public class OrbSizeSettingTests
     private static void PointSettingsAt(string dir)
     {
         Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
     }
 
     private static JsonObject ReadBack(string dir) =>
@@ -35,9 +35,9 @@ public class OrbSizeSettingTests
         var dir = NewSettingsDir();
         PointSettingsAt(dir);
 
-        Assert.Equal(OrbSizing.Default, ClaudeBuddySettings.OrbSize);
+        Assert.Equal(OrbSizing.Default, OrbweaverSettings.OrbSize);
 
-        ClaudeBuddySettings.OrbSize = 1.5;
+        OrbweaverSettings.OrbSize = 1.5;
 
         Assert.Equal(1.5, ReadBack(dir)["orbSize"]!.GetValue<double>(), 3);
     }
@@ -48,10 +48,10 @@ public class OrbSizeSettingTests
         var dir = NewSettingsDir();
         PointSettingsAt(dir);
 
-        ClaudeBuddySettings.OrbSize = 1.25;
+        OrbweaverSettings.OrbSize = 1.25;
 
         PointSettingsAt(dir);
-        Assert.Equal(1.25, ClaudeBuddySettings.OrbSize);
+        Assert.Equal(1.25, OrbweaverSettings.OrbSize);
     }
 
     [Theory]
@@ -70,8 +70,8 @@ public class OrbSizeSettingTests
 
         PointSettingsAt(dir);
 
-        Assert.InRange(ClaudeBuddySettings.OrbSize, OrbSizing.Min, OrbSizing.Max);
-        Assert.Equal(1.3, ClaudeBuddySettings.ChatTextScale, 3);
+        Assert.InRange(OrbweaverSettings.OrbSize, OrbSizing.Min, OrbSizing.Max);
+        Assert.Equal(1.3, OrbweaverSettings.ChatTextScale, 3);
     }
 
     [Fact]
@@ -82,10 +82,10 @@ public class OrbSizeSettingTests
             "{ \"version\": 1, \"orbSize\": 1.5, \"orbSizes\": { \"a\": 2.0 }, \"somethingFromANewerBuild\": \"keep me\" }");
 
         PointSettingsAt(dir);
-        Assert.Equal(1.5, ClaudeBuddySettings.OrbSize);
-        Assert.Equal(2.0, ClaudeBuddySettings.OrbSizeFor("a"));
+        Assert.Equal(1.5, OrbweaverSettings.OrbSize);
+        Assert.Equal(2.0, OrbweaverSettings.OrbSizeFor("a"));
 
-        ClaudeBuddySettings.OrbSize = 0.75;
+        OrbweaverSettings.OrbSize = 0.75;
 
         var root = ReadBack(dir);
         Assert.Equal(0.75, root["orbSize"]!.GetValue<double>(), 3);
@@ -99,19 +99,19 @@ public class OrbSizeSettingTests
         var dir = NewSettingsDir();
         PointSettingsAt(dir);
 
-        Assert.Null(ClaudeBuddySettings.OrbSizeFor("C:/Work|lead"));
+        Assert.Null(OrbweaverSettings.OrbSizeFor("C:/Work|lead"));
 
-        ClaudeBuddySettings.SetOrbSize("C:/Work|lead", 1.5);
-        ClaudeBuddySettings.SetOrbSize("other", 99);   // clamped on the way in
-
-        PointSettingsAt(dir);
-        Assert.Equal(1.5, ClaudeBuddySettings.OrbSizeFor("c:/work|LEAD"));
-        Assert.Equal(OrbSizing.Max, ClaudeBuddySettings.OrbSizeFor("other"));
-
-        ClaudeBuddySettings.SetOrbSize("C:/Work|lead", null);
+        OrbweaverSettings.SetOrbSize("C:/Work|lead", 1.5);
+        OrbweaverSettings.SetOrbSize("other", 99);   // clamped on the way in
 
         PointSettingsAt(dir);
-        Assert.Null(ClaudeBuddySettings.OrbSizeFor("C:/Work|lead"));
+        Assert.Equal(1.5, OrbweaverSettings.OrbSizeFor("c:/work|LEAD"));
+        Assert.Equal(OrbSizing.Max, OrbweaverSettings.OrbSizeFor("other"));
+
+        OrbweaverSettings.SetOrbSize("C:/Work|lead", null);
+
+        PointSettingsAt(dir);
+        Assert.Null(OrbweaverSettings.OrbSizeFor("C:/Work|lead"));
         Assert.False(ReadBack(dir)["orbSizes"]!.AsObject().ContainsKey("C:/Work|lead"));
     }
 
@@ -121,9 +121,9 @@ public class OrbSizeSettingTests
         var dir = NewSettingsDir();
         PointSettingsAt(dir);
 
-        ClaudeBuddySettings.SetOrbSize("", 1.5);
+        OrbweaverSettings.SetOrbSize("", 1.5);
 
-        Assert.Null(ClaudeBuddySettings.OrbSizeFor(""));
+        Assert.Null(OrbweaverSettings.OrbSizeFor(""));
         Assert.False(File.Exists(Path.Combine(dir, "settings.json")) &&
                      ReadBack(dir)["orbSizes"] is JsonObject o && o.Count > 0);
     }
@@ -137,9 +137,9 @@ public class OrbSizeSettingTests
 
         PointSettingsAt(dir);
 
-        Assert.Equal(1.25, ClaudeBuddySettings.OrbSizeFor("good"));
-        Assert.Null(ClaudeBuddySettings.OrbSizeFor("bad"));
-        Assert.Null(ClaudeBuddySettings.OrbSizeFor("worse"));
+        Assert.Equal(1.25, OrbweaverSettings.OrbSizeFor("good"));
+        Assert.Null(OrbweaverSettings.OrbSizeFor("bad"));
+        Assert.Null(OrbweaverSettings.OrbSizeFor("worse"));
     }
 
     [Fact]
@@ -150,8 +150,8 @@ public class OrbSizeSettingTests
 
         PointSettingsAt(dir);
 
-        Assert.Equal(OrbSizing.Default, ClaudeBuddySettings.OrbSize);
-        Assert.Null(ClaudeBuddySettings.OrbSizeFor("anything"));
+        Assert.Equal(OrbSizing.Default, OrbweaverSettings.OrbSize);
+        Assert.Null(OrbweaverSettings.OrbSizeFor("anything"));
     }
 
     // --- CB-198: the size a spot was saved at ---------------------------------
@@ -162,13 +162,13 @@ public class OrbSizeSettingTests
         var dir = NewSettingsDir();
         PointSettingsAt(dir);
 
-        ClaudeBuddySettings.SetOrbPosition("spot", 300, 200, 2.0);
+        OrbweaverSettings.SetOrbPosition("spot", 300, 200, 2.0);
 
         var written = ReadBack(dir)["orbPositions"]!["spot"]!;
         Assert.Equal(2.0, written["size"]!.GetValue<double>(), 3);
 
         PointSettingsAt(dir);
-        Assert.Equal(new ClaudeBuddySettings.OrbPlacement(300, 200, 2.0), ClaudeBuddySettings.OrbPositionFor("spot"));
+        Assert.Equal(new OrbweaverSettings.OrbPlacement(300, 200, 2.0), OrbweaverSettings.OrbPositionFor("spot"));
     }
 
     [Fact]
@@ -180,10 +180,10 @@ public class OrbSizeSettingTests
             "{ \"version\": 1, \"orbPositions\": { \"old\": { \"x\": 10, \"y\": 20 } } }");
 
         PointSettingsAt(dir);
-        Assert.Equal(new ClaudeBuddySettings.OrbPlacement(10, 20, null), ClaudeBuddySettings.OrbPositionFor("old"));
+        Assert.Equal(new OrbweaverSettings.OrbPlacement(10, 20, null), OrbweaverSettings.OrbPositionFor("old"));
 
         // Some other write makes Save run; the old spot must round-trip as it was.
-        ClaudeBuddySettings.OrbSize = 1.5;
+        OrbweaverSettings.OrbSize = 1.5;
         var old = ReadBack(dir)["orbPositions"]!["old"]!.AsObject();
         Assert.False(old.ContainsKey("size"));
         Assert.Equal(10, old["x"]!.GetValue<int>());
@@ -198,7 +198,7 @@ public class OrbSizeSettingTests
 
         PointSettingsAt(dir);
 
-        Assert.Equal(new ClaudeBuddySettings.OrbPlacement(10, 20, null), ClaudeBuddySettings.OrbPositionFor("s"));
+        Assert.Equal(new OrbweaverSettings.OrbPlacement(10, 20, null), OrbweaverSettings.OrbPositionFor("s"));
     }
 
     [Fact]
@@ -209,11 +209,11 @@ public class OrbSizeSettingTests
         var dir = NewSettingsDir();
         PointSettingsAt(dir);
 
-        ClaudeBuddySettings.SetOrbPosition("spot", 5, 5, 1.0);
-        ClaudeBuddySettings.SetOrbPosition("spot", 5, 5, 1.0);
-        ClaudeBuddySettings.SetOrbPosition("spot", 5, 5, 2.0);
+        OrbweaverSettings.SetOrbPosition("spot", 5, 5, 1.0);
+        OrbweaverSettings.SetOrbPosition("spot", 5, 5, 1.0);
+        OrbweaverSettings.SetOrbPosition("spot", 5, 5, 2.0);
 
         PointSettingsAt(dir);
-        Assert.Equal(2.0, ClaudeBuddySettings.OrbPositionFor("spot")!.Size);
+        Assert.Equal(2.0, OrbweaverSettings.OrbPositionFor("spot")!.Size);
     }
 }

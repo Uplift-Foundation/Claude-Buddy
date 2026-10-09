@@ -1,4 +1,4 @@
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Which of the three groups an orb belongs to, when the arrangement is
     // allowed to draw more than one shape at a time.

@@ -6,7 +6,7 @@ using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Per-profile Dock icons, by giving each profile its own copy of Claude.app
     // with a tinted icon.

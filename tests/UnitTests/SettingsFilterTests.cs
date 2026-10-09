@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests
+namespace Orbweaver.Tests
 {
     // The pure half of CB-166's filter box. No Avalonia type appears in any
     // signature under test here — SettingsFilter is a static class of plain

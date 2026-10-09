@@ -4,7 +4,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Text.Json;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Whether a session's own transcript says its conversation was handed off
     // to a background job, with nothing having happened in the session since.

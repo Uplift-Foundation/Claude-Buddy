@@ -3,7 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Media;
 using Avalonia.Threading;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     public partial class OrbFlyout : Window
     {

@@ -2,7 +2,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Runtime.Versioning;
 using System.Text.RegularExpressions;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Which session, if any, leads the team a given session belongs to.
     //

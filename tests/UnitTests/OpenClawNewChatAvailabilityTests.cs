@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // OpenClawNewChat.AvailabilityFor/ReasonFor: whether the new-chat dialog's
 // OpenClaw radio item is a live choice, and what it says under itself when

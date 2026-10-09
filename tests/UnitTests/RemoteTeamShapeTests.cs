@@ -4,7 +4,7 @@ using System.Linq;
 using System.Text.Json;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-223: agent-team shape over the direct link, one rule at a time — which
 // snapshot statuses are members and whose, which members a roster offers,

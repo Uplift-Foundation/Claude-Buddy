@@ -3,7 +3,7 @@ using System.IO;
 using System.Text.Json.Nodes;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // ClaudeBuddySettings.IsSettingsSectionCollapsed / SetSettingsSectionCollapsed —
 // the model behind CB-166's fold state, with no window in front of it.
@@ -20,12 +20,12 @@ public class SettingsSectionStateTests
         var dir = Path.Combine(Path.GetTempPath(), "cb-settings-sections-" + Guid.NewGuid());
         Directory.CreateDirectory(dir);
         Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
     }
 
     private static JsonObject ReadRawSettings()
     {
-        var text = File.ReadAllText(ClaudeBuddySettings.Path_);
+        var text = File.ReadAllText(OrbweaverSettings.Path_);
         return JsonNode.Parse(text)!.AsObject();
     }
 
@@ -34,12 +34,12 @@ public class SettingsSectionStateTests
     {
         FreshSettings();
 
-        Assert.False(ClaudeBuddySettings.IsSettingsSectionCollapsed("voice"));
+        Assert.False(OrbweaverSettings.IsSettingsSectionCollapsed("voice"));
 
         // A fresh install has never called SetSettingsSectionCollapsed, so
         // nothing has forced a save at all — no settings.json on disk yet,
         // not merely one with an empty array in it.
-        Assert.False(File.Exists(ClaudeBuddySettings.Path_));
+        Assert.False(File.Exists(OrbweaverSettings.Path_));
     }
 
     [Fact]
@@ -47,16 +47,16 @@ public class SettingsSectionStateTests
     {
         FreshSettings();
 
-        ClaudeBuddySettings.SetSettingsSectionCollapsed("voice", true);
+        OrbweaverSettings.SetSettingsSectionCollapsed("voice", true);
 
-        Assert.True(ClaudeBuddySettings.IsSettingsSectionCollapsed("voice"));
+        Assert.True(OrbweaverSettings.IsSettingsSectionCollapsed("voice"));
         var afterCollapse = ReadRawSettings();
         Assert.Equal(new[] { "voice" }, afterCollapse["collapsedSettingsSections"]!.AsArray()
             .Select(n => n!.GetValue<string>()));
 
-        ClaudeBuddySettings.SetSettingsSectionCollapsed("voice", false);
+        OrbweaverSettings.SetSettingsSectionCollapsed("voice", false);
 
-        Assert.False(ClaudeBuddySettings.IsSettingsSectionCollapsed("voice"));
+        Assert.False(OrbweaverSettings.IsSettingsSectionCollapsed("voice"));
         var afterExpand = ReadRawSettings();
         Assert.Empty(afterExpand["collapsedSettingsSections"]!.AsArray());
     }
@@ -66,14 +66,14 @@ public class SettingsSectionStateTests
     {
         FreshSettings();
 
-        ClaudeBuddySettings.SetSettingsSectionCollapsed("orbs", true);
-        ClaudeBuddySettings.SetSettingsSectionCollapsed("codex", true);
+        OrbweaverSettings.SetSettingsSectionCollapsed("orbs", true);
+        OrbweaverSettings.SetSettingsSectionCollapsed("codex", true);
 
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
 
-        Assert.True(ClaudeBuddySettings.IsSettingsSectionCollapsed("orbs"));
-        Assert.True(ClaudeBuddySettings.IsSettingsSectionCollapsed("codex"));
-        Assert.False(ClaudeBuddySettings.IsSettingsSectionCollapsed("voice"));
+        Assert.True(OrbweaverSettings.IsSettingsSectionCollapsed("orbs"));
+        Assert.True(OrbweaverSettings.IsSettingsSectionCollapsed("codex"));
+        Assert.False(OrbweaverSettings.IsSettingsSectionCollapsed("voice"));
     }
 
     // A triangle emits one event per click, so setting a section to the state
@@ -85,13 +85,13 @@ public class SettingsSectionStateTests
     {
         FreshSettings();
 
-        ClaudeBuddySettings.SetSettingsSectionCollapsed("voice", true);
-        var writtenAt = File.GetLastWriteTimeUtc(ClaudeBuddySettings.Path_);
+        OrbweaverSettings.SetSettingsSectionCollapsed("voice", true);
+        var writtenAt = File.GetLastWriteTimeUtc(OrbweaverSettings.Path_);
 
         System.Threading.Thread.Sleep(20);
-        ClaudeBuddySettings.SetSettingsSectionCollapsed("voice", true);
+        OrbweaverSettings.SetSettingsSectionCollapsed("voice", true);
 
-        Assert.Equal(writtenAt, File.GetLastWriteTimeUtc(ClaudeBuddySettings.Path_));
+        Assert.Equal(writtenAt, File.GetLastWriteTimeUtc(OrbweaverSettings.Path_));
     }
 
     // An id this build has never heard of — a section removed in a later
@@ -102,14 +102,14 @@ public class SettingsSectionStateTests
     {
         FreshSettings();
 
-        File.WriteAllText(Path.Combine(Path.GetDirectoryName(ClaudeBuddySettings.Path_)!, "settings.json"),
+        File.WriteAllText(Path.Combine(Path.GetDirectoryName(OrbweaverSettings.Path_)!, "settings.json"),
             """{ "collapsedSettingsSections": ["some-future-section"] }""");
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
 
-        Assert.True(ClaudeBuddySettings.IsSettingsSectionCollapsed("some-future-section"));
-        Assert.False(ClaudeBuddySettings.IsSettingsSectionCollapsed("voice"));
+        Assert.True(OrbweaverSettings.IsSettingsSectionCollapsed("some-future-section"));
+        Assert.False(OrbweaverSettings.IsSettingsSectionCollapsed("voice"));
 
-        ClaudeBuddySettings.SetSettingsSectionCollapsed("voice", true);
+        OrbweaverSettings.SetSettingsSectionCollapsed("voice", true);
 
         var raw = ReadRawSettings();
         Assert.Contains("some-future-section", raw["collapsedSettingsSections"]!.AsArray()
@@ -126,22 +126,22 @@ public class SettingsSectionStateTests
     {
         FreshSettings();
 
-        ClaudeBuddySettings.SpeakVoice = "Samantha";
-        ClaudeBuddySettings.SetSettingsSectionCollapsed("voice", true);
+        OrbweaverSettings.SpeakVoice = "Samantha";
+        OrbweaverSettings.SetSettingsSectionCollapsed("voice", true);
 
         File.WriteAllText(
-            ClaudeBuddySettings.Path_,
+            OrbweaverSettings.Path_,
             ReadRawSettings().ToJsonString().Replace(
                 "\"voice\"",
                 "\"voice\", 42, { \"nested\": true }"));
 
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
 
         // The garbage entries did not survive, but the real neighbour did...
-        Assert.True(ClaudeBuddySettings.IsSettingsSectionCollapsed("voice"));
+        Assert.True(OrbweaverSettings.IsSettingsSectionCollapsed("voice"));
 
         // ...and, critically, so did an entirely unrelated setting in the same
         // file — proof the outer catch-all never fired.
-        Assert.Equal("Samantha", ClaudeBuddySettings.SpeakVoice);
+        Assert.Equal("Samantha", OrbweaverSettings.SpeakVoice);
     }
 }

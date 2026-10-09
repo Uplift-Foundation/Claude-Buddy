@@ -8,7 +8,7 @@ using System.Threading.Tasks;
 using Avalonia.Headless.XUnit;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-225: the session half of archiving and deleting a cloud session — which
 // login asks, what happens to the orb the moment it succeeds, and what an open
@@ -86,7 +86,7 @@ public class CloudLifecycleSessionTests
             _api = ClaudeCloudSessions.LifecycleApi;
             _creds = ClaudeCloudSessions.LifecycleCredentials;
 
-            ClaudeBuddySettings.ClaudeCloudEnabled = enabled;
+            OrbweaverSettings.ClaudeCloudEnabled = enabled;
             ClaudeCloudSessions.ClearTombstonesForTests();
             ClaudeCloudSessions.SetSnapshotForTests(sessions);
             ClaudeCloudSessions.LifecycleApi = api;
@@ -103,7 +103,7 @@ public class CloudLifecycleSessionTests
             ClaudeCloudSessions.LifecycleCredentials = _creds;
             ClaudeCloudSessions.ClearTombstonesForTests();
             ClaudeCloudSessions.SetSnapshotForTests(Array.Empty<ClaudeCloudSessions.Session>());
-            ClaudeBuddySettings.ClaudeCloudEnabled = false;
+            OrbweaverSettings.ClaudeCloudEnabled = false;
         }
     }
 

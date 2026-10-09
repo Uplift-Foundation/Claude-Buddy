@@ -1,7 +1,7 @@
 using System.Text.Json;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-170: what the event stream does to an orb after its conversation is
 // interrupted or ended — the two things the new menu rows cause, as the
@@ -28,9 +28,9 @@ public class OpenClawAbortAndArchiveEventTests : IDisposable
     // running: "generating" can only come from what the events recorded.
     private static string StateOf(string key)
     {
-        ClaudeBuddySettings.OpenClawEnabled = true;
-        ClaudeBuddySettings.OpenClawHeartbeatMode = ClusterMode.WithChats;
-        ClaudeBuddySettings.OpenClawActiveWithinMinutes = ClaudeBuddySettings.OpenClawActiveWithinAll;
+        OrbweaverSettings.OpenClawEnabled = true;
+        OrbweaverSettings.OpenClawHeartbeatMode = ClusterMode.WithChats;
+        OrbweaverSettings.OpenClawActiveWithinMinutes = OrbweaverSettings.OpenClawActiveWithinAll;
 
         var at = new DateTimeOffset(DateTime.UtcNow.AddMinutes(-1)).ToUnixTimeMilliseconds();
         var json = "{\"sessions\":[{\"key\":" + JsonSerializer.Serialize(key) + ",\"lastActivityAt\":" + at + "}]}";
@@ -96,7 +96,7 @@ public class OpenClawAbortAndArchiveEventTests : IDisposable
     [Fact]
     public void AnArchivedRowOnTheEventStreamTakesTheOrbOffNow()
     {
-        ClaudeBuddySettings.OpenClawEnabled = true;
+        OrbweaverSettings.OpenClawEnabled = true;
         var key = Key();
         OpenClawSessions.SetSnapshotForTests(new[] { Session(key) });
 
@@ -128,7 +128,7 @@ public class OpenClawAbortAndArchiveEventTests : IDisposable
     [InlineData("")]
     public void ARowThatIsNotArchivedChangesNothing(string archived)
     {
-        ClaudeBuddySettings.OpenClawEnabled = true;
+        OrbweaverSettings.OpenClawEnabled = true;
         var key = Key();
         var k = JsonSerializer.Serialize(key);
         OpenClawSessions.SetSnapshotForTests(new[] { Session(key) });

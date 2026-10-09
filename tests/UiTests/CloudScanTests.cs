@@ -5,7 +5,7 @@ using Avalonia.Headless.XUnit;
 using Avalonia.LogicalTree;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // A scan with Claude Code's cloud sessions in it, and what the orbs it makes
 // for them look like.
@@ -91,14 +91,14 @@ public class CloudScanTests
 
     private static void Publish(params ClaudeCloudSessions.Session[] sessions)
     {
-        ClaudeBuddySettings.ClaudeCloudEnabled = true;
+        OrbweaverSettings.ClaudeCloudEnabled = true;
         ClaudeCloudSessions.SetSnapshotForTests(sessions);
     }
 
     private static void PublishNothing()
     {
         ClaudeCloudSessions.SetSnapshotForTests(Array.Empty<ClaudeCloudSessions.Session>());
-        ClaudeBuddySettings.ClaudeCloudEnabled = false;
+        OrbweaverSettings.ClaudeCloudEnabled = false;
     }
 
     private static SessionStatus CloudStatus(
@@ -172,7 +172,7 @@ public class CloudScanTests
         try
         {
             Publish(Session("session_01abc"));
-            ClaudeBuddySettings.ClaudeCloudEnabled = false;
+            OrbweaverSettings.ClaudeCloudEnabled = false;
 
             var manager = Manager(scratch.Dir);
             manager.ScanAndUpdate();
@@ -202,12 +202,12 @@ public class CloudScanTests
     public void ALongIdleCloudSessionStillGetsAnOrb()
     {
         using var scratch = new Scratch();
-        var wasLifetime = ClaudeBuddySettings.OrbLifetimeMinutes;
+        var wasLifetime = OrbweaverSettings.OrbLifetimeMinutes;
         try
         {
             // The shortest the picker offers, so nothing longer can be what
             // carried this.
-            ClaudeBuddySettings.OrbLifetimeMinutes = 1;
+            OrbweaverSettings.OrbLifetimeMinutes = 1;
             Publish(Session("session_01old", state: "idle", lastActivity: Now.AddMinutes(-1146)));
 
             var manager = Manager(scratch.Dir);
@@ -217,7 +217,7 @@ public class CloudScanTests
         }
         finally
         {
-            ClaudeBuddySettings.OrbLifetimeMinutes = wasLifetime;
+            OrbweaverSettings.OrbLifetimeMinutes = wasLifetime;
             PublishNothing();
         }
     }
@@ -233,12 +233,12 @@ public class CloudScanTests
     public void ALocalSessionOfTheSameAgeStillExpiresInTheSameScan()
     {
         using var scratch = new Scratch();
-        var wasLifetime = ClaudeBuddySettings.OrbLifetimeMinutes;
-        var wasClaudeCode = ClaudeBuddySettings.ClaudeCodeEnabled;
+        var wasLifetime = OrbweaverSettings.OrbLifetimeMinutes;
+        var wasClaudeCode = OrbweaverSettings.ClaudeCodeEnabled;
         try
         {
-            ClaudeBuddySettings.OrbLifetimeMinutes = 1;
-            ClaudeBuddySettings.ClaudeCodeEnabled = true;
+            OrbweaverSettings.OrbLifetimeMinutes = 1;
+            OrbweaverSettings.ClaudeCodeEnabled = true;
             Publish(Session("session_01old", state: "idle", lastActivity: Now.AddMinutes(-1146)));
 
             // The hooks' own shape: a live pid (this process, the one pid on the
@@ -264,8 +264,8 @@ public class CloudScanTests
         }
         finally
         {
-            ClaudeBuddySettings.ClaudeCodeEnabled = wasClaudeCode;
-            ClaudeBuddySettings.OrbLifetimeMinutes = wasLifetime;
+            OrbweaverSettings.ClaudeCodeEnabled = wasClaudeCode;
+            OrbweaverSettings.OrbLifetimeMinutes = wasLifetime;
             PublishNothing();
         }
     }
@@ -282,10 +282,10 @@ public class CloudScanTests
     public void AnArchivedCloudSessionDrawsNoOrbAndTheFilterIsWhatDroppedIt()
     {
         using var scratch = new Scratch();
-        var wasLifetime = ClaudeBuddySettings.OrbLifetimeMinutes;
+        var wasLifetime = OrbweaverSettings.OrbLifetimeMinutes;
         try
         {
-            ClaudeBuddySettings.OrbLifetimeMinutes = 1;
+            OrbweaverSettings.OrbLifetimeMinutes = 1;
 
             var reduction = ClaudeCloudRoster.Reduce(new[]
             {
@@ -310,7 +310,7 @@ public class CloudScanTests
         }
         finally
         {
-            ClaudeBuddySettings.OrbLifetimeMinutes = wasLifetime;
+            OrbweaverSettings.OrbLifetimeMinutes = wasLifetime;
             PublishNothing();
         }
     }
@@ -336,10 +336,10 @@ public class CloudScanTests
     public void ARecentCloudSessionSurvivesTheSameLifetime()
     {
         using var scratch = new Scratch();
-        var wasLifetime = ClaudeBuddySettings.OrbLifetimeMinutes;
+        var wasLifetime = OrbweaverSettings.OrbLifetimeMinutes;
         try
         {
-            ClaudeBuddySettings.OrbLifetimeMinutes = 1;
+            OrbweaverSettings.OrbLifetimeMinutes = 1;
             Publish(Session("session_01new", state: "idle", lastActivity: Now.AddSeconds(-5)));
 
             var manager = Manager(scratch.Dir);
@@ -349,7 +349,7 @@ public class CloudScanTests
         }
         finally
         {
-            ClaudeBuddySettings.OrbLifetimeMinutes = wasLifetime;
+            OrbweaverSettings.OrbLifetimeMinutes = wasLifetime;
             PublishNothing();
         }
     }
@@ -462,10 +462,10 @@ public class CloudScanTests
     public void AWorkingCloudSessionSurvivesGoingQuiet()
     {
         using var scratch = new Scratch();
-        var wasLifetime = ClaudeBuddySettings.OrbLifetimeMinutes;
+        var wasLifetime = OrbweaverSettings.OrbLifetimeMinutes;
         try
         {
-            ClaudeBuddySettings.OrbLifetimeMinutes = 1;
+            OrbweaverSettings.OrbLifetimeMinutes = 1;
             Publish(Session("session_01busy", state: "generating",
                 lastActivity: Now.AddMinutes(-10)));
 
@@ -476,7 +476,7 @@ public class CloudScanTests
         }
         finally
         {
-            ClaudeBuddySettings.OrbLifetimeMinutes = wasLifetime;
+            OrbweaverSettings.OrbLifetimeMinutes = wasLifetime;
             PublishNothing();
         }
     }
@@ -889,7 +889,7 @@ public class CloudScanTests
 
             var chat = (IRemoteChatReadOnly)manager.RemoteChatFor("cloud:session_01abc")!;
 
-            ClaudeBuddySettings.ClaudeCloudEnabled = false;
+            OrbweaverSettings.ClaudeCloudEnabled = false;
             manager.ScanAndUpdate();
 
             Assert.False(chat.IsReadOnly);

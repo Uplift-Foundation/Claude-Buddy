@@ -3,7 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
-namespace ClaudeBuddy;
+namespace Orbweaver;
 
 // CB-199's gate: can the Claude Code CLI's own token *write* into a cloud
 // session from outside one?

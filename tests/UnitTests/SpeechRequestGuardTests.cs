@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The rule that decides whether a summary which has just come back still gets
 // spoken.

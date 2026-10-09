@@ -1,6 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Which platform arm RealLaunch took, so Decide (below) can be asked about
     // every branch as a table lookup rather than by re-running RealLaunch on a

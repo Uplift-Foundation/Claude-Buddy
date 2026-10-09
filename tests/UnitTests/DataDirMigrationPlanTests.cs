@@ -1,7 +1,7 @@
 using Xunit;
-using static ClaudeBuddy.DataDirMigration;
+using static Orbweaver.DataDirMigration;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-255 §2: the decisions the data-dir migration makes, with no folder behind
 // any of them. The executor that acts on these is driven against temp folders

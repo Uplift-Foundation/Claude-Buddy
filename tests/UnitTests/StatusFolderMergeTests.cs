@@ -4,9 +4,9 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using Xunit;
-using StatusFileRead = ClaudeBuddy.SessionManager.StatusFileRead;
+using StatusFileRead = Orbweaver.SessionManager.StatusFileRead;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-255 §1: the app reads two status folders while the legacy one is
 // watched — the Orbweaver hooks' and the pre-Orbweaver ones' — because a
@@ -37,7 +37,7 @@ public class StatusFolderMergeTests : IDisposable
 
     public StatusFolderMergeTests()
     {
-        ClaudeBuddySettings.ClaudeCodeEnabled = true;
+        OrbweaverSettings.ClaudeCodeEnabled = true;
     }
 
     public void Dispose()

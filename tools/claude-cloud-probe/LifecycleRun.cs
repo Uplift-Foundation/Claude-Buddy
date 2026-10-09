@@ -1,6 +1,6 @@
 using System.Diagnostics;
 
-namespace ClaudeBuddy;
+namespace Orbweaver;
 
 // CB-225: run the shipped ClaudeCloudLifecycle.RunAsync through the shipped
 // HttpCloudApi — the app's exact path, not the probe's own requests — and log

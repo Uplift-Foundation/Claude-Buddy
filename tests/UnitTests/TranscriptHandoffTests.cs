@@ -1,7 +1,7 @@
 using System;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // TranscriptHandoff.EndsBackgrounded over rows — the rule that decides whether
 // a status file is the husk a backgrounded turn left behind, and so whether an

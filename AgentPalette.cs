@@ -1,4 +1,4 @@
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // A colour per agent, for the sessions that don't get to choose one.
     //

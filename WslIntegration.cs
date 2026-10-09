@@ -3,7 +3,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Runtime.Versioning;
 using Microsoft.Win32;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Backs the Settings window's "WSL integration" section: list a machine's
     // WSL distros, tell whether each one's Claude Code already has Claude

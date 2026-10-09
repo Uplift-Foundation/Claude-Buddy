@@ -14,7 +14,7 @@ using Avalonia.Platform.Storage;
 using Avalonia.Styling;
 using Avalonia.Threading;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // The app's first real window. Everything else is a 56x56 orb or a native
     // menu, and a native menu can't take text input — which is the only reason
@@ -57,7 +57,7 @@ namespace ClaudeBuddy
 
                 // The colour pickers defer their write; closing the window is the
                 // last chance to land one that's still pending.
-                ClaudeBuddySettings.FlushPendingSave();
+                OrbweaverSettings.FlushPendingSave();
 
                 // Back to a menu-bar-only app: no Dock icon, no Cmd-Tab entry.
                 MacOSActivation.SetAccessory();
@@ -521,7 +521,7 @@ namespace ClaudeBuddy
             // to default to.
             public void RestoreOpenState()
             {
-                IsOpen = !ClaudeBuddySettings.IsSettingsSectionCollapsed(Id);
+                IsOpen = !OrbweaverSettings.IsSettingsSectionCollapsed(Id);
             }
 
             // Applies query to every card, then decides whether the section
@@ -764,16 +764,16 @@ namespace ClaudeBuddy
         internal Control[] OrbsRows() => new[]
         {
             Row("Show orbs",
-                Switch(SessionManager.Instance?.OrbsVisible ?? ClaudeBuddySettings.ShowOrbs,
+                Switch(SessionManager.Instance?.OrbsVisible ?? OrbweaverSettings.ShowOrbs,
                     value => SessionManager.Instance?.SetOrbsVisible(value))),
             Row("Keep orbs for", LifetimePicker(),
                 "How long an orb stays after its session goes quiet. A session that's "
                 + "waiting on you is never removed, however long this is — those only go "
                 + "away when you answer it or reset it from the orb's menu."),
             Row("Two-letter initials",
-                Switch(ClaudeBuddySettings.TwoLetterGlyphs, value =>
+                Switch(OrbweaverSettings.TwoLetterGlyphs, value =>
                 {
-                    ClaudeBuddySettings.TwoLetterGlyphs = value;
+                    OrbweaverSettings.TwoLetterGlyphs = value;
                     SessionManager.Instance?.ReapplyGlyphs();
                 }),
                 "One letter from each of the first two words of a chat's name, or the "
@@ -805,7 +805,7 @@ namespace ClaudeBuddy
             ColorRow("Working", "generating"),
             ColorRow("Needs you", "waiting"),
             Row("Give each session a colour",
-                Switch(ClaudeBuddySettings.AutoColorSessions, OnAutoColorToggled),
+                Switch(OrbweaverSettings.AutoColorSessions, OnAutoColorToggled),
                 "Off, only a colour you set with /color shows on an orb. On, a session "
                 + "with none is given one from its working directory, so a project keeps "
                 + "its colour and both CLIs agree on it. For Claude Code that writes the "
@@ -844,7 +844,7 @@ namespace ClaudeBuddy
 
         internal Control ClaudeDesktopUrlRoutingRow() => Row(
             "Send Claude links to the right profile",
-            Switch(ClaudeBuddySettings.RouteClaudeUrls, ClaudeDesktopUrlRouter.SetEnabled),
+            Switch(OrbweaverSettings.RouteClaudeUrls, ClaudeDesktopUrlRouter.SetEnabled),
             "Claude Desktop's sign-in callback resolves to a bundle id that every "
             + "profile shares, so without this it opens the Default profile whichever "
             + "profile you were signing in to. Only used when you have more than one.");
@@ -895,14 +895,14 @@ namespace ClaudeBuddy
         internal Control[] ClickRows() => new[]
         {
             Row("Click", ClickPicker(
-                () => ClaudeBuddySettings.ClickAction,
-                v => ClaudeBuddySettings.ClickAction = v)),
+                () => OrbweaverSettings.ClickAction,
+                v => OrbweaverSettings.ClickAction = v)),
             Row("Double click", ClickPicker(
-                () => ClaudeBuddySettings.DoubleClickAction,
-                v => ClaudeBuddySettings.DoubleClickAction = v)),
+                () => OrbweaverSettings.DoubleClickAction,
+                v => OrbweaverSettings.DoubleClickAction = v)),
             Row("Triple click", ClickPicker(
-                () => ClaudeBuddySettings.TripleClickAction,
-                v => ClaudeBuddySettings.TripleClickAction = v),
+                () => OrbweaverSettings.TripleClickAction,
+                v => OrbweaverSettings.TripleClickAction = v),
                 "Binding a second or third click makes a single click wait a moment to see "
                 + "whether another is coming — there is no way to tell them apart without "
                 + "that pause. Leave them on Nothing and a single click acts the instant "
@@ -921,8 +921,8 @@ namespace ClaudeBuddy
         };
 
         internal Control ShapePicker() => ShapePicker(
-            () => ClaudeBuddySettings.ArrangeShape,
-            v => ClaudeBuddySettings.ArrangeShape = v);
+            () => OrbweaverSettings.ArrangeShape,
+            v => OrbweaverSettings.ArrangeShape = v);
 
         // Taken over a getter and setter rather than hard-wired to
         // ArrangeShape, because there are now three shapes to pick — the chats'
@@ -1032,7 +1032,7 @@ namespace ClaudeBuddy
             {
                 Minimum = 0,
                 Maximum = ChatZoom.Steps.Length - 1,
-                Value = ChatZoom.IndexOf(ClaudeBuddySettings.ChatTextScale),
+                Value = ChatZoom.IndexOf(OrbweaverSettings.ChatTextScale),
                 MinWidth = 160,
                 SmallChange = 1,
                 LargeChange = 1,
@@ -1043,7 +1043,7 @@ namespace ClaudeBuddy
             {
                 if (e.Property != Slider.ValueProperty) return;
 
-                ClaudeBuddySettings.ChatTextScale = ChatZoom.At((int)Math.Round(slider.Value));
+                OrbweaverSettings.ChatTextScale = ChatZoom.At((int)Math.Round(slider.Value));
                 ChatPanel.ReapplyTextScale();
             };
             return slider;
@@ -1059,7 +1059,7 @@ namespace ClaudeBuddy
             {
                 Minimum = OrbSizing.Min,
                 Maximum = OrbSizing.Max,
-                Value = ClaudeBuddySettings.OrbSize,
+                Value = OrbweaverSettings.OrbSize,
                 MinWidth = 160,
                 SmallChange = OrbSizing.Step,
                 LargeChange = 0.25,
@@ -1069,7 +1069,7 @@ namespace ClaudeBuddy
             slider.PropertyChanged += (_, e) =>
             {
                 if (e.Property != Slider.ValueProperty) return;
-                ClaudeBuddySettings.OrbSize = slider.Value;
+                OrbweaverSettings.OrbSize = slider.Value;
                 SessionManager.Instance?.ReapplyOrbSizes();
             };
             return slider;
@@ -1081,7 +1081,7 @@ namespace ClaudeBuddy
             {
                 Minimum = 0.3,
                 Maximum = 2.0,
-                Value = ClaudeBuddySettings.ArrangeSpacing,
+                Value = OrbweaverSettings.ArrangeSpacing,
                 MinWidth = 160,
                 SmallChange = 0.05,
                 LargeChange = 0.1,
@@ -1091,7 +1091,7 @@ namespace ClaudeBuddy
             slider.PropertyChanged += (_, e) =>
             {
                 if (e.Property != Slider.ValueProperty) return;
-                ClaudeBuddySettings.ArrangeSpacing = slider.Value;
+                OrbweaverSettings.ArrangeSpacing = slider.Value;
                 SessionManager.Instance?.ReapplyArrangement();
             };
             return slider;
@@ -1139,15 +1139,15 @@ namespace ClaudeBuddy
         {
             var cards = new List<Control> { Card(ClaudeCodeChatRows()) };
 
-            if (!ClaudeBuddySettings.ClaudeCodeEnabled) return cards.ToArray();
+            if (!OrbweaverSettings.ClaudeCodeEnabled) return cards.ToArray();
 
             cards.Add(Card(ProfileDirsCard(
                 blurb: $"Wire {Brand.DisplayName} hooks into additional Claude Code accounts managed "
                        + "via CLAUDE_CONFIG_DIR, alongside the default ~/.claude.",
                 watermark: ".claude-work",
-                current: () => ClaudeBuddySettings.ClaudeCodeProfileDirs,
-                add: ClaudeBuddySettings.AddClaudeCodeProfileDir,
-                remove: ClaudeBuddySettings.RemoveClaudeCodeProfileDir,
+                current: () => OrbweaverSettings.ClaudeCodeProfileDirs,
+                add: OrbweaverSettings.AddClaudeCodeProfileDir,
+                remove: OrbweaverSettings.RemoveClaudeCodeProfileDir,
                 reapply: HookInstaller.ReapplyClaudeCode,
                 verify: HookInstaller.IsWired)));
 
@@ -1163,16 +1163,16 @@ namespace ClaudeBuddy
         {
             var cards = new List<Control> { Card(CodexChatRows()) };
 
-            if (!ClaudeBuddySettings.CodexEnabled) return cards.ToArray();
+            if (!OrbweaverSettings.CodexEnabled) return cards.ToArray();
 
             cards.Add(Card(ProfileDirsCard(
                 blurb: $"Wire {Brand.DisplayName} hooks into additional Codex accounts managed via "
                        + "CODEX_HOME, alongside the default ~/.codex. Codex asks you to trust "
                        + "hooks the first time it sees them, once per account.",
                 watermark: ".codex-work",
-                current: () => ClaudeBuddySettings.CodexHomes,
-                add: ClaudeBuddySettings.AddCodexHome,
-                remove: ClaudeBuddySettings.RemoveCodexHome,
+                current: () => OrbweaverSettings.CodexHomes,
+                add: OrbweaverSettings.AddCodexHome,
+                remove: OrbweaverSettings.RemoveCodexHome,
                 reapply: HookInstaller.ReapplyCodex)));
 
             return cards.ToArray();
@@ -1182,15 +1182,15 @@ namespace ClaudeBuddy
         {
             var cards = new List<Control> { Card(GrokChatRows()) };
 
-            if (!ClaudeBuddySettings.GrokEnabled) return cards.ToArray();
+            if (!OrbweaverSettings.GrokEnabled) return cards.ToArray();
 
             cards.Add(Card(ProfileDirsCard(
                 blurb: $"Wire {Brand.DisplayName} hooks into additional Grok Build accounts managed via "
                        + "GROK_HOME, alongside the default ~/.grok.",
                 watermark: ".grok-work",
-                current: () => ClaudeBuddySettings.GrokHomes,
-                add: ClaudeBuddySettings.AddGrokHome,
-                remove: ClaudeBuddySettings.RemoveGrokHome,
+                current: () => OrbweaverSettings.GrokHomes,
+                add: OrbweaverSettings.AddGrokHome,
+                remove: OrbweaverSettings.RemoveGrokHome,
                 reapply: HookInstaller.ReapplyGrok)));
 
             return cards.ToArray();
@@ -1205,26 +1205,26 @@ namespace ClaudeBuddy
             var rows = new List<Control>
             {
                 Row("Show Claude Code sessions",
-                    Switch(ClaudeBuddySettings.ClaudeCodeEnabled, OnClaudeCodeEnabledToggled),
+                    Switch(OrbweaverSettings.ClaudeCodeEnabled, OnClaudeCodeEnabledToggled),
                     "Off, Claude Code sessions get no orbs and are left out of the menu bar. "
                     + "Its hooks are left alone — they are your own config, and they keep "
                     + "writing where the app will find them again the moment you switch this "
                     + "back on.")
             };
 
-            if (!ClaudeBuddySettings.ClaudeCodeEnabled) return rows.ToArray();
+            if (!OrbweaverSettings.ClaudeCodeEnabled) return rows.ToArray();
 
             rows.Add(Row("Chat panel on the orb",
-                Switch(ClaudeBuddySettings.ClaudeCodeChatEnabled, OnClaudeCodeChatToggled),
+                Switch(OrbweaverSettings.ClaudeCodeChatEnabled, OnClaudeCodeChatToggled),
                 "Adds a keyboard button to the orb's hover menu that opens the session's "
                 + "conversation — the same panel OpenClaw agents use. It is the same "
                 + "conversation as the terminal's, not a copy: it reads the transcript "
                 + "Claude Code already writes. Clicking the orb still goes to the terminal."));
 
-            if (!ClaudeBuddySettings.ClaudeCodeChatEnabled) return rows.ToArray();
+            if (!OrbweaverSettings.ClaudeCodeChatEnabled) return rows.ToArray();
 
             rows.Add(Row("Allow replying to sessions",
-                Switch(ClaudeBuddySettings.ClaudeCodeReplyEnabled, OnClaudeCodeReplyToggled),
+                Switch(OrbweaverSettings.ClaudeCodeReplyEnabled, OnClaudeCodeReplyToggled),
                 "Off, the panel shows what a session is doing. On, you can type into it, "
                 + "answer its permission prompts and interrupt it — by typing into its tmux "
                 + "pane, exactly as if you had typed there yourself, so the terminal shows it "
@@ -1232,7 +1232,7 @@ namespace ClaudeBuddy
                 + "the only way to type into those is to bring their window to the front."));
 
             rows.Add(Row("Usage orbs for each account",
-                Switch(ClaudeBuddySettings.AccountUsageEnabled, OnAccountUsageToggled),
+                Switch(OrbweaverSettings.AccountUsageEnabled, OnAccountUsageToggled),
                 "An orb per Claude Code account wearing three rings — this week, this "
                 + "five-hour session, and extra usage. Hover one for the numbers; click it "
                 + "to keep the card up. The figures come from Claude Code itself, asked "
@@ -1244,7 +1244,7 @@ namespace ClaudeBuddy
 
         internal void OnAccountUsageToggled(bool enabled)
         {
-            ClaudeBuddySettings.AccountUsageEnabled = enabled;
+            OrbweaverSettings.AccountUsageEnabled = enabled;
 
             // Whoever changed the setting says so — nothing on the scan path
             // treats a setting change as a session change.
@@ -1253,13 +1253,13 @@ namespace ClaudeBuddy
 
         internal void OnClaudeCodeChatToggled(bool enabled)
         {
-            ClaudeBuddySettings.ClaudeCodeChatEnabled = enabled;
+            OrbweaverSettings.ClaudeCodeChatEnabled = enabled;
             Rebuild();
         }
 
         internal void OnClaudeCodeReplyToggled(bool enabled)
         {
-            ClaudeBuddySettings.ClaudeCodeReplyEnabled = enabled;
+            OrbweaverSettings.ClaudeCodeReplyEnabled = enabled;
         }
 
         // No re-wiring. The hooks read a marker file beside the status files,
@@ -1269,7 +1269,7 @@ namespace ClaudeBuddy
         // rewrote Codex's hooks.json and cost the user their hook trust.
         internal void OnAutoColorToggled(bool enabled)
         {
-            ClaudeBuddySettings.AutoColorSessions = enabled;
+            OrbweaverSettings.AutoColorSessions = enabled;
         }
 
         // The same two powers for Codex, and its own pair of switches rather
@@ -1283,27 +1283,27 @@ namespace ClaudeBuddy
             var rows = new List<Control>
             {
                 Row("Show Codex sessions",
-                    Switch(ClaudeBuddySettings.CodexEnabled, OnCodexEnabledToggled),
+                    Switch(OrbweaverSettings.CodexEnabled, OnCodexEnabledToggled),
                     "Off, Codex sessions get no orbs and are left out of the menu bar. Its "
                     + "hooks are left alone, so nothing has to be re-approved when you switch "
                     + "this back on.")
             };
 
-            if (!ClaudeBuddySettings.CodexEnabled) return rows.ToArray();
+            if (!OrbweaverSettings.CodexEnabled) return rows.ToArray();
 
             rows.AddRange(new Control[]
             {
                 Row("Chat panel on the orb",
-                    Switch(ClaudeBuddySettings.CodexChatEnabled, OnCodexChatToggled),
+                    Switch(OrbweaverSettings.CodexChatEnabled, OnCodexChatToggled),
                     "The same panel Claude Code sessions get, reading the rollout transcript "
                     + "Codex already writes. It is the same conversation as the terminal's, not "
                     + "a copy. Clicking the orb still goes to the terminal.")
             });
 
-            if (!ClaudeBuddySettings.CodexChatEnabled) return rows.ToArray();
+            if (!OrbweaverSettings.CodexChatEnabled) return rows.ToArray();
 
             rows.Add(Row("Allow replying to sessions",
-                Switch(ClaudeBuddySettings.CodexReplyEnabled, OnCodexReplyToggled),
+                Switch(OrbweaverSettings.CodexReplyEnabled, OnCodexReplyToggled),
                 "Off, the panel shows what a session is doing. On, you can type into it, "
                 + "answer its approval prompts and interrupt it — by typing into its tmux "
                 + "pane, exactly as if you had typed there yourself. Codex's approval prompts "
@@ -1311,7 +1311,7 @@ namespace ClaudeBuddy
                 + "outright. Sessions not running under tmux stay read-only either way."));
 
             rows.Add(Row("Usage orbs for each Codex account",
-                Switch(ClaudeBuddySettings.CodexAccountUsageEnabled, OnCodexAccountUsageToggled),
+                Switch(OrbweaverSettings.CodexAccountUsageEnabled, OnCodexAccountUsageToggled),
                 "An orb per Codex account wearing its weekly credit ring and the five-hour "
                 + "window when Codex reports one. Hover for the numbers; click to keep the "
                 + "card up. The figures come from the last session's own rollout — Codex "
@@ -1325,41 +1325,41 @@ namespace ClaudeBuddy
             var rows = new List<Control>
             {
                 Row("Show Grok Build sessions",
-                    Switch(ClaudeBuddySettings.GrokEnabled, OnGrokEnabledToggled),
+                    Switch(OrbweaverSettings.GrokEnabled, OnGrokEnabledToggled),
                     "Off, Grok Build sessions get no orbs and are left out of the menu bar. "
                     + "Its hooks are left alone — they are your own config, and they keep "
                     + "writing where the app will find them again the moment you switch this "
                     + "back on.")
             };
 
-            if (!ClaudeBuddySettings.GrokEnabled) return rows.ToArray();
+            if (!OrbweaverSettings.GrokEnabled) return rows.ToArray();
 
             rows.Add(Row("Chat panel on the orb",
-                Switch(ClaudeBuddySettings.GrokChatEnabled, OnGrokChatToggled),
+                Switch(OrbweaverSettings.GrokChatEnabled, OnGrokChatToggled),
                 "The same panel Claude Code sessions get, reading the updates.jsonl "
                 + "transcript Grok already writes. It is the same conversation as the "
                 + "terminal's, not a copy. Clicking the orb still goes to the terminal."));
 
-            if (!ClaudeBuddySettings.GrokChatEnabled) return rows.ToArray();
+            if (!OrbweaverSettings.GrokChatEnabled) return rows.ToArray();
 
             rows.Add(Row("Allow replying to sessions",
-                Switch(ClaudeBuddySettings.GrokReplyEnabled, OnGrokReplyToggled),
+                Switch(OrbweaverSettings.GrokReplyEnabled, OnGrokReplyToggled),
                 "Off, the panel shows what a session is doing. On, you can type into it, "
                 + "answer its permission prompts and interrupt it — by typing into its tmux "
                 + "pane. Sessions not running under tmux stay read-only either way."));
 
             rows.Add(Row("Usage orbs for each Grok account",
-                Switch(ClaudeBuddySettings.GrokAccountUsageEnabled, OnGrokAccountUsageToggled),
+                Switch(OrbweaverSettings.GrokAccountUsageEnabled, OnGrokAccountUsageToggled),
                 "An orb per Grok Build account wearing its weekly credit ring, and "
                 + "on-demand spend when that is switched on. Grok has no five-hour window, "
                 + "so that ring is omitted rather than drawn at zero. Hover one for the "
                 + "numbers; click it to keep the card up. Nothing here reads your login "
                 + "token."));
 
-            if (!ClaudeBuddySettings.GrokAccountUsageEnabled) return rows.ToArray();
+            if (!OrbweaverSettings.GrokAccountUsageEnabled) return rows.ToArray();
 
             rows.Add(Row("Keep Grok usage fresh automatically",
-                Switch(ClaudeBuddySettings.GrokAutoRefreshEnabled, OnGrokAutoRefreshToggled),
+                Switch(OrbweaverSettings.GrokAutoRefreshEnabled, OnGrokAutoRefreshToggled),
                 "Grok only reports its own usage once, when it starts, and never again for "
                 + "the life of that process — there is no lighter way to ask it. On, this "
                 + "starts and stops Grok in the background roughly every twenty minutes "
@@ -1381,53 +1381,53 @@ namespace ClaudeBuddy
         // Rebuild, because switching a CLI off removes the rest of its section.
         internal void OnClaudeCodeEnabledToggled(bool enabled)
         {
-            ClaudeBuddySettings.ClaudeCodeEnabled = enabled;
+            OrbweaverSettings.ClaudeCodeEnabled = enabled;
             Rebuild();
         }
 
         internal void OnCodexEnabledToggled(bool enabled)
         {
-            ClaudeBuddySettings.CodexEnabled = enabled;
+            OrbweaverSettings.CodexEnabled = enabled;
             Rebuild();
         }
 
         internal void OnCodexChatToggled(bool enabled)
         {
-            ClaudeBuddySettings.CodexChatEnabled = enabled;
+            OrbweaverSettings.CodexChatEnabled = enabled;
             Rebuild();
         }
 
         internal void OnCodexReplyToggled(bool enabled)
         {
-            ClaudeBuddySettings.CodexReplyEnabled = enabled;
+            OrbweaverSettings.CodexReplyEnabled = enabled;
         }
 
         internal void OnCodexAccountUsageToggled(bool enabled)
         {
-            ClaudeBuddySettings.CodexAccountUsageEnabled = enabled;
+            OrbweaverSettings.CodexAccountUsageEnabled = enabled;
             SessionManager.Instance?.ReapplyAccountOrbs();
         }
 
         internal void OnGrokEnabledToggled(bool enabled)
         {
-            ClaudeBuddySettings.GrokEnabled = enabled;
+            OrbweaverSettings.GrokEnabled = enabled;
             Rebuild();
         }
 
         internal void OnGrokChatToggled(bool enabled)
         {
-            ClaudeBuddySettings.GrokChatEnabled = enabled;
+            OrbweaverSettings.GrokChatEnabled = enabled;
             Rebuild();
         }
 
         internal void OnGrokReplyToggled(bool enabled)
         {
-            ClaudeBuddySettings.GrokReplyEnabled = enabled;
+            OrbweaverSettings.GrokReplyEnabled = enabled;
         }
 
         internal void OnGrokAccountUsageToggled(bool enabled)
         {
-            ClaudeBuddySettings.GrokAccountUsageEnabled = enabled;
+            OrbweaverSettings.GrokAccountUsageEnabled = enabled;
 
             // Turning this off also turns auto-refresh off, rather than
             // leaving it true underneath a row that just vanished. Auto-refresh
@@ -1439,7 +1439,7 @@ namespace ClaudeBuddy
             // prevent. Only on-to-off writes anything here; turning usage orbs
             // back on never flips auto-refresh back on, only makes its own row
             // visible again.
-            if (!enabled) ClaudeBuddySettings.GrokAutoRefreshEnabled = false;
+            if (!enabled) OrbweaverSettings.GrokAutoRefreshEnabled = false;
 
             SessionManager.Instance?.ReapplyAccountOrbs();
             Rebuild();
@@ -1447,7 +1447,7 @@ namespace ClaudeBuddy
 
         internal void OnGrokAutoRefreshToggled(bool enabled)
         {
-            ClaudeBuddySettings.GrokAutoRefreshEnabled = enabled;
+            OrbweaverSettings.GrokAutoRefreshEnabled = enabled;
         }
 
         internal Control[] ClaudeCloudRows()
@@ -1455,7 +1455,7 @@ namespace ClaudeBuddy
             var rows = new List<Control>
             {
                 Row("Show cloud sessions",
-                    Switch(ClaudeBuddySettings.ClaudeCloudEnabled, OnClaudeCloudToggled),
+                    Switch(OrbweaverSettings.ClaudeCloudEnabled, OnClaudeCloudToggled),
 
                     // The Keychain prompt is named because it is the one thing
                     // about this feature that looks alarming and is not. It
@@ -1504,7 +1504,7 @@ namespace ClaudeBuddy
             // so there is nothing further to configure and nothing further to
             // show. See ClaudeCloudSessions.Snapshot, which holds that gate
             // itself rather than leaving it to the scan.
-            if (!ClaudeBuddySettings.ClaudeCloudEnabled) return rows.ToArray();
+            if (!OrbweaverSettings.ClaudeCloudEnabled) return rows.ToArray();
 
             // Kept as a field and ticked rather than rebuilt, for the reason the
             // gateway's own status line is: this changes while you are looking
@@ -1542,7 +1542,7 @@ namespace ClaudeBuddy
         // the user is still looking at the switch. Same as OnOpenClawToggled.
         private void OnClaudeCloudToggled(bool enabled)
         {
-            ClaudeBuddySettings.ClaudeCloudEnabled = enabled;
+            OrbweaverSettings.ClaudeCloudEnabled = enabled;
             ClaudeCloudSessions.Restart();
             Rebuild();
         }
@@ -1558,18 +1558,18 @@ namespace ClaudeBuddy
             var rows = new List<Control>
             {
                 Row("Show OpenClaw agents (experimental)",
-                    Switch(ClaudeBuddySettings.OpenClawEnabled, OnOpenClawToggled),
+                    Switch(OrbweaverSettings.OpenClawEnabled, OnOpenClawToggled),
                     "Shows an orb for each recently active session on an OpenClaw gateway, "
                     + $"alongside your Claude Code ones. Read-only: {Brand.DisplayName} can see what "
                     + "your agents are doing, and cannot ask them to do anything.")
             };
 
-            if (!ClaudeBuddySettings.OpenClawEnabled) return rows.ToArray();
+            if (!OrbweaverSettings.OpenClawEnabled) return rows.ToArray();
 
             rows.Add(Row("Gateway address", GatewayHostBox(),
                 "The address of the machine running the gateway — an IP, because the "
                 + "certificate it serves carries no hostname. Port "
-                + ClaudeBuddySettings.DefaultOpenClawPort + " unless you changed it."));
+                + OrbweaverSettings.DefaultOpenClawPort + " unless you changed it."));
 
             rows.Add(Row("Gateway token", GatewayTokenBox(),
                 "From `gateway.auth.token` in the gateway's own openclaw.json. Stored "
@@ -1582,7 +1582,7 @@ namespace ClaudeBuddy
                 + $"{Brand.DisplayName} also counts anything it has watched happen since it started."));
 
             rows.Add(Row("Heartbeat sessions", ClusterModePicker(
-                    () => ClaudeBuddySettings.OpenClawHeartbeatMode,
+                    () => OrbweaverSettings.OpenClawHeartbeatMode,
                     OnOpenClawHeartbeatModeChanged),
                 "A gateway wakes each agent on a timer to do background work, and it does "
                 + "that in the agent's own main session — so those orbs go active together "
@@ -1591,34 +1591,34 @@ namespace ClaudeBuddy
                 + "beside your conversations instead of among them. The agents keep their "
                 + "colours in any channel they are in whichever you pick."));
 
-            if (ClaudeBuddySettings.OpenClawHeartbeatMode == ClusterMode.OwnShape)
+            if (OrbweaverSettings.OpenClawHeartbeatMode == ClusterMode.OwnShape)
             {
                 rows.Add(Row("Heartbeat shape", ShapePicker(
-                        () => ClaudeBuddySettings.OpenClawHeartbeatShape,
-                        v => ClaudeBuddySettings.OpenClawHeartbeatShape = v),
+                        () => OrbweaverSettings.OpenClawHeartbeatShape,
+                        v => OrbweaverSettings.OpenClawHeartbeatShape = v),
                     "The pattern the heartbeat orbs arrange into, drawn beside the one your "
                     + "chats use. Pick something that is not the chats' shape — telling two "
                     + "hearts apart across a screen is the one thing this cannot help with."));
             }
 
             rows.Add(Row("Cron sessions", ClusterModePicker(
-                    () => ClaudeBuddySettings.OpenClawCronMode,
+                    () => OrbweaverSettings.OpenClawCronMode,
                     OnOpenClawCronModeChanged),
                 "Jobs somebody scheduled on the gateway, which wake on their own timer with "
                 + "nobody on the other end either. Same three answers as heartbeats above."));
 
-            if (ClaudeBuddySettings.OpenClawCronMode == ClusterMode.OwnShape)
+            if (OrbweaverSettings.OpenClawCronMode == ClusterMode.OwnShape)
             {
                 rows.Add(Row("Cron shape", ShapePicker(
-                        () => ClaudeBuddySettings.OpenClawCronShape,
-                        v => ClaudeBuddySettings.OpenClawCronShape = v),
+                        () => OrbweaverSettings.OpenClawCronShape,
+                        v => OrbweaverSettings.OpenClawCronShape = v),
                     "The pattern the cron orbs arrange into. Set both of these to Own shape "
                     + "and the arrange button draws three patterns — your chats, the "
                     + "heartbeats, and these — side by side rather than one."));
             }
 
             rows.Add(Row("Allow replying to agents",
-                Switch(ClaudeBuddySettings.OpenClawReplyEnabled, OnOpenClawReplyToggled),
+                Switch(OrbweaverSettings.OpenClawReplyEnabled, OnOpenClawReplyToggled),
                 "Off, this shows what your agents are doing. On, you can also reply to "
                 + "them from an orb — which asks the gateway for write permission, so you "
                 + "have to approve this device again there (`openclaw devices approve --latest`)."));
@@ -1718,12 +1718,12 @@ namespace ClaudeBuddy
             ("1 hour", 60),
             ("4 hours", 240),
             ("12 hours", 720),
-            ("Everything", ClaudeBuddySettings.OpenClawActiveWithinAll)
+            ("Everything", OrbweaverSettings.OpenClawActiveWithinAll)
         };
 
         internal Control ActiveWithinPicker()
         {
-            var current = ClaudeBuddySettings.OpenClawActiveWithinMinutes;
+            var current = OrbweaverSettings.OpenClawActiveWithinMinutes;
             var choices = ActiveWithinChoices.ToList();
 
             // Same courtesy LifetimePicker extends: a value typed into
@@ -1747,12 +1747,12 @@ namespace ClaudeBuddy
                 if (index < 0 || index >= choices.Count) return;
 
                 var minutes = choices[index].Minutes;
-                if (minutes == ClaudeBuddySettings.OpenClawActiveWithinMinutes) return;
+                if (minutes == OrbweaverSettings.OpenClawActiveWithinMinutes) return;
 
                 // No reconnect: this only changes which of the sessions we
                 // already have gets an orb, and the next poll is a few seconds
                 // away.
-                ClaudeBuddySettings.OpenClawActiveWithinMinutes = minutes;
+                OrbweaverSettings.OpenClawActiveWithinMinutes = minutes;
             };
 
             return combo;
@@ -1817,7 +1817,7 @@ namespace ClaudeBuddy
         {
             var box = new TextBox
             {
-                Text = ClaudeBuddySettings.OpenClawHost,
+                Text = OrbweaverSettings.OpenClawHost,
                 Watermark = "198.51.100.10",
                 Width = 220
             };
@@ -1828,7 +1828,7 @@ namespace ClaudeBuddy
             box.LostFocus += (_, _) =>
             {
                 var value = (box.Text ?? "").Trim();
-                if (value == ClaudeBuddySettings.OpenClawHost) return;
+                if (value == OrbweaverSettings.OpenClawHost) return;
 
                 OnGatewayHostChanged(value);
             };
@@ -1845,8 +1845,8 @@ namespace ClaudeBuddy
         [ExcludeFromCodeCoverage]
         internal void OnGatewayHostChanged(string value)
         {
-            ClaudeBuddySettings.OpenClawHost = value;
-            ClaudeBuddySettings.OpenClawFingerprint = "";
+            OrbweaverSettings.OpenClawHost = value;
+            OrbweaverSettings.OpenClawFingerprint = "";
             OpenClawSessions.Restart();
             Rebuild();
         }
@@ -1915,7 +1915,7 @@ namespace ClaudeBuddy
 
         internal Control GatewayTokenBox()
         {
-            var host = ClaudeBuddySettings.OpenClawHost;
+            var host = OrbweaverSettings.OpenClawHost;
             var existing = string.IsNullOrEmpty(host) ? null : OpenClawIdentity.GatewayTokenFor(host);
 
             var box = new TextBox
@@ -1957,13 +1957,13 @@ namespace ClaudeBuddy
         // which reads as the setting not working.
         internal void OnOpenClawHeartbeatModeChanged(ClusterMode mode)
         {
-            ClaudeBuddySettings.OpenClawHeartbeatMode = mode;
+            OrbweaverSettings.OpenClawHeartbeatMode = mode;
             SessionManager.Instance?.ReapplyArrangement();
         }
 
         internal void OnOpenClawCronModeChanged(ClusterMode mode)
         {
-            ClaudeBuddySettings.OpenClawCronMode = mode;
+            OrbweaverSettings.OpenClawCronMode = mode;
             SessionManager.Instance?.ReapplyArrangement();
         }
 
@@ -1973,7 +1973,7 @@ namespace ClaudeBuddy
         [ExcludeFromCodeCoverage]
         private void OnOpenClawReplyToggled(bool enabled)
         {
-            ClaudeBuddySettings.OpenClawReplyEnabled = enabled;
+            OrbweaverSettings.OpenClawReplyEnabled = enabled;
 
             // Reconnects, because the scopes are part of the handshake and the
             // gateway treats a changed scope set as a device to approve afresh.
@@ -1988,7 +1988,7 @@ namespace ClaudeBuddy
         [ExcludeFromCodeCoverage]
         private void OnOpenClawToggled(bool enabled)
         {
-            ClaudeBuddySettings.OpenClawEnabled = enabled;
+            OrbweaverSettings.OpenClawEnabled = enabled;
 
             // Immediately, not at the next launch: turning it off should take
             // the orbs off the screen and the socket off the network while the
@@ -2042,7 +2042,7 @@ namespace ClaudeBuddy
             var rows = new List<Control>
             {
                 Row("Connect directly to other machines",
-                    Switch(ClaudeBuddySettings.PeerLinkEnabled, OnPeerLinkToggled),
+                    Switch(OrbweaverSettings.PeerLinkEnabled, OnPeerLinkToggled),
 
                     // The contrast with the row below is the point, and it is
                     // stated rather than implied: this is the same feature
@@ -2053,7 +2053,7 @@ namespace ClaudeBuddy
                     + "usage. Both machines need this switched on, and you pair them once.")
             };
 
-            if (!ClaudeBuddySettings.PeerLinkEnabled) return rows.ToArray();
+            if (!OrbweaverSettings.PeerLinkEnabled) return rows.ToArray();
 
             _peerLinkStatus = new TextBlock
             {
@@ -2223,7 +2223,7 @@ namespace ClaudeBuddy
         [ExcludeFromCodeCoverage]
         internal void OnPeerLinkToggled(bool on)
         {
-            ClaudeBuddySettings.PeerLinkEnabled = on;
+            OrbweaverSettings.PeerLinkEnabled = on;
 
             // Restarted rather than left for the next launch, unlike the relay
             // switch above: a socket costs nothing to open, so making someone
@@ -2300,12 +2300,12 @@ namespace ClaudeBuddy
             var rows = new List<Control>();
 
             rows.Add(Row("High-quality voice (experimental)",
-                Switch(ClaudeBuddySettings.NeuralVoiceEnabled, OnNeuralVoiceToggled),
+                Switch(OrbweaverSettings.NeuralVoiceEnabled, OnNeuralVoiceToggled),
                 "Speaks with a neural voice (Kokoro) that runs entirely on this machine. "
                 + "Downloads about 300 MB the first time and takes a few seconds "
                 + "before it starts talking."));
 
-            if (ClaudeBuddySettings.NeuralVoiceEnabled && _neuralModelStatus is not null)
+            if (OrbweaverSettings.NeuralVoiceEnabled && _neuralModelStatus is not null)
             {
                 rows.Add(Row("Speech engine", new TextBlock
                 {
@@ -2349,14 +2349,14 @@ namespace ClaudeBuddy
             rows.AddRange(new Control[]
             {
                 Row("Enable voice input (experimental)",
-                    Switch(ClaudeBuddySettings.VoiceInputEnabled, OnVoiceInputToggled),
+                    Switch(OrbweaverSettings.VoiceInputEnabled, OnVoiceInputToggled),
                     "Hover an orb and click the mic that appears to dictate a prompt. Speech is "
                     + "transcribed entirely on this machine (Whisper, no cloud service) and typed "
                     + "into that session's terminal for review — nothing is sent anywhere, and "
                     + "Enter is never pressed for you.")
             });
 
-            if (ClaudeBuddySettings.VoiceInputEnabled && _voiceModelStatus is not null)
+            if (OrbweaverSettings.VoiceInputEnabled && _voiceModelStatus is not null)
             {
                 rows.Add(Row("Voice model", new TextBlock
                 {
@@ -2527,8 +2527,8 @@ namespace ClaudeBuddy
         internal Control SpeechVolumeControl()
         {
             SpeechVolumeReadout = VolumeReadout();
-            SpeechVolumeSlider = VolumeSlider(ClaudeBuddySettings.SpeechVolume,
-                level => ClaudeBuddySettings.SpeechVolume = level, SpeechVolumeReadout);
+            SpeechVolumeSlider = VolumeSlider(OrbweaverSettings.SpeechVolume,
+                level => OrbweaverSettings.SpeechVolume = level, SpeechVolumeReadout);
 
             // Under the slider rather than beside it, and wrapped: every
             // note is a sentence or two, and beside a 160px slider it
@@ -2572,7 +2572,7 @@ namespace ClaudeBuddy
             // The engine that will speak, not merely the one named: a stale
             // "custom" with no command behind it speaks with a system voice.
             var engine = TextToSpeech.EngineThatWillSpeak(
-                ClaudeBuddySettings.SpeakEngine, TextToSpeech.CustomCommandConfigured);
+                OrbweaverSettings.SpeakEngine, TextToSpeech.CustomCommandConfigured);
             var note = AudioVolume.SpeechVolumeNote(engine, NeuralSpeech.EngineIgnoresVolume,
                 SessionIdentity.OrbEngines(SessionIdentity.PersonaVoiceRequests(), TextToSpeech.CachedVoiceOptions));
 
@@ -2587,8 +2587,8 @@ namespace ClaudeBuddy
         internal Control AlertVolumeControl()
         {
             AlertVolumeReadout = VolumeReadout();
-            AlertVolumeSlider = VolumeSlider(ClaudeBuddySettings.AlertVolume,
-                level => ClaudeBuddySettings.AlertVolume = level, AlertVolumeReadout);
+            AlertVolumeSlider = VolumeSlider(OrbweaverSettings.AlertVolume,
+                level => OrbweaverSettings.AlertVolume = level, AlertVolumeReadout);
             return WithReadout(AlertVolumeSlider, AlertVolumeReadout);
         }
 
@@ -2655,12 +2655,12 @@ namespace ClaudeBuddy
             var combo = new ComboBox
             {
                 ItemsSource = new[] { FullLabel, SummaryLabel },
-                SelectedIndex = ClaudeBuddySettings.SpeakScope == SpeakScope.Summary ? 1 : 0,
+                SelectedIndex = OrbweaverSettings.SpeakScope == SpeakScope.Summary ? 1 : 0,
                 MinWidth = 220
             };
 
             combo.SelectionChanged += (_, _) =>
-                ClaudeBuddySettings.SpeakScope =
+                OrbweaverSettings.SpeakScope =
                     combo.SelectedIndex == 1 ? SpeakScope.Summary : SpeakScope.Full;
 
             return combo;
@@ -2721,11 +2721,11 @@ namespace ClaudeBuddy
         // TextToSpeech.SelectedVoice() — that method calls AllVoiceOptions()
         // itself, which is exactly the scan this placeholder exists to avoid.
         internal static string? SavedVoiceNameForPlaceholder() =>
-            ClaudeBuddySettings.SpeakEngine switch
+            OrbweaverSettings.SpeakEngine switch
             {
-                "custom" => ClaudeBuddySettings.SpeakCommandVoice,
-                "neural" => ClaudeBuddySettings.NeuralVoice,
-                _ => ClaudeBuddySettings.SpeakVoice
+                "custom" => OrbweaverSettings.SpeakCommandVoice,
+                "neural" => OrbweaverSettings.NeuralVoice,
+                _ => OrbweaverSettings.SpeakVoice
             };
 
         // A near-copy of OnVoiceInputToggled below, and deliberately so: the
@@ -2755,7 +2755,7 @@ namespace ClaudeBuddy
         [ExcludeFromCodeCoverage]
         internal void OnNeuralVoiceToggled(bool enabled)
         {
-            ClaudeBuddySettings.NeuralVoiceEnabled = enabled;
+            OrbweaverSettings.NeuralVoiceEnabled = enabled;
             TextToSpeech.InvalidateVoiceCache();
 
             if (!ShouldStartNeuralDownload(enabled))
@@ -2875,7 +2875,7 @@ namespace ClaudeBuddy
         [ExcludeFromCodeCoverage]
         internal void OnVoiceInputToggled(bool enabled)
         {
-            ClaudeBuddySettings.VoiceInputEnabled = enabled;
+            OrbweaverSettings.VoiceInputEnabled = enabled;
 
             if (!ShouldStartVoiceInputDownload(enabled))
             {
@@ -2959,14 +2959,14 @@ namespace ClaudeBuddy
         internal static Func<Task<string?>>? ChooseSoundFileForTests;
 
         internal static ComboBox TurnFinishedSoundPicker() => SoundPicker(
-            () => ClaudeBuddySettings.TurnFinishedSound,
-            v => ClaudeBuddySettings.TurnFinishedSound = v,
+            () => OrbweaverSettings.TurnFinishedSound,
+            v => OrbweaverSettings.TurnFinishedSound = v,
             SystemSoundCatalog.DefaultFinishedSoundName,
             includeSummary: true);
 
         internal static ComboBox NeedsAttentionSoundPicker() => SoundPicker(
-            () => ClaudeBuddySettings.NeedsAttentionSound,
-            v => ClaudeBuddySettings.NeedsAttentionSound = v,
+            () => OrbweaverSettings.NeedsAttentionSound,
+            v => OrbweaverSettings.NeedsAttentionSound = v,
             SystemSoundCatalog.DefaultAttentionSoundName,
             includeSummary: false);
 
@@ -3339,7 +3339,7 @@ namespace ClaudeBuddy
         // control, since which control a row holds (ToggleSwitch or its
         // CheckBox fallback) is a property of the theme rather than of the
         // setting, and this keeps that row testable the same way.
-        internal void OnTurnSoundsToggled(bool enabled) => ClaudeBuddySettings.TurnSoundsEnabled = enabled;
+        internal void OnTurnSoundsToggled(bool enabled) => OrbweaverSettings.TurnSoundsEnabled = enabled;
 
         internal Control[] SoundRows() => new[]
         {
@@ -3348,7 +3348,7 @@ namespace ClaudeBuddy
             // turnFinishedSound, settings.json — which means nothing to
             // someone reading the settings window rather than the source.
             // Said the same thing in plain terms instead.
-            Row("Play a sound", Switch(ClaudeBuddySettings.TurnSoundsEnabled, OnTurnSoundsToggled),
+            Row("Play a sound", Switch(OrbweaverSettings.TurnSoundsEnabled, OnTurnSoundsToggled),
                 "Off silences both rows below, whatever sound each one is set to."),
 
             // QA round 2 (copy): "it never interrupts speech already
@@ -3359,14 +3359,14 @@ namespace ClaudeBuddy
             // by only marking the sound "played" once something real was
             // actually about to be heard.
             SoundPickerRow("When a turn finishes", TurnFinishedSoundPicker(),
-                () => ClaudeBuddySettings.TurnFinishedSound, SystemSoundCatalog.DefaultFinishedSoundName,
+                () => OrbweaverSettings.TurnFinishedSound, SystemSoundCatalog.DefaultFinishedSoundName,
                 $"Plays once a reply is done and {Brand.DisplayName} is waiting on you again. "
                 + "Vibe summary speaks two or three sentences on what just happened and "
                 + "what's next, in that orb's own voice — if you're already listening to "
                 + "something else, it plays the chime below instead of talking over it."),
 
             SoundPickerRow("When a session needs you", NeedsAttentionSoundPicker(),
-                () => ClaudeBuddySettings.NeedsAttentionSound, SystemSoundCatalog.DefaultAttentionSoundName,
+                () => OrbweaverSettings.NeedsAttentionSound, SystemSoundCatalog.DefaultAttentionSoundName,
                 "Plays when a session is waiting on a permission prompt or a question — "
                 + "the state that most needs your attention, so it always wins over a "
                 + "turn finishing elsewhere on the same scan. Set an individual orb's "
@@ -3513,7 +3513,7 @@ namespace ClaudeBuddy
                 // the old value and come back open while the setting already
                 // says closed.
                 var opening = !section.IsOpen;
-                ClaudeBuddySettings.SetSettingsSectionCollapsed(id, !opening);
+                OrbweaverSettings.SetSettingsSectionCollapsed(id, !opening);
                 section.IsOpen = opening;
             };
 
@@ -3804,12 +3804,12 @@ namespace ClaudeBuddy
             ("30 minutes", 30),
             ("1 hour", 60),
             ("4 hours", 240),
-            ("Forever", ClaudeBuddySettings.OrbLifetimeForever)
+            ("Forever", OrbweaverSettings.OrbLifetimeForever)
         };
 
         internal Control LifetimePicker()
         {
-            var current = ClaudeBuddySettings.OrbLifetimeMinutes;
+            var current = OrbweaverSettings.OrbLifetimeMinutes;
             var choices = LifetimeChoices.ToList();
 
             // A number hand-written into settings.json shows as itself instead of
@@ -3831,7 +3831,7 @@ namespace ClaudeBuddy
                 var index = combo.SelectedIndex;
                 if (index < 0) return;
 
-                ClaudeBuddySettings.OrbLifetimeMinutes = choices[index].Minutes;
+                OrbweaverSettings.OrbLifetimeMinutes = choices[index].Minutes;
             };
             return combo;
         }
@@ -3919,7 +3919,7 @@ namespace ClaudeBuddy
         [ExcludeFromCodeCoverage]
         private static void ApplyProfileName(string folder, string? typed)
         {
-            ClaudeBuddySettings.Update(folder, entry => entry.Name = ChosenProfileName(typed));
+            OrbweaverSettings.Update(folder, entry => entry.Name = ChosenProfileName(typed));
             ClaudeDesktopManager.KickRefresh();
         }
 
@@ -3963,7 +3963,7 @@ namespace ClaudeBuddy
         {
             if (index < 0) return;
 
-            ClaudeBuddySettings.SetProfileColor(folder, ChosenProfileColour(options, index));
+            OrbweaverSettings.SetProfileColor(folder, ChosenProfileColour(options, index));
 
             // The Dock icon was tinted when its clone was built, so it needs
             // regenerating; the swatch and window tint just re-read the colour.
@@ -3975,14 +3975,14 @@ namespace ClaudeBuddy
         [ExcludeFromCodeCoverage]
         private static void ApplyProfileSwatch(string folder, bool value)
         {
-            ClaudeBuddySettings.SetProfileShowSwatch(folder, value);
+            OrbweaverSettings.SetProfileShowSwatch(folder, value);
             ClaudeDesktopManager.KickRefresh();
         }
 
         internal Control Row(ProfileView profile)
         {
             var folder = Path.GetFileName(profile.Directory);
-            var settings = ClaudeBuddySettings.For(folder);
+            var settings = OrbweaverSettings.For(folder);
             var grid = RowGrid();
             grid.SearchText = SettingsFilter.TextOf(profile.DisplayName, folder);
 
@@ -4031,10 +4031,10 @@ namespace ClaudeBuddy
             Add(grid, 2, Check(settings.ShowSwatch, value => ApplyProfileSwatch(folder, value)));
 
             Add(grid, 3, Check(settings.TintDockIcon, value =>
-                ClaudeBuddySettings.Update(folder, entry => entry.TintDockIcon = value)));
+                OrbweaverSettings.Update(folder, entry => entry.TintDockIcon = value)));
 
             Add(grid, 4, Check(settings.TintWindow, value =>
-                ClaudeBuddySettings.Update(folder, entry => entry.TintWindow = value)));
+                OrbweaverSettings.Update(folder, entry => entry.TintWindow = value)));
 
             Add(grid, 5, DeleteProfileButton(profile));
 

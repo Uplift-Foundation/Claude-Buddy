@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-140's own reason to exist: a persona file written by profile-gen, a
 // separate skill that is currently shipping and writes YAML front matter with

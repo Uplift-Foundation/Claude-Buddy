@@ -8,7 +8,7 @@ using Avalonia.Media;
 using Avalonia.Threading;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-110: a chat that has been told to stay.
 //
@@ -546,14 +546,14 @@ public class ChatPanelPinTests : IDisposable
     [AvaloniaFact]
     public void TheTextScaleReachesEveryPanel()
     {
-        var was = ClaudeBuddySettings.ChatTextScale;
+        var was = OrbweaverSettings.ChatTextScale;
 
         try
         {
             var pinned = OpenPinned(NewOrb(), NewFake("Pinned"));
             var transient = Open(NewOrb(), NewFake("Transient"));
 
-            ClaudeBuddySettings.ChatTextScale = 1.5;
+            OrbweaverSettings.ChatTextScale = 1.5;
             ChatPanel.ReapplyTextScale();
             Flush();
 
@@ -562,7 +562,7 @@ public class ChatPanelPinTests : IDisposable
         }
         finally
         {
-            ClaudeBuddySettings.ChatTextScale = was;
+            OrbweaverSettings.ChatTextScale = was;
             ChatPanel.ReapplyTextScale();
             Flush();
         }
@@ -950,7 +950,7 @@ public class ChatPanelPinTests : IDisposable
             panel.TogglePin();
             Flush();
 
-            var saved = ClaudeBuddySettings.PinnedChatPanelPositionFor(orb.PositionKey);
+            var saved = OrbweaverSettings.PinnedChatPanelPositionFor(orb.PositionKey);
             Assert.NotNull(saved);
             Assert.Equal(before.X, saved!.X);
             Assert.Equal(before.Y, saved.Y);
@@ -971,7 +971,7 @@ public class ChatPanelPinTests : IDisposable
             panel.Position = moved;
             Flush();
 
-            var saved = ClaudeBuddySettings.PinnedChatPanelPositionFor(orb.PositionKey);
+            var saved = OrbweaverSettings.PinnedChatPanelPositionFor(orb.PositionKey);
             Assert.NotNull(saved);
             Assert.Equal(moved.X, saved!.X);
             Assert.Equal(moved.Y, saved.Y);
@@ -990,7 +990,7 @@ public class ChatPanelPinTests : IDisposable
             panel.Position = new PixelPoint(panel.Position.X + 200, panel.Position.Y);
             Flush();
 
-            Assert.Null(ClaudeBuddySettings.PinnedChatPanelPositionFor(orb.PositionKey));
+            Assert.Null(OrbweaverSettings.PinnedChatPanelPositionFor(orb.PositionKey));
         }
 
         // Unpin() is the one event CB-111 lets forget a pin — see its own
@@ -1001,12 +1001,12 @@ public class ChatPanelPinTests : IDisposable
         {
             var orb = NewOrbWithKey();
             var panel = OpenPinned(orb, NewFake());
-            Assert.NotNull(ClaudeBuddySettings.PinnedChatPanelPositionFor(orb.PositionKey));
+            Assert.NotNull(OrbweaverSettings.PinnedChatPanelPositionFor(orb.PositionKey));
 
             panel.TogglePin();
             Flush();
 
-            Assert.Null(ClaudeBuddySettings.PinnedChatPanelPositionFor(orb.PositionKey));
+            Assert.Null(OrbweaverSettings.PinnedChatPanelPositionFor(orb.PositionKey));
         }
 
         // The regression this whole feature exists to avoid: closing a
@@ -1021,12 +1021,12 @@ public class ChatPanelPinTests : IDisposable
         {
             var orb = NewOrbWithKey();
             var panel = OpenPinned(orb, NewFake());
-            var saved = ClaudeBuddySettings.PinnedChatPanelPositionFor(orb.PositionKey);
+            var saved = OrbweaverSettings.PinnedChatPanelPositionFor(orb.PositionKey);
             Assert.NotNull(saved);
 
             Dissolve(panel);
 
-            var stillSaved = ClaudeBuddySettings.PinnedChatPanelPositionFor(orb.PositionKey);
+            var stillSaved = OrbweaverSettings.PinnedChatPanelPositionFor(orb.PositionKey);
             Assert.NotNull(stillSaved);
             Assert.Equal(saved!.X, stillSaved!.X);
             Assert.Equal(saved.Y, stillSaved.Y);
@@ -1044,7 +1044,7 @@ public class ChatPanelPinTests : IDisposable
             var panel = OpenPinned(orb, NewFake());
 
             Assert.True(panel.IsPinned);
-            Assert.Null(ClaudeBuddySettings.PinnedChatPanelPositionFor(""));
+            Assert.Null(OrbweaverSettings.PinnedChatPanelPositionFor(""));
         }
 
         [AvaloniaFact]

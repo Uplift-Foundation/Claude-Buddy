@@ -1,6 +1,6 @@
 using System.Text.Json;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Carries the mirror over a direct connection instead of through a relay.
     //

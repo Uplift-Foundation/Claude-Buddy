@@ -1,7 +1,7 @@
 using Avalonia;
 using Xunit;
 
-namespace ClaudeBuddy.Tests
+namespace Orbweaver.Tests
 {
     // Where a team arrow goes, and when there isn't one.
     //

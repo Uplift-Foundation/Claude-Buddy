@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-250: Brand holds every name the app goes by, and each one is pinned here
 // to the string that has shipped. That is the point of the class rather than a
@@ -28,7 +28,7 @@ public class BrandTests
     [InlineData(nameof(Brand.SpeechEngineName), Brand.SpeechEngineName, "ClaudeBuddySpeech")]
     [InlineData(nameof(Brand.MacBundleId), Brand.MacBundleId, "io.github.wtvamp.claudebuddy")]
     [InlineData(nameof(Brand.HotkeyWindowClass), Brand.HotkeyWindowClass, "OrbweaverGlobalHotkeyWindow")]
-    [InlineData(nameof(Brand.AssemblyName), Brand.AssemblyName, "ClaudeBuddy")]
+    [InlineData(nameof(Brand.AssemblyName), Brand.AssemblyName, "Orbweaver")]
     public void EachNameIsTheShippedString(string member, string actual, string shipped)
     {
         Assert.True(actual == shipped, $"Brand.{member} is \"{actual}\", shipped as \"{shipped}\"");
@@ -48,6 +48,7 @@ public class BrandTests
     [InlineData(nameof(Brand.Legacy.HookScriptPowerShell), Brand.Legacy.HookScriptPowerShell, "ClaudeBuddyHook.ps1")]
     [InlineData(nameof(Brand.Legacy.HookScriptShell), Brand.Legacy.HookScriptShell, "ClaudeBuddyHook.sh")]
     [InlineData(nameof(Brand.Legacy.SingleInstanceMutexName), Brand.Legacy.SingleInstanceMutexName, "ClaudeBuddy_SingleInstance_Mutex")]
+    [InlineData(nameof(Brand.Legacy.Executable), Brand.Legacy.Executable, "ClaudeBuddy")]
     public void EachLegacyNameIsTheStringOldBuildsShipped(string member, string actual, string shipped)
     {
         Assert.True(actual == shipped, $"Brand.Legacy.{member} is \"{actual}\", shipped as \"{shipped}\"");

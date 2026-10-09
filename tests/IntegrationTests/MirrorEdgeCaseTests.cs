@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The paths a mirror takes when something is missing, stale, refused or asked
 // for twice — the ones a happy round trip never reaches.

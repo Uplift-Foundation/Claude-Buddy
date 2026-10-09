@@ -21,7 +21,7 @@ using Xunit;
 // in under two seconds regardless.
 [assembly: CollectionBehavior(DisableTestParallelization = true)]
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Runs before any test in this assembly touches a single line of app code.
 //
@@ -106,6 +106,6 @@ internal static class TestBootstrap
         TextToSpeech.SilenceForTests = true;
         ChimePlayer.SilenceForTests = true;
 
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
     }
 }

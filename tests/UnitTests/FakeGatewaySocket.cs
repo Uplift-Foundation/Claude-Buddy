@@ -7,7 +7,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // A WebSocket that answers from a script instead of from a gateway.
 //

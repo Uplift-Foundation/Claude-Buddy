@@ -6,7 +6,7 @@ using Avalonia.Media;
 using Avalonia.Platform;
 using Avalonia.Threading;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Tints the frontmost Claude Desktop window in its profile's colour.
     //
@@ -55,7 +55,7 @@ namespace ClaudeBuddy
         private const int MaxParked = 6;
         private static DispatcherTimer? _timer;
 
-        public static bool Enabled { get; private set; } = ClaudeBuddySettings.TintActiveWindow;
+        public static bool Enabled { get; private set; } = OrbweaverSettings.TintActiveWindow;
 
         // Excluded from coverage: creates real overlay windows and an Avalonia
         // timer over them.
@@ -94,7 +94,7 @@ namespace ClaudeBuddy
 
             if (profile is null) return null;
 
-            return ClaudeBuddySettings.For(Path.GetFileName(profile.Directory)).TintWindow
+            return OrbweaverSettings.For(Path.GetFileName(profile.Directory)).TintWindow
                 ? profile
                 : null;
         }
@@ -103,7 +103,7 @@ namespace ClaudeBuddy
         {
             if (Enabled == enabled) return;
             Enabled = enabled;
-            ClaudeBuddySettings.TintActiveWindow = enabled;
+            OrbweaverSettings.TintActiveWindow = enabled;
 
             if (!enabled) HideAll();
             TrayController.Instance?.Refresh();

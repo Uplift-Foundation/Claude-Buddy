@@ -11,7 +11,7 @@ using Avalonia.Styling;
 using Avalonia.Threading;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // AccountOrbWindow driven through the one method the poll calls, and asserted
 // on what a person would have seen.
@@ -75,7 +75,7 @@ public class AccountOrbWindowTests : IDisposable
         // against OrbGlyph rather than a hardcoded string so this test says "the
         // orb uses the app's letters" instead of quietly re-implementing them.
         Assert.Equal(
-            OrbGlyph.For("board", ClaudeBuddySettings.TwoLetterGlyphs),
+            OrbGlyph.For("board", OrbweaverSettings.TwoLetterGlyphs),
             orb.GlyphText);
     }
 

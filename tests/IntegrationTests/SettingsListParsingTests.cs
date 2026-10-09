@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The three list-valued keys in settings.json — speakCommandArgs,
 // speakVoicesCommandArgs and codexHomes — read through a real file, plus what
@@ -27,7 +27,7 @@ public class SettingsListParsingTests
         var dir = NewSettingsDir();
         File.WriteAllText(Path.Combine(dir, "settings.json"), json);
         Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
     }
 
     // ---- speakCommandArgs / speakVoicesCommandArgs ----------------------
@@ -39,7 +39,7 @@ public class SettingsListParsingTests
         { "speakCommand": "say", "speakCommandArgs": ["-v", "Daniel", "-r", "200"] }
         """);
 
-        Assert.Equal(new[] { "-v", "Daniel", "-r", "200" }, ClaudeBuddySettings.SpeakCommandArgs);
+        Assert.Equal(new[] { "-v", "Daniel", "-r", "200" }, OrbweaverSettings.SpeakCommandArgs);
     }
 
     // CB-200: a custom speak command launched from a real settings file gets
@@ -54,7 +54,7 @@ public class SettingsListParsingTests
           "speakCommandVoice": "female_03", "speechVolume": 0.25 }
         """);
 
-        var startInfo = TextToSpeech.CustomCommandStartInfo(ClaudeBuddySettings.SpeakCommand!, voice: null);
+        var startInfo = TextToSpeech.CustomCommandStartInfo(OrbweaverSettings.SpeakCommand!, voice: null);
 
         Assert.Equal("/usr/local/bin/my-tts", startInfo.FileName);
         Assert.Equal(new[] { "--model", "f5" }, startInfo.ArgumentList);
@@ -69,8 +69,8 @@ public class SettingsListParsingTests
         { "speakVoicesCommand": "say", "speakVoicesCommandArgs": ["-v", "?"] }
         """);
 
-        Assert.Equal("say", ClaudeBuddySettings.SpeakVoicesCommand);
-        Assert.Equal(new[] { "-v", "?" }, ClaudeBuddySettings.SpeakVoicesCommandArgs);
+        Assert.Equal("say", OrbweaverSettings.SpeakVoicesCommand);
+        Assert.Equal(new[] { "-v", "?" }, OrbweaverSettings.SpeakVoicesCommandArgs);
     }
 
     // An older file has neither key. It must load with empty lists rather than
@@ -81,8 +81,8 @@ public class SettingsListParsingTests
     {
         Stage("""{ "speakCommand": "say" }""");
 
-        Assert.Empty(ClaudeBuddySettings.SpeakCommandArgs);
-        Assert.Empty(ClaudeBuddySettings.SpeakVoicesCommandArgs);
+        Assert.Empty(OrbweaverSettings.SpeakCommandArgs);
+        Assert.Empty(OrbweaverSettings.SpeakVoicesCommandArgs);
     }
 
     // A key holding the wrong shape is the same as absent, not a failure: the
@@ -92,7 +92,7 @@ public class SettingsListParsingTests
     {
         Stage("""{ "speakCommandArgs": "not an array" }""");
 
-        Assert.Empty(ClaudeBuddySettings.SpeakCommandArgs);
+        Assert.Empty(OrbweaverSettings.SpeakCommandArgs);
     }
 
     // Blank and null entries are dropped rather than passed to a process as
@@ -102,7 +102,7 @@ public class SettingsListParsingTests
     {
         Stage("""{ "speakCommandArgs": ["-v", "", null, "Daniel"] }""");
 
-        Assert.Equal(new[] { "-v", "Daniel" }, ClaudeBuddySettings.SpeakCommandArgs);
+        Assert.Equal(new[] { "-v", "Daniel" }, OrbweaverSettings.SpeakCommandArgs);
     }
 
     // The getter hands out a copy, so a caller mutating what it got back cannot
@@ -113,9 +113,9 @@ public class SettingsListParsingTests
     {
         Stage("""{ "speakCommandArgs": ["-v"] }""");
 
-        ClaudeBuddySettings.SpeakCommandArgs.Add("injected");
+        OrbweaverSettings.SpeakCommandArgs.Add("injected");
 
-        Assert.Equal(new[] { "-v" }, ClaudeBuddySettings.SpeakCommandArgs);
+        Assert.Equal(new[] { "-v" }, OrbweaverSettings.SpeakCommandArgs);
     }
 
     // ---- codexHomes -----------------------------------------------------
@@ -125,8 +125,8 @@ public class SettingsListParsingTests
     {
         Stage("""{ "codexHomes": ["work", "personal"] }""");
 
-        Assert.Contains("work", ClaudeBuddySettings.CodexHomes);
-        Assert.Contains("personal", ClaudeBuddySettings.CodexHomes);
+        Assert.Contains("work", OrbweaverSettings.CodexHomes);
+        Assert.Contains("personal", OrbweaverSettings.CodexHomes);
     }
 
     // { Length: > 0 } rather than a null check, so an empty string does not
@@ -136,7 +136,7 @@ public class SettingsListParsingTests
     {
         Stage("""{ "codexHomes": ["work", "", null] }""");
 
-        Assert.Equal(new[] { "work" }, ClaudeBuddySettings.CodexHomes);
+        Assert.Equal(new[] { "work" }, OrbweaverSettings.CodexHomes);
     }
 
     [Fact]
@@ -144,7 +144,7 @@ public class SettingsListParsingTests
     {
         Stage("{}");
 
-        Assert.Empty(ClaudeBuddySettings.CodexHomes);
+        Assert.Empty(OrbweaverSettings.CodexHomes);
     }
 
     [Fact]
@@ -152,8 +152,8 @@ public class SettingsListParsingTests
     {
         Stage("""{ "grokHomes": ["work", "personal"] }""");
 
-        Assert.Contains("work", ClaudeBuddySettings.GrokHomes);
-        Assert.Contains("personal", ClaudeBuddySettings.GrokHomes);
+        Assert.Contains("work", OrbweaverSettings.GrokHomes);
+        Assert.Contains("personal", OrbweaverSettings.GrokHomes);
     }
 
     [Fact]
@@ -161,7 +161,7 @@ public class SettingsListParsingTests
     {
         Stage("""{ "grokHomes": ["work", "", null] }""");
 
-        Assert.Equal(new[] { "work" }, ClaudeBuddySettings.GrokHomes);
+        Assert.Equal(new[] { "work" }, OrbweaverSettings.GrokHomes);
     }
 
     [Fact]
@@ -169,7 +169,7 @@ public class SettingsListParsingTests
     {
         Stage("{}");
 
-        Assert.Empty(ClaudeBuddySettings.GrokHomes);
+        Assert.Empty(OrbweaverSettings.GrokHomes);
     }
 
     // ---- OpenClaw scalars ------------------------------------------------
@@ -186,8 +186,8 @@ public class SettingsListParsingTests
     {
         Stage("""{ "openclawPort": 8317, "openclawFingerprint": "ab:cd:ef" }""");
 
-        Assert.Equal(8317, ClaudeBuddySettings.OpenClawPort);
-        Assert.Equal("ab:cd:ef", ClaudeBuddySettings.OpenClawFingerprint);
+        Assert.Equal(8317, OrbweaverSettings.OpenClawPort);
+        Assert.Equal("ab:cd:ef", OrbweaverSettings.OpenClawFingerprint);
     }
 
     // The trap the case above describes, made explicit: a camelCased key is not
@@ -199,7 +199,7 @@ public class SettingsListParsingTests
     {
         Stage("""{ "openClawPort": 8317 }""");
 
-        Assert.Equal(ClaudeBuddySettings.DefaultOpenClawPort, ClaudeBuddySettings.OpenClawPort);
+        Assert.Equal(OrbweaverSettings.DefaultOpenClawPort, OrbweaverSettings.OpenClawPort);
     }
 
     // The fingerprint is coalesced to "" rather than left null, because every
@@ -209,7 +209,7 @@ public class SettingsListParsingTests
     {
         Stage("{}");
 
-        Assert.Equal("", ClaudeBuddySettings.OpenClawFingerprint);
+        Assert.Equal("", OrbweaverSettings.OpenClawFingerprint);
     }
 
     // ---- a file that cannot be parsed ------------------------------------
@@ -228,8 +228,8 @@ public class SettingsListParsingTests
         Stage("{ this is not json");
 
         // Defaults, not a throw.
-        Assert.Empty(ClaudeBuddySettings.CodexHomes);
-        Assert.Empty(ClaudeBuddySettings.SpeakCommandArgs);
+        Assert.Empty(OrbweaverSettings.CodexHomes);
+        Assert.Empty(OrbweaverSettings.SpeakCommandArgs);
 
         Assert.True(File.Exists(log), $"expected a failure log at {log}");
         Assert.True(new FileInfo(log).Length > before,
@@ -245,7 +245,7 @@ public class SettingsListParsingTests
     {
         Stage("[1, 2, 3]");
 
-        Assert.Empty(ClaudeBuddySettings.CodexHomes);
+        Assert.Empty(OrbweaverSettings.CodexHomes);
     }
 
     // ---- the setters nothing else exercises -------------------------------
@@ -258,10 +258,10 @@ public class SettingsListParsingTests
     {
         Stage("{}");
 
-        ClaudeBuddySettings.SpeakVoicesCommand = "say";
+        OrbweaverSettings.SpeakVoicesCommand = "say";
 
-        ClaudeBuddySettings.ReloadForTests();
-        Assert.Equal("say", ClaudeBuddySettings.SpeakVoicesCommand);
+        OrbweaverSettings.ReloadForTests();
+        Assert.Equal("say", OrbweaverSettings.SpeakVoicesCommand);
     }
 
     [Fact]
@@ -269,9 +269,9 @@ public class SettingsListParsingTests
     {
         Stage("{}");
 
-        ClaudeBuddySettings.OpenClawPort = 9999;
+        OrbweaverSettings.OpenClawPort = 9999;
 
-        ClaudeBuddySettings.ReloadForTests();
-        Assert.Equal(9999, ClaudeBuddySettings.OpenClawPort);
+        OrbweaverSettings.ReloadForTests();
+        Assert.Equal(9999, OrbweaverSettings.OpenClawPort);
     }
 }

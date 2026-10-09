@@ -1,7 +1,7 @@
 using System.Reflection;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-135's own use case, against a real tree — and the reason this file exists
 // rather than another row in a grammar table.

@@ -1,7 +1,7 @@
 using System.Runtime.CompilerServices;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-200 QA: the Speech level's environment variable is spelled in exactly
 // one place, and both the app and the side-car engine compile that place.

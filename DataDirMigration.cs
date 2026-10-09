@@ -1,7 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using System.IO;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Moves the per-user data and log folders from Brand.Legacy.DataDirName to
     // Brand.DataDirName on the first launch after the rename (CB-255 §2).

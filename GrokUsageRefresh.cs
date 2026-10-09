@@ -3,7 +3,7 @@ using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.IO;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Where the `grok` CLI is, for the one part of this app that shells out to
     // it. Same problem and same answer as ClaudeBinary and CodexBinary, whose

@@ -1,7 +1,7 @@
 using Avalonia;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The three places SessionManager reads a setting and turns it into a rule:
 // how long an orb outlives its session, whether a CLI is tracked at all, and
@@ -25,18 +25,18 @@ public class OrbLifetimeAndAnchorTests
         // "forever" has to skip the comparison entirely rather than compare
         // against some large number, because the state a user reaches for it in
         // is precisely the one where a session has been quiet for days.
-        var before = ClaudeBuddySettings.OrbLifetimeMinutes;
+        var before = OrbweaverSettings.OrbLifetimeMinutes;
         try
         {
-            ClaudeBuddySettings.OrbLifetimeMinutes = ClaudeBuddySettings.OrbLifetimeForever;
+            OrbweaverSettings.OrbLifetimeMinutes = OrbweaverSettings.OrbLifetimeForever;
             Assert.Null(SessionManager.StaleAfter);
 
-            ClaudeBuddySettings.OrbLifetimeMinutes = 30;
+            OrbweaverSettings.OrbLifetimeMinutes = 30;
             Assert.Equal(30, SessionManager.StaleAfter?.TotalMinutes);
         }
         finally
         {
-            ClaudeBuddySettings.OrbLifetimeMinutes = before;
+            OrbweaverSettings.OrbLifetimeMinutes = before;
         }
     }
 
@@ -49,14 +49,14 @@ public class OrbLifetimeAndAnchorTests
         // OpenClaw's own toggle means something stronger and is consulted where
         // the gateway is asked, and there is nothing to gate a remote session
         // on beyond the bridge already being running.
-        var claude = ClaudeBuddySettings.ClaudeCodeEnabled;
-        var codex = ClaudeBuddySettings.CodexEnabled;
-        var grok = ClaudeBuddySettings.GrokEnabled;
+        var claude = OrbweaverSettings.ClaudeCodeEnabled;
+        var codex = OrbweaverSettings.CodexEnabled;
+        var grok = OrbweaverSettings.GrokEnabled;
         try
         {
-            ClaudeBuddySettings.ClaudeCodeEnabled = false;
-            ClaudeBuddySettings.CodexEnabled = false;
-            ClaudeBuddySettings.GrokEnabled = false;
+            OrbweaverSettings.ClaudeCodeEnabled = false;
+            OrbweaverSettings.CodexEnabled = false;
+            OrbweaverSettings.GrokEnabled = false;
 
             Assert.False(SessionManager.EnabledFor(SessionSource.ClaudeCode));
             Assert.False(SessionManager.EnabledFor(SessionSource.Codex));
@@ -64,9 +64,9 @@ public class OrbLifetimeAndAnchorTests
             Assert.True(SessionManager.EnabledFor(SessionSource.OpenClaw));
             Assert.True(SessionManager.EnabledFor(SessionSource.RemoteControl));
 
-            ClaudeBuddySettings.ClaudeCodeEnabled = true;
-            ClaudeBuddySettings.CodexEnabled = true;
-            ClaudeBuddySettings.GrokEnabled = true;
+            OrbweaverSettings.ClaudeCodeEnabled = true;
+            OrbweaverSettings.CodexEnabled = true;
+            OrbweaverSettings.GrokEnabled = true;
 
             Assert.True(SessionManager.EnabledFor(SessionSource.ClaudeCode));
             Assert.True(SessionManager.EnabledFor(SessionSource.Codex));
@@ -74,9 +74,9 @@ public class OrbLifetimeAndAnchorTests
         }
         finally
         {
-            ClaudeBuddySettings.ClaudeCodeEnabled = claude;
-            ClaudeBuddySettings.CodexEnabled = codex;
-            ClaudeBuddySettings.GrokEnabled = grok;
+            OrbweaverSettings.ClaudeCodeEnabled = claude;
+            OrbweaverSettings.CodexEnabled = codex;
+            OrbweaverSettings.GrokEnabled = grok;
         }
     }
 
@@ -89,16 +89,16 @@ public class OrbLifetimeAndAnchorTests
         // joining or leaving would re-fit the shape around the screen's middle
         // rather than around wherever the user has since dragged it, so the
         // whole arrangement would jump every time a session started.
-        var before = ClaudeBuddySettings.ArrangeAnchor;
+        var before = OrbweaverSettings.ArrangeAnchor;
         try
         {
-            ClaudeBuddySettings.ArrangeAnchor = null;
+            OrbweaverSettings.ArrangeAnchor = null;
 
             var work = new PixelRect(0, 0, 1920, 1080);
             var first = SessionManager.ArrangementAnchor(work);
 
             Assert.Equal(new PixelPoint(960, 540), first);
-            Assert.Equal(new ClaudeBuddySettings.OrbPlacement(960, 540), ClaudeBuddySettings.ArrangeAnchor);
+            Assert.Equal(new OrbweaverSettings.OrbPlacement(960, 540), OrbweaverSettings.ArrangeAnchor);
 
             // Asked again about a *different* screen, it still answers with what
             // was saved — the shape stays where it is rather than following the
@@ -109,7 +109,7 @@ public class OrbLifetimeAndAnchorTests
         }
         finally
         {
-            ClaudeBuddySettings.ArrangeAnchor = before;
+            OrbweaverSettings.ArrangeAnchor = before;
         }
     }
 
@@ -119,25 +119,25 @@ public class OrbLifetimeAndAnchorTests
         // A whole-shape drag moves every arranged orb by one delta; without the
         // anchor getting the same nudge, the next session to start or end would
         // snap the shape back to where it was before the drag.
-        var before = ClaudeBuddySettings.ArrangeAnchor;
+        var before = OrbweaverSettings.ArrangeAnchor;
         try
         {
-            ClaudeBuddySettings.ArrangeAnchor = new ClaudeBuddySettings.OrbPlacement(500, 400);
+            OrbweaverSettings.ArrangeAnchor = new OrbweaverSettings.OrbPlacement(500, 400);
 
             new SessionManager().ShiftArrangementAnchor(-120, 60);
 
-            Assert.Equal(new ClaudeBuddySettings.OrbPlacement(380, 460), ClaudeBuddySettings.ArrangeAnchor);
+            Assert.Equal(new OrbweaverSettings.OrbPlacement(380, 460), OrbweaverSettings.ArrangeAnchor);
         }
         finally
         {
-            ClaudeBuddySettings.ArrangeAnchor = before;
+            OrbweaverSettings.ArrangeAnchor = before;
         }
     }
 
     [Fact]
     public void AZeroDeltaAndAnUnarrangedShapeBothLeaveTheAnchorAlone()
     {
-        var before = ClaudeBuddySettings.ArrangeAnchor;
+        var before = OrbweaverSettings.ArrangeAnchor;
         try
         {
             var manager = new SessionManager();
@@ -145,17 +145,17 @@ public class OrbLifetimeAndAnchorTests
             // Nothing arranged yet, so there is no anchor to move — and a save
             // here would invent one, which would then be honoured as "where the
             // shape already is" the first time somebody did arrange.
-            ClaudeBuddySettings.ArrangeAnchor = null;
+            OrbweaverSettings.ArrangeAnchor = null;
             manager.ShiftArrangementAnchor(10, 10);
-            Assert.Null(ClaudeBuddySettings.ArrangeAnchor);
+            Assert.Null(OrbweaverSettings.ArrangeAnchor);
 
-            ClaudeBuddySettings.ArrangeAnchor = new ClaudeBuddySettings.OrbPlacement(500, 400);
+            OrbweaverSettings.ArrangeAnchor = new OrbweaverSettings.OrbPlacement(500, 400);
             manager.ShiftArrangementAnchor(0, 0);
-            Assert.Equal(new ClaudeBuddySettings.OrbPlacement(500, 400), ClaudeBuddySettings.ArrangeAnchor);
+            Assert.Equal(new OrbweaverSettings.OrbPlacement(500, 400), OrbweaverSettings.ArrangeAnchor);
         }
         finally
         {
-            ClaudeBuddySettings.ArrangeAnchor = before;
+            OrbweaverSettings.ArrangeAnchor = before;
         }
     }
 }

@@ -1,4 +1,4 @@
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Whether the OpenClaw slot in the new-chat dialog can be used at all, and
     // why not when it can't.

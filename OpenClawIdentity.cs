@@ -4,7 +4,7 @@ using Org.BouncyCastle.Crypto.Parameters;
 using Org.BouncyCastle.Crypto.Signers;
 using Org.BouncyCastle.Security;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // This machine's identity to an OpenClaw gateway: an Ed25519 keypair, the
     // device id derived from it, and the signature the gateway demands on every
@@ -30,7 +30,7 @@ namespace ClaudeBuddy
         // every time, which is the one part of this feature that can't be made
         // automatic.
         private static string Path_ =>
-            System.IO.Path.Combine(ClaudeBuddySettings.Directory, "openclaw-identity.json");
+            System.IO.Path.Combine(OrbweaverSettings.Directory, "openclaw-identity.json");
 
         private static readonly object Gate = new();
         private static Identity? _cached;
@@ -131,7 +131,7 @@ namespace ClaudeBuddy
         }
 
         private static string TokensPath =>
-            System.IO.Path.Combine(ClaudeBuddySettings.Directory, "openclaw-devices.json");
+            System.IO.Path.Combine(OrbweaverSettings.Directory, "openclaw-devices.json");
 
         private static void LoadTokens()
         {
@@ -159,7 +159,7 @@ namespace ClaudeBuddy
         {
             try
             {
-                Directory.CreateDirectory(ClaudeBuddySettings.Directory);
+                Directory.CreateDirectory(OrbweaverSettings.Directory);
                 File.WriteAllText(TokensPath, System.Text.Json.JsonSerializer.Serialize(Tokens));
 
                 if (!OperatingSystem.IsWindows())
@@ -283,7 +283,7 @@ namespace ClaudeBuddy
         {
             try
             {
-                Directory.CreateDirectory(ClaudeBuddySettings.Directory);
+                Directory.CreateDirectory(OrbweaverSettings.Directory);
 
                 var json = System.Text.Json.JsonSerializer.Serialize(new
                 {

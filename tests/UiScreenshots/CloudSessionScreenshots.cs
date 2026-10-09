@@ -5,7 +5,7 @@ using Avalonia.Headless.XUnit;
 using Avalonia.LogicalTree;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Captures for CB-164's visible surfaces: the cloud orb itself, and the settings
 // group in both of its states.
@@ -321,10 +321,10 @@ public class CloudSessionScreenshots : IDisposable
 
     private static void Capture(bool enabled, string name, bool keepState = false)
     {
-        var was = ClaudeBuddySettings.ClaudeCloudEnabled;
+        var was = OrbweaverSettings.ClaudeCloudEnabled;
         try
         {
-            ClaudeBuddySettings.ClaudeCloudEnabled = enabled;
+            OrbweaverSettings.ClaudeCloudEnabled = enabled;
 
             // A state a running app would actually be in. Left alone the line
             // reads "off" even in the switched-on capture — truthfully, since
@@ -386,7 +386,7 @@ public class CloudSessionScreenshots : IDisposable
         finally
         {
             ClaudeCloudSessions.SetStateForTests("off");
-            ClaudeBuddySettings.ClaudeCloudEnabled = was;
+            OrbweaverSettings.ClaudeCloudEnabled = was;
         }
     }
 }

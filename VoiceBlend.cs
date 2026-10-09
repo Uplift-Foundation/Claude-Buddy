@@ -1,7 +1,7 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // "50% sky and 50% nicole" — a voice written as a mixture of two or more
     // of the engine's own, which is what this repository's `.claude/PERSONA.MD`

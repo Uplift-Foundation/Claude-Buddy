@@ -1,4 +1,4 @@
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Who a message belongs to when the transcript does not say.
     //

@@ -1,7 +1,7 @@
 using Avalonia;
 using Xunit;
 
-namespace ClaudeBuddy.Tests
+namespace Orbweaver.Tests
 {
     // Orbs of different sizes in one arrangement (CB-198), and the two fixes
     // that fell out of adding them.

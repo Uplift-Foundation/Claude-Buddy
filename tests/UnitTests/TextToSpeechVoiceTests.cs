@@ -1,7 +1,7 @@
 using Xunit;
-using static ClaudeBuddy.TextToSpeech;
+using static Orbweaver.TextToSpeech;
 
-namespace ClaudeBuddy.Tests
+namespace Orbweaver.Tests
 {
     // Which voice speaks, and which voices are offered.
     //
@@ -279,8 +279,8 @@ namespace ClaudeBuddy.Tests
         [Fact]
         public void TheSavedSystemVoiceIsChosen()
         {
-            ClaudeBuddySettings.SpeakEngine = "system";
-            ClaudeBuddySettings.SpeakVoice = "Albert";
+            OrbweaverSettings.SpeakEngine = "system";
+            OrbweaverSettings.SpeakVoice = "Albert";
 
             Assert.Equal(System2, SelectedFrom(Options()));
         }
@@ -288,8 +288,8 @@ namespace ClaudeBuddy.Tests
         [Fact]
         public void TheSavedNeuralVoiceIsChosen()
         {
-            ClaudeBuddySettings.SpeakEngine = "neural";
-            ClaudeBuddySettings.NeuralVoice = "af_bella";
+            OrbweaverSettings.SpeakEngine = "neural";
+            OrbweaverSettings.NeuralVoice = "af_bella";
 
             Assert.Equal(Neural1, SelectedFrom(Options()));
         }
@@ -297,8 +297,8 @@ namespace ClaudeBuddy.Tests
         [Fact]
         public void TheSavedCustomVoiceIsChosen()
         {
-            ClaudeBuddySettings.SpeakEngine = "custom";
-            ClaudeBuddySettings.SpeakCommandVoice = "narrator";
+            OrbweaverSettings.SpeakEngine = "custom";
+            OrbweaverSettings.SpeakCommandVoice = "narrator";
 
             Assert.Equal(Custom1, SelectedFrom(Options()));
         }
@@ -308,8 +308,8 @@ namespace ClaudeBuddy.Tests
         [Fact]
         public void AVoiceNameIsMatchedWithoutRegardToCase()
         {
-            ClaudeBuddySettings.SpeakEngine = "neural";
-            ClaudeBuddySettings.NeuralVoice = "AF_BELLA";
+            OrbweaverSettings.SpeakEngine = "neural";
+            OrbweaverSettings.NeuralVoice = "AF_BELLA";
 
             Assert.Equal(Neural1, SelectedFrom(Options()));
         }
@@ -319,8 +319,8 @@ namespace ClaudeBuddy.Tests
         [Fact]
         public void AMissingVoiceFallsBackWithinItsEngine()
         {
-            ClaudeBuddySettings.SpeakEngine = "system";
-            ClaudeBuddySettings.SpeakVoice = "a voice that was uninstalled";
+            OrbweaverSettings.SpeakEngine = "system";
+            OrbweaverSettings.SpeakVoice = "a voice that was uninstalled";
 
             Assert.Equal(System1, SelectedFrom(Options()));
         }
@@ -330,8 +330,8 @@ namespace ClaudeBuddy.Tests
         [Fact]
         public void AMissingEngineFallsBackToWhateverIsAvailable()
         {
-            ClaudeBuddySettings.SpeakEngine = "neural";
-            ClaudeBuddySettings.NeuralVoice = "af_bella";
+            OrbweaverSettings.SpeakEngine = "neural";
+            OrbweaverSettings.NeuralVoice = "af_bella";
 
             var withoutNeural = new List<VoiceOption> { System1, System2 };
 
@@ -346,8 +346,8 @@ namespace ClaudeBuddy.Tests
         [InlineData("something-from-a-later-version")]
         public void AnUnknownEngineNameFallsBackToTheSystemEngine(string engine)
         {
-            ClaudeBuddySettings.SpeakEngine = engine;
-            ClaudeBuddySettings.SpeakVoice = "Albert";
+            OrbweaverSettings.SpeakEngine = engine;
+            OrbweaverSettings.SpeakVoice = "Albert";
 
             Assert.Equal(System2, SelectedFrom(Options()));
         }
@@ -363,13 +363,13 @@ namespace ClaudeBuddy.Tests
             SelectVoice(System2);
             SelectVoice(Neural1);
 
-            Assert.Equal("neural", ClaudeBuddySettings.SpeakEngine);
-            Assert.Equal("af_bella", ClaudeBuddySettings.NeuralVoice);
-            Assert.Equal("Albert", ClaudeBuddySettings.SpeakVoice);
+            Assert.Equal("neural", OrbweaverSettings.SpeakEngine);
+            Assert.Equal("af_bella", OrbweaverSettings.NeuralVoice);
+            Assert.Equal("Albert", OrbweaverSettings.SpeakVoice);
 
             // ...and back again, which is the point of keeping them apart.
             SelectVoice(System2);
-            Assert.Equal("system", ClaudeBuddySettings.SpeakEngine);
+            Assert.Equal("system", OrbweaverSettings.SpeakEngine);
             Assert.Equal(System2, SelectedFrom(Options()));
         }
 
@@ -378,8 +378,8 @@ namespace ClaudeBuddy.Tests
         {
             SelectVoice(Custom1);
 
-            Assert.Equal("custom", ClaudeBuddySettings.SpeakEngine);
-            Assert.Equal("narrator", ClaudeBuddySettings.SpeakCommandVoice);
+            Assert.Equal("custom", OrbweaverSettings.SpeakEngine);
+            Assert.Equal("narrator", OrbweaverSettings.SpeakCommandVoice);
         }
 
         // A command that speaks but lists nothing still needs to be selectable,
@@ -392,20 +392,20 @@ namespace ClaudeBuddy.Tests
             SelectVoice(new VoiceOption(SpeakEngine.Custom, "narrator", "narrator (custom)"));
             SelectVoice(new VoiceOption(SpeakEngine.Custom, "", "Custom command"));
 
-            Assert.Equal("custom", ClaudeBuddySettings.SpeakEngine);
-            Assert.Equal("", ClaudeBuddySettings.SpeakCommandVoice);
+            Assert.Equal("custom", OrbweaverSettings.SpeakEngine);
+            Assert.Equal("", OrbweaverSettings.SpeakCommandVoice);
         }
 
         [Fact]
         public void ACustomCommandIsConfiguredOnlyWhenItIsNotBlank()
         {
-            ClaudeBuddySettings.SpeakCommand = "";
+            OrbweaverSettings.SpeakCommand = "";
             Assert.False(CustomCommandConfigured);
 
-            ClaudeBuddySettings.SpeakCommand = "   ";
+            OrbweaverSettings.SpeakCommand = "   ";
             Assert.False(CustomCommandConfigured);
 
-            ClaudeBuddySettings.SpeakCommand = "/usr/local/bin/speak";
+            OrbweaverSettings.SpeakCommand = "/usr/local/bin/speak";
             Assert.True(CustomCommandConfigured);
         }
 

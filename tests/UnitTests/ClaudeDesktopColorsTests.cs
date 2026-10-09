@@ -1,7 +1,7 @@
 using Avalonia.Media;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // A handful of assertions on ClaudeDesktopColors.cs's public surface. For(),
 // NameFor() and HexFor() all read through ClaudeBuddySettings.For(folderName)
@@ -110,7 +110,7 @@ public class ClaudeDesktopColorsTests
                 .First(name => ClaudeDesktopColors.ByName(name) != derived);
             var expected = ClaudeDesktopColors.ByName(chosen);
 
-            ClaudeBuddySettings.Update(folder, p => p.Color = chosen);
+            OrbweaverSettings.Update(folder, p => p.Color = chosen);
 
             Assert.Equal(expected, ClaudeDesktopColors.For(folder, isDefault: false));
             Assert.NotEqual(derived, ClaudeDesktopColors.For(folder, isDefault: false));
@@ -124,7 +124,7 @@ public class ClaudeDesktopColorsTests
         }
         finally
         {
-            ClaudeBuddySettings.RemoveProfile(folder);
+            OrbweaverSettings.RemoveProfile(folder);
         }
     }
 
@@ -137,13 +137,13 @@ public class ClaudeDesktopColorsTests
         var folder = UniqueFolder();
         try
         {
-            ClaudeBuddySettings.Update(folder, p => p.Color = "TEAL");
+            OrbweaverSettings.Update(folder, p => p.Color = "TEAL");
 
             Assert.Equal(Color.Parse("#00AFAF"), ClaudeDesktopColors.For(folder, isDefault: false));
         }
         finally
         {
-            ClaudeBuddySettings.RemoveProfile(folder);
+            OrbweaverSettings.RemoveProfile(folder);
         }
     }
 
@@ -158,13 +158,13 @@ public class ClaudeDesktopColorsTests
         try
         {
             var derived = ClaudeDesktopColors.For(folder, isDefault: false);
-            ClaudeBuddySettings.Update(folder, p => p.Color = "chartreuse");
+            OrbweaverSettings.Update(folder, p => p.Color = "chartreuse");
 
             Assert.Equal(derived, ClaudeDesktopColors.For(folder, isDefault: false));
         }
         finally
         {
-            ClaudeBuddySettings.RemoveProfile(folder);
+            OrbweaverSettings.RemoveProfile(folder);
         }
     }
 
@@ -178,14 +178,14 @@ public class ClaudeDesktopColorsTests
         var folder = UniqueFolder();
         try
         {
-            ClaudeBuddySettings.Update(folder, p => p.Color = "");
+            OrbweaverSettings.Update(folder, p => p.Color = "");
 
             Assert.Equal(Color.Parse("#5B7A94"), ClaudeDesktopColors.For(folder, isDefault: true));
             Assert.Equal("slate", ClaudeDesktopColors.NameFor(folder, isDefault: true));
         }
         finally
         {
-            ClaudeBuddySettings.RemoveProfile(folder);
+            OrbweaverSettings.RemoveProfile(folder);
         }
     }
 

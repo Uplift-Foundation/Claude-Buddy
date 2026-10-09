@@ -11,12 +11,12 @@ using Avalonia.Interactivity;
 using Avalonia.LogicalTree;
 using Avalonia.Media;
 using Avalonia.Threading;
-using ClaudeBuddy.Tests;
+using Orbweaver.Tests;
 using Xunit;
 using ShapesPath = Avalonia.Controls.Shapes.Path;
-using Speak = ClaudeBuddy.TextToSpeech.SpeakState;
+using Speak = Orbweaver.TextToSpeech.SpeakState;
 
-namespace ClaudeBuddy.UiTests;
+namespace Orbweaver.UiTests;
 
 // CB-222: the preview button beside the Speak voice picker. Driven through the
 // real window and the real VoicePreview, with only the three points that would

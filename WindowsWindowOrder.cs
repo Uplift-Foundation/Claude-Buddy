@@ -2,7 +2,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 using Avalonia.Controls;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Relative z-order between two of this app's own windows, which Avalonia
     // has no API for: Topmost is a band, not an ordering, and both the orb and

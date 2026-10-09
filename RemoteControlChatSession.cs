@@ -1,7 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using Avalonia.Threading;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // One Claude Code session on another machine, as something the chat panel
     // can talk to — in one of two modes, and the difference between them is the
@@ -566,7 +566,7 @@ namespace ClaudeBuddy
             var mine = new ChatTurn { Role = ChatRole.User, Text = text, IsComplete = true };
             Add(mine);
 
-            if (!ClaudeBuddySettings.PeerLinkEnabled)
+            if (!OrbweaverSettings.PeerLinkEnabled)
             {
                 Note(RemoteControlOffNote);
                 return ChatSendOutcome.Failed;

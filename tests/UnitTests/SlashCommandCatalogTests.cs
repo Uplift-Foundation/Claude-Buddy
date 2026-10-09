@@ -3,7 +3,7 @@ using System.IO;
 using System.Linq;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Covers the parts of SlashCommandCatalog that don't depend on the real
 // ~/.claude or ~/.codex — the built-in floor, and everything driven by a

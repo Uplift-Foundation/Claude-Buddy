@@ -2,7 +2,7 @@ using System;
 using Avalonia.Headless.XUnit;
 using Xunit;
 
-namespace ClaudeBuddy.UiScreenshots;
+namespace Orbweaver.UiScreenshots;
 
 // The menu-bar icon, recoloured to whatever the user chose for a state.
 //
@@ -35,7 +35,7 @@ public class TrayIconTintTests
     [AvaloniaFact]
     public void ADefaultColouredStateIsNotTinted()
     {
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
         ResetColours();
 
         Assert.Null(TrayController.Tinted("idle"));
@@ -46,7 +46,7 @@ public class TrayIconTintTests
     [AvaloniaFact]
     public void ACustomisedStateProducesATintedIcon()
     {
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
         ResetColours();
 
         try
@@ -70,7 +70,7 @@ public class TrayIconTintTests
     [InlineData("waiting")]
     public void EveryStateHasAnAssetToTint(string state)
     {
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
         ResetColours();
 
         try
@@ -92,7 +92,7 @@ public class TrayIconTintTests
     [AvaloniaFact]
     public void AStateWithNoAssetFallsBackRatherThanThrowing()
     {
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
         ResetColours();
 
         try

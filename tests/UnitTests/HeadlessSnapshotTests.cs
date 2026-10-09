@@ -5,7 +5,7 @@ using System.Linq;
 using System.Text.Json;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Covers SessionManager.HeadlessSnapshot — the UI-less composition of the scan
 // rules that answers a far machine's roster request before SessionManager has
@@ -337,10 +337,10 @@ public class HeadlessSnapshotTests
     public void ACodexSessionIsLeftOutOfTheTeamRead()
     {
         var dir = NewStatusDir();
-        var codexWas = ClaudeBuddySettings.CodexEnabled;
+        var codexWas = OrbweaverSettings.CodexEnabled;
         try
         {
-            ClaudeBuddySettings.CodexEnabled = true;
+            OrbweaverSettings.CodexEnabled = true;
             WriteStatus(dir, "member", new SessionStatus
                 { State = "idle", Title = "backlog", Cwd = "/tmp/t", Source = SessionSource.ClaudeCode, SessionPid = 801 });
             WriteStatus(dir, "codex", new SessionStatus
@@ -359,7 +359,7 @@ public class HeadlessSnapshotTests
         }
         finally
         {
-            ClaudeBuddySettings.CodexEnabled = codexWas;
+            OrbweaverSettings.CodexEnabled = codexWas;
             try { Directory.Delete(dir, recursive: true); } catch { }
         }
     }
@@ -807,10 +807,10 @@ public class HeadlessSnapshotTests
     public void AWslSessionPastTheOrbLifetimeIsNotOfferedEvenWithLifetimeIgnored()
     {
         var dir = NewStatusDir();
-        var before = ClaudeBuddySettings.OrbLifetimeMinutes;
+        var before = OrbweaverSettings.OrbLifetimeMinutes;
         try
         {
-            ClaudeBuddySettings.OrbLifetimeMinutes = 30;
+            OrbweaverSettings.OrbLifetimeMinutes = 30;
             WriteStatus(dir, "wsl1", WslShaped());
             File.SetLastWriteTimeUtc(Path.Combine(dir, "wsl1.txt"), DateTime.UtcNow.AddHours(-2));
 
@@ -820,7 +820,7 @@ public class HeadlessSnapshotTests
         }
         finally
         {
-            ClaudeBuddySettings.OrbLifetimeMinutes = before;
+            OrbweaverSettings.OrbLifetimeMinutes = before;
             Directory.Delete(dir, recursive: true);
         }
     }
@@ -832,10 +832,10 @@ public class HeadlessSnapshotTests
     public void AWslSessionInsideTheOrbLifetimeIsOfferedWithLifetimeIgnored()
     {
         var dir = NewStatusDir();
-        var before = ClaudeBuddySettings.OrbLifetimeMinutes;
+        var before = OrbweaverSettings.OrbLifetimeMinutes;
         try
         {
-            ClaudeBuddySettings.OrbLifetimeMinutes = 30;
+            OrbweaverSettings.OrbLifetimeMinutes = 30;
             WriteStatus(dir, "wsl1", WslShaped());
 
             Assert.Equal("wsl1", Assert.Single(SessionManager.HeadlessSnapshot(
@@ -844,7 +844,7 @@ public class HeadlessSnapshotTests
         }
         finally
         {
-            ClaudeBuddySettings.OrbLifetimeMinutes = before;
+            OrbweaverSettings.OrbLifetimeMinutes = before;
             Directory.Delete(dir, recursive: true);
         }
     }
@@ -853,10 +853,10 @@ public class HeadlessSnapshotTests
     public void ALiveNativeSessionPastTheOrbLifetimeIsStillOfferedWithLifetimeIgnored()
     {
         var dir = NewStatusDir();
-        var before = ClaudeBuddySettings.OrbLifetimeMinutes;
+        var before = OrbweaverSettings.OrbLifetimeMinutes;
         try
         {
-            ClaudeBuddySettings.OrbLifetimeMinutes = 30;
+            OrbweaverSettings.OrbLifetimeMinutes = 30;
             WriteStatus(dir, "native", new SessionStatus
             {
                 State = "idle",
@@ -872,7 +872,7 @@ public class HeadlessSnapshotTests
         }
         finally
         {
-            ClaudeBuddySettings.OrbLifetimeMinutes = before;
+            OrbweaverSettings.OrbLifetimeMinutes = before;
             Directory.Delete(dir, recursive: true);
         }
     }

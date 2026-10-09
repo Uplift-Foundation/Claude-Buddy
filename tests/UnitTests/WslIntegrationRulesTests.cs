@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests
+namespace Orbweaver.Tests
 {
     // The three decisions WslIntegration makes that are not registry reads or
     // subprocess calls.

@@ -4,7 +4,7 @@ using Avalonia.Headless.XUnit;
 using Avalonia.Threading;
 using Xunit;
 
-namespace ClaudeBuddy.UiTests;
+namespace Orbweaver.UiTests;
 
 // CB-92: conversations nobody is looking at give their memory back.
 //
@@ -28,8 +28,8 @@ public class OpenClawChatResidencyTests
 {
     private static OpenClawChatSession Fresh(out string key)
     {
-        ClaudeBuddySettings.ReloadForTests();
-        ClaudeBuddySettings.OpenClawEnabled = true;
+        OrbweaverSettings.ReloadForTests();
+        OrbweaverSettings.OpenClawEnabled = true;
 
         key = "agent:cb92-" + Guid.NewGuid().ToString("N") + ":main";
 
@@ -355,10 +355,10 @@ public class OpenClawChatResidencyTests
     [AvaloniaFact]
     public void APanelOnSomethingElseEntirelyIsNotOurBusiness()
     {
-        ClaudeBuddySettings.ReloadForTests();
-        ClaudeBuddySettings.OpenClawEnabled = true;
+        OrbweaverSettings.ReloadForTests();
+        OrbweaverSettings.OpenClawEnabled = true;
 
-        var fake = new ClaudeBuddy.Tests.FakeChatSession(null)
+        var fake = new Orbweaver.Tests.FakeChatSession(null)
         {
             SessionId = "cb92-not-openclaw-" + Guid.NewGuid(),
             DisplayName = "Local"

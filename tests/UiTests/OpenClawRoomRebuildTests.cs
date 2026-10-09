@@ -3,7 +3,7 @@ using Avalonia.Headless.XUnit;
 using Avalonia.Threading;
 using Xunit;
 
-namespace ClaudeBuddy.UiTests;
+namespace Orbweaver.UiTests;
 
 // The room's rebuild, and the coalescing around it.
 //

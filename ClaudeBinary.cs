@@ -1,6 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Where the `claude` CLI is, for the parts of this app that shell out to it.
     //

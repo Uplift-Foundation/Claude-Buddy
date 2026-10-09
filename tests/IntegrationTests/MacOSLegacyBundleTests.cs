@@ -1,7 +1,7 @@
 using Xunit;
-using static ClaudeBuddy.MacOSLegacyBundle;
+using static Orbweaver.MacOSLegacyBundle;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-255 §5: the stale-bundle cleanup's executor against real folders.
 //

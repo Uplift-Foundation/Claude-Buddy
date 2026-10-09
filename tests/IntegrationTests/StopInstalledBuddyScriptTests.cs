@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // tools/stop-installed-buddy.sh, which `build-macos-app.sh --install` runs
 // before it replaces /Applications/Orbweaver.app (CB-206). Once the

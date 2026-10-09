@@ -3,7 +3,7 @@ using System.IO;
 using System.Linq;
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 // The parts of GrokUsageRefresh.cs that do not start a real process:
 // GrokBinary.Locate, the ShouldRefresh gate, and the scheduler that holds the

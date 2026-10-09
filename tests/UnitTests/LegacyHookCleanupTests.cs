@@ -2,9 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using Xunit;
-using Verdict = ClaudeBuddy.LegacyHookCleanup.Verdict;
+using Verdict = Orbweaver.LegacyHookCleanup.Verdict;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-255 §1: when a legacy hook-script folder may be deleted. The rule is
 // pure and every arm is a case here; the IO half is driven against real temp

@@ -1,7 +1,7 @@
 using System.Net.Http;
 using System.Text.Json;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // CB-225: archiving and deleting a Claude Code cloud session from its orb.
     //

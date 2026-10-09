@@ -6,7 +6,7 @@ using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // The menu-bar / notification-area presence: one status item whose icon
     // reflects the most urgent state across all sessions (waiting beats
@@ -265,7 +265,7 @@ namespace ClaudeBuddy
             // Hidden entirely unless the feature is on, so the menu does not
             // grow a line about machines for the majority who have not asked
             // for any.
-            if (ClaudeBuddySettings.PeerLinkEnabled)
+            if (OrbweaverSettings.PeerLinkEnabled)
             {
                 var remoteItem = new NativeMenuItem("Connect to other machines");
                 remoteItem.Click += (_, _) => ConnectToOtherMachines();

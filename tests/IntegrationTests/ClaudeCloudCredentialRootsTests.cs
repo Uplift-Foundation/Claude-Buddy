@@ -3,7 +3,7 @@ using System.IO;
 using System.Linq;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // ClaudeCliCredentials.SourcesFor over real credential files — the half of
 // ClaudeCloudCredentialsFileTests that decides *which roots* are accounts rather

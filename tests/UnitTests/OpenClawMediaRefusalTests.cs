@@ -5,7 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-93: when the gateway refuses `MEDIA:<path>`, `&meta=1` on the same route
 // says why — this covers turning that answer into the line and tooltip the

@@ -18,7 +18,7 @@ using Xunit;
 // — not available yet at 3.2.2 — so this stays on the older spelling.
 [assembly: CollectionBehavior(DisableTestParallelization = true)]
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Same seam as tests/UiTests/TestBootstrap.cs, for the same reason: OrbWindow
 // and OrbFlyout read settings-backed colors the moment they're constructed
@@ -83,6 +83,6 @@ internal static class TestBootstrap
         TextToSpeech.SilenceForTests = true;
         ChimePlayer.SilenceForTests = true;
 
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
     }
 }

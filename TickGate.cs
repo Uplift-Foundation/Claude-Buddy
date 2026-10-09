@@ -1,6 +1,6 @@
 using System.Threading;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // "One of these at a time, whoever asks", across threads.
     //

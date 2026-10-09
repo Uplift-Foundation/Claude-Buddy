@@ -4,7 +4,7 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Nothing may read the stored credential except through a budget.
 //

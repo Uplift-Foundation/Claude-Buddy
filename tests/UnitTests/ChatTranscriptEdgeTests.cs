@@ -2,7 +2,7 @@ using System.Linq;
 using System.Text.Json;
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 // Three arms of ChatTranscript that the main suite's fixtures do not reach.
 //

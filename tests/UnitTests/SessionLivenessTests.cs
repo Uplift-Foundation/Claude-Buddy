@@ -1,7 +1,7 @@
-using ClaudeBuddy;
+using Orbweaver;
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 // Telling a conversation from a terminal somebody walked away from.
 //

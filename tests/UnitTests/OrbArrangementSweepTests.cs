@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests
+namespace Orbweaver.Tests
 {
     // OrbArrangement's geometry, as a test rather than as an exe you have to
     // remember to run.

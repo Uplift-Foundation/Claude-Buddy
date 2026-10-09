@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.UiTests;
+namespace Orbweaver.UiTests;
 
 // Every test class that reads or writes ClaudeBuddySettings runs in this
 // collection, which means one at a time.

@@ -1,4 +1,4 @@
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // ClaudeBuddySettings is compiled in for its gateway fields, and reaches
     // for a default voice name from each speech engine on the way past. The

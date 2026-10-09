@@ -3,7 +3,7 @@ using System.IO;
 using System.Xml;
 using System.Xml.Linq;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Moves a verified-ours `Claude Buddy.app` left beside `Orbweaver.app` to
     // the Trash, so a login item pointing at it cannot bring the old build

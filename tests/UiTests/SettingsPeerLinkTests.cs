@@ -6,7 +6,7 @@ using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
 using Xunit;
 
-namespace ClaudeBuddy.UiTests;
+namespace Orbweaver.UiTests;
 
 // The pairing section of the settings window.
 //
@@ -27,8 +27,8 @@ public class SettingsPeerLinkTests : IDisposable
     // each read as a regression in the code they cover rather than as leakage.
     public void Dispose()
     {
-        ClaudeBuddySettings.ReloadForTests();
-        ClaudeBuddySettings.PeerLinkEnabled = false;
+        OrbweaverSettings.ReloadForTests();
+        OrbweaverSettings.PeerLinkEnabled = false;
     }
 
     private static SettingsWindow NewWindow()
@@ -42,8 +42,8 @@ public class SettingsPeerLinkTests : IDisposable
 
     private static SettingsWindow WithLink(bool on)
     {
-        ClaudeBuddySettings.ReloadForTests();
-        ClaudeBuddySettings.PeerLinkEnabled = on;
+        OrbweaverSettings.ReloadForTests();
+        OrbweaverSettings.PeerLinkEnabled = on;
 
         return NewWindow();
     }

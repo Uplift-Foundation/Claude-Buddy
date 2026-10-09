@@ -2,7 +2,7 @@ using Avalonia.Headless.XUnit;
 using Avalonia.Threading;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-167's "vibe summary" turn-finished sound, from SpeechRequest.
 // SpeakTurnSummary down through OrbWindow.SpeakTurnSummary — the layer
@@ -17,11 +17,11 @@ namespace ClaudeBuddy.Tests;
 [Collection("Settings")]
 public class TurnSummarySpeechTests : IDisposable
 {
-    private readonly SpeakScope _scopeWas = ClaudeBuddySettings.SpeakScope;
+    private readonly SpeakScope _scopeWas = OrbweaverSettings.SpeakScope;
 
     public void Dispose()
     {
-        ClaudeBuddySettings.SpeakScope = _scopeWas;
+        OrbweaverSettings.SpeakScope = _scopeWas;
         SpeechSummary.SummarizerForTests = null;
         SpeechSummary.AccountSummarizerForTests = null;
         SpeechRequest.UtteranceForTests = null;
@@ -63,7 +63,7 @@ public class TurnSummarySpeechTests : IDisposable
     [AvaloniaFact]
     public void ALongReplyIsSummarisedAndTheResultIsSpoken()
     {
-        ClaudeBuddySettings.SpeakScope = SpeakScope.Full; // proves the forced override below
+        OrbweaverSettings.SpeakScope = SpeakScope.Full; // proves the forced override below
         var reply = LongReply();
 
         string? seenBySummariser = null;
@@ -106,7 +106,7 @@ public class TurnSummarySpeechTests : IDisposable
     [AvaloniaFact]
     public void AShortReplyIsSpokenInFullEvenWithTheGlobalScopeSetToFull()
     {
-        ClaudeBuddySettings.SpeakScope = SpeakScope.Full;
+        OrbweaverSettings.SpeakScope = SpeakScope.Full;
 
         var spoken = (string?)null;
         SpeechRequest.UtteranceForTests = (text, _, _) => spoken = text;
@@ -128,7 +128,7 @@ public class TurnSummarySpeechTests : IDisposable
     [AvaloniaFact]
     public void ALongReplyEntersPreparingSynchronouslyBeforeAnyRoundTrip()
     {
-        ClaudeBuddySettings.SpeakScope = SpeakScope.Full;
+        OrbweaverSettings.SpeakScope = SpeakScope.Full;
 
         // Never lets the round trip finish within this test, so the state
         // this asserts is unambiguously the synchronous part of the call.
@@ -251,10 +251,10 @@ public class TurnSummarySpeechTests : IDisposable
     [AvaloniaFact]
     public async Task AGatewayOrbWithOpenClawDisabledFiresTheRemotePathWithoutThrowing()
     {
-        var wasEnabled = ClaudeBuddySettings.OpenClawEnabled;
+        var wasEnabled = OrbweaverSettings.OpenClawEnabled;
         try
         {
-            ClaudeBuddySettings.OpenClawEnabled = false;
+            OrbweaverSettings.OpenClawEnabled = false;
 
             var orb = new OrbWindow(Guid.NewGuid().ToString());
             orb.UpdateFrom(new SessionStatus
@@ -269,7 +269,7 @@ public class TurnSummarySpeechTests : IDisposable
         }
         finally
         {
-            ClaudeBuddySettings.OpenClawEnabled = wasEnabled;
+            OrbweaverSettings.OpenClawEnabled = wasEnabled;
         }
     }
 
@@ -306,7 +306,7 @@ public class TurnSummarySpeechTests : IDisposable
     [AvaloniaFact]
     public async Task SpeakTurnSummaryRemoteAsyncFindsARealHistoryEntryAndSchedulesTheRead()
     {
-        var wasEnabled = ClaudeBuddySettings.OpenClawEnabled;
+        var wasEnabled = OrbweaverSettings.OpenClawEnabled;
         var agent = "nova" + Guid.NewGuid().ToString("N")[..8];
         var sessionId = $"openclaw:agent:{agent}:discord:channel:1";
 
@@ -315,7 +315,7 @@ public class TurnSummarySpeechTests : IDisposable
 
         try
         {
-            ClaudeBuddySettings.OpenClawEnabled = true;
+            OrbweaverSettings.OpenClawEnabled = true;
 
             var chat = (OpenClawChatSession)OpenClawSessions.ChatFor(sessionId, "Nova")!;
             chat.SetHistory(new[]
@@ -340,7 +340,7 @@ public class TurnSummarySpeechTests : IDisposable
         finally
         {
             SpeechRequest.UtteranceForTests = null;
-            ClaudeBuddySettings.OpenClawEnabled = wasEnabled;
+            OrbweaverSettings.OpenClawEnabled = wasEnabled;
         }
     }
 

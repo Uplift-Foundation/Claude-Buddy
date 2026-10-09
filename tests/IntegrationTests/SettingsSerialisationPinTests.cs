@@ -5,7 +5,7 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-241's guard, for this assembly. tests/UnitTests/SettingsSerialisationPinTests
 // has the story and the reasoning; it is copied here rather than shared because

@@ -1,7 +1,7 @@
 using System;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Covers turning the Claude Code CLI's stored login into a reading, and the
 // custody rules that surround it.

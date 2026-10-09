@@ -12,7 +12,7 @@ using Xunit;
 // the same way, with a `Shapes` alias; this file just spells the type out.
 using ShapesPath = Avalonia.Controls.Shapes.Path;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-167's settings-window half: the master switch and the two pickers,
 // driven the same way SettingsWindowPickerTests drives ClickPicker/
@@ -44,9 +44,9 @@ namespace ClaudeBuddy.Tests;
 [Collection("Settings")]
 public class SoundSettingsRowTests : IDisposable
 {
-    private readonly bool _wasEnabled = ClaudeBuddySettings.TurnSoundsEnabled;
-    private readonly string? _wasFinished = ClaudeBuddySettings.TurnFinishedSound;
-    private readonly string? _wasAttention = ClaudeBuddySettings.NeedsAttentionSound;
+    private readonly bool _wasEnabled = OrbweaverSettings.TurnSoundsEnabled;
+    private readonly string? _wasFinished = OrbweaverSettings.TurnFinishedSound;
+    private readonly string? _wasAttention = OrbweaverSettings.NeedsAttentionSound;
     private readonly object _lock = new();
     private readonly List<string> _played = new();
     private readonly List<string> _tempFiles = new();
@@ -73,9 +73,9 @@ public class SoundSettingsRowTests : IDisposable
         SettingsWindow.FlushPendingPreviewForTests();
         ChimePlayer.PlayForTests = null;
         SettingsWindow.ChooseSoundFileForTests = null;
-        ClaudeBuddySettings.TurnSoundsEnabled = _wasEnabled;
-        ClaudeBuddySettings.TurnFinishedSound = _wasFinished;
-        ClaudeBuddySettings.NeedsAttentionSound = _wasAttention;
+        OrbweaverSettings.TurnSoundsEnabled = _wasEnabled;
+        OrbweaverSettings.TurnFinishedSound = _wasFinished;
+        OrbweaverSettings.NeedsAttentionSound = _wasAttention;
         foreach (var path in _tempFiles)
         {
             try { File.Delete(path); } catch { /* best effort */ }
@@ -195,7 +195,7 @@ public class SoundSettingsRowTests : IDisposable
     [AvaloniaFact]
     public void TheFinishedPickerStartsOnDefaultWhenNothingIsSaved()
     {
-        ClaudeBuddySettings.TurnFinishedSound = null;
+        OrbweaverSettings.TurnFinishedSound = null;
 
         var combo = SettingsWindow.TurnFinishedSoundPicker();
 
@@ -205,7 +205,7 @@ public class SoundSettingsRowTests : IDisposable
     [AvaloniaFact]
     public void TheFinishedPickerStartsOnOffWhenThatIsSaved()
     {
-        ClaudeBuddySettings.TurnFinishedSound = "off";
+        OrbweaverSettings.TurnFinishedSound = "off";
 
         var combo = SettingsWindow.TurnFinishedSoundPicker();
 
@@ -215,7 +215,7 @@ public class SoundSettingsRowTests : IDisposable
     [AvaloniaFact]
     public void TheFinishedPickerStartsOnVibeSummaryWhenThatIsSaved()
     {
-        ClaudeBuddySettings.TurnFinishedSound = "summary";
+        OrbweaverSettings.TurnFinishedSound = "summary";
 
         var combo = SettingsWindow.TurnFinishedSoundPicker();
 
@@ -229,7 +229,7 @@ public class SoundSettingsRowTests : IDisposable
         var systemSounds = SystemSounds();
         if (systemSounds.Count == 0) return; // nothing installed on this runner to assert against
 
-        ClaudeBuddySettings.NeedsAttentionSound = systemSounds[0];
+        OrbweaverSettings.NeedsAttentionSound = systemSounds[0];
 
         var combo = SettingsWindow.NeedsAttentionSoundPicker();
 
@@ -242,12 +242,12 @@ public class SoundSettingsRowTests : IDisposable
     [AvaloniaFact]
     public void ChoosingOffWritesOffAndPlaysNothing()
     {
-        ClaudeBuddySettings.TurnFinishedSound = null;
+        OrbweaverSettings.TurnFinishedSound = null;
         var combo = SettingsWindow.TurnFinishedSoundPicker();
 
         combo.SelectedIndex = 1; // "Off"
 
-        Assert.Equal("off", ClaudeBuddySettings.TurnFinishedSound);
+        Assert.Equal("off", OrbweaverSettings.TurnFinishedSound);
         SettingsWindow.FlushPendingPreviewForTests(); // a safe no-op: nothing armed the timer
         Assert.Empty(_played);
     }
@@ -255,12 +255,12 @@ public class SoundSettingsRowTests : IDisposable
     [AvaloniaFact]
     public void ChoosingVibeSummaryWritesSummaryAndPlaysNothing()
     {
-        ClaudeBuddySettings.TurnFinishedSound = null;
+        OrbweaverSettings.TurnFinishedSound = null;
         var combo = SettingsWindow.TurnFinishedSoundPicker();
 
         combo.SelectedIndex = 2; // "Vibe summary"
 
-        Assert.Equal("summary", ClaudeBuddySettings.TurnFinishedSound);
+        Assert.Equal("summary", OrbweaverSettings.TurnFinishedSound);
         SettingsWindow.FlushPendingPreviewForTests();
         Assert.Empty(_played);
     }
@@ -268,13 +268,13 @@ public class SoundSettingsRowTests : IDisposable
     [AvaloniaFact]
     public async Task ChoosingBackToDefaultWritesNull()
     {
-        ClaudeBuddySettings.TurnFinishedSound = "off";
+        OrbweaverSettings.TurnFinishedSound = "off";
         var combo = SettingsWindow.TurnFinishedSoundPicker();
         Assert.Equal(1, combo.SelectedIndex);
 
         combo.SelectedIndex = 0; // "Default (Glass)"
 
-        Assert.Null(ClaudeBuddySettings.TurnFinishedSound);
+        Assert.Null(OrbweaverSettings.TurnFinishedSound);
 
         SettingsWindow.FlushPendingPreviewForTests();
         if (SystemSoundCatalog.Resolve(
@@ -291,13 +291,13 @@ public class SoundSettingsRowTests : IDisposable
         var systemSounds = SystemSounds();
         if (systemSounds.Count == 0) return; // nothing installed on this runner to assert against
 
-        ClaudeBuddySettings.NeedsAttentionSound = null;
+        OrbweaverSettings.NeedsAttentionSound = null;
         var combo = SettingsWindow.NeedsAttentionSoundPicker();
 
         var items = ((IEnumerable<string>)combo.ItemsSource!).ToList();
         combo.SelectedIndex = items.IndexOf(systemSounds[0]);
 
-        Assert.Equal(systemSounds[0], ClaudeBuddySettings.NeedsAttentionSound);
+        Assert.Equal(systemSounds[0], OrbweaverSettings.NeedsAttentionSound);
 
         SettingsWindow.FlushPendingPreviewForTests();
         await WaitForPreviewAsync();
@@ -315,14 +315,14 @@ public class SoundSettingsRowTests : IDisposable
         var picked = NewRealTempFile();
         SettingsWindow.ChooseSoundFileForTests = () => Task.FromResult<string?>(picked);
 
-        ClaudeBuddySettings.TurnFinishedSound = null;
+        OrbweaverSettings.TurnFinishedSound = null;
         var combo = SettingsWindow.TurnFinishedSoundPicker();
 
         var items = ((IEnumerable<string>)combo.ItemsSource!).ToList();
         combo.SelectedIndex = items.IndexOf("Choose file…");
         Dispatcher.UIThread.RunJobs();
 
-        Assert.Equal(picked, ClaudeBuddySettings.TurnFinishedSound);
+        Assert.Equal(picked, OrbweaverSettings.TurnFinishedSound);
 
         var reselected = ((IEnumerable<string>)combo.ItemsSource!).ToList();
         Assert.Equal(Path.GetFileName(picked), reselected[combo.SelectedIndex]);
@@ -338,7 +338,7 @@ public class SoundSettingsRowTests : IDisposable
     [AvaloniaFact]
     public void CancellingChooseFileLeavesTheSettingAndSelectionAlone()
     {
-        ClaudeBuddySettings.TurnFinishedSound = "off";
+        OrbweaverSettings.TurnFinishedSound = "off";
         SettingsWindow.ChooseSoundFileForTests = () => Task.FromResult<string?>(null);
 
         var combo = SettingsWindow.TurnFinishedSoundPicker();
@@ -348,7 +348,7 @@ public class SoundSettingsRowTests : IDisposable
         combo.SelectedIndex = items.IndexOf("Choose file…");
         Dispatcher.UIThread.RunJobs();
 
-        Assert.Equal("off", ClaudeBuddySettings.TurnFinishedSound);
+        Assert.Equal("off", OrbweaverSettings.TurnFinishedSound);
         Assert.Equal(offIndex, combo.SelectedIndex);
         SettingsWindow.FlushPendingPreviewForTests();
         Assert.Empty(_played);
@@ -417,7 +417,7 @@ public class SoundSettingsRowTests : IDisposable
         var systemSounds = SystemSounds();
         if (systemSounds.Count < 2) return; // need two distinct choices to arrow between
 
-        ClaudeBuddySettings.NeedsAttentionSound = null;
+        OrbweaverSettings.NeedsAttentionSound = null;
         var combo = SettingsWindow.NeedsAttentionSoundPicker();
         var items = ((IEnumerable<string>)combo.ItemsSource!).ToList();
 
@@ -427,7 +427,7 @@ public class SoundSettingsRowTests : IDisposable
         combo.SelectedIndex = items.IndexOf(systemSounds[1]);
         combo.SelectedIndex = items.IndexOf(systemSounds[0]);
 
-        Assert.Equal(systemSounds[0], ClaudeBuddySettings.NeedsAttentionSound);
+        Assert.Equal(systemSounds[0], OrbweaverSettings.NeedsAttentionSound);
 
         SettingsWindow.FlushPendingPreviewForTests();
         await WaitForPreviewAsync();
@@ -655,10 +655,10 @@ public class SoundSettingsRowTests : IDisposable
         var window = NewWindow();
 
         window.OnTurnSoundsToggled(true);
-        Assert.True(ClaudeBuddySettings.TurnSoundsEnabled);
+        Assert.True(OrbweaverSettings.TurnSoundsEnabled);
 
         window.OnTurnSoundsToggled(false);
-        Assert.False(ClaudeBuddySettings.TurnSoundsEnabled);
+        Assert.False(OrbweaverSettings.TurnSoundsEnabled);
     }
 
     [AvaloniaFact]
@@ -685,7 +685,7 @@ public class SoundSettingsRowTests : IDisposable
         var systemSounds = SystemSounds();
         if (systemSounds.Count == 0) return; // nothing installed on this runner to assert against
 
-        ClaudeBuddySettings.TurnFinishedSound = systemSounds[0];
+        OrbweaverSettings.TurnFinishedSound = systemSounds[0];
         var window = NewWindow();
         var rows = window.SoundRows();
 
@@ -705,7 +705,7 @@ public class SoundSettingsRowTests : IDisposable
         var systemSounds = SystemSounds();
         if (systemSounds.Count == 0) return; // nothing installed on this runner to assert against
 
-        ClaudeBuddySettings.NeedsAttentionSound = systemSounds[0];
+        OrbweaverSettings.NeedsAttentionSound = systemSounds[0];
         var window = NewWindow();
         var rows = window.SoundRows();
 

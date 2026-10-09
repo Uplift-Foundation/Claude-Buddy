@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 // Which temp root holds the session status files.
 //

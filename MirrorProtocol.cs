@@ -4,7 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // The wire format two Claude Buddies use to show each other's sessions
     // verbatim, and the reason it exists rather than a nicer one.

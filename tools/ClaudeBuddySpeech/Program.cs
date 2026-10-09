@@ -164,7 +164,7 @@ namespace ClaudeBuddySpeech
         //
         // The name comes from SpeechEngineContract.cs, the one file this
         // project shares with the app, so the two cannot spell it differently.
-        private const string VolumeEnvVar = ClaudeBuddy.SpeechEngineContract.VolumeEnvVar;
+        private const string VolumeEnvVar = Orbweaver.SpeechEngineContract.VolumeEnvVar;
 
         // Unset, unparsable or out of range all mean "full volume" — the
         // --rate rule: the caller already clamped it, so a value that still

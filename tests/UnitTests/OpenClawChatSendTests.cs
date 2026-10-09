@@ -3,7 +3,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 // OpenClawChatSession.SendAsync: what the transcript looks like after someone
 // types a sentence and presses return.
@@ -22,8 +22,8 @@ public class OpenClawChatSendTests
 
     private static void Replying(bool enabled)
     {
-        ClaudeBuddySettings.ReloadForTests();
-        ClaudeBuddySettings.OpenClawReplyEnabled = enabled;
+        OrbweaverSettings.ReloadForTests();
+        OrbweaverSettings.OpenClawReplyEnabled = enabled;
     }
 
     // CB-35: the user's own turn goes on *before* the refusal note, the same

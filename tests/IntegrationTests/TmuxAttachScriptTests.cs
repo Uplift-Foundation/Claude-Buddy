@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The generated attach script, run past a real shell.
 //

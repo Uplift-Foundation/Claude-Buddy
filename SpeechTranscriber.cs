@@ -4,7 +4,7 @@ using System.Text.RegularExpressions;
 using Whisper.net;
 using Whisper.net.Ggml;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Local, offline speech-to-text for the orb's voice-dictation mic — see
     // OrbWindow and VoiceRecorder. Whisper.net (whisper.cpp bindings) against
@@ -23,7 +23,7 @@ namespace ClaudeBuddy
         // Cached beside settings.json rather than bundled in the installer:
         // ~150MB is too large to ship to everyone when most people will never
         // turn this on. See DownloadModelAsync for when it actually arrives.
-        private static string ModelPath => Path.Combine(ClaudeBuddySettings.Directory, "ggml-base.en.bin");
+        private static string ModelPath => Path.Combine(OrbweaverSettings.Directory, "ggml-base.en.bin");
 
         public static bool ModelDownloaded => File.Exists(ModelPath);
 
@@ -65,7 +65,7 @@ namespace ClaudeBuddy
         {
             try
             {
-                Directory.CreateDirectory(ClaudeBuddySettings.Directory);
+                Directory.CreateDirectory(OrbweaverSettings.Directory);
                 progress?.Report("Downloading voice model (about 150 MB)…");
 
                 var tempPath = ModelPath + ".tmp";

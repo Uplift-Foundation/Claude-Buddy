@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // What shape of local session a status file describes.
     //

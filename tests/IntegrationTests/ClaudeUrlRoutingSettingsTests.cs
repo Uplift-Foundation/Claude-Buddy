@@ -1,7 +1,7 @@
 using System.Text.Json.Nodes;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The two settings the URL router keeps, through a real settings.json.
 //
@@ -24,7 +24,7 @@ public class ClaudeUrlRoutingSettingsTests
     private static void PointSettingsAt(string dir)
     {
         Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
     }
 
     [Fact]
@@ -37,9 +37,9 @@ public class ClaudeUrlRoutingSettingsTests
         var dir = NewSettingsDir();
         PointSettingsAt(dir);
 
-        Assert.True(ClaudeBuddySettings.RouteClaudeUrls);
+        Assert.True(OrbweaverSettings.RouteClaudeUrls);
 
-        ClaudeBuddySettings.RouteClaudeUrls = false;
+        OrbweaverSettings.RouteClaudeUrls = false;
 
         var settingsPath = Path.Combine(dir, "settings.json");
         var root = JsonNode.Parse(File.ReadAllText(settingsPath)) as JsonObject;
@@ -47,12 +47,12 @@ public class ClaudeUrlRoutingSettingsTests
         Assert.False(root!["routeClaudeUrls"]!.GetValue<bool>());
 
         // And back through a real reload, not just the in-memory model.
-        ClaudeBuddySettings.ReloadForTests();
-        Assert.False(ClaudeBuddySettings.RouteClaudeUrls);
+        OrbweaverSettings.ReloadForTests();
+        Assert.False(OrbweaverSettings.RouteClaudeUrls);
 
-        ClaudeBuddySettings.RouteClaudeUrls = true;
-        ClaudeBuddySettings.ReloadForTests();
-        Assert.True(ClaudeBuddySettings.RouteClaudeUrls);
+        OrbweaverSettings.RouteClaudeUrls = true;
+        OrbweaverSettings.ReloadForTests();
+        Assert.True(OrbweaverSettings.RouteClaudeUrls);
     }
 
     [Fact]
@@ -61,12 +61,12 @@ public class ClaudeUrlRoutingSettingsTests
         var dir = NewSettingsDir();
         PointSettingsAt(dir);
 
-        Assert.Equal("", ClaudeBuddySettings.PreviousClaudeUrlHandler);
+        Assert.Equal("", OrbweaverSettings.PreviousClaudeUrlHandler);
 
-        ClaudeBuddySettings.PreviousClaudeUrlHandler = "com.anthropic.claudefordesktop";
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.PreviousClaudeUrlHandler = "com.anthropic.claudefordesktop";
+        OrbweaverSettings.ReloadForTests();
 
-        Assert.Equal("com.anthropic.claudefordesktop", ClaudeBuddySettings.PreviousClaudeUrlHandler);
+        Assert.Equal("com.anthropic.claudefordesktop", OrbweaverSettings.PreviousClaudeUrlHandler);
     }
 
     [Fact]
@@ -79,13 +79,13 @@ public class ClaudeUrlRoutingSettingsTests
         var dir = NewSettingsDir();
         PointSettingsAt(dir);
 
-        ClaudeBuddySettings.PreviousClaudeUrlHandler = "something";
-        ClaudeBuddySettings.PreviousClaudeUrlHandler = null!;
+        OrbweaverSettings.PreviousClaudeUrlHandler = "something";
+        OrbweaverSettings.PreviousClaudeUrlHandler = null!;
 
-        Assert.Equal("", ClaudeBuddySettings.PreviousClaudeUrlHandler);
+        Assert.Equal("", OrbweaverSettings.PreviousClaudeUrlHandler);
 
-        ClaudeBuddySettings.ReloadForTests();
-        Assert.Equal("", ClaudeBuddySettings.PreviousClaudeUrlHandler);
+        OrbweaverSettings.ReloadForTests();
+        Assert.Equal("", OrbweaverSettings.PreviousClaudeUrlHandler);
     }
 
     [Fact]
@@ -101,7 +101,7 @@ public class ClaudeUrlRoutingSettingsTests
 
         PointSettingsAt(dir);
 
-        Assert.True(ClaudeBuddySettings.RouteClaudeUrls);
-        Assert.Equal("", ClaudeBuddySettings.PreviousClaudeUrlHandler);
+        Assert.True(OrbweaverSettings.RouteClaudeUrls);
+        Assert.Equal("", OrbweaverSettings.PreviousClaudeUrlHandler);
     }
 }

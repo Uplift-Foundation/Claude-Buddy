@@ -1,7 +1,7 @@
 using System;
 using Avalonia.Threading;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // The order the process starts in, as something other than the inside of
     // Main.

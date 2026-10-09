@@ -4,7 +4,7 @@ using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     public partial class App : Application
     {

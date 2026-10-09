@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // The persona pictures a mirror client has fetched, by id (CB-216).
     //

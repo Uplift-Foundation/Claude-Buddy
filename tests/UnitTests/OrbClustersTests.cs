@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests
+namespace Orbweaver.Tests
 {
     // OrbClusters: which shape an orb joins, and whether it exists at all.
     //

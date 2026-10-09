@@ -4,7 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // This machine's identity to an OpenClaw gateway.
 //

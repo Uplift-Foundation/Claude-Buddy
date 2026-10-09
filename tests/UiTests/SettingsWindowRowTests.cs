@@ -2,7 +2,7 @@ using System.Reflection;
 using Avalonia.Headless.XUnit;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // What the settings switches actually do.
 //
@@ -85,47 +85,47 @@ public class SettingsWindowRowTests : IDisposable
 
     [AvaloniaFact]
     public void TheClaudeCodeSwitchWritesItsOwnSetting() => Toggles(
-        (w, v) => w.OnClaudeCodeEnabledToggled(v), () => ClaudeBuddySettings.ClaudeCodeEnabled);
+        (w, v) => w.OnClaudeCodeEnabledToggled(v), () => OrbweaverSettings.ClaudeCodeEnabled);
 
     [AvaloniaFact]
     public void TheClaudeCodeChatSwitchWritesItsOwnSetting() => Toggles(
-        (w, v) => w.OnClaudeCodeChatToggled(v), () => ClaudeBuddySettings.ClaudeCodeChatEnabled);
+        (w, v) => w.OnClaudeCodeChatToggled(v), () => OrbweaverSettings.ClaudeCodeChatEnabled);
 
     [AvaloniaFact]
     public void TheClaudeCodeReplySwitchWritesItsOwnSetting() => Toggles(
-        (w, v) => w.OnClaudeCodeReplyToggled(v), () => ClaudeBuddySettings.ClaudeCodeReplyEnabled);
+        (w, v) => w.OnClaudeCodeReplyToggled(v), () => OrbweaverSettings.ClaudeCodeReplyEnabled);
 
     [AvaloniaFact]
     public void TheCodexSwitchWritesItsOwnSetting() => Toggles(
-        (w, v) => w.OnCodexEnabledToggled(v), () => ClaudeBuddySettings.CodexEnabled);
+        (w, v) => w.OnCodexEnabledToggled(v), () => OrbweaverSettings.CodexEnabled);
 
     [AvaloniaFact]
     public void TheCodexChatSwitchWritesItsOwnSetting() => Toggles(
-        (w, v) => w.OnCodexChatToggled(v), () => ClaudeBuddySettings.CodexChatEnabled);
+        (w, v) => w.OnCodexChatToggled(v), () => OrbweaverSettings.CodexChatEnabled);
 
     [AvaloniaFact]
     public void TheCodexReplySwitchWritesItsOwnSetting() => Toggles(
-        (w, v) => w.OnCodexReplyToggled(v), () => ClaudeBuddySettings.CodexReplyEnabled);
+        (w, v) => w.OnCodexReplyToggled(v), () => OrbweaverSettings.CodexReplyEnabled);
 
     [AvaloniaFact]
     public void TheCodexUsageSwitchWritesItsOwnSetting() => Toggles(
-        (w, v) => w.OnCodexAccountUsageToggled(v), () => ClaudeBuddySettings.CodexAccountUsageEnabled);
+        (w, v) => w.OnCodexAccountUsageToggled(v), () => OrbweaverSettings.CodexAccountUsageEnabled);
 
     [AvaloniaFact]
     public void TheGrokSwitchWritesItsOwnSetting() => Toggles(
-        (w, v) => w.OnGrokEnabledToggled(v), () => ClaudeBuddySettings.GrokEnabled);
+        (w, v) => w.OnGrokEnabledToggled(v), () => OrbweaverSettings.GrokEnabled);
 
     [AvaloniaFact]
     public void TheGrokChatSwitchWritesItsOwnSetting() => Toggles(
-        (w, v) => w.OnGrokChatToggled(v), () => ClaudeBuddySettings.GrokChatEnabled);
+        (w, v) => w.OnGrokChatToggled(v), () => OrbweaverSettings.GrokChatEnabled);
 
     [AvaloniaFact]
     public void TheGrokReplySwitchWritesItsOwnSetting() => Toggles(
-        (w, v) => w.OnGrokReplyToggled(v), () => ClaudeBuddySettings.GrokReplyEnabled);
+        (w, v) => w.OnGrokReplyToggled(v), () => OrbweaverSettings.GrokReplyEnabled);
 
     [AvaloniaFact]
     public void TheGrokUsageSwitchWritesItsOwnSetting() => Toggles(
-        (w, v) => w.OnGrokAccountUsageToggled(v), () => ClaudeBuddySettings.GrokAccountUsageEnabled);
+        (w, v) => w.OnGrokAccountUsageToggled(v), () => OrbweaverSettings.GrokAccountUsageEnabled);
 
     // CB-96. Its row only exists when GrokAccountUsageEnabled is already on —
     // Toggles() rebuilds the page after every call, which is what makes the
@@ -135,10 +135,10 @@ public class SettingsWindowRowTests : IDisposable
     [AvaloniaFact]
     public void TheGrokAutoRefreshSwitchWritesItsOwnSetting()
     {
-        ClaudeBuddySettings.GrokAccountUsageEnabled = true;
+        OrbweaverSettings.GrokAccountUsageEnabled = true;
 
         Toggles(
-            (w, v) => w.OnGrokAutoRefreshToggled(v), () => ClaudeBuddySettings.GrokAutoRefreshEnabled);
+            (w, v) => w.OnGrokAutoRefreshToggled(v), () => OrbweaverSettings.GrokAutoRefreshEnabled);
     }
 
     // Auto-refresh starts the user's real Grok app in the background and is
@@ -155,10 +155,10 @@ public class SettingsWindowRowTests : IDisposable
 
         window.OnGrokAccountUsageToggled(true);
         window.OnGrokAutoRefreshToggled(true);
-        Assert.True(ClaudeBuddySettings.GrokAutoRefreshEnabled);
+        Assert.True(OrbweaverSettings.GrokAutoRefreshEnabled);
 
         window.OnGrokAccountUsageToggled(false);
-        Assert.False(ClaudeBuddySettings.GrokAutoRefreshEnabled);
+        Assert.False(OrbweaverSettings.GrokAutoRefreshEnabled);
     }
 
     // Turning usage orbs back on is not the same gesture as turning auto
@@ -176,7 +176,7 @@ public class SettingsWindowRowTests : IDisposable
 
         window.OnGrokAccountUsageToggled(true);
 
-        Assert.False(ClaudeBuddySettings.GrokAutoRefreshEnabled);
+        Assert.False(OrbweaverSettings.GrokAutoRefreshEnabled);
     }
 
     // Not Toggles(), because these two are no longer switches: three answers
@@ -186,12 +186,12 @@ public class SettingsWindowRowTests : IDisposable
     [AvaloniaFact]
     public void TheHeartbeatModeRowWritesItsOwnSetting() => Cycles(
         (w, v) => w.OnOpenClawHeartbeatModeChanged(v),
-        () => ClaudeBuddySettings.OpenClawHeartbeatMode);
+        () => OrbweaverSettings.OpenClawHeartbeatMode);
 
     [AvaloniaFact]
     public void TheCronModeRowWritesItsOwnSetting() => Cycles(
         (w, v) => w.OnOpenClawCronModeChanged(v),
-        () => ClaudeBuddySettings.OpenClawCronMode);
+        () => OrbweaverSettings.OpenClawCronMode);
 
     // The colour switch deliberately does *not* re-wire anything, and that is
     // worth a test of its own rather than only a comment. An earlier version
@@ -202,7 +202,7 @@ public class SettingsWindowRowTests : IDisposable
     // hangs, which is the right place to find out.
     [AvaloniaFact]
     public void TheAutoColourSwitchOnlyWritesItsSetting() => Toggles(
-        (w, v) => w.OnAutoColorToggled(v), () => ClaudeBuddySettings.AutoColorSessions);
+        (w, v) => w.OnAutoColorToggled(v), () => OrbweaverSettings.AutoColorSessions);
 
     // The two download-backed switches, driven only in the direction that cannot
     // start a download: switching off, and switching on when the model is already
@@ -215,7 +215,7 @@ public class SettingsWindowRowTests : IDisposable
 
         window.OnNeuralVoiceToggled(false);
 
-        Assert.False(ClaudeBuddySettings.NeuralVoiceEnabled);
+        Assert.False(OrbweaverSettings.NeuralVoiceEnabled);
     }
 
     [AvaloniaFact]
@@ -225,7 +225,7 @@ public class SettingsWindowRowTests : IDisposable
 
         window.OnVoiceInputToggled(false);
 
-        Assert.False(ClaudeBuddySettings.VoiceInputEnabled);
+        Assert.False(OrbweaverSettings.VoiceInputEnabled);
     }
 
     // Every switch rebuilds the page, and the page is different depending on what
@@ -289,10 +289,10 @@ public class SettingsWindowRowTests : IDisposable
         window.OnCodexChatToggled(false);
         window.OnCodexReplyToggled(true);
 
-        Assert.True(ClaudeBuddySettings.ClaudeCodeChatEnabled);
-        Assert.False(ClaudeBuddySettings.ClaudeCodeReplyEnabled);
-        Assert.False(ClaudeBuddySettings.CodexChatEnabled);
-        Assert.True(ClaudeBuddySettings.CodexReplyEnabled);
+        Assert.True(OrbweaverSettings.ClaudeCodeChatEnabled);
+        Assert.False(OrbweaverSettings.ClaudeCodeReplyEnabled);
+        Assert.False(OrbweaverSettings.CodexChatEnabled);
+        Assert.True(OrbweaverSettings.CodexReplyEnabled);
     }
 
     // ...and across the two CLIs, which have their own pair each rather than one
@@ -312,21 +312,21 @@ public class SettingsWindowRowTests : IDisposable
     public void TheTwoClisDoNotShareTheirSwitches()
     {
         var window = NewWindow();
-        var claudeCode = ClaudeBuddySettings.ClaudeCodeEnabled;
-        var codex = ClaudeBuddySettings.CodexEnabled;
+        var claudeCode = OrbweaverSettings.ClaudeCodeEnabled;
+        var codex = OrbweaverSettings.CodexEnabled;
 
         try
         {
             window.OnClaudeCodeEnabledToggled(true);
             window.OnCodexEnabledToggled(false);
 
-            Assert.True(ClaudeBuddySettings.ClaudeCodeEnabled);
-            Assert.False(ClaudeBuddySettings.CodexEnabled);
+            Assert.True(OrbweaverSettings.ClaudeCodeEnabled);
+            Assert.False(OrbweaverSettings.CodexEnabled);
         }
         finally
         {
-            ClaudeBuddySettings.ClaudeCodeEnabled = claudeCode;
-            ClaudeBuddySettings.CodexEnabled = codex;
+            OrbweaverSettings.ClaudeCodeEnabled = claudeCode;
+            OrbweaverSettings.CodexEnabled = codex;
         }
     }
 }

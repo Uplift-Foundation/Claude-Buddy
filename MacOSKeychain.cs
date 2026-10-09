@@ -3,7 +3,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 using System.Text;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Reading the Claude Code CLI's stored login out of the macOS login Keychain.
     //

@@ -2,7 +2,7 @@ using System.Diagnostics;
 using System.Text.Json.Nodes;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-255 phase 2: every hook installer re-wires a machine from the pre-rename
 // ClaudeBuddyHook.{sh,ps1} to OrbweaverHook.{sh,ps1} in one pass -- strip every

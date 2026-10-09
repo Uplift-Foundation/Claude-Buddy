@@ -1,4 +1,4 @@
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // The gateway's identity is the published, portable answer; these files are
     // a local refinement for people who keep an agent's personality beside its

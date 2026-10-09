@@ -3,7 +3,7 @@ using System.Linq;
 using System.Text.Json;
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 // The tool rows Codex writes alongside its own messages: a command it ran, a file
 // it changed, a summary of what it was thinking.

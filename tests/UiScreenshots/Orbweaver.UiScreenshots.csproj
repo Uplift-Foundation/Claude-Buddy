@@ -4,8 +4,8 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <RollForward>LatestMajor</RollForward>
-    <AssemblyName>ClaudeBuddy.UiScreenshots</AssemblyName>
-    <RootNamespace>ClaudeBuddy.Tests</RootNamespace>
+    <AssemblyName>Orbweaver.UiScreenshots</AssemblyName>
+    <RootNamespace>Orbweaver.Tests</RootNamespace>
     <IsPackable>false</IsPackable>
     <!-- xunit.v3's own build targets hard-error unless OutputType=Exe and
          UseAppHost=true (see xunit.v3.core.mtp-v2.targets' _XunitValidateBuild

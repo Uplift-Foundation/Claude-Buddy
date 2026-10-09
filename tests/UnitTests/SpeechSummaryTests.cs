@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The decisions behind "what does the speaker read", with no speech engine,
 // no settings file and no subprocess anywhere near them.

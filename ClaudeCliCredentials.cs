@@ -5,7 +5,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // How the cloud arm gets a credential, and the rules it handles one under.
     //

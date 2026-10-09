@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // ClaudeBuddyHook.sh and ClaudeBuddyHook.ps1 are twins of each other, one per
 // platform, and only one of the two interpreters exists on any given CI
@@ -273,7 +273,7 @@ public sealed class MacTmuxFactAttribute : FactAttribute
             return;
         }
 
-        if (ClaudeBuddy.TerminalLauncher.ResolveTmux() is null || !File.Exists("/usr/bin/script"))
+        if (Orbweaver.TerminalLauncher.ResolveTmux() is null || !File.Exists("/usr/bin/script"))
             Skip = "needs tmux and /usr/bin/script";
     }
 }

@@ -1,6 +1,6 @@
 using Avalonia.Headless.XUnit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The original two hand-picked captures from when this project was a small
 // proof of concept: does capturing an actual rendered frame headless, and

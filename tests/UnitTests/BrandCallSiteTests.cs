@@ -2,7 +2,7 @@ using System.IO;
 using System.Reflection;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-250 QA: BrandTests pins the constants and a handful of derived names.
 // These pin the rest of the call sites that build a path, an asset name or a

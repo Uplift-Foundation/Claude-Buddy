@@ -4,7 +4,7 @@ using System.Globalization;
 using System.Linq;
 using System.Text.Json;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Reading the cloud roster: what the payload says, which rows are ours, and
     // what to say about the ones that are not.

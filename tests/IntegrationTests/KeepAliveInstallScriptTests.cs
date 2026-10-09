@@ -2,7 +2,7 @@ using System.Diagnostics;
 using System.Xml;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-49: tools/install-hooks.sh is also where the crash keep-alive
 // LaunchAgent gets written and torn down, on macOS -- see that script's own

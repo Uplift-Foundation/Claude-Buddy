@@ -3,7 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The shape of the tray menu, and the two rules about when it is allowed to be
 // rebuilt.
@@ -224,13 +224,13 @@ public class TrayMenuTests
         // gate cannot see, which is exactly what ReapplyStateColors is for. A
         // non-default colour also sends LoadIcon down the re-tint path rather
         // than straight to the baked PNG.
-        var before = ClaudeBuddySettings.IdleColor;
+        var before = OrbweaverSettings.IdleColor;
         try
         {
             var tray = NewController();
             if (tray is null) return;
 
-            ClaudeBuddySettings.IdleColor = "#FF00AA";
+            OrbweaverSettings.IdleColor = "#FF00AA";
             Assert.False(OrbColors.IsDefault("idle"));
 
             tray.ReapplyStateColors();
@@ -240,7 +240,7 @@ public class TrayMenuTests
         }
         finally
         {
-            ClaudeBuddySettings.IdleColor = before;
+            OrbweaverSettings.IdleColor = before;
         }
     }
 

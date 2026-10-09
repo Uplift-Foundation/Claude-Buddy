@@ -2,7 +2,7 @@ using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-167's orb half: the right-click "Sound" submenu, driven the same way
 // OrbWindowPresenceTests drives ApplyEndSessionGuard — through
@@ -22,7 +22,7 @@ public class OrbSoundSubmenuTests : IDisposable
     public void Dispose()
     {
         SettingsWindow.ChooseSoundFileForTests = null;
-        foreach (var key in _clearedKeys) ClaudeBuddySettings.ClearOrbTurnSound(key);
+        foreach (var key in _clearedKeys) OrbweaverSettings.ClearOrbTurnSound(key);
         foreach (var path in _tempFiles)
         {
             try { File.Delete(path); } catch { /* best effort */ }
@@ -93,7 +93,7 @@ public class OrbSoundSubmenuTests : IDisposable
     public void TheSavedOverrideIsTheCheckedItem()
     {
         var orb = NewOrb();
-        ClaudeBuddySettings.SetOrbTurnSound(orb.SoundKey, "off", null);
+        OrbweaverSettings.SetOrbTurnSound(orb.SoundKey, "off", null);
 
         orb.RebuildSoundSubmenus();
 
@@ -111,13 +111,13 @@ public class OrbSoundSubmenuTests : IDisposable
     public void ClickingOffWritesTheFinishedOverrideWithoutTouchingAttention()
     {
         var orb = NewOrb();
-        ClaudeBuddySettings.SetOrbTurnSound(orb.SoundKey, null, "Ping");
+        OrbweaverSettings.SetOrbTurnSound(orb.SoundKey, null, "Ping");
 
         orb.RebuildSoundSubmenus();
         var offItem = FinishedMenu(orb).Items.Cast<MenuItem>().Single(i => Equals(i.Header, "Off"));
         offItem.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(MenuItem.ClickEvent));
 
-        var over = ClaudeBuddySettings.OrbTurnSoundFor(orb.SoundKey);
+        var over = OrbweaverSettings.OrbTurnSoundFor(orb.SoundKey);
         Assert.Equal("off", over?.Finished);
         Assert.Equal("Ping", over?.Attention);
     }
@@ -126,13 +126,13 @@ public class OrbSoundSubmenuTests : IDisposable
     public void ClickingDefaultClearsJustThatTriggersOverride()
     {
         var orb = NewOrb();
-        ClaudeBuddySettings.SetOrbTurnSound(orb.SoundKey, "off", "Ping");
+        OrbweaverSettings.SetOrbTurnSound(orb.SoundKey, "off", "Ping");
 
         orb.RebuildSoundSubmenus();
         var defaultItem = FinishedMenu(orb).Items.Cast<MenuItem>().First();
         defaultItem.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(MenuItem.ClickEvent));
 
-        var over = ClaudeBuddySettings.OrbTurnSoundFor(orb.SoundKey);
+        var over = OrbweaverSettings.OrbTurnSoundFor(orb.SoundKey);
         Assert.Null(over?.Finished);
         Assert.Equal("Ping", over?.Attention);
     }
@@ -144,7 +144,7 @@ public class OrbSoundSubmenuTests : IDisposable
     public void ClickingDefaultOnBothTriggersRemovesTheEntryEntirely()
     {
         var orb = NewOrb();
-        ClaudeBuddySettings.SetOrbTurnSound(orb.SoundKey, "off", "off");
+        OrbweaverSettings.SetOrbTurnSound(orb.SoundKey, "off", "off");
 
         orb.RebuildSoundSubmenus();
         FinishedMenu(orb).Items.Cast<MenuItem>().First()
@@ -153,7 +153,7 @@ public class OrbSoundSubmenuTests : IDisposable
         AttentionMenu(orb).Items.Cast<MenuItem>().First()
             .RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(MenuItem.ClickEvent));
 
-        Assert.Null(ClaudeBuddySettings.OrbTurnSoundFor(orb.SoundKey));
+        Assert.Null(OrbweaverSettings.OrbTurnSoundFor(orb.SoundKey));
     }
 
     [AvaloniaFact]
@@ -169,7 +169,7 @@ public class OrbSoundSubmenuTests : IDisposable
             .Single(i => Equals(i.Header, systemSounds[0]));
         item.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(MenuItem.ClickEvent));
 
-        Assert.Equal(systemSounds[0], ClaudeBuddySettings.OrbTurnSoundFor(orb.SoundKey)?.Attention);
+        Assert.Equal(systemSounds[0], OrbweaverSettings.OrbTurnSoundFor(orb.SoundKey)?.Attention);
     }
 
     // --- Choose file… ---
@@ -192,7 +192,7 @@ public class OrbSoundSubmenuTests : IDisposable
         await Task.Yield();
         Avalonia.Threading.Dispatcher.UIThread.RunJobs();
 
-        Assert.Equal(picked, ClaudeBuddySettings.OrbTurnSoundFor(orb.SoundKey)?.Finished);
+        Assert.Equal(picked, OrbweaverSettings.OrbTurnSoundFor(orb.SoundKey)?.Finished);
     }
 
     [AvaloniaFact]
@@ -209,7 +209,7 @@ public class OrbSoundSubmenuTests : IDisposable
         await Task.Yield();
         Avalonia.Threading.Dispatcher.UIThread.RunJobs();
 
-        Assert.Null(ClaudeBuddySettings.OrbTurnSoundFor(orb.SoundKey));
+        Assert.Null(OrbweaverSettings.OrbTurnSoundFor(orb.SoundKey));
     }
 
     // --- an orb with no stable key yet ---
@@ -229,7 +229,7 @@ public class OrbSoundSubmenuTests : IDisposable
         var offItem = FinishedMenu(orb).Items.Cast<MenuItem>().Single(i => Equals(i.Header, "Off"));
         offItem.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(MenuItem.ClickEvent));
 
-        Assert.Null(ClaudeBuddySettings.OrbTurnSoundFor(""));
+        Assert.Null(OrbweaverSettings.OrbTurnSoundFor(""));
     }
 
     // SessionMenu_Opening reaches RebuildSoundSubmenus() even when no
@@ -275,7 +275,7 @@ public class OrbSoundSubmenuTests : IDisposable
         orb.RebuildSoundSubmenus();
         var offItem = FinishedMenu(orb).Items.Cast<MenuItem>().Single(i => Equals(i.Header, "Off"));
         offItem.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(MenuItem.ClickEvent));
-        Assert.Equal("off", ClaudeBuddySettings.OrbTurnSoundFor(oldKey)?.Finished);
+        Assert.Equal("off", OrbweaverSettings.OrbTurnSoundFor(oldKey)?.Finished);
 
         // Claude Code names the session.
         orb.UpdateFrom(new SessionStatus { State = "idle", Cwd = cwd, Title = "claude-buddy" });
@@ -289,8 +289,8 @@ public class OrbSoundSubmenuTests : IDisposable
         // would silently unmute whichever sibling is still called by that
         // name. An orphaned entry under a key nothing looks up any more is
         // harmless, so it is left exactly where it was.
-        Assert.Equal("off", ClaudeBuddySettings.OrbTurnSoundFor(oldKey)?.Finished);
-        Assert.Equal("off", ClaudeBuddySettings.OrbTurnSoundFor(newKey)?.Finished);
+        Assert.Equal("off", OrbweaverSettings.OrbTurnSoundFor(oldKey)?.Finished);
+        Assert.Equal("off", OrbweaverSettings.OrbTurnSoundFor(newKey)?.Finished);
 
         // And the menu, reopened, agrees — reads the override back under the
         // key it now actually lives at, not the one it was set under.
@@ -319,7 +319,7 @@ public class OrbSoundSubmenuTests : IDisposable
         orb.RebuildSoundSubmenus();
         var offItem = FinishedMenu(orb).Items.Cast<MenuItem>().Single(i => Equals(i.Header, "Off"));
         offItem.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(MenuItem.ClickEvent));
-        Assert.Equal("off", ClaudeBuddySettings.OrbTurnSoundFor(key)?.Finished);
+        Assert.Equal("off", OrbweaverSettings.OrbTurnSoundFor(key)?.Finished);
 
         // Several more polls, still untitled — the key must not drift, and
         // the override must keep reading back correctly every time.
@@ -327,7 +327,7 @@ public class OrbSoundSubmenuTests : IDisposable
         {
             orb.UpdateFrom(new SessionStatus { State = "idle", Cwd = cwd, Title = "" });
             Assert.Equal(key, orb.SoundKey);
-            Assert.Equal("off", ClaudeBuddySettings.OrbTurnSoundFor(orb.SoundKey)?.Finished);
+            Assert.Equal("off", OrbweaverSettings.OrbTurnSoundFor(orb.SoundKey)?.Finished);
         }
 
         orb.RebuildSoundSubmenus();
@@ -349,12 +349,12 @@ public class OrbSoundSubmenuTests : IDisposable
         orb.UpdateFrom(status);
         var key = orb.SoundKey;
         _clearedKeys.Add(key);
-        ClaudeBuddySettings.SetOrbTurnSound(key, "off", null);
+        OrbweaverSettings.SetOrbTurnSound(key, "off", null);
 
         orb.UpdateFrom(status); // the identical status again
 
         Assert.Equal(key, orb.SoundKey);
-        Assert.Equal("off", ClaudeBuddySettings.OrbTurnSoundFor(key)?.Finished);
+        Assert.Equal("off", OrbweaverSettings.OrbTurnSoundFor(key)?.Finished);
     }
 
     // The key changes but there was never an override to move — just the
@@ -374,8 +374,8 @@ public class OrbSoundSubmenuTests : IDisposable
         _clearedKeys.Add(newKey);
 
         Assert.NotEqual(oldKey, newKey);
-        Assert.Null(ClaudeBuddySettings.OrbTurnSoundFor(oldKey));
-        Assert.Null(ClaudeBuddySettings.OrbTurnSoundFor(newKey));
+        Assert.Null(OrbweaverSettings.OrbTurnSoundFor(oldKey));
+        Assert.Null(OrbweaverSettings.OrbTurnSoundFor(newKey));
     }
 
     // The end-to-end version, copied and adapted from QA round 2's own
@@ -405,12 +405,12 @@ public class OrbSoundSubmenuTests : IDisposable
         {
             Environment.SetEnvironmentVariable(
                 "CLAUDE_BUDDY_SETTINGS_DIR", Path.Combine(dir, "settings"));
-            ClaudeBuddySettings.ReloadForTests();
+            OrbweaverSettings.ReloadForTests();
             TurnSounds.ResetForTests();
 
             var played = new List<string>();
             ChimePlayer.PlayForTests = p => { lock (played) played.Add(p); };
-            ClaudeBuddySettings.ClaudeCodeEnabled = true;
+            OrbweaverSettings.ClaudeCodeEnabled = true;
 
             void WriteLocal(string id, string state, string title) => File.WriteAllText(
                 Path.Combine(dir, id + ".txt"),
@@ -446,7 +446,7 @@ public class OrbSoundSubmenuTests : IDisposable
             // case is about what the scan does with the override once it
             // exists, not about the menu's own click handling (covered
             // elsewhere in this file).
-            ClaudeBuddySettings.SetOrbTurnSound(window.SoundKey, "off", null);
+            OrbweaverSettings.SetOrbTurnSound(window.SoundKey, "off", null);
 
             WriteLocal("sess-1", "idle", title: "fix-login"); // generating -> idle: Finished
             manager.ScanAndUpdate();
@@ -477,18 +477,18 @@ public class OrbSoundSubmenuTests : IDisposable
         orb.UpdateFrom(new SessionStatus { State = "idle", Cwd = cwd, Title = "" });
         var oldKey = orb.SoundKey;
         _clearedKeys.Add(oldKey);
-        ClaudeBuddySettings.SetOrbTurnSound(oldKey, "off", null);
+        OrbweaverSettings.SetOrbTurnSound(oldKey, "off", null);
 
         var newKey = SessionManager.SoundKeyFor(
             new SessionStatus { State = "idle", Cwd = cwd, Title = "claude-buddy" }, orb.SessionId);
         _clearedKeys.Add(newKey);
-        ClaudeBuddySettings.SetOrbTurnSound(newKey, "Ping", null);
+        OrbweaverSettings.SetOrbTurnSound(newKey, "Ping", null);
 
         orb.UpdateFrom(new SessionStatus { State = "idle", Cwd = cwd, Title = "claude-buddy" });
 
         Assert.Equal(newKey, orb.SoundKey);
-        Assert.Equal("Ping", ClaudeBuddySettings.OrbTurnSoundFor(newKey)?.Finished);
-        Assert.Equal("off", ClaudeBuddySettings.OrbTurnSoundFor(oldKey)?.Finished);
+        Assert.Equal("Ping", OrbweaverSettings.OrbTurnSoundFor(newKey)?.Finished);
+        Assert.Equal("off", OrbweaverSettings.OrbTurnSoundFor(oldKey)?.Finished);
     }
 
     // QA round 3, finding 2 (LOW-MEDIUM), copied and adapted from
@@ -510,14 +510,14 @@ public class OrbSoundSubmenuTests : IDisposable
         orb.UpdateFrom(new SessionStatus { State = "idle", Cwd = cwd, Title = "fix-login" });
         var key = orb.SoundKey;
         _clearedKeys.Add(key);
-        ClaudeBuddySettings.SetOrbTurnSound(key, "off", null);
+        OrbweaverSettings.SetOrbTurnSound(key, "off", null);
 
         orb.UpdateFrom(new SessionStatus { State = "idle", Cwd = "", Title = "fix-login" }); // one status write without cwd
         orb.UpdateFrom(new SessionStatus { State = "idle", Cwd = cwd, Title = "fix-login" }); // back to normal
 
         Assert.Equal(key, orb.SoundKey); // never drifted onto the blank key
-        Assert.NotNull(ClaudeBuddySettings.OrbTurnSoundFor(orb.SoundKey));
-        Assert.Equal("off", ClaudeBuddySettings.OrbTurnSoundFor(orb.SoundKey)?.Finished);
+        Assert.NotNull(OrbweaverSettings.OrbTurnSoundFor(orb.SoundKey));
+        Assert.Equal("off", OrbweaverSettings.OrbTurnSoundFor(orb.SoundKey)?.Finished);
     }
 
     // QA round 3, finding 3 (LOW-MEDIUM), copied and adapted from
@@ -539,12 +539,12 @@ public class OrbSoundSubmenuTests : IDisposable
         y.UpdateFrom(new SessionStatus { State = "idle", Cwd = cwd, Title = "build" });
         Assert.Equal(x.SoundKey, y.SoundKey);
         _clearedKeys.Add(y.SoundKey);
-        ClaudeBuddySettings.SetOrbTurnSound(y.SoundKey, "off", null);
+        OrbweaverSettings.SetOrbTurnSound(y.SoundKey, "off", null);
 
         x.UpdateFrom(new SessionStatus { State = "idle", Cwd = cwd, Title = "deploy" });
         _clearedKeys.Add(x.SoundKey);
 
         Assert.NotEqual(x.SoundKey, y.SoundKey);
-        Assert.Equal("off", ClaudeBuddySettings.OrbTurnSoundFor(y.SoundKey)?.Finished);
+        Assert.Equal("off", OrbweaverSettings.OrbTurnSoundFor(y.SoundKey)?.Finished);
     }
 }

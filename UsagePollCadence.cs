@@ -1,6 +1,6 @@
 using System;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // How often to ask again, and what counts as an answer worth speeding up for.
     //

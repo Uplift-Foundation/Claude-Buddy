@@ -1,7 +1,7 @@
 using System.Threading;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // TurnSounds.Deliver itself: the seam between TurnSoundPolicy's pure
 // decision and the world. TurnSoundPolicyTests already covers what gets
@@ -72,8 +72,8 @@ public class TurnSoundsTests : IDisposable
             signal.TrySetResult(true);
         };
 
-        ClaudeBuddySettings.TurnSoundsEnabled = true;
-        ClaudeBuddySettings.TurnFinishedSound = null; // platform default (Glass on macOS)
+        OrbweaverSettings.TurnSoundsEnabled = true;
+        OrbweaverSettings.TurnFinishedSound = null; // platform default (Glass on macOS)
 
         // First signal: nothing has played yet, so this plays immediately
         // and sets _lastPlayed to Past.
@@ -119,8 +119,8 @@ public class TurnSoundsTests : IDisposable
             signal.TrySetResult(true);
         };
 
-        ClaudeBuddySettings.TurnSoundsEnabled = true;
-        ClaudeBuddySettings.TurnFinishedSound = null;
+        OrbweaverSettings.TurnSoundsEnabled = true;
+        OrbweaverSettings.TurnFinishedSound = null;
 
         // Anchored to the real clock rather than Past for this one case,
         // deliberately: SchedulePending's own delay is always computed
@@ -199,8 +199,8 @@ public class TurnSoundsTests : IDisposable
             }
         };
 
-        ClaudeBuddySettings.TurnSoundsEnabled = true;
-        ClaudeBuddySettings.TurnFinishedSound = null;
+        OrbweaverSettings.TurnSoundsEnabled = true;
+        OrbweaverSettings.TurnFinishedSound = null;
 
         var start = DateTime.UtcNow;
         TurnSounds.Deliver(new[] { Finished("key-a", "session-a") }, NoSummary, start);
@@ -231,8 +231,8 @@ public class TurnSoundsTests : IDisposable
             signal.TrySetResult(true);
         };
 
-        ClaudeBuddySettings.TurnSoundsEnabled = true;
-        ClaudeBuddySettings.TurnFinishedSound = null;
+        OrbweaverSettings.TurnSoundsEnabled = true;
+        OrbweaverSettings.TurnFinishedSound = null;
 
         var start = DateTime.UtcNow;
         TurnSounds.Deliver(new[] { Finished("key-a", "session-a") }, NoSummary, start);
@@ -264,8 +264,8 @@ public class TurnSoundsTests : IDisposable
             signal.TrySetResult(true);
         };
 
-        ClaudeBuddySettings.TurnSoundsEnabled = true;
-        ClaudeBuddySettings.TurnFinishedSound = null;
+        OrbweaverSettings.TurnSoundsEnabled = true;
+        OrbweaverSettings.TurnFinishedSound = null;
 
         var start = DateTime.UtcNow;
         TurnSounds.Deliver(new[] { Finished("key-a", "session-a") }, NoSummary, start);
@@ -302,8 +302,8 @@ public class TurnSoundsTests : IDisposable
             if (firstStarted.TrySetResult(true)) holdFirst.Wait(TimeSpan.FromSeconds(5));
         };
 
-        ClaudeBuddySettings.TurnSoundsEnabled = true;
-        ClaudeBuddySettings.TurnFinishedSound = null;
+        OrbweaverSettings.TurnSoundsEnabled = true;
+        OrbweaverSettings.TurnFinishedSound = null;
 
         TurnSounds.Deliver(new[] { Finished("key-a", "session-a") }, NoSummary, Past);
         Assert.True(await Task.WhenAny(firstStarted.Task, Task.Delay(TimeSpan.FromSeconds(2))) == firstStarted.Task);
@@ -330,8 +330,8 @@ public class TurnSoundsTests : IDisposable
             signal.TrySetResult(true);
         };
 
-        ClaudeBuddySettings.TurnSoundsEnabled = true;
-        ClaudeBuddySettings.TurnFinishedSound = null;
+        OrbweaverSettings.TurnSoundsEnabled = true;
+        OrbweaverSettings.TurnFinishedSound = null;
 
         var start = DateTime.UtcNow;
         TurnSounds.Deliver(new[] { Finished("key-a", "session-a") }, NoSummary, start);
@@ -363,8 +363,8 @@ public class TurnSoundsTests : IDisposable
             throw new InvalidOperationException("no audio device");
         };
 
-        ClaudeBuddySettings.TurnSoundsEnabled = true;
-        ClaudeBuddySettings.TurnFinishedSound = null;
+        OrbweaverSettings.TurnSoundsEnabled = true;
+        OrbweaverSettings.TurnFinishedSound = null;
 
         TurnSounds.Deliver(new[] { Finished("key-a", "session-a") }, NoSummary, Past);
 
@@ -375,8 +375,8 @@ public class TurnSoundsTests : IDisposable
     [Fact]
     public async Task ATrySpeakTurnSummaryThatThrowsIsCaughtRatherThanCrashingTheBackgroundTask()
     {
-        ClaudeBuddySettings.TurnSoundsEnabled = true;
-        ClaudeBuddySettings.TurnFinishedSound = "summary";
+        OrbweaverSettings.TurnSoundsEnabled = true;
+        OrbweaverSettings.TurnFinishedSound = "summary";
 
         var threw = new TaskCompletionSource<bool>();
         Task<bool> ThrowingSpeak(string sessionId)
@@ -409,9 +409,9 @@ public class TurnSoundsTests : IDisposable
         var played = new List<string>();
         ChimePlayer.PlayForTests = path => { lock (played) played.Add(path); };
 
-        ClaudeBuddySettings.TurnSoundsEnabled = true;
-        ClaudeBuddySettings.TurnFinishedSound = null;   // platform default (Glass)
-        ClaudeBuddySettings.NeedsAttentionSound = null; // platform default (Ping)
+        OrbweaverSettings.TurnSoundsEnabled = true;
+        OrbweaverSettings.TurnFinishedSound = null;   // platform default (Glass)
+        OrbweaverSettings.NeedsAttentionSound = null; // platform default (Ping)
 
         var t0 = DateTime.UtcNow;
         TurnSounds.Deliver(new[] { Finished("key-a", "session-a") }, NoSummary, t0);
@@ -443,8 +443,8 @@ public class TurnSoundsTests : IDisposable
     [Fact]
     public async Task ADeferredSummaryDoesNotStartWhileSpeechIsAlreadyPlaying()
     {
-        ClaudeBuddySettings.TurnSoundsEnabled = true;
-        ClaudeBuddySettings.TurnFinishedSound = "summary";
+        OrbweaverSettings.TurnSoundsEnabled = true;
+        OrbweaverSettings.TurnFinishedSound = "summary";
         ChimePlayer.PlayForTests = _ => { };
 
         var spokenFor = new List<string>();
@@ -480,9 +480,9 @@ public class TurnSoundsTests : IDisposable
         var played = new List<string>();
         ChimePlayer.PlayForTests = path => { lock (played) played.Add(path); };
 
-        ClaudeBuddySettings.TurnSoundsEnabled = true;
-        ClaudeBuddySettings.TurnFinishedSound = null;
-        ClaudeBuddySettings.NeedsAttentionSound = null;
+        OrbweaverSettings.TurnSoundsEnabled = true;
+        OrbweaverSettings.TurnFinishedSound = null;
+        OrbweaverSettings.NeedsAttentionSound = null;
 
         var t0 = DateTime.UtcNow;
         TurnSounds.Deliver(new[] { Finished("key-a", "session-a") }, NoSummary, t0); // opens the gap
@@ -511,9 +511,9 @@ public class TurnSoundsTests : IDisposable
         var played = new List<string>();
         ChimePlayer.PlayForTests = path => { lock (played) played.Add(path); };
 
-        ClaudeBuddySettings.TurnSoundsEnabled = true;
-        ClaudeBuddySettings.TurnFinishedSound = null;
-        ClaudeBuddySettings.NeedsAttentionSound = null;
+        OrbweaverSettings.TurnSoundsEnabled = true;
+        OrbweaverSettings.TurnFinishedSound = null;
+        OrbweaverSettings.NeedsAttentionSound = null;
 
         var t0 = DateTime.UtcNow;
         TurnSounds.Deliver(new[] { Finished("key-a", "session-a") }, NoSummary, t0); // opens the gap
@@ -547,9 +547,9 @@ public class TurnSoundsTests : IDisposable
         var played = new List<string>();
         ChimePlayer.PlayForTests = path => { lock (played) played.Add(path); };
 
-        ClaudeBuddySettings.TurnSoundsEnabled = true;
-        ClaudeBuddySettings.TurnFinishedSound = null;
-        ClaudeBuddySettings.NeedsAttentionSound = null;
+        OrbweaverSettings.TurnSoundsEnabled = true;
+        OrbweaverSettings.TurnFinishedSound = null;
+        OrbweaverSettings.NeedsAttentionSound = null;
 
         var start = DateTime.UtcNow;
         TurnSounds.Deliver(new[] { Finished("key-a", "session-a") }, NoSummary, start); // opens the gap
@@ -577,9 +577,9 @@ public class TurnSoundsTests : IDisposable
         var played = new List<string>();
         ChimePlayer.PlayForTests = path => { lock (played) played.Add(path); };
 
-        ClaudeBuddySettings.TurnSoundsEnabled = true;
-        ClaudeBuddySettings.TurnFinishedSound = null;
-        ClaudeBuddySettings.NeedsAttentionSound = null;
+        OrbweaverSettings.TurnSoundsEnabled = true;
+        OrbweaverSettings.TurnFinishedSound = null;
+        OrbweaverSettings.NeedsAttentionSound = null;
 
         var start = DateTime.UtcNow;
         TurnSounds.Deliver(new[] { Finished("key-a", "session-a") }, NoSummary, start); // opens the gap
@@ -607,8 +607,8 @@ public class TurnSoundsTests : IDisposable
         var played = new List<string>();
         ChimePlayer.PlayForTests = path => { lock (played) played.Add(path); };
 
-        ClaudeBuddySettings.TurnSoundsEnabled = true;
-        ClaudeBuddySettings.TurnFinishedSound = null;
+        OrbweaverSettings.TurnSoundsEnabled = true;
+        OrbweaverSettings.TurnFinishedSound = null;
 
         var start = DateTime.UtcNow;
         TurnSounds.Deliver(new[] { Finished("key-a", "session-a") }, NoSummary, start); // opens the gap
@@ -637,9 +637,9 @@ public class TurnSoundsTests : IDisposable
         var played = new List<string>();
         ChimePlayer.PlayForTests = path => { lock (played) played.Add(path); };
 
-        ClaudeBuddySettings.TurnSoundsEnabled = true;
-        ClaudeBuddySettings.TurnFinishedSound = null;
-        ClaudeBuddySettings.NeedsAttentionSound = null;
+        OrbweaverSettings.TurnSoundsEnabled = true;
+        OrbweaverSettings.TurnFinishedSound = null;
+        OrbweaverSettings.NeedsAttentionSound = null;
 
         var start = DateTime.UtcNow;
         TurnSounds.Deliver(new[] { Finished("key-a", "session-a") }, NoSummary, start); // opens the gap
@@ -672,16 +672,16 @@ public class TurnSoundsTests : IDisposable
         var played = new List<string>();
         ChimePlayer.PlayForTests = path => { lock (played) played.Add(path); };
 
-        ClaudeBuddySettings.TurnSoundsEnabled = true;
-        ClaudeBuddySettings.TurnFinishedSound = null;
-        ClaudeBuddySettings.NeedsAttentionSound = null; // audible at defer time
+        OrbweaverSettings.TurnSoundsEnabled = true;
+        OrbweaverSettings.TurnFinishedSound = null;
+        OrbweaverSettings.NeedsAttentionSound = null; // audible at defer time
 
         var start = DateTime.UtcNow;
         TurnSounds.Deliver(new[] { Finished("key-a", "session-a") }, NoSummary, start); // opens the gap
         TurnSounds.Deliver(new[] { NeedsAttention("key-b", "session-b") }, NoSummary, start.AddMilliseconds(100));
 
         // Muted after B was already deferred, before its timer fires.
-        ClaudeBuddySettings.NeedsAttentionSound = "off";
+        OrbweaverSettings.NeedsAttentionSound = "off";
 
         await Task.Delay(TimeSpan.FromSeconds(3));
 
@@ -707,8 +707,8 @@ public class TurnSoundsTests : IDisposable
             signal.TrySetResult(true);
         };
 
-        ClaudeBuddySettings.TurnSoundsEnabled = true;
-        ClaudeBuddySettings.TurnFinishedSound = null;
+        OrbweaverSettings.TurnSoundsEnabled = true;
+        OrbweaverSettings.TurnFinishedSound = null;
 
         TurnSounds.Deliver(new[] { Finished("key-a", "session-a") }, NoSummary); // now omitted entirely
 
@@ -728,8 +728,8 @@ public class TurnSoundsTests : IDisposable
         var played = new List<string>();
         ChimePlayer.PlayForTests = path => { lock (played) played.Add(path); };
 
-        ClaudeBuddySettings.TurnSoundsEnabled = true;
-        ClaudeBuddySettings.TurnFinishedSound = "off";
+        OrbweaverSettings.TurnSoundsEnabled = true;
+        OrbweaverSettings.TurnFinishedSound = "off";
 
         TurnSounds.Deliver(new[] { Finished("key-a", "session-a") }, NoSummary, Past);
 
@@ -758,9 +758,9 @@ public class TurnSoundsTests : IDisposable
         var callbackEntered = new TaskCompletionSource<bool>();
         var releaseCallback = new TaskCompletionSource<bool>();
 
-        ClaudeBuddySettings.TurnSoundsEnabled = true;
-        ClaudeBuddySettings.TurnFinishedSound = null;
-        ClaudeBuddySettings.NeedsAttentionSound = null;
+        OrbweaverSettings.TurnSoundsEnabled = true;
+        OrbweaverSettings.TurnFinishedSound = null;
+        OrbweaverSettings.NeedsAttentionSound = null;
         ChimePlayer.PlayForTests = _ => { };
 
         var start = DateTime.UtcNow;
@@ -822,9 +822,9 @@ public class TurnSoundsTests : IDisposable
         var played = new List<string>();
         ChimePlayer.PlayForTests = path => { lock (played) played.Add(path); };
 
-        ClaudeBuddySettings.TurnSoundsEnabled = true;
-        ClaudeBuddySettings.TurnFinishedSound = null;
-        ClaudeBuddySettings.NeedsAttentionSound = null;
+        OrbweaverSettings.TurnSoundsEnabled = true;
+        OrbweaverSettings.TurnFinishedSound = null;
+        OrbweaverSettings.NeedsAttentionSound = null;
 
         var t0 = DateTime.UtcNow;
         TurnSounds.Deliver(new[] { Finished("key-a", "session-a") }, NoSummary, t0); // opens the gap
@@ -860,9 +860,9 @@ public class TurnSoundsTests : IDisposable
         var played = new List<string>();
         ChimePlayer.PlayForTests = path => { lock (played) played.Add(path); };
 
-        ClaudeBuddySettings.TurnSoundsEnabled = true;
-        ClaudeBuddySettings.TurnFinishedSound = null;
-        ClaudeBuddySettings.NeedsAttentionSound = null;
+        OrbweaverSettings.TurnSoundsEnabled = true;
+        OrbweaverSettings.TurnFinishedSound = null;
+        OrbweaverSettings.NeedsAttentionSound = null;
 
         var t0 = DateTime.UtcNow;
         TurnSounds.Deliver(new[] { Finished("key-a", "session-a") }, NoSummary, t0); // opens the gap
@@ -898,9 +898,9 @@ public class TurnSoundsTests : IDisposable
         var played = new List<string>();
         ChimePlayer.PlayForTests = path => { lock (played) played.Add(path); };
 
-        ClaudeBuddySettings.TurnSoundsEnabled = true;
-        ClaudeBuddySettings.TurnFinishedSound = null;
-        ClaudeBuddySettings.NeedsAttentionSound = null;
+        OrbweaverSettings.TurnSoundsEnabled = true;
+        OrbweaverSettings.TurnFinishedSound = null;
+        OrbweaverSettings.NeedsAttentionSound = null;
 
         var t0 = DateTime.UtcNow;
         TurnSounds.Deliver(new[] { Finished("key-a", "session-a") }, NoSummary, t0); // opens the gap
@@ -932,9 +932,9 @@ public class TurnSoundsTests : IDisposable
         var played = new List<string>();
         ChimePlayer.PlayForTests = path => { lock (played) played.Add(path); };
 
-        ClaudeBuddySettings.TurnSoundsEnabled = true;
-        ClaudeBuddySettings.TurnFinishedSound = null;
-        ClaudeBuddySettings.NeedsAttentionSound = null;
+        OrbweaverSettings.TurnSoundsEnabled = true;
+        OrbweaverSettings.TurnFinishedSound = null;
+        OrbweaverSettings.NeedsAttentionSound = null;
 
         var t0 = DateTime.UtcNow;
         TurnSounds.Deliver(new[] { Finished("key-a", "session-a") }, NoSummary, t0); // opens the gap
@@ -964,9 +964,9 @@ public class TurnSoundsTests : IDisposable
         var played = new List<string>();
         ChimePlayer.PlayForTests = path => { lock (played) played.Add(path); };
 
-        ClaudeBuddySettings.TurnSoundsEnabled = true;
-        ClaudeBuddySettings.TurnFinishedSound = null;
-        ClaudeBuddySettings.NeedsAttentionSound = null;
+        OrbweaverSettings.TurnSoundsEnabled = true;
+        OrbweaverSettings.TurnFinishedSound = null;
+        OrbweaverSettings.NeedsAttentionSound = null;
 
         var t0 = DateTime.UtcNow;
         TurnSounds.Deliver(new[] { Finished("key-a", "session-a") }, NoSummary, t0); // opens the gap
@@ -1001,9 +1001,9 @@ public class TurnSoundsTests : IDisposable
         var played = new List<string>();
         ChimePlayer.PlayForTests = path => { lock (played) played.Add(path); };
 
-        ClaudeBuddySettings.TurnSoundsEnabled = true;
-        ClaudeBuddySettings.TurnFinishedSound = null;
-        ClaudeBuddySettings.NeedsAttentionSound = null;
+        OrbweaverSettings.TurnSoundsEnabled = true;
+        OrbweaverSettings.TurnFinishedSound = null;
+        OrbweaverSettings.NeedsAttentionSound = null;
 
         var t0 = DateTime.UtcNow;
         TurnSounds.Deliver(new[] { Finished("key-a", "session-a") }, NoSummary, t0); // opens the gap
@@ -1031,9 +1031,9 @@ public class TurnSoundsTests : IDisposable
         var played = new List<(DateTime At, string Path)>();
         ChimePlayer.PlayForTests = path => { lock (played) played.Add((DateTime.UtcNow, path)); };
 
-        ClaudeBuddySettings.TurnSoundsEnabled = true;
-        ClaudeBuddySettings.TurnFinishedSound = null;
-        ClaudeBuddySettings.NeedsAttentionSound = null;
+        OrbweaverSettings.TurnSoundsEnabled = true;
+        OrbweaverSettings.TurnFinishedSound = null;
+        OrbweaverSettings.NeedsAttentionSound = null;
 
         var t0 = DateTime.UtcNow;
         TurnSounds.Deliver(new[] { Finished("key-a", "session-a") }, NoSummary, t0);
@@ -1070,9 +1070,9 @@ public class TurnSoundsTests : IDisposable
         var played = new List<(DateTime At, string Path)>();
         ChimePlayer.PlayForTests = path => { lock (played) played.Add((DateTime.UtcNow, path)); };
 
-        ClaudeBuddySettings.TurnSoundsEnabled = true;
-        ClaudeBuddySettings.TurnFinishedSound = null;
-        ClaudeBuddySettings.NeedsAttentionSound = null;
+        OrbweaverSettings.TurnSoundsEnabled = true;
+        OrbweaverSettings.TurnFinishedSound = null;
+        OrbweaverSettings.NeedsAttentionSound = null;
 
         var t0 = DateTime.UtcNow;
         TurnSounds.Deliver(new[] { Finished("key-a", "session-a") }, NoSummary, t0);   // plays, stamps t0
@@ -1102,9 +1102,9 @@ public class TurnSoundsTests : IDisposable
         var played = new List<(DateTime At, string Path)>();
         ChimePlayer.PlayForTests = path => { lock (played) played.Add((DateTime.UtcNow, path)); };
 
-        ClaudeBuddySettings.TurnSoundsEnabled = true;
-        ClaudeBuddySettings.TurnFinishedSound = null;
-        ClaudeBuddySettings.NeedsAttentionSound = null;
+        OrbweaverSettings.TurnSoundsEnabled = true;
+        OrbweaverSettings.TurnFinishedSound = null;
+        OrbweaverSettings.NeedsAttentionSound = null;
 
         var t0 = DateTime.UtcNow;
         var slippedIn = false;
@@ -1140,9 +1140,9 @@ public class TurnSoundsTests : IDisposable
         var played = new List<string>();
         ChimePlayer.PlayForTests = path => { lock (played) played.Add(path); };
 
-        ClaudeBuddySettings.TurnSoundsEnabled = true;
-        ClaudeBuddySettings.TurnFinishedSound = null;
-        ClaudeBuddySettings.NeedsAttentionSound = null;
+        OrbweaverSettings.TurnSoundsEnabled = true;
+        OrbweaverSettings.TurnFinishedSound = null;
+        OrbweaverSettings.NeedsAttentionSound = null;
 
         var t0 = DateTime.UtcNow;
         TurnSounds.Deliver(new[] { Finished("key-a", "session-a") }, NoSummary, t0);   // plays
@@ -1187,9 +1187,9 @@ public class TurnSoundsTests : IDisposable
         var played = new List<string>();
         ChimePlayer.PlayForTests = path => { lock (played) played.Add(path); };
 
-        ClaudeBuddySettings.TurnSoundsEnabled = true;
-        ClaudeBuddySettings.TurnFinishedSound = null;
-        ClaudeBuddySettings.NeedsAttentionSound = null;
+        OrbweaverSettings.TurnSoundsEnabled = true;
+        OrbweaverSettings.TurnFinishedSound = null;
+        OrbweaverSettings.NeedsAttentionSound = null;
 
         var t0 = DateTime.UtcNow;
         TurnSounds.Deliver(new[] { Finished("key-a", "session-a") }, NoSummary, t0);   // plays, stamps t0
@@ -1199,7 +1199,7 @@ public class TurnSoundsTests : IDisposable
 
         // A finished turn whose summary is still being prepared: decided live,
         // not yet heard, so not yet stamped.
-        ClaudeBuddySettings.TurnFinishedSound = "summary";
+        OrbweaverSettings.TurnFinishedSound = "summary";
         var preparing = new TaskCompletionSource<bool>();
         TurnSounds.Deliver(new[] { Finished("key-c", "session-c") }, _ => preparing.Task, t0.AddSeconds(2.05));
 
@@ -1223,9 +1223,9 @@ public class TurnSoundsTests : IDisposable
         var played = new List<string>();
         ChimePlayer.PlayForTests = path => { lock (played) played.Add(path); };
 
-        ClaudeBuddySettings.TurnSoundsEnabled = true;
-        ClaudeBuddySettings.TurnFinishedSound = null;
-        ClaudeBuddySettings.NeedsAttentionSound = null;
+        OrbweaverSettings.TurnSoundsEnabled = true;
+        OrbweaverSettings.TurnFinishedSound = null;
+        OrbweaverSettings.NeedsAttentionSound = null;
 
         var t0 = DateTime.UtcNow;
         TurnSounds.Deliver(new[] { Finished("key-a", "session-a") }, NoSummary, t0);
@@ -1233,7 +1233,7 @@ public class TurnSoundsTests : IDisposable
             new[] { NeedsAttention("key-b", "session-b") }, NoSummary, t0.AddSeconds(0.5),
             currentStateFor: _ => "waiting");
 
-        ClaudeBuddySettings.TurnFinishedSound = "summary";
+        OrbweaverSettings.TurnFinishedSound = "summary";
         var preparing = new TaskCompletionSource<bool>();
         TurnSounds.Deliver(new[] { Finished("key-c", "session-c") }, _ => preparing.Task, t0.AddSeconds(2.05));
         TurnSounds.FirePending(t0.AddSeconds(2.06));   // b plays and stamps t0+2.06
@@ -1243,7 +1243,7 @@ public class TurnSoundsTests : IDisposable
         await TurnSounds.ChimesEnqueuedSoFar();
 
         // 5 ms short of b's gap closing (t0+4.06), but past t0+2.05's (t0+4.05).
-        ClaudeBuddySettings.TurnFinishedSound = null;
+        OrbweaverSettings.TurnFinishedSound = null;
         TurnSounds.Deliver(new[] { Finished("key-d", "session-d") }, NoSummary, t0.AddSeconds(4.055));
         await TurnSounds.ChimesEnqueuedSoFar();
 
@@ -1262,8 +1262,8 @@ public class TurnSoundsTests : IDisposable
     public async Task APendingSummaryIsNotSpokenWhenAResetLandsBetweenChoosingAndClaiming()
     {
         ChimePlayer.PlayForTests = _ => { };
-        ClaudeBuddySettings.TurnSoundsEnabled = true;
-        ClaudeBuddySettings.TurnFinishedSound = "summary";
+        OrbweaverSettings.TurnSoundsEnabled = true;
+        OrbweaverSettings.TurnFinishedSound = "summary";
 
         var spokenFor = new List<string>();
         Task<bool> Speak(string sessionId)

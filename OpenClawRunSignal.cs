@@ -1,6 +1,6 @@
 using System.Text.Json;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // What one gateway event says about whether its session is generating.
     //

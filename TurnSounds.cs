@@ -1,6 +1,6 @@
 using System.Threading;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // The one call SessionManager makes at the end of a scan to turn whatever
     // TurnSignalTracker noticed into an actual sound.
@@ -545,10 +545,10 @@ namespace ClaudeBuddy
             var extensions = SystemSoundCatalog.DefaultExtensions;
 
             return new SoundSettingsSnapshot(
-                MasterEnabled: ClaudeBuddySettings.TurnSoundsEnabled,
-                DefaultFinishedSetting: ClaudeBuddySettings.TurnFinishedSound,
-                DefaultAttentionSetting: ClaudeBuddySettings.NeedsAttentionSound,
-                OverrideFor: ClaudeBuddySettings.OrbTurnSoundFor,
+                MasterEnabled: OrbweaverSettings.TurnSoundsEnabled,
+                DefaultFinishedSetting: OrbweaverSettings.TurnFinishedSound,
+                DefaultAttentionSetting: OrbweaverSettings.NeedsAttentionSound,
+                OverrideFor: OrbweaverSettings.OrbTurnSoundFor,
                 ResolveFinishedSound: setting => SystemSoundCatalog.Resolve(
                     setting ?? SystemSoundCatalog.DefaultFinishedSoundName, directory, extensions),
                 ResolveAttentionSound: setting => SystemSoundCatalog.Resolve(

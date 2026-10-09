@@ -4,7 +4,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Threading;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // The Claude Code accounts on this machine, as the cloud arm sees them.
     //

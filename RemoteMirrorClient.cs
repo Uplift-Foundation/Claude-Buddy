@@ -1,5 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // This machine asking another machine's Buddy for what its sessions
     // actually say, and refusing anything it cannot prove.

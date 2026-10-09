@@ -2,7 +2,7 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 // Covers PeerIdentity — how one copy of this app proves which machine it is to
 // another, and how it remembers the ones a person has agreed to.

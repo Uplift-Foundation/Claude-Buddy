@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // What a session calls itself and what colour it has been given, read out of
     // its own transcript.

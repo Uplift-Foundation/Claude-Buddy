@@ -1,7 +1,7 @@
 using System.Text.Json;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Covers the JSON shape of SessionStatus (SessionManager.cs ~11-145) against
 // the exact literal ClaudeBuddyHook.sh writes. Per this repo's fixture rule

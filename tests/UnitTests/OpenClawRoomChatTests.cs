@@ -1,7 +1,7 @@
 using System.Linq;
 using Xunit;
 
-namespace ClaudeBuddy.Tests
+namespace Orbweaver.Tests
 {
     // Merging several agents' transcripts into one room.
     //
@@ -862,10 +862,10 @@ namespace ClaudeBuddy.Tests
         {
             var room = new OpenClawRoomChatSession("openclaw:room:discord:1", "#general");
 
-            ClaudeBuddySettings.OpenClawReplyEnabled = true;
+            OrbweaverSettings.OpenClawReplyEnabled = true;
             Assert.Equal("Message the channel…", room.ComposerHint);
 
-            ClaudeBuddySettings.OpenClawReplyEnabled = false;
+            OrbweaverSettings.OpenClawReplyEnabled = false;
             Assert.Equal("Replying is off", room.ComposerHint);
         }
 
@@ -1097,8 +1097,8 @@ namespace ClaudeBuddy.Tests
         [Fact]
         public async Task WithReplyingOffTheMessageIsRefusedInTheRoom()
         {
-            ClaudeBuddySettings.ReloadForTests();
-            ClaudeBuddySettings.OpenClawReplyEnabled = false;
+            OrbweaverSettings.ReloadForTests();
+            OrbweaverSettings.OpenClawReplyEnabled = false;
 
             var nova = Member("nova");
             nova.HasMore = false;
@@ -1132,8 +1132,8 @@ namespace ClaudeBuddy.Tests
         [Fact]
         public async Task ARoomWithNobodyInItSaysSoRatherThanFailingQuietly()
         {
-            ClaudeBuddySettings.ReloadForTests();
-            ClaudeBuddySettings.OpenClawReplyEnabled = true;
+            OrbweaverSettings.ReloadForTests();
+            OrbweaverSettings.OpenClawReplyEnabled = true;
 
             var room = new OpenClawRoomChatSession("openclaw:room:discord:1", "#general");
 
@@ -1411,8 +1411,8 @@ namespace ClaudeBuddy.Tests
         [Fact]
         public async Task WhatYouTypeAppearsInTheRoomRatherThanInAMembersTranscript()
         {
-            ClaudeBuddySettings.ReloadForTests();
-            ClaudeBuddySettings.OpenClawReplyEnabled = true;
+            OrbweaverSettings.ReloadForTests();
+            OrbweaverSettings.OpenClawReplyEnabled = true;
 
             var quill = Member("quill");
             quill.HasMore = false;
@@ -1431,8 +1431,8 @@ namespace ClaudeBuddy.Tests
         [Fact]
         public async Task WhatYouTypeIsMarkedAsYours()
         {
-            ClaudeBuddySettings.ReloadForTests();
-            ClaudeBuddySettings.OpenClawReplyEnabled = true;
+            OrbweaverSettings.ReloadForTests();
+            OrbweaverSettings.OpenClawReplyEnabled = true;
 
             var quill = Member("quill");
             quill.HasMore = false;
@@ -1455,8 +1455,8 @@ namespace ClaudeBuddy.Tests
         [Fact]
         public async Task ARoomWithNoAddressAnywhereRefusesAndSendsNothing()
         {
-            ClaudeBuddySettings.ReloadForTests();
-            ClaudeBuddySettings.OpenClawReplyEnabled = true;
+            OrbweaverSettings.ReloadForTests();
+            OrbweaverSettings.OpenClawReplyEnabled = true;
 
             var quill = Member("quill");
             var aster = Member("aster");
@@ -1483,8 +1483,8 @@ namespace ClaudeBuddy.Tests
         [Fact]
         public async Task WithNoGatewayTheFailureIsSaidInTheRoom()
         {
-            ClaudeBuddySettings.ReloadForTests();
-            ClaudeBuddySettings.OpenClawReplyEnabled = true;
+            OrbweaverSettings.ReloadForTests();
+            OrbweaverSettings.OpenClawReplyEnabled = true;
 
             var quill = Member("quill");
             quill.HasMore = false;
@@ -1509,8 +1509,8 @@ namespace ClaudeBuddy.Tests
         [Fact]
         public async Task ANoteSurvivesTheNextRebuild()
         {
-            ClaudeBuddySettings.ReloadForTests();
-            ClaudeBuddySettings.OpenClawReplyEnabled = false;
+            OrbweaverSettings.ReloadForTests();
+            OrbweaverSettings.OpenClawReplyEnabled = false;
 
             var quill = Member("quill");
             quill.HasMore = false;
@@ -1530,8 +1530,8 @@ namespace ClaudeBuddy.Tests
         [Fact]
         public async Task YourMessageGivesWayToTheGatewaysOwnCopyOfIt()
         {
-            ClaudeBuddySettings.ReloadForTests();
-            ClaudeBuddySettings.OpenClawReplyEnabled = true;
+            OrbweaverSettings.ReloadForTests();
+            OrbweaverSettings.OpenClawReplyEnabled = true;
 
             var quill = Member("quill");
             quill.HasMore = false;
@@ -1567,8 +1567,8 @@ namespace ClaudeBuddy.Tests
         [Fact]
         public async Task OneCopyComingBackRetiresOneOptimisticCopy()
         {
-            ClaudeBuddySettings.ReloadForTests();
-            ClaudeBuddySettings.OpenClawReplyEnabled = true;
+            OrbweaverSettings.ReloadForTests();
+            OrbweaverSettings.OpenClawReplyEnabled = true;
 
             var quill = Member("quill");
             quill.HasMore = false;
@@ -1598,8 +1598,8 @@ namespace ClaudeBuddy.Tests
         [Fact]
         public async Task BothCopiesComingBackRetireBothOptimisticCopies()
         {
-            ClaudeBuddySettings.ReloadForTests();
-            ClaudeBuddySettings.OpenClawReplyEnabled = true;
+            OrbweaverSettings.ReloadForTests();
+            OrbweaverSettings.OpenClawReplyEnabled = true;
 
             var quill = Member("quill");
             quill.HasMore = false;
@@ -1628,8 +1628,8 @@ namespace ClaudeBuddy.Tests
         [Fact]
         public async Task SomebodyElsesIdenticalWordsDoNotRetireYourOwnMessage()
         {
-            ClaudeBuddySettings.ReloadForTests();
-            ClaudeBuddySettings.OpenClawReplyEnabled = true;
+            OrbweaverSettings.ReloadForTests();
+            OrbweaverSettings.OpenClawReplyEnabled = true;
 
             var quill = Member("quill");
             quill.HasMore = false;
@@ -1661,8 +1661,8 @@ namespace ClaudeBuddy.Tests
         [Fact]
         public async Task EachRefusedAttemptKeepsItsOwnMessageAndNote()
         {
-            ClaudeBuddySettings.ReloadForTests();
-            ClaudeBuddySettings.OpenClawReplyEnabled = false;
+            OrbweaverSettings.ReloadForTests();
+            OrbweaverSettings.OpenClawReplyEnabled = false;
 
             var quill = Member("quill");
             quill.HasMore = false;
@@ -1686,8 +1686,8 @@ namespace ClaudeBuddy.Tests
         [Fact]
         public async Task ANoteAboutAFreshMessageIsNotSwallowed()
         {
-            ClaudeBuddySettings.ReloadForTests();
-            ClaudeBuddySettings.OpenClawReplyEnabled = true;
+            OrbweaverSettings.ReloadForTests();
+            OrbweaverSettings.OpenClawReplyEnabled = true;
 
             var quill = Member("quill");
             quill.HasMore = false;
@@ -1710,8 +1710,8 @@ namespace ClaudeBuddy.Tests
         [Fact]
         public async Task ADifferentNoteAlwaysLands()
         {
-            ClaudeBuddySettings.ReloadForTests();
-            ClaudeBuddySettings.OpenClawReplyEnabled = false;
+            OrbweaverSettings.ReloadForTests();
+            OrbweaverSettings.OpenClawReplyEnabled = false;
 
             var quill = Member("quill");
             quill.HasMore = false;
@@ -1719,7 +1719,7 @@ namespace ClaudeBuddy.Tests
 
             await room.SendAsync("first try");
 
-            ClaudeBuddySettings.OpenClawReplyEnabled = true;
+            OrbweaverSettings.OpenClawReplyEnabled = true;
             await room.SendAsync("second try");
 
             var notes = room.History.Where(t => t.Role == ChatRole.System).ToList();
@@ -1756,8 +1756,8 @@ namespace ClaudeBuddy.Tests
         [Fact]
         public async Task TheOldestEntryIsWhatFallsOffWhenTheListOverflows()
         {
-            ClaudeBuddySettings.ReloadForTests();
-            ClaudeBuddySettings.OpenClawReplyEnabled = true;
+            OrbweaverSettings.ReloadForTests();
+            OrbweaverSettings.OpenClawReplyEnabled = true;
 
             var quill = Member("quill");
             quill.HasMore = false;
@@ -1787,8 +1787,8 @@ namespace ClaudeBuddy.Tests
         [Fact]
         public async Task YourMessageSurvivesTheNextRebuild()
         {
-            ClaudeBuddySettings.ReloadForTests();
-            ClaudeBuddySettings.OpenClawReplyEnabled = true;
+            OrbweaverSettings.ReloadForTests();
+            OrbweaverSettings.OpenClawReplyEnabled = true;
 
             var quill = Member("quill");
             quill.HasMore = false;

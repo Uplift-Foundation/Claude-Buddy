@@ -5,7 +5,7 @@ using System.Text.Json.Nodes;
 using System.Text.Json.Serialization.Metadata;
 using Avalonia.Threading;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // The app's first persistent state.
     //
@@ -18,7 +18,7 @@ namespace ClaudeBuddy
     // Profiles are keyed by folder name rather than by path, so moving the
     // profile root (the CLAUDE_BUDDY_PROFILE_ROOT override) keeps your settings,
     // and renaming a folder deliberately starts fresh.
-    internal static class ClaudeBuddySettings
+    internal static class OrbweaverSettings
     {
         private const int CurrentVersion = 1;
 
@@ -904,14 +904,14 @@ namespace ClaudeBuddy
                 lock (Gate)
                 {
                     return string.Equals(_model.SpeakScope, "summary", StringComparison.OrdinalIgnoreCase)
-                        ? ClaudeBuddy.SpeakScope.Summary
-                        : ClaudeBuddy.SpeakScope.Full;
+                        ? Orbweaver.SpeakScope.Summary
+                        : Orbweaver.SpeakScope.Full;
                 }
             }
             set
             {
                 Load();
-                lock (Gate) _model.SpeakScope = value == ClaudeBuddy.SpeakScope.Summary ? "summary" : "full";
+                lock (Gate) _model.SpeakScope = value == Orbweaver.SpeakScope.Summary ? "summary" : "full";
                 Save();
             }
         }

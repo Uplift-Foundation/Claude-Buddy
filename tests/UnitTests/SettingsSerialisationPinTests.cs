@@ -6,7 +6,7 @@ using System.Reflection;
 using System.Text.RegularExpressions;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-241's regression pin, in the shape CB-183's UiDispatcherIsolationTests set:
 // it fails the day the next unserialised class arrives, which a kept
@@ -183,7 +183,7 @@ public class SettingsSerialisationPinTests
     {
         const string home = "/tmp/cb241-pin";
 
-        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-board");
+        OrbweaverSettings.AddClaudeCodeProfileDir(".claude-board");
         try
         {
             var held = ClaudeCliCredentials.SourcesFor(isMacOS: true, home: home);
@@ -192,7 +192,7 @@ public class SettingsSerialisationPinTests
         }
         finally
         {
-            ClaudeBuddySettings.RemoveClaudeCodeProfileDir(".claude-board");
+            OrbweaverSettings.RemoveClaudeCodeProfileDir(".claude-board");
         }
 
         Assert.Single(ClaudeCliCredentials.SourcesFor(isMacOS: true, home: home));

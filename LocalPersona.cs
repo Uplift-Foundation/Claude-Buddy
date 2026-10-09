@@ -1,7 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Text;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // The persona a local CLI session wears, read from the CLAUDE.md files that
     // are already beside its work.

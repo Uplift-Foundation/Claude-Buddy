@@ -1,7 +1,7 @@
 using System;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // SessionPresence's classifier: which shape of local session a status file
 // describes, whether anything is on the other end of it, and which of the two

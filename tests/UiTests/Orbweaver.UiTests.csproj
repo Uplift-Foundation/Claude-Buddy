@@ -4,8 +4,8 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <RollForward>LatestMajor</RollForward>
-    <AssemblyName>ClaudeBuddy.UiTests</AssemblyName>
-    <RootNamespace>ClaudeBuddy.Tests</RootNamespace>
+    <AssemblyName>Orbweaver.UiTests</AssemblyName>
+    <RootNamespace>Orbweaver.Tests</RootNamespace>
     <IsPackable>false</IsPackable>
     <!-- Same reasoning as tests/UiScreenshots' csproj (see its own, longer
          comment): xunit.v3's build targets require OutputType=Exe and

@@ -1,4 +1,4 @@
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // The small monochrome marks this app draws rather than types, as SVG path
     // data in a 16x16 box — the shape CliMark's marks take, stretched uniformly

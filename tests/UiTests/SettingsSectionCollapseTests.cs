@@ -11,7 +11,7 @@ using Avalonia.Media;
 using Avalonia.Threading;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The collapse half of CB-166: a real gesture on the header, moving the
 // chevron and the body's IsVisible, and persisting through
@@ -90,7 +90,7 @@ public class SettingsSectionCollapseTests
 
     private static void ResetAllSections()
     {
-        foreach (var id in AllIds) ClaudeBuddySettings.SetSettingsSectionCollapsed(id, false);
+        foreach (var id in AllIds) OrbweaverSettings.SetSettingsSectionCollapsed(id, false);
     }
 
     [AvaloniaFact]
@@ -129,11 +129,11 @@ public class SettingsSectionCollapseTests
 
             Click(header);
             Assert.False(section.IsOpen);
-            Assert.True(ClaudeBuddySettings.IsSettingsSectionCollapsed("voice"));
+            Assert.True(OrbweaverSettings.IsSettingsSectionCollapsed("voice"));
 
             Click(header);
             Assert.True(section.IsOpen);
-            Assert.False(ClaudeBuddySettings.IsSettingsSectionCollapsed("voice"));
+            Assert.False(OrbweaverSettings.IsSettingsSectionCollapsed("voice"));
         }
         finally
         {

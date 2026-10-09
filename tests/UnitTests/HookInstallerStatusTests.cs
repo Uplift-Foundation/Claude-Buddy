@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // What the Settings card tells a person after an installer run, and what the
 // log says about it (CB-258). Both are pure decisions over a HookInstallResult,

@@ -3,7 +3,7 @@ using System.IO;
 using System.Text.Json.Nodes;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The new settings key, through a real file on disk.
 //
@@ -37,7 +37,7 @@ public class AccountUsageSettingsTests
     private static void PointSettingsAt(string dir)
     {
         Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
     }
 
     [Fact]
@@ -48,8 +48,8 @@ public class AccountUsageSettingsTests
         // The orbs are four more things on a desktop that already has orbs on
         // it, behind a poll that starts a process per account. Neither is
         // something to begin doing to someone who has not asked.
-        Assert.False(ClaudeBuddySettings.AccountUsageEnabled);
-        Assert.False(ClaudeBuddySettings.CodexAccountUsageEnabled);
+        Assert.False(OrbweaverSettings.AccountUsageEnabled);
+        Assert.False(OrbweaverSettings.CodexAccountUsageEnabled);
     }
 
     [Fact]
@@ -58,7 +58,7 @@ public class AccountUsageSettingsTests
         var dir = NewSettingsDir();
         PointSettingsAt(dir);
 
-        ClaudeBuddySettings.AccountUsageEnabled = true;
+        OrbweaverSettings.AccountUsageEnabled = true;
 
         var path = Path.Combine(dir, "settings.json");
         Assert.True(File.Exists(path));
@@ -69,11 +69,11 @@ public class AccountUsageSettingsTests
 
         // And survives a reload, which is what an app restart looks like.
         PointSettingsAt(dir);
-        Assert.True(ClaudeBuddySettings.AccountUsageEnabled);
+        Assert.True(OrbweaverSettings.AccountUsageEnabled);
 
-        ClaudeBuddySettings.AccountUsageEnabled = false;
+        OrbweaverSettings.AccountUsageEnabled = false;
         PointSettingsAt(dir);
-        Assert.False(ClaudeBuddySettings.AccountUsageEnabled);
+        Assert.False(OrbweaverSettings.AccountUsageEnabled);
     }
 
     // The one that catches a missing KnownKeys entry.
@@ -97,9 +97,9 @@ public class AccountUsageSettingsTests
 
         PointSettingsAt(dir);
 
-        Assert.True(ClaudeBuddySettings.AccountUsageEnabled);
+        Assert.True(OrbweaverSettings.AccountUsageEnabled);
 
-        ClaudeBuddySettings.AccountUsageEnabled = false;
+        OrbweaverSettings.AccountUsageEnabled = false;
 
         var root = JsonNode.Parse(File.ReadAllText(path)) as JsonObject;
         Assert.NotNull(root);
@@ -123,13 +123,13 @@ public class AccountUsageSettingsTests
 
         var accountKey = AccountOrbs.PositionKey("/Users/x/project");
 
-        ClaudeBuddySettings.SetOrbPosition("/Users/x/project", 10, 20);
-        ClaudeBuddySettings.SetOrbPosition(accountKey, 300, 400);
+        OrbweaverSettings.SetOrbPosition("/Users/x/project", 10, 20);
+        OrbweaverSettings.SetOrbPosition(accountKey, 300, 400);
 
         PointSettingsAt(dir);
 
-        var session = ClaudeBuddySettings.OrbPositionFor("/Users/x/project");
-        var account = ClaudeBuddySettings.OrbPositionFor(accountKey);
+        var session = OrbweaverSettings.OrbPositionFor("/Users/x/project");
+        var account = OrbweaverSettings.OrbPositionFor(accountKey);
 
         Assert.NotNull(session);
         Assert.NotNull(account);
@@ -154,15 +154,15 @@ public class AccountUsageSettingsTests
         // even though GrokAccountUsageEnabled sits right next to it in the
         // model, the same argument SettingsWindow's own comment on the row
         // makes for showing the switch at all.
-        Assert.False(ClaudeBuddySettings.GrokAutoRefreshEnabled);
+        Assert.False(OrbweaverSettings.GrokAutoRefreshEnabled);
 
-        ClaudeBuddySettings.GrokAutoRefreshEnabled = true;
+        OrbweaverSettings.GrokAutoRefreshEnabled = true;
 
         var path = Path.Combine(dir, "settings.json");
         var root = JsonNode.Parse(File.ReadAllText(path)) as JsonObject;
         Assert.True(root!["grokAutoRefreshEnabled"]!.GetValue<bool>());
 
         PointSettingsAt(dir);
-        Assert.True(ClaudeBuddySettings.GrokAutoRefreshEnabled);
+        Assert.True(OrbweaverSettings.GrokAutoRefreshEnabled);
     }
 }

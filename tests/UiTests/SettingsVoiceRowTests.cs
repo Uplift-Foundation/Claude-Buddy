@@ -6,7 +6,7 @@ using Avalonia.Headless.XUnit;
 using Avalonia.LogicalTree;
 using Xunit;
 
-namespace ClaudeBuddy.UiTests;
+namespace Orbweaver.UiTests;
 
 // The speech and dictation sections of the settings window: which rows appear,
 // and the progress line that only exists while something is downloading.
@@ -51,7 +51,7 @@ public class SettingsVoiceRowTests
     [AvaloniaFact]
     public void TheHighQualityVoiceRowIsAlwaysOffered()
     {
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
         var window = NewWindow();
 
         Assert.True(Mentions(window.VoiceRows(), "High-quality voice"));
@@ -63,7 +63,7 @@ public class SettingsVoiceRowTests
     [AvaloniaFact]
     public void TheVoiceRowSaysWhatEnablingItCosts()
     {
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
         var rows = NewWindow().VoiceRows();
 
         Assert.True(Mentions(rows, "300 MB"));
@@ -77,8 +77,8 @@ public class SettingsVoiceRowTests
     [AvaloniaFact]
     public void TheEngineProgressLineAppearsWhenThereIsProgressToReport()
     {
-        ClaudeBuddySettings.ReloadForTests();
-        ClaudeBuddySettings.NeuralVoiceEnabled = true;
+        OrbweaverSettings.ReloadForTests();
+        OrbweaverSettings.NeuralVoiceEnabled = true;
 
         var window = NewWindow();
         SetStatus(window, "_neuralModelStatus", "Downloading… 42%");
@@ -89,8 +89,8 @@ public class SettingsVoiceRowTests
     [AvaloniaFact]
     public void TheEngineProgressLineIsAbsentWithNothingToReport()
     {
-        ClaudeBuddySettings.ReloadForTests();
-        ClaudeBuddySettings.NeuralVoiceEnabled = true;
+        OrbweaverSettings.ReloadForTests();
+        OrbweaverSettings.NeuralVoiceEnabled = true;
 
         var window = NewWindow();
         SetStatus(window, "_neuralModelStatus", null);
@@ -101,8 +101,8 @@ public class SettingsVoiceRowTests
     [AvaloniaFact]
     public void TheEngineProgressLineIsAbsentWhileTheFeatureIsOff()
     {
-        ClaudeBuddySettings.ReloadForTests();
-        ClaudeBuddySettings.NeuralVoiceEnabled = false;
+        OrbweaverSettings.ReloadForTests();
+        OrbweaverSettings.NeuralVoiceEnabled = false;
 
         var window = NewWindow();
         SetStatus(window, "_neuralModelStatus", "Downloading… 42%");
@@ -118,9 +118,9 @@ public class SettingsVoiceRowTests
     [AvaloniaFact]
     public void TheVoiceModelProgressLineIsSeparateFromTheEngineOne()
     {
-        ClaudeBuddySettings.ReloadForTests();
-        ClaudeBuddySettings.VoiceInputEnabled = true;
-        ClaudeBuddySettings.NeuralVoiceEnabled = true;
+        OrbweaverSettings.ReloadForTests();
+        OrbweaverSettings.VoiceInputEnabled = true;
+        OrbweaverSettings.NeuralVoiceEnabled = true;
 
         var window = NewWindow();
         SetStatus(window, "_voiceModelStatus", "Fetching Whisper…");
@@ -135,8 +135,8 @@ public class SettingsVoiceRowTests
     [AvaloniaFact]
     public void TheVoiceModelLineIsAbsentWhileDictationIsOff()
     {
-        ClaudeBuddySettings.ReloadForTests();
-        ClaudeBuddySettings.VoiceInputEnabled = false;
+        OrbweaverSettings.ReloadForTests();
+        OrbweaverSettings.VoiceInputEnabled = false;
 
         var window = NewWindow();
         SetStatus(window, "_voiceModelStatus", "Fetching Whisper…");
@@ -150,7 +150,7 @@ public class SettingsVoiceRowTests
     [AvaloniaFact]
     public void TheDictationRowSaysNothingLeavesTheMachine()
     {
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
         var rows = NewWindow().VoiceRows();
 
         Assert.True(Mentions(rows, "entirely on this machine"));
@@ -165,7 +165,7 @@ public class SettingsVoiceRowTests
     [AvaloniaFact]
     public void TheVoicePickerStartsAsAPlaceholderWithoutEnumeratingAnything()
     {
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
         var rows = NewWindow().VoiceRows();
 
         var combo = rows

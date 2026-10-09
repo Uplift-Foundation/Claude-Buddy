@@ -1,7 +1,7 @@
 using Xunit;
-using static ClaudeBuddy.MacOSLegacyBundle;
+using static Orbweaver.MacOSLegacyBundle;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-255 §5: the rules that decide whether a "Claude Buddy.app" beside
 // Orbweaver.app is ours to move to the Trash, with no filesystem behind them.

@@ -13,7 +13,7 @@ using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using Avalonia.Threading;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // A small conversation anchored to an orb: the last few turns, a line to
     // type in, and a mic. Opened by clicking an orb that represents a session
@@ -431,7 +431,7 @@ namespace ClaudeBuddy
             {
                 if (!_pinned || _owner is not { PositionKey.Length: > 0 } owner) return;
 
-                ClaudeBuddySettings.SetPinnedChatPanelPosition(owner.PositionKey, Position.X, Position.Y);
+                OrbweaverSettings.SetPinnedChatPanelPosition(owner.PositionKey, Position.X, Position.Y);
             };
 
             // See NwSeCursor/NeSwCursor: no StandardCursorType member draws
@@ -855,7 +855,7 @@ namespace ClaudeBuddy
             HideSlashSuggestions();
 
             Input.Text = Drafts.GetValueOrDefault(session.SessionId, "");
-            MicButton.IsVisible = ClaudeBuddySettings.VoiceInputEnabled;
+            MicButton.IsVisible = OrbweaverSettings.VoiceInputEnabled;
             ApplySpeakState(TextToSpeech.State);
 
             // The box stays enabled even when sending won't work, and says why
@@ -1295,7 +1295,7 @@ namespace ClaudeBuddy
             var name = TitleText.Text;
             return string.IsNullOrWhiteSpace(name)
                 ? ""
-                : OrbGlyph.For(name, ClaudeBuddySettings.TwoLetterGlyphs);
+                : OrbGlyph.For(name, OrbweaverSettings.TwoLetterGlyphs);
         }
 
         // Ink that can be read on a given circle.
@@ -1714,7 +1714,7 @@ namespace ClaudeBuddy
             // not have survived one.
             if (_owner is { } owner)
             {
-                ClaudeBuddySettings.SetChatPanelSize(owner.PositionKey, Width, Height);
+                OrbweaverSettings.SetChatPanelSize(owner.PositionKey, Width, Height);
             }
         }
 
@@ -1728,7 +1728,7 @@ namespace ClaudeBuddy
         // panel wider than any screen has no visible way back.
         private void ApplySavedSize(OrbWindow orb)
         {
-            var saved = ClaudeBuddySettings.ChatPanelSizeFor(orb.PositionKey);
+            var saved = OrbweaverSettings.ChatPanelSizeFor(orb.PositionKey);
 
             Width = saved is null
                 ? _defaultWidth
@@ -2257,10 +2257,10 @@ namespace ClaudeBuddy
             // would put a "0" in the composer for someone pressing Cmd+0 twice.
             e.Handled = true;
 
-            var next = ChatZoom.Apply(command, ClaudeBuddySettings.ChatTextScale);
+            var next = ChatZoom.Apply(command, OrbweaverSettings.ChatTextScale);
             if (next.Equals(_textScale.Value)) return;
 
-            ClaudeBuddySettings.ChatTextScale = next;
+            OrbweaverSettings.ChatTextScale = next;
             ApplyTextScale();
         }
 
@@ -2269,7 +2269,7 @@ namespace ClaudeBuddy
         // settings slider through ReapplyTextScale below.
         private void ApplyTextScale()
         {
-            var scale = ClaudeBuddySettings.ChatTextScale;
+            var scale = OrbweaverSettings.ChatTextScale;
 
             _textScale.Value = scale;
 
@@ -2875,7 +2875,7 @@ namespace ClaudeBuddy
             // that hasn't gone anywhere.
             if (_owner is { PositionKey.Length: > 0 } owner)
             {
-                ClaudeBuddySettings.SetPinnedChatPanelPosition(owner.PositionKey, Position.X, Position.Y);
+                OrbweaverSettings.SetPinnedChatPanelPosition(owner.PositionKey, Position.X, Position.Y);
             }
         }
 
@@ -2909,7 +2909,7 @@ namespace ClaudeBuddy
             // See ClearPinnedChatPanelPosition's own comment.
             if (_owner is { PositionKey.Length: > 0 } owner)
             {
-                ClaudeBuddySettings.ClearPinnedChatPanelPosition(owner.PositionKey);
+                OrbweaverSettings.ClearPinnedChatPanelPosition(owner.PositionKey);
             }
         }
 

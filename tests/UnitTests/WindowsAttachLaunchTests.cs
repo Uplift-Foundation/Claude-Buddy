@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The Windows half of a background-orb click cannot create a terminal in a
 // headless test runner. Its command description is pure, though, and this

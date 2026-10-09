@@ -5,15 +5,15 @@ VisualStudioVersion = 17.0.31903.59
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "UnitTests", "UnitTests", "{2F646680-91A4-F107-74F4-9BF3126A0F16}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ClaudeBuddy.UnitTests", "UnitTests\Orbweaver.UnitTests.csproj", "{D2B44EA7-91D6-4ED2-9AC6-80A009C6C04C}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Orbweaver.UnitTests", "UnitTests\Orbweaver.UnitTests.csproj", "{D2B44EA7-91D6-4ED2-9AC6-80A009C6C04C}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "IntegrationTests", "IntegrationTests", "{1D262D65-7495-6CB3-7B98-55E7B311B78D}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ClaudeBuddy.IntegrationTests", "IntegrationTests\Orbweaver.IntegrationTests.csproj", "{757D27BD-C0CF-4893-AEEC-934171B40B86}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Orbweaver.IntegrationTests", "IntegrationTests\Orbweaver.IntegrationTests.csproj", "{757D27BD-C0CF-4893-AEEC-934171B40B86}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "UiTests", "UiTests", "{717263FE-3448-65CC-A03C-20CFBE74EFB9}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ClaudeBuddy.UiTests", "UiTests\Orbweaver.UiTests.csproj", "{C444E741-DC3A-4022-BA8B-27E415EABE4B}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Orbweaver.UiTests", "UiTests\Orbweaver.UiTests.csproj", "{C444E741-DC3A-4022-BA8B-27E415EABE4B}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

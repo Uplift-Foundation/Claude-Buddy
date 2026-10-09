@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 // Who said a user-role message the gateway handed us.
 //

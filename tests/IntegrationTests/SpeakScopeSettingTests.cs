@@ -1,7 +1,7 @@
 using System.Text.Json.Nodes;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The speakScope setting through a real file on disk.
 //
@@ -23,7 +23,7 @@ public class SpeakScopeSettingTests
     private static void PointSettingsAt(string dir)
     {
         Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
     }
 
     // The default is load-bearing rather than incidental: everyone who has ever
@@ -35,7 +35,7 @@ public class SpeakScopeSettingTests
     {
         PointSettingsAt(NewSettingsDir());
 
-        Assert.Equal(SpeakScope.Full, ClaudeBuddySettings.SpeakScope);
+        Assert.Equal(SpeakScope.Full, OrbweaverSettings.SpeakScope);
     }
 
     [Fact]
@@ -44,18 +44,18 @@ public class SpeakScopeSettingTests
         var dir = NewSettingsDir();
         PointSettingsAt(dir);
 
-        ClaudeBuddySettings.SpeakScope = SpeakScope.Summary;
+        OrbweaverSettings.SpeakScope = SpeakScope.Summary;
 
         var settingsPath = Path.Combine(dir, "settings.json");
         var root = JsonNode.Parse(File.ReadAllText(settingsPath)) as JsonObject;
         Assert.Equal("summary", root!["speakScope"]!.GetValue<string>());
 
         PointSettingsAt(dir);
-        Assert.Equal(SpeakScope.Summary, ClaudeBuddySettings.SpeakScope);
+        Assert.Equal(SpeakScope.Summary, OrbweaverSettings.SpeakScope);
 
-        ClaudeBuddySettings.SpeakScope = SpeakScope.Full;
+        OrbweaverSettings.SpeakScope = SpeakScope.Full;
         PointSettingsAt(dir);
-        Assert.Equal(SpeakScope.Full, ClaudeBuddySettings.SpeakScope);
+        Assert.Equal(SpeakScope.Full, OrbweaverSettings.SpeakScope);
     }
 
     // A value no build has ever written — a newer mode, or a hand edit. It
@@ -74,7 +74,7 @@ public class SpeakScopeSettingTests
 
         PointSettingsAt(dir);
 
-        Assert.Equal(SpeakScope.Full, ClaudeBuddySettings.SpeakScope);
+        Assert.Equal(SpeakScope.Full, OrbweaverSettings.SpeakScope);
     }
 
     // Case is not the user's problem when they have edited the file by hand.
@@ -86,7 +86,7 @@ public class SpeakScopeSettingTests
 
         PointSettingsAt(dir);
 
-        Assert.Equal(SpeakScope.Summary, ClaudeBuddySettings.SpeakScope);
+        Assert.Equal(SpeakScope.Summary, OrbweaverSettings.SpeakScope);
     }
 
     // The failure this key is most likely to meet in the wild: an older build,
@@ -104,11 +104,11 @@ public class SpeakScopeSettingTests
             "{\"speakScope\": \"summary\", \"aKeyFromTheFuture\": \"kept\"}");
 
         PointSettingsAt(dir);
-        ClaudeBuddySettings.TwoLetterGlyphs = true;
-        ClaudeBuddySettings.FlushPendingSave();
+        OrbweaverSettings.TwoLetterGlyphs = true;
+        OrbweaverSettings.FlushPendingSave();
 
         PointSettingsAt(dir);
-        Assert.Equal(SpeakScope.Summary, ClaudeBuddySettings.SpeakScope);
+        Assert.Equal(SpeakScope.Summary, OrbweaverSettings.SpeakScope);
 
         var root = JsonNode.Parse(File.ReadAllText(Path.Combine(dir, "settings.json"))) as JsonObject;
         Assert.Equal("kept", root!["aKeyFromTheFuture"]!.GetValue<string>());
@@ -124,12 +124,12 @@ public class SpeakScopeSettingTests
         var dir = NewSettingsDir();
         PointSettingsAt(dir);
 
-        ClaudeBuddySettings.SpeakScope = SpeakScope.Summary;
+        OrbweaverSettings.SpeakScope = SpeakScope.Summary;
         PointSettingsAt(dir);
-        ClaudeBuddySettings.TwoLetterGlyphs = true;
-        ClaudeBuddySettings.FlushPendingSave();
+        OrbweaverSettings.TwoLetterGlyphs = true;
+        OrbweaverSettings.FlushPendingSave();
 
         PointSettingsAt(dir);
-        Assert.Equal(SpeakScope.Summary, ClaudeBuddySettings.SpeakScope);
+        Assert.Equal(SpeakScope.Summary, OrbweaverSettings.SpeakScope);
     }
 }

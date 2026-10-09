@@ -1,6 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Retires the legacy hook-script folders (~/.claude/claude-buddy and its
     // Codex, Grok and Windows %LOCALAPPDATA% twins) once the installer has

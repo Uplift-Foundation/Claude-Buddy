@@ -4,7 +4,7 @@ using Avalonia.Headless.XUnit;
 using Avalonia.Threading;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // RemoteControlChatSession in **live view** — the mode where the panel shows the
 // far session's own transcript rather than a reply a model wrote about it.
@@ -76,13 +76,13 @@ public class RemoteMirrorChatSessionTests : IDisposable
         // real setter that writes settings.json and leaks into every test after
         // it is exactly what bugfix/rc-tests-leak-remote-setting had to fix once
         // already.
-        _remoteWasEnabled = ClaudeBuddySettings.RemoteControlEnabled;
-        ClaudeBuddySettings.PeerLinkEnabled = true;
+        _remoteWasEnabled = OrbweaverSettings.RemoteControlEnabled;
+        OrbweaverSettings.PeerLinkEnabled = true;
     }
 
     public void Dispose()
     {
-        ClaudeBuddySettings.RemoteControlEnabled = _remoteWasEnabled;
+        OrbweaverSettings.RemoteControlEnabled = _remoteWasEnabled;
         RemoteControlSessions.ResetForTests();
 
         try { Directory.Delete(_dir, recursive: true); } catch { }

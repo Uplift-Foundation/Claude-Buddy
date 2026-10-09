@@ -9,7 +9,7 @@ using Avalonia.Media;
 using Avalonia.Threading;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // OrbFlyout has no OS coupling (confirmed by reading OrbFlyout.axaml.cs in
 // full) and its five buttons are plain named Grids wired to PointerPressed,

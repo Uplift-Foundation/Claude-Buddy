@@ -1,7 +1,7 @@
 using System.Reflection;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 /// <summary>
 /// CB-205: the shipped exe reported FileVersion 0.4.1.0 next to a ProductVersion of

@@ -5,7 +5,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Claude Code sessions running in Anthropic's cloud, listed by the account
     // API rather than by a hook.
@@ -89,7 +89,7 @@ namespace ClaudeBuddy
         // and opens no socket, which is stronger than "draws no orb" and is the
         // promise the settings copy makes.
         public static IReadOnlyList<Session> Snapshot() =>
-            ClaudeBuddySettings.ClaudeCloudEnabled
+            OrbweaverSettings.ClaudeCloudEnabled
                 ? WithoutTombstones(_snapshot, TombstonesNow(DateTime.UtcNow))
                 : Array.Empty<Session>();
 
@@ -209,7 +209,7 @@ namespace ClaudeBuddy
         internal static async Task<CloudLifecycleResult> RunLifecycleAsync(CloudLifecycleAction action,
             string? orbKey, CancellationToken ct)
         {
-            if (!ClaudeBuddySettings.ClaudeCloudEnabled)
+            if (!OrbweaverSettings.ClaudeCloudEnabled)
                 return new CloudLifecycleResult(CloudLifecycleVerdict.Refused, SwitchedOffDetail);
 
             var id = CloudOrbActions.IdFromKey(orbKey);
@@ -669,7 +669,7 @@ namespace ClaudeBuddy
                 _snapshot = Array.Empty<Session>();
                 _tombstones.Clear();
 
-                if (!ClaudeBuddySettings.ClaudeCloudEnabled)
+                if (!OrbweaverSettings.ClaudeCloudEnabled)
                 {
                     _state = "off";
                     return;

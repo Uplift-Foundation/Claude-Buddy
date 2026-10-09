@@ -1,6 +1,6 @@
 using System.Text.RegularExpressions;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // The Markdown grammar an agent's identity is written in, shared by the two
     // places that read one: an OpenClaw workspace's IDENTITY.md, and a local

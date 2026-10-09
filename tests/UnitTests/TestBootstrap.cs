@@ -2,7 +2,7 @@ using System;
 using System.IO;
 using System.Runtime.CompilerServices;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Runs once, before any test in this assembly, no matter which test class
 // happens to run first. ClaudeBuddySettings.Directory reads
@@ -69,6 +69,6 @@ internal static class TestBootstrap
         TextToSpeech.SilenceForTests = true;
         ChimePlayer.SilenceForTests = true;
 
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
     }
 }

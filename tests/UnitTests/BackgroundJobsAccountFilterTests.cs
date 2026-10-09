@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-217: `claude agents --json` is run once per account every ten seconds,
 // about 19 runs a minute on the MacBook this was measured on. The listing is only

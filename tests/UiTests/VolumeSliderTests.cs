@@ -7,7 +7,7 @@ using Avalonia.Headless.XUnit;
 using Avalonia.LogicalTree;
 using Xunit;
 
-namespace ClaudeBuddy.UiTests;
+namespace Orbweaver.UiTests;
 
 // CB-200's two sliders in the settings window: that each renders over the
 // right range holding the saved level, that moving it writes the setting,
@@ -32,28 +32,28 @@ public class VolumeSliderTests
     // so the command is never actually run.
     private static void With(string engine, double speech, double alert, Action body)
     {
-        var wasEngine = ClaudeBuddySettings.SpeakEngine;
-        var wasSpeech = ClaudeBuddySettings.SpeechVolume;
-        var wasAlert = ClaudeBuddySettings.AlertVolume;
-        var wasCommand = ClaudeBuddySettings.SpeakCommand;
+        var wasEngine = OrbweaverSettings.SpeakEngine;
+        var wasSpeech = OrbweaverSettings.SpeechVolume;
+        var wasAlert = OrbweaverSettings.AlertVolume;
+        var wasCommand = OrbweaverSettings.SpeakCommand;
         try
         {
             // No orb voices and no built voice list unless a case adds them,
             // so the note reflects the global engine alone.
             LocalPersonas.SetForTests(new System.Collections.Generic.Dictionary<string, LocalPersona.Persona>());
             TextToSpeech.InvalidateVoiceCache();
-            ClaudeBuddySettings.SpeakEngine = engine;
-            ClaudeBuddySettings.SpeechVolume = speech;
-            ClaudeBuddySettings.AlertVolume = alert;
-            ClaudeBuddySettings.SpeakCommand = "my-own-tts";
+            OrbweaverSettings.SpeakEngine = engine;
+            OrbweaverSettings.SpeechVolume = speech;
+            OrbweaverSettings.AlertVolume = alert;
+            OrbweaverSettings.SpeakCommand = "my-own-tts";
             body();
         }
         finally
         {
-            ClaudeBuddySettings.SpeakEngine = wasEngine;
-            ClaudeBuddySettings.SpeechVolume = wasSpeech;
-            ClaudeBuddySettings.AlertVolume = wasAlert;
-            ClaudeBuddySettings.SpeakCommand = wasCommand;
+            OrbweaverSettings.SpeakEngine = wasEngine;
+            OrbweaverSettings.SpeechVolume = wasSpeech;
+            OrbweaverSettings.AlertVolume = wasAlert;
+            OrbweaverSettings.SpeakCommand = wasCommand;
             LocalPersonas.SetForTests(new System.Collections.Generic.Dictionary<string, LocalPersona.Persona>());
             TextToSpeech.InvalidateVoiceCache();
         }
@@ -112,18 +112,18 @@ public class VolumeSliderTests
             var slider = window.SpeechVolumeSlider!;
 
             slider.Value = 0.5;
-            Assert.Equal(0.5, ClaudeBuddySettings.SpeechVolume, 3);
-            Assert.Equal(0.8, ClaudeBuddySettings.AlertVolume, 3);
+            Assert.Equal(0.5, OrbweaverSettings.SpeechVolume, 3);
+            Assert.Equal(0.8, OrbweaverSettings.AlertVolume, 3);
             Assert.Equal("50%", ToolTip.GetTip(slider));
             Assert.Equal("50%", window.SpeechVolumeReadout!.Text);
 
             // An unrelated property changing is not a level change.
             slider.MinWidth = 200;
-            Assert.Equal(0.5, ClaudeBuddySettings.SpeechVolume, 3);
+            Assert.Equal(0.5, OrbweaverSettings.SpeechVolume, 3);
 
             // And it survives a reload from disk, as a relaunch would.
-            ClaudeBuddySettings.ReloadForTests();
-            Assert.Equal(0.5, ClaudeBuddySettings.SpeechVolume, 3);
+            OrbweaverSettings.ReloadForTests();
+            Assert.Equal(0.5, OrbweaverSettings.SpeechVolume, 3);
         });
 
     [AvaloniaFact]
@@ -135,12 +135,12 @@ public class VolumeSliderTests
             var slider = window.AlertVolumeSlider!;
 
             slider.Value = 0.25;
-            Assert.Equal(0.25, ClaudeBuddySettings.AlertVolume, 3);
-            Assert.Equal(0.9, ClaudeBuddySettings.SpeechVolume, 3);
+            Assert.Equal(0.25, OrbweaverSettings.AlertVolume, 3);
+            Assert.Equal(0.9, OrbweaverSettings.SpeechVolume, 3);
             Assert.Equal("25%", window.AlertVolumeReadout!.Text);
 
-            ClaudeBuddySettings.ReloadForTests();
-            Assert.Equal(0.25, ClaudeBuddySettings.AlertVolume, 3);
+            OrbweaverSettings.ReloadForTests();
+            Assert.Equal(0.25, OrbweaverSettings.AlertVolume, 3);
         });
 
     // ---- always live; noted where the level may not be heard ------------------
@@ -280,15 +280,15 @@ public class VolumeSliderTests
 
     private static void WithSpeakCommand(string? command, Action body)
     {
-        var saved = ClaudeBuddySettings.SpeakCommand;
+        var saved = OrbweaverSettings.SpeakCommand;
         try
         {
-            ClaudeBuddySettings.SpeakCommand = command;
+            OrbweaverSettings.SpeakCommand = command;
             body();
         }
         finally
         {
-            ClaudeBuddySettings.SpeakCommand = saved;
+            OrbweaverSettings.SpeakCommand = saved;
         }
     }
 
@@ -319,7 +319,7 @@ public class VolumeSliderTests
     // switched on — and removes exactly what it placed.
     private static void WithEngineOnDisk(string version, Action body)
     {
-        var wasEnabled = ClaudeBuddySettings.NeuralVoiceEnabled;
+        var wasEnabled = OrbweaverSettings.NeuralVoiceEnabled;
         var directory = Path.Combine(NeuralSpeech.Root, version);
         var modelExisted = File.Exists(NeuralSpeech.ModelPath);
         Directory.CreateDirectory(directory);
@@ -332,12 +332,12 @@ public class VolumeSliderTests
         if (!modelExisted) File.WriteAllBytes(NeuralSpeech.ModelPath, Array.Empty<byte>());
         try
         {
-            ClaudeBuddySettings.NeuralVoiceEnabled = true;
+            OrbweaverSettings.NeuralVoiceEnabled = true;
             body();
         }
         finally
         {
-            ClaudeBuddySettings.NeuralVoiceEnabled = wasEnabled;
+            OrbweaverSettings.NeuralVoiceEnabled = wasEnabled;
             Directory.Delete(directory, recursive: true);
             if (!modelExisted) File.Delete(NeuralSpeech.ModelPath);
         }
@@ -368,12 +368,12 @@ public class VolumeSliderTests
             window.VoiceRows();
             Assert.False(window.SpeechVolumeNote!.IsVisible);
 
-            ClaudeBuddySettings.SpeakEngine = "custom";
+            OrbweaverSettings.SpeakEngine = "custom";
             window.RefreshSpeechVolumeNote();
             Assert.True(window.SpeechVolumeNote.IsVisible);
             Assert.True(window.SpeechVolumeSlider!.IsEnabled);
 
-            ClaudeBuddySettings.SpeakEngine = "neural";
+            OrbweaverSettings.SpeakEngine = "neural";
             window.RefreshSpeechVolumeNote();
             Assert.False(window.SpeechVolumeNote.IsVisible);
         });
@@ -392,7 +392,7 @@ public class VolumeSliderTests
             var picker = RowLabelled(rows, "Speak voice").GetLogicalDescendants().OfType<ComboBox>().Single();
             Assert.False(window.SpeechVolumeNote!.IsVisible);
 
-            ClaudeBuddySettings.SpeakEngine = "custom";
+            OrbweaverSettings.SpeakEngine = "custom";
             picker.ItemsSource = new[] { "placeholder", "another" };
             picker.SelectedIndex = 1;
 

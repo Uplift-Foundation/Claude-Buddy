@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests
+namespace Orbweaver.Tests
 {
     // The parts of NewChatLauncher that don't touch a real terminal: the
     // display names shared with NewChatAvailability's reason text, the

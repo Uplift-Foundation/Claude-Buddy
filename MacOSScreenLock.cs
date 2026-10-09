@@ -1,7 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Is the login session's screen locked?
     //

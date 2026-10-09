@@ -3,7 +3,7 @@ using System.IO;
 using System.Text;
 using Avalonia.Threading;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // What the process leaves behind when it dies of an unhandled exception.
     //

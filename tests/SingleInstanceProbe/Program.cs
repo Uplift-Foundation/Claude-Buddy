@@ -1,5 +1,5 @@
 using System.Runtime.InteropServices;
-using ClaudeBuddy;
+using Orbweaver;
 
 // One claim of the single-instance mutex from a process of its own (CB-206),
 // for tests/IntegrationTests' SingleInstanceTests.

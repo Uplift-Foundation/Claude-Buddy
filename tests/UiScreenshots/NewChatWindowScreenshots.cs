@@ -4,7 +4,7 @@ using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-168's "New chat…" dialog, captured through real Skia the same way every
 // other window in this project is — see SettingsWindowScreenshots' own
@@ -65,7 +65,7 @@ public class NewChatWindowScreenshots : IDisposable
         var dir = Path.Combine(Path.GetTempPath(), "cb-newchat-screenshots-" + Guid.NewGuid());
         Directory.CreateDirectory(dir);
         Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
     }
 
     private static NewChatWindow NewWindow(
@@ -183,8 +183,8 @@ public class NewChatWindowScreenshots : IDisposable
         // The constructor's own FreshSettings() already gave this instance an
         // isolated, empty settings dir — no extra dir setup needed here, only
         // the two profiles this scenario is actually about.
-        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-work");
-        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-board");
+        OrbweaverSettings.AddClaudeCodeProfileDir(".claude-work");
+        OrbweaverSettings.AddClaudeCodeProfileDir(".claude-board");
 
         var window = NewWindow();
 
@@ -206,8 +206,8 @@ public class NewChatWindowScreenshots : IDisposable
         };
         NewChatWindow.OpenClawAvailabilityForTests = () => OpenClawNewChatAvailability.NoGateway;
         NewChatWindow.CurrentStatusesForTests = () => new Dictionary<string, SessionStatus>();
-        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-work");
-        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-board");
+        OrbweaverSettings.AddClaudeCodeProfileDir(".claude-work");
+        OrbweaverSettings.AddClaudeCodeProfileDir(".claude-board");
 
         var window = NewWindow(prefillCli: NewChatCli.Codex);
 
@@ -229,10 +229,10 @@ public class NewChatWindowScreenshots : IDisposable
         };
         NewChatWindow.OpenClawAvailabilityForTests = () => OpenClawNewChatAvailability.NoGateway;
         NewChatWindow.CurrentStatusesForTests = () => new Dictionary<string, SessionStatus>();
-        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-work");
-        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-board");
-        ClaudeBuddySettings.AddCodexHome(".codex-work");
-        ClaudeBuddySettings.SetNewChatLastProfile(NewChatCli.Codex, ".codex-work");
+        OrbweaverSettings.AddClaudeCodeProfileDir(".claude-work");
+        OrbweaverSettings.AddClaudeCodeProfileDir(".claude-board");
+        OrbweaverSettings.AddCodexHome(".codex-work");
+        OrbweaverSettings.SetNewChatLastProfile(NewChatCli.Codex, ".codex-work");
 
         var window = NewWindow(prefillCli: NewChatCli.Codex);
 
@@ -253,8 +253,8 @@ public class NewChatWindowScreenshots : IDisposable
         NewChatWindow.OpenClawAvailabilityForTests = () => OpenClawNewChatAvailability.NoGateway;
         NewChatWindow.CurrentStatusesForTests = () => new Dictionary<string, SessionStatus>();
         NewChatWindow.AccountDirectoryExistsForTests = _ => false;
-        ClaudeBuddySettings.AddCodexHome(".codex-work");
-        ClaudeBuddySettings.SetNewChatLastProfile(NewChatCli.Codex, ".codex-work");
+        OrbweaverSettings.AddCodexHome(".codex-work");
+        OrbweaverSettings.SetNewChatLastProfile(NewChatCli.Codex, ".codex-work");
 
         var window = NewWindow(prefillCli: NewChatCli.Codex);
 

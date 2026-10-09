@@ -7,7 +7,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RollForward>LatestMajor</RollForward>
     <AssemblyName>OpenClawProbe</AssemblyName>
-    <RootNamespace>ClaudeBuddy</RootNamespace>
+    <RootNamespace>Orbweaver</RootNamespace>
   </PropertyGroup>
 
   <ItemGroup>

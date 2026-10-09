@@ -1,7 +1,7 @@
 using System.Text.Json.Nodes;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-167's four keys through a real settings.json on disk.
 //
@@ -24,7 +24,7 @@ public class TurnSoundSettingsTests
     private static void PointSettingsAt(string dir)
     {
         Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
     }
 
     // --- turnSoundsEnabled ---
@@ -34,7 +34,7 @@ public class TurnSoundSettingsTests
     {
         PointSettingsAt(NewSettingsDir());
 
-        Assert.True(ClaudeBuddySettings.TurnSoundsEnabled);
+        Assert.True(OrbweaverSettings.TurnSoundsEnabled);
     }
 
     [Fact]
@@ -43,17 +43,17 @@ public class TurnSoundSettingsTests
         var dir = NewSettingsDir();
         PointSettingsAt(dir);
 
-        ClaudeBuddySettings.TurnSoundsEnabled = false;
+        OrbweaverSettings.TurnSoundsEnabled = false;
 
         var root = JsonNode.Parse(File.ReadAllText(Path.Combine(dir, "settings.json"))) as JsonObject;
         Assert.False(root!["turnSoundsEnabled"]!.GetValue<bool>());
 
         PointSettingsAt(dir);
-        Assert.False(ClaudeBuddySettings.TurnSoundsEnabled);
+        Assert.False(OrbweaverSettings.TurnSoundsEnabled);
 
-        ClaudeBuddySettings.TurnSoundsEnabled = true;
+        OrbweaverSettings.TurnSoundsEnabled = true;
         PointSettingsAt(dir);
-        Assert.True(ClaudeBuddySettings.TurnSoundsEnabled);
+        Assert.True(OrbweaverSettings.TurnSoundsEnabled);
     }
 
     // QA (CB-167): root["turnSoundsEnabled"]?.GetValue<bool>() reaching a
@@ -76,9 +76,9 @@ public class TurnSoundSettingsTests
 
         PointSettingsAt(dir);
 
-        Assert.Equal(SpeakScope.Summary, ClaudeBuddySettings.SpeakScope);
-        Assert.Equal("Hero", ClaudeBuddySettings.TurnFinishedSound);
-        Assert.True(ClaudeBuddySettings.TurnSoundsEnabled);
+        Assert.Equal(SpeakScope.Summary, OrbweaverSettings.SpeakScope);
+        Assert.Equal("Hero", OrbweaverSettings.TurnFinishedSound);
+        Assert.True(OrbweaverSettings.TurnSoundsEnabled);
     }
 
     // --- turnFinishedSound / needsAttentionSound ---
@@ -88,8 +88,8 @@ public class TurnSoundSettingsTests
     {
         PointSettingsAt(NewSettingsDir());
 
-        Assert.Null(ClaudeBuddySettings.TurnFinishedSound);
-        Assert.Null(ClaudeBuddySettings.NeedsAttentionSound);
+        Assert.Null(OrbweaverSettings.TurnFinishedSound);
+        Assert.Null(OrbweaverSettings.NeedsAttentionSound);
     }
 
     [Theory]
@@ -102,10 +102,10 @@ public class TurnSoundSettingsTests
         var dir = NewSettingsDir();
         PointSettingsAt(dir);
 
-        ClaudeBuddySettings.TurnFinishedSound = value;
+        OrbweaverSettings.TurnFinishedSound = value;
         PointSettingsAt(dir);
 
-        Assert.Equal(value, ClaudeBuddySettings.TurnFinishedSound);
+        Assert.Equal(value, OrbweaverSettings.TurnFinishedSound);
     }
 
     [Fact]
@@ -114,10 +114,10 @@ public class TurnSoundSettingsTests
         var dir = NewSettingsDir();
         PointSettingsAt(dir);
 
-        ClaudeBuddySettings.NeedsAttentionSound = "Ping";
+        OrbweaverSettings.NeedsAttentionSound = "Ping";
         PointSettingsAt(dir);
 
-        Assert.Equal("Ping", ClaudeBuddySettings.NeedsAttentionSound);
+        Assert.Equal("Ping", OrbweaverSettings.NeedsAttentionSound);
     }
 
     // Setting back to null (the platform default) has to actually clear the
@@ -128,11 +128,11 @@ public class TurnSoundSettingsTests
         var dir = NewSettingsDir();
         PointSettingsAt(dir);
 
-        ClaudeBuddySettings.TurnFinishedSound = "Glass";
-        ClaudeBuddySettings.TurnFinishedSound = null;
+        OrbweaverSettings.TurnFinishedSound = "Glass";
+        OrbweaverSettings.TurnFinishedSound = null;
         PointSettingsAt(dir);
 
-        Assert.Null(ClaudeBuddySettings.TurnFinishedSound);
+        Assert.Null(OrbweaverSettings.TurnFinishedSound);
     }
 
     // --- orbTurnSounds ---
@@ -142,7 +142,7 @@ public class TurnSoundSettingsTests
     {
         PointSettingsAt(NewSettingsDir());
 
-        Assert.Null(ClaudeBuddySettings.OrbTurnSoundFor("never-touched"));
+        Assert.Null(OrbweaverSettings.OrbTurnSoundFor("never-touched"));
     }
 
     // QA (CB-167): SoundKeyFor now genuinely produces "" for a local
@@ -155,7 +155,7 @@ public class TurnSoundSettingsTests
     {
         PointSettingsAt(NewSettingsDir());
 
-        Assert.Null(ClaudeBuddySettings.OrbTurnSoundFor(key!));
+        Assert.Null(OrbweaverSettings.OrbTurnSoundFor(key!));
     }
 
     [Fact]
@@ -164,7 +164,7 @@ public class TurnSoundSettingsTests
         var dir = NewSettingsDir();
         PointSettingsAt(dir);
 
-        ClaudeBuddySettings.SetOrbTurnSound("some/project\nbuild", finished: "off", attention: "Ping");
+        OrbweaverSettings.SetOrbTurnSound("some/project\nbuild", finished: "off", attention: "Ping");
 
         var root = JsonNode.Parse(File.ReadAllText(Path.Combine(dir, "settings.json"))) as JsonObject;
         var entry = root!["orbTurnSounds"]!["some/project\nbuild"] as JsonObject;
@@ -172,7 +172,7 @@ public class TurnSoundSettingsTests
         Assert.Equal("Ping", entry["attention"]!.GetValue<string>());
 
         PointSettingsAt(dir);
-        var over = ClaudeBuddySettings.OrbTurnSoundFor("some/project\nbuild");
+        var over = OrbweaverSettings.OrbTurnSoundFor("some/project\nbuild");
         Assert.NotNull(over);
         Assert.Equal("off", over!.Finished);
         Assert.Equal("Ping", over.Attention);
@@ -187,10 +187,10 @@ public class TurnSoundSettingsTests
         var dir = NewSettingsDir();
         PointSettingsAt(dir);
 
-        ClaudeBuddySettings.SetOrbTurnSound("key", finished: "off", attention: "Ping");
-        ClaudeBuddySettings.SetOrbTurnSound("key", finished: null, attention: null);
+        OrbweaverSettings.SetOrbTurnSound("key", finished: "off", attention: "Ping");
+        OrbweaverSettings.SetOrbTurnSound("key", finished: null, attention: null);
 
-        Assert.Null(ClaudeBuddySettings.OrbTurnSoundFor("key"));
+        Assert.Null(OrbweaverSettings.OrbTurnSoundFor("key"));
 
         var root = JsonNode.Parse(File.ReadAllText(Path.Combine(dir, "settings.json"))) as JsonObject;
         Assert.Null(root!["orbTurnSounds"]!["key"]);
@@ -202,10 +202,10 @@ public class TurnSoundSettingsTests
         var dir = NewSettingsDir();
         PointSettingsAt(dir);
 
-        ClaudeBuddySettings.SetOrbTurnSound("key", finished: "Glass", attention: null);
-        ClaudeBuddySettings.ClearOrbTurnSound("key");
+        OrbweaverSettings.SetOrbTurnSound("key", finished: "Glass", attention: null);
+        OrbweaverSettings.ClearOrbTurnSound("key");
 
-        Assert.Null(ClaudeBuddySettings.OrbTurnSoundFor("key"));
+        Assert.Null(OrbweaverSettings.OrbTurnSoundFor("key"));
     }
 
     // A hand-edited entry with both sides absent is read the same way
@@ -221,7 +221,7 @@ public class TurnSoundSettingsTests
 
         PointSettingsAt(dir);
 
-        Assert.Null(ClaudeBuddySettings.OrbTurnSoundFor("key"));
+        Assert.Null(OrbweaverSettings.OrbTurnSoundFor("key"));
     }
 
     // Keys are looked up case-insensitively, matching ChatPanelSizes and
@@ -233,9 +233,9 @@ public class TurnSoundSettingsTests
         var dir = NewSettingsDir();
         PointSettingsAt(dir);
 
-        ClaudeBuddySettings.SetOrbTurnSound("MyKey", finished: "Glass", attention: null);
+        OrbweaverSettings.SetOrbTurnSound("MyKey", finished: "Glass", attention: null);
 
-        Assert.NotNull(ClaudeBuddySettings.OrbTurnSoundFor("mykey"));
+        Assert.NotNull(OrbweaverSettings.OrbTurnSoundFor("mykey"));
     }
 
     // --- surviving a save by a build that only knows other keys ---
@@ -253,14 +253,14 @@ public class TurnSoundSettingsTests
                 + "\"aKeyFromTheFuture\": \"kept\"}");
 
         PointSettingsAt(dir);
-        ClaudeBuddySettings.TwoLetterGlyphs = true; // an unrelated write
-        ClaudeBuddySettings.FlushPendingSave();
+        OrbweaverSettings.TwoLetterGlyphs = true; // an unrelated write
+        OrbweaverSettings.FlushPendingSave();
 
         PointSettingsAt(dir);
-        Assert.False(ClaudeBuddySettings.TurnSoundsEnabled);
-        Assert.Equal("summary", ClaudeBuddySettings.TurnFinishedSound);
-        Assert.Equal("Ping", ClaudeBuddySettings.NeedsAttentionSound);
-        Assert.Equal("off", ClaudeBuddySettings.OrbTurnSoundFor("key")!.Finished);
+        Assert.False(OrbweaverSettings.TurnSoundsEnabled);
+        Assert.Equal("summary", OrbweaverSettings.TurnFinishedSound);
+        Assert.Equal("Ping", OrbweaverSettings.NeedsAttentionSound);
+        Assert.Equal("off", OrbweaverSettings.OrbTurnSoundFor("key")!.Finished);
 
         var root = JsonNode.Parse(File.ReadAllText(Path.Combine(dir, "settings.json"))) as JsonObject;
         Assert.Equal("kept", root!["aKeyFromTheFuture"]!.GetValue<string>());
@@ -276,17 +276,17 @@ public class TurnSoundSettingsTests
         var dir = NewSettingsDir();
         PointSettingsAt(dir);
 
-        ClaudeBuddySettings.TurnSoundsEnabled = false;
-        ClaudeBuddySettings.TurnFinishedSound = "summary";
-        ClaudeBuddySettings.NeedsAttentionSound = "Ping";
-        ClaudeBuddySettings.SetOrbTurnSound("key", "off", null);
+        OrbweaverSettings.TurnSoundsEnabled = false;
+        OrbweaverSettings.TurnFinishedSound = "summary";
+        OrbweaverSettings.NeedsAttentionSound = "Ping";
+        OrbweaverSettings.SetOrbTurnSound("key", "off", null);
 
         PointSettingsAt(dir);
-        ClaudeBuddySettings.TwoLetterGlyphs = true;
-        ClaudeBuddySettings.FlushPendingSave();
+        OrbweaverSettings.TwoLetterGlyphs = true;
+        OrbweaverSettings.FlushPendingSave();
 
         PointSettingsAt(dir);
-        Assert.False(ClaudeBuddySettings.TurnSoundsEnabled);
-        Assert.Equal("summary", ClaudeBuddySettings.TurnFinishedSound);
+        Assert.False(OrbweaverSettings.TurnSoundsEnabled);
+        Assert.Equal("summary", OrbweaverSettings.TurnFinishedSound);
     }
 }

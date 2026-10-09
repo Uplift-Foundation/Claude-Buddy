@@ -8,7 +8,7 @@ using Avalonia.VisualTree;
 using SkiaSharp;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Shared by every screenshot class in this project: build a control, show
 // it, force a real render, save the frame. Pulled out once every one of the

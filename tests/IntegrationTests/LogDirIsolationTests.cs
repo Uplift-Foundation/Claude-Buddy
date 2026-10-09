@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The property that replaced an enumeration (CB — see CrashLog.ScopeForTests).
 //

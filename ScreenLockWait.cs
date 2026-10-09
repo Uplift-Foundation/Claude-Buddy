@@ -1,4 +1,4 @@
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Whether startup may build a compositor yet, and for how long it is worth
     // waiting if not.

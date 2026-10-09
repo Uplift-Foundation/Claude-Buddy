@@ -2,7 +2,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 using System.Text;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Where the hooks leave a session's status file, and where Claude Buddy
     // looks for it.

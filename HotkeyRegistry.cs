@@ -1,6 +1,6 @@
 using Avalonia.Input;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // What a global hotkey does, once pressed. CB-155 asks for one — hide/show
     // orbs — "plus room for a couple more" without saying which, so this is an

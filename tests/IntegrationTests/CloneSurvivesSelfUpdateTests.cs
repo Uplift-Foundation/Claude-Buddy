@@ -1,11 +1,11 @@
 using System;
 using System.IO;
 using Avalonia.Media;
-using ClaudeBuddy;
-using ClaudeBuddy.Tests;
+using Orbweaver;
+using Orbweaver.Tests;
 using Xunit;
 
-namespace ClaudeBuddy.IntegrationTests;
+namespace Orbweaver.IntegrationTests;
 
 // The downgrade loop, pinned against real directories.
 //

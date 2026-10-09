@@ -1,7 +1,7 @@
 using System.Text.Json;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-170: the pure half of an OpenClaw orb's Interrupt and End rows — what the
 // gateway's answers mean, what the rows say about them, and when each row is

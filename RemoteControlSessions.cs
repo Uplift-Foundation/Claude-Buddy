@@ -1,7 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using Avalonia.Threading;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // The remote half of what SessionManager displays: sessions running on the
     // user's *other* machines, published as an immutable snapshot the scan reads
@@ -159,7 +159,7 @@ namespace ClaudeBuddy
         }
 
         public static IReadOnlyList<Remote> Snapshot() =>
-            Visible(_snapshot, ClaudeBuddySettings.PeerLinkEnabled);
+            Visible(_snapshot, OrbweaverSettings.PeerLinkEnabled);
 
         // Whether remote orbs are shown at all.
         //
@@ -423,7 +423,7 @@ namespace ClaudeBuddy
             var rows = client is null
                 ? Array.Empty<Remote>()
                 : RemotesFromRoster(
-                    ClaudeBuddySettings.DefaultRemoteControlProfileDir,
+                    OrbweaverSettings.DefaultRemoteControlProfileDir,
                     client.Known(),
                     Now());
 

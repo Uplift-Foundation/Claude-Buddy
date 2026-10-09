@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // NewChatCommand.ExecLine, run by real shells (CB-232).
 //

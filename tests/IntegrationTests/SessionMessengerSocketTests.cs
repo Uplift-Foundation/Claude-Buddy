@@ -5,7 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
 
-namespace ClaudeBuddy.IntegrationTests;
+namespace Orbweaver.IntegrationTests;
 
 // SessionMessenger.Live's Write seam against a real Unix domain socket — the
 // one thing SessionMessageFrameTests cannot prove: that Encode's bytes are

@@ -4,7 +4,7 @@ using Avalonia.Media.Imaging;
 using SkiaSharp;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-218, acceptance criterion 2: an animated persona still visibly plays.
 //

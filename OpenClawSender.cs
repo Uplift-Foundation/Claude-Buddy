@@ -1,4 +1,4 @@
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Who said a user-role message the gateway handed us, and what of it is
     // worth showing.

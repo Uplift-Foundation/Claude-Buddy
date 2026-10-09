@@ -1,4 +1,4 @@
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // The names both halves of the app-to-engine contract spell, in one file
     // compiled into both: the side-car engine picks it up from its own folder,

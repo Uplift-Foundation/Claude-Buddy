@@ -1,8 +1,8 @@
 using System;
-using ClaudeBuddy;
+using Orbweaver;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The guard that stops a test process asking the OS for a credential.
 //

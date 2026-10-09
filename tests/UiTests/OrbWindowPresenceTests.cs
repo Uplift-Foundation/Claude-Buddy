@@ -10,7 +10,7 @@ using Avalonia.Headless.XUnit;
 using Avalonia.Threading;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Presence on the orb: the third axis, beside identity and state. A parked
 // background job or an orphaned teammate is dimmed and held still, and it wears

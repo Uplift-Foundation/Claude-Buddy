@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The real installer scripts, run as subprocesses against a scratch HOME, to pin
 // where they read the app's saved profile list from (CB-258).
@@ -169,8 +169,8 @@ public class HookInstallerScriptsTests : IDisposable
             : script.Contains("codex") ? "codexHomes" : "grokHomes";
         File.WriteAllText(Path.Combine(_settingsDir, "settings.json"), $$"""{"{{key}}":[".cb258-profile"]}""");
 
-        var was = ClaudeBuddySettings.AutoColorSessions;
-        ClaudeBuddySettings.AutoColorSessions = autoColor;
+        var was = OrbweaverSettings.AutoColorSessions;
+        OrbweaverSettings.AutoColorSessions = autoColor;
         try
         {
             var result = HookInstaller.RunScript(script, baseDirectory: RepoRoot,
@@ -186,7 +186,7 @@ public class HookInstallerScriptsTests : IDisposable
         }
         finally
         {
-            ClaudeBuddySettings.AutoColorSessions = was;
+            OrbweaverSettings.AutoColorSessions = was;
         }
     }
 

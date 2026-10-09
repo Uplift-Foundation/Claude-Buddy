@@ -4,7 +4,7 @@ using System.Linq;
 using Avalonia;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Covers SessionManager.cs ~295-470: the rules that turn a directory full of
 // status files into one orb per real session, and ~1295-1340: the keys used

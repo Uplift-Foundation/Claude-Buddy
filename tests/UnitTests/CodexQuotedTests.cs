@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 // CodexTranscript.Quoted: pulling one `"name":"…"` value out of the head of a
 // rollout row, by hand rather than by parsing the whole thing.

@@ -4,10 +4,10 @@ using System.Net.WebSockets;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using ClaudeBuddy.Tests;
+using Orbweaver.Tests;
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 // CB-115, end to end: OpenClawSessions.FetchHistoryPageAsync's cron-recovery
 // pass and OpenClawSessions.RecoverCronMediaPathAsync's paging and caching,

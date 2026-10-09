@@ -5,7 +5,7 @@ using System.Linq;
 using System.Text.Json;
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 // Six decisions that were only reachable from the machine the tests happened to
 // be running on, or from a platform CI only half covers, until each was given

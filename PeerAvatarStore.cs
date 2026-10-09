@@ -4,7 +4,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Linq;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Persona pictures the mirror has offered, by path and by id (CB-216).
     //

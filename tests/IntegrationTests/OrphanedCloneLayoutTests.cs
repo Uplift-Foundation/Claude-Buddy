@@ -1,9 +1,9 @@
 using System;
 using System.IO;
-using ClaudeBuddy;
+using Orbweaver;
 using Xunit;
 
-namespace ClaudeBuddy.IntegrationTests;
+namespace Orbweaver.IntegrationTests;
 
 // CB-7's rule reads a path that another part of this app writes, and the two
 // have to agree about a layout neither of them states in one place.

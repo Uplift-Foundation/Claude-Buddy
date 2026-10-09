@@ -3,7 +3,7 @@ using System.Runtime.InteropServices;
 using Avalonia.Controls;
 using Avalonia.Platform;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Avalonia doesn't expose NSWindow.collectionBehavior, so set it through
     // the native handle: orbs should follow you across Spaces and still show

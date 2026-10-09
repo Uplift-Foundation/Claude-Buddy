@@ -2,7 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // SessionRegistry — turning Claude Code's own ~/.claude/sessions/<pid>.json
 // files into Entry values a caller can dial. The fixture below is the

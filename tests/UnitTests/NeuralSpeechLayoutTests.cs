@@ -2,7 +2,7 @@ using System;
 using System.IO;
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 // NeuralSpeech's view of what is on disk: which engine binary it would run, and
 // the three flags that decide whether the feature is offered, downloaded or used.
@@ -223,18 +223,18 @@ public class NeuralSpeechLayoutTests : IDisposable
         PlaceEngine(NeuralSpeech.EngineVersion);
         PlaceModel();
 
-        var original = ClaudeBuddySettings.NeuralVoiceEnabled;
+        var original = OrbweaverSettings.NeuralVoiceEnabled;
         try
         {
-            ClaudeBuddySettings.NeuralVoiceEnabled = false;
+            OrbweaverSettings.NeuralVoiceEnabled = false;
             Assert.False(NeuralSpeech.Available);
 
-            ClaudeBuddySettings.NeuralVoiceEnabled = true;
+            OrbweaverSettings.NeuralVoiceEnabled = true;
             Assert.True(NeuralSpeech.Available);
         }
         finally
         {
-            ClaudeBuddySettings.NeuralVoiceEnabled = original;
+            OrbweaverSettings.NeuralVoiceEnabled = original;
         }
     }
 
@@ -245,15 +245,15 @@ public class NeuralSpeechLayoutTests : IDisposable
 
     private static void WithNeuralVoice(bool enabled, Action body)
     {
-        var original = ClaudeBuddySettings.NeuralVoiceEnabled;
+        var original = OrbweaverSettings.NeuralVoiceEnabled;
         try
         {
-            ClaudeBuddySettings.NeuralVoiceEnabled = enabled;
+            OrbweaverSettings.NeuralVoiceEnabled = enabled;
             body();
         }
         finally
         {
-            ClaudeBuddySettings.NeuralVoiceEnabled = original;
+            OrbweaverSettings.NeuralVoiceEnabled = original;
         }
     }
 

@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-139 against real trees, at both ends of the feature — an OpenClaw
 // workspace's IDENTITY.md and a local session's CLAUDE.md — because the two

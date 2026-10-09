@@ -2,7 +2,7 @@ using System;
 using System.Text.Json;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Covers the two bodies a write into a cloud session carries, and reading the
 // answer to one.

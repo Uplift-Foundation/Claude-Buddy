@@ -1,6 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Whether this process is the one Buddy running, decided by trying to own
     // a named, machine-wide mutex — and split out for the same reason

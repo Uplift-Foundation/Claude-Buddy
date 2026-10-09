@@ -1,7 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using Pv;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Captures mic audio for the orb's voice-dictation mic — see
     // OrbWindow's recording state and SpeechTranscriber. PvRecorder's native

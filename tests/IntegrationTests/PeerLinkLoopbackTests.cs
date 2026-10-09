@@ -2,7 +2,7 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using Xunit;
 
-namespace ClaudeBuddy.IntegrationTests;
+namespace Orbweaver.IntegrationTests;
 
 // Two PeerLinks talking to each other over a real socket on loopback.
 //

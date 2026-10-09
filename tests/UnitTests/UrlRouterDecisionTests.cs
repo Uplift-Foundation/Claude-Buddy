@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 // The four decisions ClaudeDesktopUrlRouter makes before it touches anything.
 //

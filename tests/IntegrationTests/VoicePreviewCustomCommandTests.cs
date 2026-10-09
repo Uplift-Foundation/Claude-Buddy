@@ -1,9 +1,9 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Xunit;
-using Speak = ClaudeBuddy.TextToSpeech.SpeakState;
+using Speak = Orbweaver.TextToSpeech.SpeakState;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-222: the one seam the voice preview has with something this process does
 // not own — the user's own speakCommand, run as a real subprocess.
@@ -66,8 +66,8 @@ public class VoicePreviewCustomCommandTests
     private static void Point(string dir, string command)
     {
         Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
-        ClaudeBuddySettings.ReloadForTests();
-        ClaudeBuddySettings.SpeakCommand = command;
+        OrbweaverSettings.ReloadForTests();
+        OrbweaverSettings.SpeakCommand = command;
     }
 
     // Pids of the long-running child, found by its command line. Read from the
@@ -184,7 +184,7 @@ public class VoicePreviewCustomCommandTests
             KillSurvivors();
             TextToSpeech.Cancel();
             Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", previousDir);
-            ClaudeBuddySettings.ReloadForTests();
+            OrbweaverSettings.ReloadForTests();
             VoicePreview.ResetForTests();
         }
     }
@@ -224,7 +224,7 @@ public class VoicePreviewCustomCommandTests
             TextToSpeech.StateChanged -= Record;
             TextToSpeech.Cancel();
             Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", previousDir);
-            ClaudeBuddySettings.ReloadForTests();
+            OrbweaverSettings.ReloadForTests();
             VoicePreview.ResetForTests();
         }
     }

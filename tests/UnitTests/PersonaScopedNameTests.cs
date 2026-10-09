@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // A name written as a standalone bold field or a two-cell table row, and the
 // persona heading that is the only place either is read (CB-142).

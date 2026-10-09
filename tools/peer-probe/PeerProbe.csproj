@@ -7,7 +7,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RollForward>LatestMajor</RollForward>
     <AssemblyName>PeerProbe</AssemblyName>
-    <RootNamespace>ClaudeBuddy</RootNamespace>
+    <RootNamespace>Orbweaver</RootNamespace>
     <!-- Matches ClaudeBuddy.csproj, which publishes self-contained: the SDK
          refuses to let a framework-dependent executable reference a
          self-contained one. -->

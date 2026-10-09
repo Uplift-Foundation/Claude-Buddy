@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // The "New chat…" dialog's folder combo: live local-CLI cwds first (so a
     // folder you're already working in shows up without having launched a

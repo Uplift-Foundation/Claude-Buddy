@@ -1,4 +1,4 @@
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // When an orb's breath is allowed to move its scale.
     //

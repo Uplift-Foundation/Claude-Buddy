@@ -4,7 +4,7 @@ using Avalonia.Media;
 using Avalonia.Threading;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The chat panel's third header line, driven through the real ChatPanel.
 //

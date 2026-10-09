@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // hotkeys.log on a real disk: the line a lost hotkey collision leaves
 // (CB-196), and the three rules it shares with persona.log — once per

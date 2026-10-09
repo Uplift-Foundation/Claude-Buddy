@@ -1,6 +1,6 @@
 using Avalonia;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Where a chat panel opens, once more than one of them can be on screen
     // at a time.

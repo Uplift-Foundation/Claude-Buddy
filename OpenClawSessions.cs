@@ -3,7 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Avalonia.Threading;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // The OpenClaw half of what SessionManager displays: one connection to the
     // gateway, kept alive in the background, publishing an immutable snapshot
@@ -306,7 +306,7 @@ namespace ClaudeBuddy
         {
             if (!OpenClawPeerIdentity.ValidPin(gatewayPin)
                 || agentIds.Count > OpenClawPeerIdentity.MaxAgents
-                || !string.Equals(gatewayPin, ClaudeBuddySettings.OpenClawFingerprint, StringComparison.OrdinalIgnoreCase))
+                || !string.Equals(gatewayPin, OrbweaverSettings.OpenClawFingerprint, StringComparison.OrdinalIgnoreCase))
                 return Array.Empty<OpenClawPeerIdentity.Row>();
 
             lock (Gate) return agentIds
@@ -325,7 +325,7 @@ namespace ClaudeBuddy
         {
             if (string.IsNullOrWhiteSpace(peer) || rows.Count > OpenClawPeerIdentity.MaxAgents
                 || !OpenClawPeerIdentity.ValidPin(gatewayPin)
-                || !string.Equals(gatewayPin, ClaudeBuddySettings.OpenClawFingerprint, StringComparison.OrdinalIgnoreCase)) return;
+                || !string.Equals(gatewayPin, OrbweaverSettings.OpenClawFingerprint, StringComparison.OrdinalIgnoreCase)) return;
             lock (Gate)
             {
                 var accepted = rows.Where(row => OpenClawPeerIdentity.ValidAgentId(row.AgentId)
@@ -348,7 +348,7 @@ namespace ClaudeBuddy
         // reconnect before its already-known agents can speak correctly.
         internal static void RequestPeerProfileVoices()
         {
-            var pin = ClaudeBuddySettings.OpenClawFingerprint;
+            var pin = OrbweaverSettings.OpenClawFingerprint;
             if (!OpenClawPeerIdentity.ValidPin(pin)) return;
 
             List<string> ids;
@@ -379,7 +379,7 @@ namespace ClaudeBuddy
             if (agentId is null) return (null, null);
             lock (Gate)
             {
-                var pin = ClaudeBuddySettings.OpenClawFingerprint;
+                var pin = OrbweaverSettings.OpenClawFingerprint;
                 if (!OpenClawPeerIdentity.ValidPin(pin)) return (null, null);
                 var matches = PeerVoices.Values
                     .Where(cache => string.Equals(cache.GatewayPin, pin, StringComparison.OrdinalIgnoreCase)
@@ -410,8 +410,8 @@ namespace ClaudeBuddy
         {
             get
             {
-                var minutes = ClaudeBuddySettings.OpenClawActiveWithinMinutes;
-                return minutes == ClaudeBuddySettings.OpenClawActiveWithinAll
+                var minutes = OrbweaverSettings.OpenClawActiveWithinMinutes;
+                return minutes == OrbweaverSettings.OpenClawActiveWithinAll
                     ? null
                     : TimeSpan.FromMinutes(minutes);
             }
@@ -419,8 +419,8 @@ namespace ClaudeBuddy
 
         // Read per scan, for the same reason ActiveWithin above is: changing it
         // in Settings should take effect on the next poll.
-        private static ClusterMode HeartbeatMode => ClaudeBuddySettings.OpenClawHeartbeatMode;
-        private static ClusterMode CronMode => ClaudeBuddySettings.OpenClawCronMode;
+        private static ClusterMode HeartbeatMode => OrbweaverSettings.OpenClawHeartbeatMode;
+        private static ClusterMode CronMode => OrbweaverSettings.OpenClawCronMode;
 
         internal sealed record Session(
             string Key,
@@ -657,7 +657,7 @@ namespace ClaudeBuddy
         public static IRemoteChatSession? RoomChatFor(
             string sessionId, string displayName, IReadOnlyList<string> memberKeys)
         {
-            if (!ClaudeBuddySettings.OpenClawEnabled) return null;
+            if (!OrbweaverSettings.OpenClawEnabled) return null;
             if (memberKeys.Count == 0) return null;
 
             OpenClawRoomChatSession room;
@@ -696,7 +696,7 @@ namespace ClaudeBuddy
         // id; the gateway knows it without the prefix.
         public static IRemoteChatSession? ChatFor(string sessionId, string displayName)
         {
-            if (!ClaudeBuddySettings.OpenClawEnabled) return null;
+            if (!OrbweaverSettings.OpenClawEnabled) return null;
 
             const string Prefix = "openclaw:";
             if (!sessionId.StartsWith(Prefix, StringComparison.Ordinal)) return null;
@@ -767,7 +767,7 @@ namespace ClaudeBuddy
         }
 
         public static IReadOnlyList<Session> Snapshot() =>
-            ClaudeBuddySettings.OpenClawEnabled ? _snapshot : Array.Empty<Session>();
+            OrbweaverSettings.OpenClawEnabled ? _snapshot : Array.Empty<Session>();
 
         // A test seam, in the same spirit as ClaudeBuddySettings.ReloadForTests
         // and OpenClawIdentity.ResetForTests: the poll loop above is the only
@@ -802,7 +802,7 @@ namespace ClaudeBuddy
         [ExcludeFromCodeCoverage]
         public static void TrustNewCertificate()
         {
-            ClaudeBuddySettings.OpenClawFingerprint = "";
+            OrbweaverSettings.OpenClawFingerprint = "";
 
             lock (Gate)
             {
@@ -837,13 +837,13 @@ namespace ClaudeBuddy
                 // conversation didn't stop happening because the socket did.
                 foreach (var chat in Chats.Values) chat.SetState(RemoteChatState.Connecting);
 
-                if (!ClaudeBuddySettings.OpenClawEnabled)
+                if (!OrbweaverSettings.OpenClawEnabled)
                 {
                     _state = "off";
                     return;
                 }
 
-                var host = ClaudeBuddySettings.OpenClawHost;
+                var host = OrbweaverSettings.OpenClawHost;
                 if (string.IsNullOrWhiteSpace(host))
                 {
                     _state = "no gateway address set";
@@ -852,7 +852,7 @@ namespace ClaudeBuddy
 
                 _state = "connecting…";
                 _cts = new CancellationTokenSource();
-                _supervisor = Task.Run(() => RunAsync(host, ClaudeBuddySettings.OpenClawPort, _cts.Token));
+                _supervisor = Task.Run(() => RunAsync(host, OrbweaverSettings.OpenClawPort, _cts.Token));
             }
         }
 
@@ -873,7 +873,7 @@ namespace ClaudeBuddy
                     gateway = new OpenClawGateway(host, port, token);
                     gateway.EventReceived += OnEvent;
 
-                    var pinned = ClaudeBuddySettings.OpenClawFingerprint;
+                    var pinned = OrbweaverSettings.OpenClawFingerprint;
                     var result = await gateway.ConnectAsync(
                         string.IsNullOrEmpty(pinned) ? null : pinned, ct);
 
@@ -927,7 +927,7 @@ namespace ClaudeBuddy
                         && !string.IsNullOrEmpty(gateway.ObservedFingerprint))
                     {
                         var seen = gateway.ObservedFingerprint;
-                        Dispatcher.UIThread.Post(() => ClaudeBuddySettings.OpenClawFingerprint = seen);
+                        Dispatcher.UIThread.Post(() => OrbweaverSettings.OpenClawFingerprint = seen);
                     }
 
                     backoff = TimeSpan.FromSeconds(2);   // reset on a real connect, never before
@@ -3429,7 +3429,7 @@ namespace ClaudeBuddy
                 if (Media.TryGetValue(url, out var cached)) return cached;
             }
 
-            var host = ClaudeBuddySettings.OpenClawHost;
+            var host = OrbweaverSettings.OpenClawHost;
             var token = OpenClawIdentity.GatewayTokenFor(host);
             if (string.IsNullOrWhiteSpace(host) || string.IsNullOrEmpty(token)) return null;
 
@@ -3437,10 +3437,10 @@ namespace ClaudeBuddy
 
             try
             {
-                var pinned = ClaudeBuddySettings.OpenClawFingerprint;
+                var pinned = OrbweaverSettings.OpenClawFingerprint;
 
                 bytes = await OpenClawSocket.GetAsync(
-                    host, ClaudeBuddySettings.OpenClawPort, url, token!,
+                    host, OrbweaverSettings.OpenClawPort, url, token!,
                     string.IsNullOrEmpty(pinned) ? null : pinned, ct);
             }
             catch
@@ -3522,7 +3522,7 @@ namespace ClaudeBuddy
                 if (MediaMeta.TryGetValue(route, out var cached)) return cached;
             }
 
-            var host = ClaudeBuddySettings.OpenClawHost;
+            var host = OrbweaverSettings.OpenClawHost;
             var token = OpenClawIdentity.GatewayTokenFor(host);
             if (string.IsNullOrWhiteSpace(host) || string.IsNullOrEmpty(token)) return null;
 
@@ -3530,10 +3530,10 @@ namespace ClaudeBuddy
 
             try
             {
-                var pinned = ClaudeBuddySettings.OpenClawFingerprint;
+                var pinned = OrbweaverSettings.OpenClawFingerprint;
 
                 var bytes = await OpenClawSocket.GetAsync(
-                    host, ClaudeBuddySettings.OpenClawPort, route, token!,
+                    host, OrbweaverSettings.OpenClawPort, route, token!,
                     string.IsNullOrEmpty(pinned) ? null : pinned, ct);
 
                 if (bytes is { Length: > 0 }) json = Encoding.UTF8.GetString(bytes);

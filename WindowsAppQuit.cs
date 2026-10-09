@@ -2,7 +2,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Asking a tray-resident Electron app to close its windows on Windows.
     //

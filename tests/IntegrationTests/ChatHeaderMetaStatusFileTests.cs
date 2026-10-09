@@ -2,7 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The header's third line, against bytes this process did not write.
 //

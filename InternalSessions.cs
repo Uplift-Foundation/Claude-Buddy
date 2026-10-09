@@ -1,4 +1,4 @@
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // The CLI processes Claude Buddy starts for its own purposes, so that the
     // scan can tell them apart from the ones the user started.

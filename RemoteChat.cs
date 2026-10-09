@@ -1,7 +1,7 @@
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // What the chat panel needs from a session it can talk to, and nothing more.
     //

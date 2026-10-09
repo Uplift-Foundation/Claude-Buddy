@@ -1,7 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Talking to one *instance* of an app rather than to its bundle.
     //

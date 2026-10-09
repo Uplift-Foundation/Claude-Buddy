@@ -2,7 +2,7 @@ using System.Diagnostics.CodeAnalysis;
 using Avalonia;
 using Avalonia.Threading;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Excluded from coverage: the process entry point. Main waits on the real
     // screen-lock state and then hands control to

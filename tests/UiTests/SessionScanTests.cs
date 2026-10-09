@@ -5,7 +5,7 @@ using Avalonia.Headless.XUnit;
 using Avalonia.Threading;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // A real scan, over real status files, producing real orb windows.
 //
@@ -126,8 +126,8 @@ public class SessionScanTests
         // opt out of the guarantee the rest rely on.
         if (enableBothClis)
         {
-            ClaudeBuddySettings.ClaudeCodeEnabled = true;
-            ClaudeBuddySettings.CodexEnabled = true;
+            OrbweaverSettings.ClaudeCodeEnabled = true;
+            OrbweaverSettings.CodexEnabled = true;
         }
 
         var manager = new SessionManager(scratch.Dir);
@@ -280,10 +280,10 @@ public class SessionScanTests
     {
         // The lifetime timer, end to end: an mtime older than the setting is
         // the only thing wrong with this file, and it is enough.
-        var before = ClaudeBuddySettings.OrbLifetimeMinutes;
+        var before = OrbweaverSettings.OrbLifetimeMinutes;
         try
         {
-            ClaudeBuddySettings.OrbLifetimeMinutes = 5;
+            OrbweaverSettings.OrbLifetimeMinutes = 5;
 
             using var scratch = new Scratch();
             scratch.Write("fresh");
@@ -295,14 +295,14 @@ public class SessionScanTests
             Assert.Equal(new[] { "fresh" }, OrbIds(manager));
 
             // And "forever" brings it straight back, without the file changing.
-            ClaudeBuddySettings.OrbLifetimeMinutes = ClaudeBuddySettings.OrbLifetimeForever;
+            OrbweaverSettings.OrbLifetimeMinutes = OrbweaverSettings.OrbLifetimeForever;
             manager.ScanAndUpdate();
 
             Assert.Contains("ancient", OrbIds(manager));
         }
         finally
         {
-            ClaudeBuddySettings.OrbLifetimeMinutes = before;
+            OrbweaverSettings.OrbLifetimeMinutes = before;
         }
     }
 
@@ -312,27 +312,27 @@ public class SessionScanTests
         // "A CLI switched off is ignored, not unwired." The hook keeps writing —
         // it is the user's own config, and for Codex rewriting it would cost
         // them their hook trust — so the file must still be there afterwards.
-        var before = ClaudeBuddySettings.CodexEnabled;
+        var before = OrbweaverSettings.CodexEnabled;
         try
         {
             using var scratch = new Scratch();
             scratch.Write("claude-1");
             scratch.Write("codex-1", cli: "codex");
 
-            ClaudeBuddySettings.CodexEnabled = false;
+            OrbweaverSettings.CodexEnabled = false;
             var manager = Scan(scratch, enableBothClis: false);
 
             Assert.Equal(new[] { "claude-1" }, OrbIds(manager));
             Assert.True(File.Exists(Path.Combine(scratch.Dir, "codex-1.txt")));
 
-            ClaudeBuddySettings.CodexEnabled = true;
+            OrbweaverSettings.CodexEnabled = true;
             manager.ScanAndUpdate();
 
             Assert.Contains("codex-1", OrbIds(manager));
         }
         finally
         {
-            ClaudeBuddySettings.CodexEnabled = before;
+            OrbweaverSettings.CodexEnabled = before;
         }
     }
 
@@ -360,13 +360,13 @@ public class SessionScanTests
         // temp path, which the OS is entitled to clear out. A marker that
         // vanished would turn the feature off with nothing said — so a scan
         // puts it back, and this deletes it behind the scan's back to prove it.
-        var before = ClaudeBuddySettings.AutoColorSessions;
+        var before = OrbweaverSettings.AutoColorSessions;
         try
         {
             using var scratch = new Scratch();
             var marker = Path.Combine(scratch.Dir, ".auto-color");
 
-            ClaudeBuddySettings.AutoColorSessions = true;
+            OrbweaverSettings.AutoColorSessions = true;
             var manager = Scan(scratch);
             Assert.True(File.Exists(marker));
 
@@ -374,13 +374,13 @@ public class SessionScanTests
             manager.ScanAndUpdate();
             Assert.True(File.Exists(marker));
 
-            ClaudeBuddySettings.AutoColorSessions = false;
+            OrbweaverSettings.AutoColorSessions = false;
             manager.ScanAndUpdate();
             Assert.False(File.Exists(marker));
         }
         finally
         {
-            ClaudeBuddySettings.AutoColorSessions = before;
+            OrbweaverSettings.AutoColorSessions = before;
         }
     }
 
@@ -511,7 +511,7 @@ public class SessionScanTests
         // "Sessions keep being tracked either way, so the tray icon and its menu
         // stay accurate" — the orbs going away must not look like the sessions
         // going away.
-        var before = ClaudeBuddySettings.ShowOrbs;
+        var before = OrbweaverSettings.ShowOrbs;
         try
         {
             using var scratch = new Scratch();
@@ -522,7 +522,7 @@ public class SessionScanTests
 
             manager.SetOrbsVisible(false);
             Assert.False(manager.OrbsVisible);
-            Assert.False(ClaudeBuddySettings.ShowOrbs);
+            Assert.False(OrbweaverSettings.ShowOrbs);
             Assert.Equal(new[] { "session-a" }, OrbIds(manager));
             Assert.NotNull(manager.StatusFor("session-a"));
 
@@ -533,11 +533,11 @@ public class SessionScanTests
 
             manager.SetOrbsVisible(true);
             Assert.True(manager.OrbsVisible);
-            Assert.True(ClaudeBuddySettings.ShowOrbs);
+            Assert.True(OrbweaverSettings.ShowOrbs);
         }
         finally
         {
-            ClaudeBuddySettings.ShowOrbs = before;
+            OrbweaverSettings.ShowOrbs = before;
         }
     }
 
@@ -546,10 +546,10 @@ public class SessionScanTests
     [AvaloniaFact]
     public void ArrangingIsAToggleAndLeavesEveryOrbSomewhereOnTheScreen()
     {
-        var beforeAnchor = ClaudeBuddySettings.ArrangeAnchor;
+        var beforeAnchor = OrbweaverSettings.ArrangeAnchor;
         try
         {
-            ClaudeBuddySettings.ArrangeAnchor = null;
+            OrbweaverSettings.ArrangeAnchor = null;
 
             using var scratch = new Scratch();
             scratch.Write("a");
@@ -564,7 +564,7 @@ public class SessionScanTests
             // The anchor is saved on the first arrangement so a later arrival
             // re-fits around where the shape already is rather than around the
             // screen's middle.
-            Assert.NotNull(ClaudeBuddySettings.ArrangeAnchor);
+            Assert.NotNull(OrbweaverSettings.ArrangeAnchor);
 
             // Asked again mid-glide, it declines rather than fighting the
             // animation that is already running.
@@ -579,7 +579,7 @@ public class SessionScanTests
         }
         finally
         {
-            ClaudeBuddySettings.ArrangeAnchor = beforeAnchor;
+            OrbweaverSettings.ArrangeAnchor = beforeAnchor;
         }
     }
 
@@ -625,7 +625,7 @@ public class SessionScanTests
             Assert.Equal("Reset this orb's position", resetPosition.Header);
             manager.RememberOrbPosition(window);
 
-            Assert.Equal(300, ClaudeBuddySettings.OrbPositionFor(key)!.X);
+            Assert.Equal(300, OrbweaverSettings.OrbPositionFor(key)!.X);
 
             // A second manager over the same directory restores it — which is
             // the whole point of the key surviving a restart.
@@ -633,14 +633,14 @@ public class SessionScanTests
             Assert.Equal(new PixelPoint(300, 200), WindowFor(restored, "session-a").Position);
 
             manager.ReturnOrbToStack("session-a");
-            Assert.Null(ClaudeBuddySettings.OrbPositionFor(key));
+            Assert.Null(OrbweaverSettings.OrbPositionFor(key));
 
             // An id nobody is tracking is declined rather than throwing.
             manager.ReturnOrbToStack("not-a-session");
         }
         finally
         {
-            ClaudeBuddySettings.ClearOrbPosition(key);
+            OrbweaverSettings.ClearOrbPosition(key);
         }
     }
 
@@ -681,7 +681,7 @@ public class SessionScanTests
             panel.Position = new PixelPoint(444, 333);
             Dispatcher.UIThread.RunJobs();
 
-            var saved = ClaudeBuddySettings.PinnedChatPanelPositionFor(key);
+            var saved = OrbweaverSettings.PinnedChatPanelPositionFor(key);
             Assert.NotNull(saved);
             Assert.Equal(444, saved!.X);
             Assert.Equal(333, saved.Y);
@@ -708,7 +708,7 @@ public class SessionScanTests
         finally
         {
             ChatPanel.CloseFor("session-a");
-            ClaudeBuddySettings.ClearPinnedChatPanelPosition(key);
+            OrbweaverSettings.ClearPinnedChatPanelPosition(key);
         }
     }
 
@@ -717,7 +717,7 @@ public class SessionScanTests
     [AvaloniaFact]
     public void ReapplyingSizesResizesEveryOrbAndTheStackAdvancesByEachOrbsOwnSize()
     {
-        var before = ClaudeBuddySettings.OrbSize;
+        var before = OrbweaverSettings.OrbSize;
         string? key = null;
         try
         {
@@ -730,8 +730,8 @@ public class SessionScanTests
             var b = WindowFor(manager, "b");
             key = b.SoundKey;
 
-            ClaudeBuddySettings.OrbSize = 1.5;
-            ClaudeBuddySettings.SetOrbSize(key, 2.0);
+            OrbweaverSettings.OrbSize = 1.5;
+            OrbweaverSettings.SetOrbSize(key, 2.0);
             manager.ReapplyOrbSizes();
 
             Assert.Equal(1.5, a.OrbSize);
@@ -751,19 +751,19 @@ public class SessionScanTests
         }
         finally
         {
-            ClaudeBuddySettings.OrbSize = before;
-            if (key is not null) ClaudeBuddySettings.SetOrbSize(key, null);
+            OrbweaverSettings.OrbSize = before;
+            if (key is not null) OrbweaverSettings.SetOrbSize(key, null);
         }
     }
 
     [AvaloniaFact]
     public void ReapplyingSizesWhileArrangedReArrangesAroundTheNewSizes()
     {
-        var beforeSize = ClaudeBuddySettings.OrbSize;
-        var beforeAnchor = ClaudeBuddySettings.ArrangeAnchor;
+        var beforeSize = OrbweaverSettings.OrbSize;
+        var beforeAnchor = OrbweaverSettings.ArrangeAnchor;
         try
         {
-            ClaudeBuddySettings.ArrangeAnchor = null;
+            OrbweaverSettings.ArrangeAnchor = null;
 
             using var scratch = new Scratch();
             scratch.Write("a");
@@ -787,7 +787,7 @@ public class SessionScanTests
 
             var atDefault = CentreDistance(a, b);
 
-            ClaudeBuddySettings.OrbSize = OrbSizing.Max;
+            OrbweaverSettings.OrbSize = OrbSizing.Max;
             manager.ReapplyOrbSizes();
 
             Assert.Equal(OrbSizing.Max, a.OrbSize);
@@ -812,22 +812,22 @@ public class SessionScanTests
         }
         finally
         {
-            ClaudeBuddySettings.OrbSize = beforeSize;
-            ClaudeBuddySettings.ArrangeAnchor = beforeAnchor;
+            OrbweaverSettings.OrbSize = beforeSize;
+            OrbweaverSettings.ArrangeAnchor = beforeAnchor;
         }
     }
 
     [AvaloniaFact]
     public void AnOrbLeftOffscreenAtDoubleSizeIsClampedBackWithItsWholeWindowOnScreen()
     {
-        var before = ClaudeBuddySettings.OrbSize;
+        var before = OrbweaverSettings.OrbSize;
         try
         {
             using var scratch = new Scratch();
             scratch.Write("session-a");
 
             var manager = Scan(scratch);
-            ClaudeBuddySettings.OrbSize = 2.0;
+            OrbweaverSettings.OrbSize = 2.0;
             manager.ReapplyOrbSizes();
 
             var window = WindowFor(manager, "session-a");
@@ -841,14 +841,14 @@ public class SessionScanTests
         }
         finally
         {
-            ClaudeBuddySettings.OrbSize = before;
+            OrbweaverSettings.OrbSize = before;
         }
     }
 
     [AvaloniaFact]
     public void ALaterKeyCarryingADifferentSizeReLaysTheOrbsOut()
     {
-        var before = ClaudeBuddySettings.OrbSize;
+        var before = OrbweaverSettings.OrbSize;
         var titledKey = "";
         try
         {
@@ -862,7 +862,7 @@ public class SessionScanTests
             titledKey = SessionManager.SoundKeyFor(
                 new SessionStatus { Source = SessionSource.ClaudeCode, Cwd = "/Users/user/project", Title = "named" },
                 "session-a");
-            ClaudeBuddySettings.SetOrbSize(titledKey, 2.0);
+            OrbweaverSettings.SetOrbSize(titledKey, 2.0);
 
             scratch.Write("session-a", title: "named");
             manager.ScanAndUpdate();
@@ -876,15 +876,15 @@ public class SessionScanTests
         }
         finally
         {
-            ClaudeBuddySettings.OrbSize = before;
-            if (titledKey.Length > 0) ClaudeBuddySettings.SetOrbSize(titledKey, null);
+            OrbweaverSettings.OrbSize = before;
+            if (titledKey.Length > 0) OrbweaverSettings.SetOrbSize(titledKey, null);
         }
     }
 
     [AvaloniaFact]
     public void AnOrbSavedAtDoubleSizeComesBackCentredWhereItWasAtTheDefault()
     {
-        var before = ClaudeBuddySettings.OrbSize;
+        var before = OrbweaverSettings.OrbSize;
         using var scratch = new Scratch();
         scratch.Write("session-a", title: "sized");
         var key = SessionManager.PositionKeyFor(
@@ -892,17 +892,17 @@ public class SessionScanTests
             "session-a");
         try
         {
-            ClaudeBuddySettings.OrbSize = 2.0;
+            OrbweaverSettings.OrbSize = 2.0;
             var manager = Scan(scratch);
             var window = WindowFor(manager, "session-a");
             window.PinAt(new PixelPoint(300, 200));
             manager.RememberOrbPosition(window);
-            Assert.Equal(2.0, ClaudeBuddySettings.OrbPositionFor(key)!.Size);
+            Assert.Equal(2.0, OrbweaverSettings.OrbPositionFor(key)!.Size);
 
             var scale = (window.Screens.ScreenFromPoint(window.Position) ?? window.Screens.Primary)!.Scaling;
             var centreThen = 300 + OrbSizing.CentreDip(2.0) * scale;
 
-            ClaudeBuddySettings.OrbSize = 1.0;
+            OrbweaverSettings.OrbSize = 1.0;
             var restored = WindowFor(Scan(scratch), "session-a");
 
             Assert.Equal(1.0, restored.OrbSize);
@@ -911,15 +911,15 @@ public class SessionScanTests
         }
         finally
         {
-            ClaudeBuddySettings.OrbSize = before;
-            ClaudeBuddySettings.ClearOrbPosition(key);
+            OrbweaverSettings.OrbSize = before;
+            OrbweaverSettings.ClearOrbPosition(key);
         }
     }
 
     [AvaloniaFact]
     public void ASpotSavedBeforeOrbsHadASizeIsReadAsTheDefaultSize()
     {
-        var before = ClaudeBuddySettings.OrbSize;
+        var before = OrbweaverSettings.OrbSize;
         using var scratch = new Scratch();
         scratch.Write("session-a", title: "legacy");
         var key = SessionManager.PositionKeyFor(
@@ -928,28 +928,28 @@ public class SessionScanTests
         try
         {
             // No size, exactly as an older build writes it.
-            ClaudeBuddySettings.SetOrbPosition(key, 300, 200);
-            ClaudeBuddySettings.OrbSize = 1.0;
+            OrbweaverSettings.SetOrbPosition(key, 300, 200);
+            OrbweaverSettings.OrbSize = 1.0;
 
             Assert.Equal(new PixelPoint(300, 200), WindowFor(Scan(scratch), "session-a").Position);
 
             // And at 2x it grows around the centre a 1.0 orb had there.
-            ClaudeBuddySettings.OrbSize = 2.0;
+            OrbweaverSettings.OrbSize = 2.0;
             var big = WindowFor(Scan(scratch), "session-a");
             var scale = (big.Screens.ScreenFromPoint(big.Position) ?? big.Screens.Primary)!.Scaling;
             Assert.Equal(300 + 28 * scale, big.Position.X + 56 * scale, 0);
         }
         finally
         {
-            ClaudeBuddySettings.OrbSize = before;
-            ClaudeBuddySettings.ClearOrbPosition(key);
+            OrbweaverSettings.OrbSize = before;
+            OrbweaverSettings.ClearOrbPosition(key);
         }
     }
 
     [AvaloniaFact]
     public void ResizingAPinnedOrbReSavesItsSpotAndSize()
     {
-        var before = ClaudeBuddySettings.OrbSize;
+        var before = OrbweaverSettings.OrbSize;
         using var scratch = new Scratch();
         scratch.Write("session-a", title: "pinned");
         var key = SessionManager.PositionKeyFor(
@@ -957,23 +957,23 @@ public class SessionScanTests
             "session-a");
         try
         {
-            ClaudeBuddySettings.OrbSize = 1.0;
+            OrbweaverSettings.OrbSize = 1.0;
             var manager = Scan(scratch);
             var window = WindowFor(manager, "session-a");
             window.PinAt(new PixelPoint(300, 200));
             manager.RememberOrbPosition(window);
 
-            ClaudeBuddySettings.OrbSize = 2.0;
+            OrbweaverSettings.OrbSize = 2.0;
             manager.ReapplyOrbSizes();
 
-            var saved = ClaudeBuddySettings.OrbPositionFor(key)!;
+            var saved = OrbweaverSettings.OrbPositionFor(key)!;
             Assert.Equal(2.0, saved.Size);
             Assert.Equal(window.Position, new PixelPoint(saved.X, saved.Y));
         }
         finally
         {
-            ClaudeBuddySettings.OrbSize = before;
-            ClaudeBuddySettings.ClearOrbPosition(key);
+            OrbweaverSettings.OrbSize = before;
+            OrbweaverSettings.ClearOrbPosition(key);
         }
     }
 
@@ -984,7 +984,7 @@ public class SessionScanTests
         // dragged together) never have the member's spot written over the
         // lead's. The saved entry keeps the size it was saved at, so it restores
         // correctly without the re-save.
-        var before = ClaudeBuddySettings.OrbSize;
+        var before = OrbweaverSettings.OrbSize;
         using var scratch = new Scratch();
         scratch.Write("second", title: "shared name");
         var key = SessionManager.PositionKeyFor(
@@ -992,7 +992,7 @@ public class SessionScanTests
             "first");
         try
         {
-            ClaudeBuddySettings.OrbSize = 1.0;
+            OrbweaverSettings.OrbSize = 1.0;
             var manager = Scan(scratch);
             var second = WindowFor(manager, "second");
             second.PinAt(new PixelPoint(500, 250));
@@ -1004,36 +1004,36 @@ public class SessionScanTests
             first.PinAt(new PixelPoint(400, 250));
             first.PositionKey = key;
             WindowsDict(manager)["first"] = first;
-            ClaudeBuddySettings.SetOrbPosition(key, 400, 250, 1.0);
+            OrbweaverSettings.SetOrbPosition(key, 400, 250, 1.0);
 
-            ClaudeBuddySettings.OrbSize = 2.0;
+            OrbweaverSettings.OrbSize = 2.0;
             manager.ReapplyOrbSizes();
 
             Assert.Equal(key, second.PositionKey);
             Assert.Same(first, WindowFor(manager, "first"));
-            Assert.Equal(new ClaudeBuddySettings.OrbPlacement(400, 250, 1.0), ClaudeBuddySettings.OrbPositionFor(key));
+            Assert.Equal(new OrbweaverSettings.OrbPlacement(400, 250, 1.0), OrbweaverSettings.OrbPositionFor(key));
 
             // The control: take the sibling away and the same call does re-save.
             WindowsDict(manager).Remove("first");
-            ClaudeBuddySettings.OrbSize = 1.5;
+            OrbweaverSettings.OrbSize = 1.5;
             manager.ReapplyOrbSizes();
-            Assert.Equal(1.5, ClaudeBuddySettings.OrbPositionFor(key)!.Size);
+            Assert.Equal(1.5, OrbweaverSettings.OrbPositionFor(key)!.Size);
         }
         finally
         {
-            ClaudeBuddySettings.OrbSize = before;
-            ClaudeBuddySettings.ClearOrbPosition(key);
+            OrbweaverSettings.OrbSize = before;
+            OrbweaverSettings.ClearOrbPosition(key);
         }
     }
 
     [AvaloniaFact]
     public void TheSizeMenuOnAManagedOrbReLaysTheStackOut()
     {
-        var before = ClaudeBuddySettings.OrbSize;
+        var before = OrbweaverSettings.OrbSize;
         string? soundKey = null;
         try
         {
-            ClaudeBuddySettings.OrbSize = 1.0;
+            OrbweaverSettings.OrbSize = 1.0;
             using var scratch = new Scratch();
             scratch.Write("session-a");
             var manager = Scan(scratch);
@@ -1055,8 +1055,8 @@ public class SessionScanTests
         }
         finally
         {
-            ClaudeBuddySettings.OrbSize = before;
-            if (soundKey is not null) ClaudeBuddySettings.SetOrbSize(soundKey, null);
+            OrbweaverSettings.OrbSize = before;
+            if (soundKey is not null) OrbweaverSettings.SetOrbSize(soundKey, null);
         }
     }
 
@@ -1102,7 +1102,7 @@ public class SessionScanTests
     [AvaloniaFact]
     public void RemoteChatForALocalSessionIsGatedThenCachedOnceCreated()
     {
-        var before = ClaudeBuddySettings.ClaudeCodeChatEnabled;
+        var before = OrbweaverSettings.ClaudeCodeChatEnabled;
         try
         {
             using var scratch = new Scratch();
@@ -1123,10 +1123,10 @@ public class SessionScanTests
             var manager = new SessionManager(scratch.Dir);
             manager.ScanAndUpdate();
 
-            ClaudeBuddySettings.ClaudeCodeChatEnabled = false;
+            OrbweaverSettings.ClaudeCodeChatEnabled = false;
             Assert.Null(manager.RemoteChatFor("session-a"));
 
-            ClaudeBuddySettings.ClaudeCodeChatEnabled = true;
+            OrbweaverSettings.ClaudeCodeChatEnabled = true;
             var chat = manager.RemoteChatFor("session-a");
             Assert.IsType<LocalCliChatSession>(chat);
 
@@ -1135,7 +1135,7 @@ public class SessionScanTests
         }
         finally
         {
-            ClaudeBuddySettings.ClaudeCodeChatEnabled = before;
+            OrbweaverSettings.ClaudeCodeChatEnabled = before;
         }
     }
 
@@ -1148,20 +1148,20 @@ public class SessionScanTests
         // worth interrupting a scan for" — proved by handing it a directory
         // that was never created, so the write it attempts has nowhere to
         // land.
-        var before = ClaudeBuddySettings.AutoColorSessions;
+        var before = OrbweaverSettings.AutoColorSessions;
         try
         {
             var missingDir = Path.Combine(Path.GetTempPath(), "cb-scan-missing-" + Guid.NewGuid());
             var manager = new SessionManager(missingDir);
 
-            ClaudeBuddySettings.AutoColorSessions = true;
+            OrbweaverSettings.AutoColorSessions = true;
             manager.SyncAutoColorMarker();
 
             Assert.False(Directory.Exists(missingDir));
         }
         finally
         {
-            ClaudeBuddySettings.AutoColorSessions = before;
+            OrbweaverSettings.AutoColorSessions = before;
         }
     }
 
@@ -1714,8 +1714,8 @@ public class SessionScanTests
         Action<int, SessionDependents.Verdict>? terminate = null)
     {
         // Both CLIs on, for the reason Scan above states at length.
-        ClaudeBuddySettings.ClaudeCodeEnabled = true;
-        ClaudeBuddySettings.CodexEnabled = true;
+        OrbweaverSettings.ClaudeCodeEnabled = true;
+        OrbweaverSettings.CodexEnabled = true;
 
         // Nobody attached unless a test says so. Handed over rather than scanned
         // for the same reason the listing is: the real one walks the process
@@ -2322,10 +2322,10 @@ public class SessionScanTests
         // the only place a live session's terminal coordinates and colour live,
         // and the hook writes nothing more until its next event. Deleting it
         // would take the orb away and leave the session running.
-        var before = ClaudeBuddySettings.OrbLifetimeMinutes;
+        var before = OrbweaverSettings.OrbLifetimeMinutes;
         try
         {
-            ClaudeBuddySettings.OrbLifetimeMinutes = 5;
+            OrbweaverSettings.OrbLifetimeMinutes = 5;
 
             using var scratch = new Scratch();
             scratch.Write("quiet", written: DateTime.UtcNow - TimeSpan.FromHours(2));
@@ -2341,7 +2341,7 @@ public class SessionScanTests
         }
         finally
         {
-            ClaudeBuddySettings.OrbLifetimeMinutes = before;
+            OrbweaverSettings.OrbLifetimeMinutes = before;
         }
     }
 
@@ -3246,8 +3246,8 @@ public class SessionScanTests
 
     private static SessionManager ScanBoth(Scratch current, Scratch legacy)
     {
-        ClaudeBuddySettings.ClaudeCodeEnabled = true;
-        ClaudeBuddySettings.CodexEnabled = true;
+        OrbweaverSettings.ClaudeCodeEnabled = true;
+        OrbweaverSettings.CodexEnabled = true;
 
         var manager = new SessionManager(current.Dir, null, legacyStatusDir: legacy.Dir);
         manager.ScanAndUpdate();
@@ -3302,25 +3302,25 @@ public class SessionScanTests
     [AvaloniaFact]
     public void TheAutoColourMarkerIsKeptInBothFolders()
     {
-        var before = ClaudeBuddySettings.AutoColorSessions;
+        var before = OrbweaverSettings.AutoColorSessions;
         try
         {
             using var current = new Scratch();
             using var legacy = new Scratch();
 
-            ClaudeBuddySettings.AutoColorSessions = true;
+            OrbweaverSettings.AutoColorSessions = true;
             var manager = ScanBoth(current, legacy);
             Assert.True(File.Exists(Path.Combine(current.Dir, ".auto-color")));
             Assert.True(File.Exists(Path.Combine(legacy.Dir, ".auto-color")));
 
-            ClaudeBuddySettings.AutoColorSessions = false;
+            OrbweaverSettings.AutoColorSessions = false;
             manager.ScanAndUpdate();
             Assert.False(File.Exists(Path.Combine(current.Dir, ".auto-color")));
             Assert.False(File.Exists(Path.Combine(legacy.Dir, ".auto-color")));
         }
         finally
         {
-            ClaudeBuddySettings.AutoColorSessions = before;
+            OrbweaverSettings.AutoColorSessions = before;
         }
     }
 
@@ -3329,13 +3329,13 @@ public class SessionScanTests
     [AvaloniaFact]
     public void AMissingLegacyFolderNeitherBlocksTheMarkerNorIsCreated()
     {
-        var before = ClaudeBuddySettings.AutoColorSessions;
+        var before = OrbweaverSettings.AutoColorSessions;
         try
         {
             using var current = new Scratch();
             var missing = Path.Combine(Path.GetTempPath(), "cb-scan-missing-" + Guid.NewGuid());
 
-            ClaudeBuddySettings.AutoColorSessions = true;
+            OrbweaverSettings.AutoColorSessions = true;
             new SessionManager(current.Dir, null, legacyStatusDir: missing).SyncAutoColorMarker();
 
             Assert.True(File.Exists(Path.Combine(current.Dir, ".auto-color")));
@@ -3343,7 +3343,7 @@ public class SessionScanTests
         }
         finally
         {
-            ClaudeBuddySettings.AutoColorSessions = before;
+            OrbweaverSettings.AutoColorSessions = before;
         }
     }
 

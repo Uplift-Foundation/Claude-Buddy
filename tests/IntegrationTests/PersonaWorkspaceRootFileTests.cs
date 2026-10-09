@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-147, against real trees: a persona picture may now be written relative to
 // two different places — the directory of the markdown file that named it, or

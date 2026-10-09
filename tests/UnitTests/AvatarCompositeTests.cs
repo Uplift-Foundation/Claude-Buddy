@@ -1,7 +1,7 @@
 using SkiaSharp;
 using Xunit;
 
-namespace ClaudeBuddy.Tests
+namespace Orbweaver.Tests
 {
     // The pie itself: several agents' pictures cut into one orb.
     //

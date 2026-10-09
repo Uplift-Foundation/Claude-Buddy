@@ -1,7 +1,7 @@
 using System.IO;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The set of CLI processes this app started for itself, and the scan actually
 // leaving them out.

@@ -5,7 +5,7 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The hover bridge between an orb and its flyout, and EnsureFlyoutShown
 // itself — the one place that actually builds the flyout window and wires it
@@ -238,22 +238,22 @@ public class OrbWindowFlyoutTests
     public void TheMicButtonFollowsTheVoiceInputSetting()
     {
         var orb = NewOrb();
-        var wasEnabled = ClaudeBuddySettings.VoiceInputEnabled;
+        var wasEnabled = OrbweaverSettings.VoiceInputEnabled;
         try
         {
-            ClaudeBuddySettings.VoiceInputEnabled = true;
+            OrbweaverSettings.VoiceInputEnabled = true;
             orb.EnsureFlyoutShown();
 
             Assert.True(orb.Flyout!.FindControl<Control>("MicButton")!.IsVisible);
 
-            ClaudeBuddySettings.VoiceInputEnabled = false;
+            OrbweaverSettings.VoiceInputEnabled = false;
             orb.EnsureFlyoutShown();
 
             Assert.False(orb.Flyout!.FindControl<Control>("MicButton")!.IsVisible);
         }
         finally
         {
-            ClaudeBuddySettings.VoiceInputEnabled = wasEnabled;
+            OrbweaverSettings.VoiceInputEnabled = wasEnabled;
         }
     }
 

@@ -3,9 +3,9 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
-using Speak = ClaudeBuddy.TextToSpeech.SpeakState;
+using Speak = Orbweaver.TextToSpeech.SpeakState;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-222: the settings window's voice preview. The decisions are pure and named,
 // so most of this needs no window and no process; what it does need is the real

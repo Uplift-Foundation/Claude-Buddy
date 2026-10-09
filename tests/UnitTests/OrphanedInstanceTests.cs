@@ -1,7 +1,7 @@
-using ClaudeBuddy;
+using Orbweaver;
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 // Claude Desktop's own updater relaunches the bundle it just updated and drops
 // both profile selectors, so an instance this app launched onto a profile ends

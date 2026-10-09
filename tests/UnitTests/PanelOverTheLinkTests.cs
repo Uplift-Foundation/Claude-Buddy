@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 // The rules that decide whether anything remote is drawn at all, and what the
 // panel says when it cannot send. (Which client a panel gets used to be a rule

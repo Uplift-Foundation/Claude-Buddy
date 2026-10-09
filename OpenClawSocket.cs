@@ -6,7 +6,7 @@ using Org.BouncyCastle.Security;
 using Org.BouncyCastle.Tls;
 using Org.BouncyCastle.Tls.Crypto.Impl.BC;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Opens a WebSocket to an OpenClaw gateway without using .NET's TLS stack.
     //

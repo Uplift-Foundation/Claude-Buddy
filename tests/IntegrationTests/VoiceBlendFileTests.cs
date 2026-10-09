@@ -2,7 +2,7 @@ using System.Buffers.Binary;
 using System.Text;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The seam CB-136 actually added: reading real `.npy` files off a disk,
 // averaging them, and writing the result where the engine will find it.

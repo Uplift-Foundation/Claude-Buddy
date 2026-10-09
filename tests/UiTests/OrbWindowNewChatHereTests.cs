@@ -1,7 +1,7 @@
 using Avalonia.Headless.XUnit;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-168: the orb context menu's "New chat here" item — visible for a
 // local-CLI orb or an OpenClaw orb, and what it would pre-fill the dialog

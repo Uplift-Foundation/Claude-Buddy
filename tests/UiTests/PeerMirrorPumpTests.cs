@@ -3,7 +3,7 @@ using System.Threading.Tasks;
 using Avalonia.Headless.XUnit;
 using Xunit;
 
-namespace ClaudeBuddy.UiTests;
+namespace Orbweaver.UiTests;
 
 // The clock the mirror halves run on.
 //

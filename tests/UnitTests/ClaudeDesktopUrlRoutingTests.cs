@@ -1,7 +1,7 @@
 using System.Collections.Generic;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The rule that decides which profile a `claude://` link belongs to, and the
 // two command lines built from it.

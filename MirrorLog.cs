@@ -1,7 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Text;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // What the mirror actually did with a frame, written down.
     //
@@ -47,7 +47,7 @@ namespace ClaudeBuddy
         {
             try
             {
-                var dir = ClaudeBuddySettings.Directory;
+                var dir = OrbweaverSettings.Directory;
                 if (string.IsNullOrEmpty(dir)) return null;
 
                 var asked = !string.IsNullOrWhiteSpace(

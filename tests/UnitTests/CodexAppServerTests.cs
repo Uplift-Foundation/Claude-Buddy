@@ -3,7 +3,7 @@ using System.IO;
 using System.Linq;
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 // The live-usage path added by CB-85: finding the `codex` binary, and picking
 // the one line worth reading out of the app-server's stream.

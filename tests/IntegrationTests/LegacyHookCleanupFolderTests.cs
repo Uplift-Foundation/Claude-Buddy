@@ -1,7 +1,7 @@
 using Xunit;
-using Verdict = ClaudeBuddy.LegacyHookCleanup.Verdict;
+using Verdict = Orbweaver.LegacyHookCleanup.Verdict;
 
-namespace ClaudeBuddy.Tests
+namespace Orbweaver.Tests
 {
     // CB-255 §1: retiring a legacy hook-script folder, against real temp
     // folders whose `.superseded` markers are back-dated with

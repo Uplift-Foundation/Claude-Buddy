@@ -2,7 +2,7 @@ using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-225: a cloud orb's right-click menu with its Archive and Delete rows, in
 // the states a reviewer needs to see — offered, Delete armed with its
@@ -67,15 +67,15 @@ public class OrbWindowCloudMenuScreenshots
 
     private static async Task WithCloudOn(Func<Task> body)
     {
-        var was = ClaudeBuddySettings.ClaudeCloudEnabled;
+        var was = OrbweaverSettings.ClaudeCloudEnabled;
         try
         {
-            ClaudeBuddySettings.ClaudeCloudEnabled = true;
+            OrbweaverSettings.ClaudeCloudEnabled = true;
             await body();
         }
         finally
         {
-            ClaudeBuddySettings.ClaudeCloudEnabled = was;
+            OrbweaverSettings.ClaudeCloudEnabled = was;
         }
     }
 

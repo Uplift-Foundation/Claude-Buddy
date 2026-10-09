@@ -3,7 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The tray menu's "Connect to other machines" item.
 //
@@ -46,14 +46,14 @@ public class TrayRemoteItemTests
     // attempts out of three, while the same commit passed on the other runner.
     private static NativeMenu? BuildMenu(bool remoteEnabled)
     {
-        var before = ClaudeBuddySettings.RemoteControlEnabled;
+        var before = OrbweaverSettings.RemoteControlEnabled;
         try
         {
             return BuildMenuCore(remoteEnabled);
         }
         finally
         {
-            ClaudeBuddySettings.RemoteControlEnabled = before;
+            OrbweaverSettings.RemoteControlEnabled = before;
         }
     }
 
@@ -61,7 +61,7 @@ public class TrayRemoteItemTests
     {
         // The menu item follows the link now rather than the relay, which is
         // the only transport left for it to offer.
-        ClaudeBuddySettings.PeerLinkEnabled = remoteEnabled;
+        OrbweaverSettings.PeerLinkEnabled = remoteEnabled;
 
         TrayController tray;
         try

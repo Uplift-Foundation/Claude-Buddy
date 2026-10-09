@@ -4,7 +4,7 @@ using Avalonia.Headless.XUnit;
 using Avalonia.LogicalTree;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The settings rows that are a dropdown or a slider rather than a switch.
 //
@@ -111,18 +111,18 @@ public class SettingsWindowPickerTests
     public void ChoosingAShapeWritesIt()
     {
         var window = NewWindow();
-        ClaudeBuddySettings.ArrangeShape = "heart";
+        OrbweaverSettings.ArrangeShape = "heart";
 
         var combo = (ComboBox)window.ShapePicker();
         combo.SelectedIndex = 3;
 
-        Assert.Equal("star", ClaudeBuddySettings.ArrangeShape);
+        Assert.Equal("star", OrbweaverSettings.ArrangeShape);
     }
 
     [AvaloniaFact]
     public void TheShapePickerOpensOnTheSavedShape()
     {
-        ClaudeBuddySettings.ArrangeShape = "grid";
+        OrbweaverSettings.ArrangeShape = "grid";
         var window = NewWindow();
 
         var combo = (ComboBox)window.ShapePicker();
@@ -142,7 +142,7 @@ public class SettingsWindowPickerTests
         // list. Without this the case inherited whatever the previous test left
         // behind and then asserted the geometry knows it — which is how it first
         // failed, on a shape another test had invented.
-        ClaudeBuddySettings.ArrangeShape = "heart";
+        OrbweaverSettings.ArrangeShape = "heart";
 
         var window = NewWindow();
         var combo = (ComboBox)window.ShapePicker();
@@ -151,7 +151,7 @@ public class SettingsWindowPickerTests
         for (var i = 0; i < count; i++)
         {
             combo.SelectedIndex = i;
-            var shape = ClaudeBuddySettings.ArrangeShape;
+            var shape = OrbweaverSettings.ArrangeShape;
 
             Assert.Contains(shape, ArrangementSweep.Shapes);
         }
@@ -162,7 +162,7 @@ public class SettingsWindowPickerTests
     [AvaloniaFact]
     public void AnUnknownSavedShapeIsKept()
     {
-        ClaudeBuddySettings.ArrangeShape = "spiral-from-a-later-build";
+        OrbweaverSettings.ArrangeShape = "spiral-from-a-later-build";
         var window = NewWindow();
 
         var combo = (ComboBox)window.ShapePicker();
@@ -180,13 +180,13 @@ public class SettingsWindowPickerTests
 
         slider.Value = 1.5;
 
-        Assert.Equal(1.5, ClaudeBuddySettings.ArrangeSpacing, 3);
+        Assert.Equal(1.5, OrbweaverSettings.ArrangeSpacing, 3);
     }
 
     [AvaloniaFact]
     public void TheSliderOpensOnTheSavedSpacing()
     {
-        ClaudeBuddySettings.ArrangeSpacing = 1.25;
+        OrbweaverSettings.ArrangeSpacing = 1.25;
         var window = NewWindow();
 
         var slider = (Slider)window.SpacingSlider();
@@ -241,7 +241,7 @@ public class SettingsWindowPickerTests
     [AvaloniaFact]
     public void TheTextSizeSliderOpensOnTheSavedSizeAndWritesTheRungItIsDraggedTo()
     {
-        ClaudeBuddySettings.ChatTextScale = 1.3;
+        OrbweaverSettings.ChatTextScale = 1.3;
 
         var window = NewWindow();
         var slider = (Slider)window.TextSizeSlider();
@@ -253,10 +253,10 @@ public class SettingsWindowPickerTests
         for (var i = 0; i < ChatZoom.Steps.Length; i++)
         {
             slider.Value = i;
-            Assert.Equal(ChatZoom.Steps[i], ClaudeBuddySettings.ChatTextScale, 3);
+            Assert.Equal(ChatZoom.Steps[i], OrbweaverSettings.ChatTextScale, 3);
         }
 
-        ClaudeBuddySettings.ChatTextScale = ChatZoom.Default;
+        OrbweaverSettings.ChatTextScale = ChatZoom.Default;
     }
 
     // The row says which keys do the same thing, and says the right ones for

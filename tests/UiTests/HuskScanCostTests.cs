@@ -2,7 +2,7 @@ using System.Diagnostics;
 using Avalonia.Headless.XUnit;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-22: the real per-scan cost of the FileInfo stat CouldBeABackgroundedHusk's
 // widened admission opened up.
@@ -148,8 +148,8 @@ public class HuskScanCostTests
     [AvaloniaFact]
     public void FifteenLiveSessionsOneMidGenerationScanInARealisticTime()
     {
-        ClaudeBuddySettings.ClaudeCodeEnabled = true;
-        ClaudeBuddySettings.CodexEnabled = true;
+        OrbweaverSettings.ClaudeCodeEnabled = true;
+        OrbweaverSettings.CodexEnabled = true;
 
         var pids = FifteenLivePids();
         const int iterations = 300;

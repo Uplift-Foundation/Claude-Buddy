@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // TMUX_TMPDIR and TMUX are process-wide, and every tmux this process runs reads
 // them, so nothing else may run while a test here has them pointed at its own

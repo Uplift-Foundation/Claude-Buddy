@@ -4,7 +4,7 @@ using Avalonia;
 using Avalonia.Headless.XUnit;
 using Xunit;
 
-namespace ClaudeBuddy.UiTests;
+namespace Orbweaver.UiTests;
 
 // The shared pulse tick, the pin, and the two click actions that were previously
 // only reachable through something unsafe.
@@ -89,7 +89,7 @@ public class OrbWindowPulseAndPinTests
     [AvaloniaFact]
     public void TheChatActionIsHarmlessWithNoSessionManager()
     {
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
         var orb = Orb();
 
         orb.RunClickAction(ActionClicks("chat"));
@@ -98,7 +98,7 @@ public class OrbWindowPulseAndPinTests
     [AvaloniaFact]
     public void TheSpeakActionIsHarmlessWithNothingToSay()
     {
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
         var orb = Orb();
 
         Assert.Null(orb.FindSpeakableText());
@@ -116,7 +116,7 @@ public class OrbWindowPulseAndPinTests
     [AvaloniaFact]
     public void WithNoTranscriptPathTheCwdFallbackIsUsed()
     {
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
 
         // Built from the platform's own separator, not written as a POSIX literal.
         // EncodeCwd replaces Path.DirectorySeparatorChar with '-', so on Windows a
@@ -162,7 +162,7 @@ public class OrbWindowPulseAndPinTests
     [AvaloniaFact]
     public void ACwdWithNoTranscriptAnywhereSaysNothing()
     {
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
 
         var home = Path.Combine(Path.GetTempPath(), "cb-orbhome-empty-" + Guid.NewGuid());
         Directory.CreateDirectory(home);
@@ -218,7 +218,7 @@ public class OrbWindowPulseAndPinTests
     [AvaloniaFact]
     public void AFallbackTranscriptWithNothingSaidInItStillSaysNothing()
     {
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
 
         var sep = Path.DirectorySeparatorChar;
         var cwd = $"{sep}Users{sep}w{sep}Source{sep}Quiet";

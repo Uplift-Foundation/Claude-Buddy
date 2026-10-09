@@ -3,7 +3,7 @@ using System.IO;
 using Avalonia.Headless.XUnit;
 using Xunit;
 
-namespace ClaudeBuddy.UiTests;
+namespace Orbweaver.UiTests;
 
 // The other half of the deferred write: what happens where there IS a dispatcher.
 //
@@ -26,7 +26,7 @@ public class SettingsDeferredTimerTests
         var dir = Path.Combine(Path.GetTempPath(), "cb-deferred-ui-" + Guid.NewGuid());
         Directory.CreateDirectory(dir);
         Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
         return dir;
     }
 
@@ -40,11 +40,11 @@ public class SettingsDeferredTimerTests
     {
         var dir = Stage();
 
-        ClaudeBuddySettings.IdleColor = "#abcdef";
+        OrbweaverSettings.IdleColor = "#abcdef";
 
         Assert.Equal("", OnDisk(dir));
 
-        ClaudeBuddySettings.FlushPendingSave();
+        OrbweaverSettings.FlushPendingSave();
 
         Assert.Contains("abcdef", OnDisk(dir));
     }
@@ -59,12 +59,12 @@ public class SettingsDeferredTimerTests
 
         for (var i = 0; i < 50; i++)
         {
-            ClaudeBuddySettings.IdleColor = $"#0000{i:X2}";
+            OrbweaverSettings.IdleColor = $"#0000{i:X2}";
         }
 
         Assert.Equal("", OnDisk(dir));
 
-        ClaudeBuddySettings.FlushPendingSave();
+        OrbweaverSettings.FlushPendingSave();
 
         // The last one wins, not the first.
         Assert.Contains("000031", OnDisk(dir));
@@ -78,14 +78,14 @@ public class SettingsDeferredTimerTests
     {
         var dir = Stage();
 
-        ClaudeBuddySettings.IdleColor = "#111111";
-        ClaudeBuddySettings.FlushPendingSave();
+        OrbweaverSettings.IdleColor = "#111111";
+        OrbweaverSettings.FlushPendingSave();
         Assert.Contains("111111", OnDisk(dir));
 
-        ClaudeBuddySettings.GeneratingColor = "#222222";
+        OrbweaverSettings.GeneratingColor = "#222222";
         Assert.DoesNotContain("222222", OnDisk(dir));
 
-        ClaudeBuddySettings.FlushPendingSave();
+        OrbweaverSettings.FlushPendingSave();
         Assert.Contains("222222", OnDisk(dir));
     }
 }

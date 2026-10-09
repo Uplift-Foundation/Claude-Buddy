@@ -1,7 +1,7 @@
 using System;
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 public class GrokUsageParseTests
 {

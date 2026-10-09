@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // HookInstaller.Run and RunScript against real subprocesses, and the log they
 // leave (CB-258). The thing being pinned is that a run which fails, hangs, is

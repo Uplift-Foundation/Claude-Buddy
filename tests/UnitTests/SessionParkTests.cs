@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // SessionPark.SaysParked over a session record — the rule that decides whether
 // a window has handed its conversation to a background job and so should not be

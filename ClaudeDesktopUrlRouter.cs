@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Claude Buddy as the handler for Claude Desktop's URL schemes, forwarding
     // each link to the profile it belongs to.
@@ -76,7 +76,7 @@ namespace ClaudeBuddy
         private static void ClaimIfWorthwhile()
         {
             switch (WhatToDoAboutClaiming(
-                ClaudeBuddySettings.RouteClaudeUrls,
+                OrbweaverSettings.RouteClaudeUrls,
                 ClaudeDesktopManager.RouteCandidates().Count))
             {
                 case ClaimAction.Restore:
@@ -149,9 +149,9 @@ namespace ClaudeBuddy
                 // isn't us — re-claiming must not overwrite the real previous
                 // handler with our own id.
                 if (ShouldRememberPreviousHandler(
-                        scheme, current, ClaudeBuddySettings.PreviousClaudeUrlHandler))
+                        scheme, current, OrbweaverSettings.PreviousClaudeUrlHandler))
                 {
-                    ClaudeBuddySettings.PreviousClaudeUrlHandler = current!;
+                    OrbweaverSettings.PreviousClaudeUrlHandler = current!;
                 }
 
                 if (MacOSUrlScheme.SetHandler(scheme, ownId)) claimed++;
@@ -194,7 +194,7 @@ namespace ClaudeBuddy
         {
             if (!OperatingSystem.IsMacOS()) return;
 
-            var previous = HandlerToRestore(ClaudeBuddySettings.PreviousClaudeUrlHandler);
+            var previous = HandlerToRestore(OrbweaverSettings.PreviousClaudeUrlHandler);
 
             var ownId = MacOSUrlScheme.OwnBundleId();
 
@@ -209,7 +209,7 @@ namespace ClaudeBuddy
                 MacOSUrlScheme.SetHandler(scheme, previous);
             }
 
-            ClaudeBuddySettings.PreviousClaudeUrlHandler = "";
+            OrbweaverSettings.PreviousClaudeUrlHandler = "";
             Status = "not routing links";
         }
 
@@ -229,9 +229,9 @@ namespace ClaudeBuddy
         public static void SetEnabled(bool enabled)
         {
             if (!OperatingSystem.IsMacOS()) return;
-            if (ClaudeBuddySettings.RouteClaudeUrls == enabled) return;
+            if (OrbweaverSettings.RouteClaudeUrls == enabled) return;
 
-            ClaudeBuddySettings.RouteClaudeUrls = enabled;
+            OrbweaverSettings.RouteClaudeUrls = enabled;
 
             Task.Run(() =>
             {

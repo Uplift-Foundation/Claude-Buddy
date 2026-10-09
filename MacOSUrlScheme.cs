@@ -2,7 +2,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 using System.Text;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Reading and setting which app macOS hands a URL scheme to.
     //

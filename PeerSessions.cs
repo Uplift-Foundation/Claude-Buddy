@@ -1,6 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // The peer link as the app runs it: listening, announcing, and keeping a
     // connection to every machine the user has paired with.
@@ -135,7 +135,7 @@ namespace ClaudeBuddy
         [ExcludeFromCodeCoverage]
         internal static void Start()
         {
-            if (!ClaudeBuddySettings.PeerLinkEnabled) return;
+            if (!OrbweaverSettings.PeerLinkEnabled) return;
 
             PeerMirrorHost host;
             PeerDiscovery discovery;
@@ -151,13 +151,13 @@ namespace ClaudeBuddy
             // Both halves, before anything connects. A machine that is dialled
             // must be able to answer immediately, and a panel opened the moment
             // the app starts must find a client rather than a null.
-            var account = ClaudeBuddySettings.DefaultRemoteControlProfileDir;
+            var account = OrbweaverSettings.DefaultRemoteControlProfileDir;
 
             // Every configured account, not just the first. See
             // RemoteMirrorServer.AllAccountSeams — a socket is not account
             // scoped, and reading one roster made that claim untrue.
             host.Serve(
-                ClaudeBuddySettings.RemoteControlProfileDirs,
+                OrbweaverSettings.RemoteControlProfileDirs,
                 RemoteControlSessions.LocalSessions);
 
             // A roster landing is what puts an orb on screen and what tells an
@@ -175,7 +175,7 @@ namespace ClaudeBuddy
 
             try
             {
-                host.Link.Listen(ClaudeBuddySettings.PeerLinkPort);
+                host.Link.Listen(OrbweaverSettings.PeerLinkPort);
                 discovery.Start(host.Link.BoundPort);
 
                 MirrorLog.Say("peer-listening", $"port={host.Link.BoundPort}");
@@ -386,7 +386,7 @@ namespace ClaudeBuddy
 
         [ExcludeFromCodeCoverage]
         internal static string PairingFilePath() =>
-            Path.Combine(ClaudeBuddySettings.Directory, PairingFileName);
+            Path.Combine(OrbweaverSettings.Directory, PairingFileName);
 
         // Reads the file, opens the window, and deletes the file.
         //
@@ -679,7 +679,7 @@ namespace ClaudeBuddy
             }
 
             return StatusText(
-                ClaudeBuddySettings.PeerLinkEnabled,
+                OrbweaverSettings.PeerLinkEnabled,
                 host is not null,
                 host?.Link.BoundPort ?? 0,
                 host?.Link.ConnectedMachines().Count ?? 0,

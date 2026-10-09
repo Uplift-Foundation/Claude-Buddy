@@ -8,7 +8,7 @@ using Avalonia.Media;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // CB-168's "start a new chat" dialog: pick a CLI, pick a folder, Start.
     //
@@ -462,7 +462,7 @@ namespace ClaudeBuddy
             var options = NewChatAvailability.CurrentForTests?.Invoke() ?? NewChatAvailability.Current();
             NewChatCli? firstEnabled = null;
 
-            var lastCli = ClaudeBuddySettings.NewChatLastCli is { Length: > 0 } saved
+            var lastCli = OrbweaverSettings.NewChatLastCli is { Length: > 0 } saved
                 && Enum.TryParse<NewChatCli>(saved, out var parsed)
                 ? parsed
                 : (NewChatCli?)null;
@@ -507,8 +507,8 @@ namespace ClaudeBuddy
             }
 
             var openClawAvailability = OpenClawAvailabilityForTests?.Invoke() ?? OpenClawNewChat.AvailabilityFor(
-                ClaudeBuddySettings.OpenClawEnabled, ClaudeBuddySettings.OpenClawHost,
-                ClaudeBuddySettings.OpenClawReplyEnabled);
+                OrbweaverSettings.OpenClawEnabled, OrbweaverSettings.OpenClawHost,
+                OrbweaverSettings.OpenClawReplyEnabled);
             var openClawReady = openClawAvailability == OpenClawNewChatAvailability.Ready;
 
             // Which shapes each slot can ever hold for this window's lifetime
@@ -648,7 +648,7 @@ namespace ClaudeBuddy
             var choices = AccountChoices(cli);
             _accountCombo.ItemsSource = choices;
 
-            var saved = ClaudeBuddySettings.NewChatLastProfileFor(cli);
+            var saved = OrbweaverSettings.NewChatLastProfileFor(cli);
             var preferredIndex = saved is { Length: > 0 }
                 ? choices.FindIndex(c => c.ProfileDir == saved)
                 : -1;
@@ -701,9 +701,9 @@ namespace ClaudeBuddy
                 Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
                 cli switch
                 {
-                    NewChatCli.Codex => ClaudeBuddySettings.CodexHomes,
-                    NewChatCli.Grok => ClaudeBuddySettings.GrokHomes,
-                    _ => ClaudeBuddySettings.ClaudeCodeProfileDirs
+                    NewChatCli.Codex => OrbweaverSettings.CodexHomes,
+                    NewChatCli.Grok => OrbweaverSettings.GrokHomes,
+                    _ => OrbweaverSettings.ClaudeCodeProfileDirs
                 }).ToList();
 
         // The stated reason/warning line under a CLI row — small, secondary
@@ -745,7 +745,7 @@ namespace ClaudeBuddy
         private void BuildFolderCombo()
         {
             var live = CurrentStatuses().Values;
-            var saved = ClaudeBuddySettings.NewChatRecentFolders;
+            var saved = OrbweaverSettings.NewChatRecentFolders;
             var folders = RecentFolders.Merge(live, saved).ToList();
 
             if (_prefillCwd is { Length: > 0 } pre && !folders.Contains(pre))
@@ -836,13 +836,13 @@ namespace ClaudeBuddy
 
             if (launch.Outcome != LaunchOutcome.Launched) return;
 
-            ClaudeBuddySettings.SetNewChatLastCli(cli.ToString());
-            ClaudeBuddySettings.SetNewChatLastProfile(cli, profileDir);
+            OrbweaverSettings.SetNewChatLastCli(cli.ToString());
+            OrbweaverSettings.SetNewChatLastProfile(cli, profileDir);
 
             var updatedFolders = RecentFolders.Merge(
                 CurrentStatuses().Values,
-                new[] { folder }.Concat(ClaudeBuddySettings.NewChatRecentFolders).ToList());
-            ClaudeBuddySettings.SetNewChatRecentFolders(updatedFolders);
+                new[] { folder }.Concat(OrbweaverSettings.NewChatRecentFolders).ToList());
+            OrbweaverSettings.SetNewChatRecentFolders(updatedFolders);
 
             StartWatch(priorIds, cli, folder);
         }
