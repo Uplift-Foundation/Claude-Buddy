@@ -6,7 +6,7 @@ namespace Orbweaver.Tests;
 // where they read the app's saved profile list from (CB-258).
 //
 // The three bash installers hardcoded $HOME/Library/Application Support/
-// ClaudeBuddy/settings.json and ignored CLAUDE_BUDDY_SETTINGS_DIR, which the app
+// ClaudeBuddy/settings.json and ignored ORBWEAVER_SETTINGS_DIR, which the app
 // and install-hooks.sh both honour — so a test instance pointed at a scratch
 // settings directory wired the *real* saved list instead. Each case therefore
 // plants two lists: one in the scratch settings directory the variable names, and
@@ -65,15 +65,45 @@ public class HookInstallerScriptsTests : IDisposable
         File.WriteAllText(Path.Combine(defaultDir, "settings.json"), $$"""{"{{key}}":["{{decoy}}"]}""");
     }
 
-    private HookInstallResult RunInstaller(string script, bool withSettingsDirVariable)
+    private HookInstallResult RunInstaller(string script, bool withSettingsDirVariable) =>
+        RunInstaller(script, withSettingsDirVariable ? Spelling.New : Spelling.None);
+
+    // Which spelling of the settings-dir variable the installer is handed
+    // (CB-256). The old one must still redirect it, and when both are set to
+    // different places the new one must win — so Both points the legacy name
+    // at a third directory holding a list of its own.
+    public enum Spelling { None, New, Legacy, Both }
+
+    internal const string NewName = BrandEnv.Prefix + BrandEnv.SettingsDir;
+    internal const string LegacyName = BrandEnv.LegacyPrefix + BrandEnv.SettingsDir;
+
+    private string LegacyDir => Path.Combine(_root, "legacy-settings");
+
+    private Dictionary<string, string?> SettingsDirVariables(Spelling spelling) => new()
     {
+        [NewName] = spelling is Spelling.New or Spelling.Both ? _settingsDir : null,
+        [LegacyName] = spelling switch
+        {
+            Spelling.Legacy => _settingsDir,
+            Spelling.Both => LegacyDir,
+            _ => null,
+        },
+    };
+
+    // The list a Both run must ignore: the one only the legacy name points at.
+    private void PlantLegacyOnlyList(string key, string loser)
+    {
+        Directory.CreateDirectory(LegacyDir);
+        File.WriteAllText(Path.Combine(LegacyDir, "settings.json"), $$"""{"{{key}}":["{{loser}}"]}""");
+    }
+
+    private HookInstallResult RunInstaller(string script, Spelling spelling)
+    {
+        var environment = SettingsDirVariables(spelling);
+        environment["HOME"] = _home;
+        environment["TMPDIR"] = _root + Path.DirectorySeparatorChar;
         return HookInstaller.Run("/bin/bash", new[] { Path.Combine(RepoRoot, "tools", script) }, script,
-            environment: new Dictionary<string, string?>
-            {
-                ["HOME"] = _home,
-                ["TMPDIR"] = _root + Path.DirectorySeparatorChar,
-                ["CLAUDE_BUDDY_SETTINGS_DIR"] = withSettingsDirVariable ? _settingsDir : null
-            });
+            environment: environment);
     }
 
     private string Home(params string[] parts) => Path.Combine(new[] { _home }.Concat(parts).ToArray());
@@ -87,6 +117,9 @@ public class HookInstallerScriptsTests : IDisposable
 
         Assert.Equal(HookInstallOutcome.Ok, result.Outcome);
         Assert.Contains("OrbweaverHook", File.ReadAllText(Home(".claude-wanted", "settings.json")));
+        // The Settings card's own check, on what the real installer wrote: an
+        // OrbweaverHook.sh profile, which IsWiredIn used to call un-wired.
+        Assert.True(HookInstaller.IsWiredIn(".claude-wanted", _home));
         Assert.False(Directory.Exists(Home(".claude-decoy")));
     }
 
@@ -148,6 +181,43 @@ public class HookInstallerScriptsTests : IDisposable
         Assert.False(Directory.Exists(Home(".grok-wanted")));
     }
 
+    // What each bash installer saves its list under, and the file that says a
+    // profile got wired.
+    private string WiredFile(string script, string profile) =>
+        script.Contains("macos") ? Home(profile, "settings.json")
+        : script.Contains("codex") ? Home(profile, "hooks.json")
+        : Home(profile, "hooks", "orbweaver.json");
+
+    private static (string key, string prefix) ListFor(string script) =>
+        script.Contains("macos") ? ("claudeCodeProfileDirs", ".claude")
+        : script.Contains("codex") ? ("codexHomes", ".codex")
+        : ("grokHomes", ".grok");
+
+    // CB-256: the pre-rename spelling still redirects every bash installer, and
+    // with both set to different directories the new spelling's list is the one
+    // wired. Each run also plants the default-location decoy, so a script that
+    // ignored both names would wire that instead and fail here.
+    [MacOnlyTheory]
+    [InlineData("install-macos-hooks.sh", Spelling.Legacy)]
+    [InlineData("install-macos-hooks.sh", Spelling.Both)]
+    [InlineData("install-codex-hooks.sh", Spelling.Legacy)]
+    [InlineData("install-codex-hooks.sh", Spelling.Both)]
+    [InlineData("install-grok-hooks.sh", Spelling.Legacy)]
+    [InlineData("install-grok-hooks.sh", Spelling.Both)]
+    public void EachBashInstallerHonoursTheOldSpellingAndPrefersTheNewOne(string script, Spelling spelling)
+    {
+        var (key, prefix) = ListFor(script);
+        PlantLists(key, prefix + "-wanted", prefix + "-decoy");
+        PlantLegacyOnlyList(key, prefix + "-legacy");
+
+        var result = RunInstaller(script, spelling);
+
+        Assert.True(result.Outcome == HookInstallOutcome.Ok, $"{script}: {result.Outcome} exit {result.ExitCode}: {result.Error}");
+        Assert.True(File.Exists(WiredFile(script, prefix + "-wanted")), $"{script} under {spelling} did not wire the list the variable names");
+        Assert.False(Directory.Exists(Home(prefix + "-decoy")));
+        Assert.False(Directory.Exists(Home(prefix + "-legacy")));
+    }
+
     // The cause of CB-258 itself, found by a real click: HookInstaller appended
     // --auto-color for any user with the colour setting on, every installer
     // rejects an unknown option with exit 2 before wiring anything, and the
@@ -178,7 +248,7 @@ public class HookInstallerScriptsTests : IDisposable
                 {
                     ["HOME"] = _home,
                     ["TMPDIR"] = _root + Path.DirectorySeparatorChar,
-                    ["CLAUDE_BUDDY_SETTINGS_DIR"] = _settingsDir
+                    ["ORBWEAVER_SETTINGS_DIR"] = _settingsDir
                 });
 
             Assert.True(result.Outcome == HookInstallOutcome.Ok, $"{script}: {result.Outcome} exit {result.ExitCode}: {result.Error}");
@@ -204,7 +274,7 @@ public class HookInstallerScriptsTests : IDisposable
                 ["HOME"] = _home,
                 ["CODEX_HOME"] = null,
                 ["GROK_HOME"] = null,
-                ["CLAUDE_BUDDY_SETTINGS_DIR"] = _settingsDir
+                ["ORBWEAVER_SETTINGS_DIR"] = _settingsDir
             });
 
         Assert.True(result.Outcome == HookInstallOutcome.Ok, $"{script}: {result.Outcome} exit {result.ExitCode}: {result.Error}");
@@ -283,7 +353,7 @@ public class HookInstallerScriptsTests : IDisposable
             {
                 ["HOME"] = _home,
                 ["TMPDIR"] = _root + Path.DirectorySeparatorChar,
-                ["CLAUDE_BUDDY_SETTINGS_DIR"] = _settingsDir,
+                ["ORBWEAVER_SETTINGS_DIR"] = _settingsDir,
                 ["PATH"] = shims + ":/usr/bin:/bin"
             });
 
@@ -333,7 +403,7 @@ public class HookInstallerScriptsTests : IDisposable
         Assert.Equal(Path.GetFullPath(Path.Combine(macOs, "..", "Resources", "install-macos-hooks.sh")), resolved);
 
         // The list goes in both places: the installed bundle may predate the
-        // CLAUDE_BUDDY_SETTINGS_DIR seam (this ticket's own fix), in which case
+        // ORBWEAVER_SETTINGS_DIR seam (this ticket's own fix), in which case
         // only the default location under the scratch HOME is read.
         File.WriteAllText(Path.Combine(_settingsDir, "settings.json"), """{"claudeCodeProfileDirs":[".claude-cb258-test"]}""");
         var defaultDir = Path.Combine(_home, "Library", "Application Support", "ClaudeBuddy");
@@ -344,7 +414,7 @@ public class HookInstallerScriptsTests : IDisposable
             {
                 ["HOME"] = _home,
                 ["TMPDIR"] = _root + Path.DirectorySeparatorChar,
-                ["CLAUDE_BUDDY_SETTINGS_DIR"] = _settingsDir
+                ["ORBWEAVER_SETTINGS_DIR"] = _settingsDir
             });
 
         Console.Error.WriteLine($"PROBE outcome={result.Outcome} exit={result.ExitCode} stderr=[{result.Error}]");
@@ -352,15 +422,30 @@ public class HookInstallerScriptsTests : IDisposable
         Assert.True(HookInstaller.IsWiredIn(".claude-cb258-test", _home));
     }
 
-    // The Windows installer's copy of the seam. Not runnable off Windows, and not
-    // run here: named in the PR as unverified until the Windows CI leg reports.
-    [WindowsOnlyFact]
-    public void WindowsInstallerWiresTheProfileInTheSettingsDirNotTheAppDataOne()
+    // The Windows installer's copy of the seam, in each spelling (CB-256): the
+    // new name, the pre-rename one, and both pointed at different lists, where
+    // the new name's must win. Runs on the Windows leg only.
+    //
+    // It also asserts HookInstaller.IsWiredIn on what the real installer wrote,
+    // which is the check the Settings card makes after a run. That check used to
+    // look only for the pre-rename script name, so this profile — wired with
+    // OrbweaverHook.ps1 — read as un-wired; the only test that asserted it
+    // returned early unless an installed bundle was on the machine.
+    [WindowsOnlyTheory]
+    [InlineData(Spelling.New)]
+    [InlineData(Spelling.Legacy)]
+    [InlineData(Spelling.Both)]
+    public void WindowsInstallerWiresTheProfileInTheSettingsDirNotTheAppDataOne(Spelling spelling)
     {
         var appData = Path.Combine(_root, "appdata");
         Directory.CreateDirectory(Path.Combine(appData, "ClaudeBuddy"));
         File.WriteAllText(Path.Combine(_settingsDir, "settings.json"), """{"claudeCodeProfileDirs":[".claude-wanted"]}""");
         File.WriteAllText(Path.Combine(appData, "ClaudeBuddy", "settings.json"), """{"claudeCodeProfileDirs":[".claude-decoy"]}""");
+        PlantLegacyOnlyList("claudeCodeProfileDirs", ".claude-legacy");
+
+        var environment = SettingsDirVariables(spelling);
+        environment["USERPROFILE"] = _home;
+        environment["APPDATA"] = appData;
 
         var result = HookInstaller.Run(
             @"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
@@ -372,16 +457,13 @@ public class HookInstallerScriptsTests : IDisposable
                 "-SettingsPath", Path.Combine(_home, ".claude", "settings.json")
             },
             "install-windows-hooks.ps1",
-            environment: new Dictionary<string, string?>
-            {
-                ["USERPROFILE"] = _home,
-                ["APPDATA"] = appData,
-                ["CLAUDE_BUDDY_SETTINGS_DIR"] = _settingsDir
-            });
+            environment: environment);
 
         Assert.Equal(HookInstallOutcome.Ok, result.Outcome);
         Assert.Contains("OrbweaverHook", File.ReadAllText(Home(".claude-wanted", "settings.json")));
+        Assert.True(HookInstaller.IsWiredIn(".claude-wanted", _home));
         Assert.False(Directory.Exists(Home(".claude-decoy")));
+        Assert.False(Directory.Exists(Home(".claude-legacy")));
     }
 }
 

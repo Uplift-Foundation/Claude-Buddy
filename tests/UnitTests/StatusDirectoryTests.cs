@@ -159,7 +159,7 @@ public class StatusDirectoryTests
     }
 
     // And the real pair agrees: whatever Root decides for this process —
-    // here, the suite's own CLAUDE_BUDDY_STATUS_ROOT — Path() and LegacyPath()
+    // here, the suite's own ORBWEAVER_STATUS_ROOT — Path() and LegacyPath()
     // are siblings in it. A negative control is built in: the two differ.
     [Fact]
     public void TheRealLegacyPathIsASiblingOfTheRealPath()

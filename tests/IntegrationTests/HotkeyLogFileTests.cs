@@ -6,7 +6,7 @@ namespace Orbweaver.Tests;
 // (CB-196), and the three rules it shares with persona.log — once per
 // message, a ceiling, and never a throw.
 //
-// Scoped with CrashLog.ScopeForTests rather than CLAUDE_BUDDY_LOG_DIR, for
+// Scoped with CrashLog.ScopeForTests rather than ORBWEAVER_LOG_DIR, for
 // the reason that method gives. HotkeyLog.Said is process-wide, but nothing
 // else in this assembly writes to it, and one class's tests run one at a
 // time, so no collection is needed.

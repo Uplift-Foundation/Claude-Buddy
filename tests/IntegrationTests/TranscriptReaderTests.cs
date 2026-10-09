@@ -11,7 +11,7 @@ namespace Orbweaver.Tests;
 // fixtures, per this repo's fixture-provenance rule (write fixtures from
 // real captures, not from memory).
 // In the Settings collection since the multi-profile cases below repoint
-// CLAUDE_BUDDY_SETTINGS_DIR and add a profile directory. Without it they race
+// ORBWEAVER_SETTINGS_DIR and add a profile directory. Without it they race
 // every other settings test in this assembly — and this branch has fixed that
 // same ordering hazard five times, so adding a sixth would be careless.
 [Collection("Settings")]
@@ -361,7 +361,7 @@ public class TranscriptReaderTests
 
         var dir = Path.Combine(Path.GetTempPath(), "cb-multihome-settings-" + Guid.NewGuid());
         Directory.CreateDirectory(dir);
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
+        Environment.SetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR", dir);
         OrbweaverSettings.ReloadForTests();
         OrbweaverSettings.AddClaudeCodeProfileDir(".claude-work");
 
@@ -390,7 +390,7 @@ public class TranscriptReaderTests
 
         var dir = Path.Combine(Path.GetTempPath(), "cb-multihome2-settings-" + Guid.NewGuid());
         Directory.CreateDirectory(dir);
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
+        Environment.SetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR", dir);
         OrbweaverSettings.ReloadForTests();
         OrbweaverSettings.AddClaudeCodeProfileDir(".claude-work");
 

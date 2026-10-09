@@ -299,7 +299,7 @@ public class CloudSettingsRowsTests
             // budget and the assertion always won the race. The green was a
             // symptom of the hang, not evidence of the behaviour. Now that a test
             // process refuses the credential store outright
-            // (CLAUDE_BUDDY_NO_CREDENTIAL_STORE, see ClaudeCliCredentials), the
+            // (ORBWEAVER_NO_CREDENTIAL_STORE, see ClaudeCliCredentials), the
             // read returns instantly and the loop moves the state on before this
             // line runs — so the test had to start asserting something that is
             // actually true rather than something that was merely slow.

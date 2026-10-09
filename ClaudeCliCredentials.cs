@@ -462,8 +462,8 @@ namespace Orbweaver
 
         // Whether this process is forbidden from asking the OS for a credential.
         //
-        // The same env-var seam shape as CLAUDE_BUDDY_SETTINGS_DIR,
-        // CLAUDE_BUDDY_PROFILE_ROOT and CLAUDE_BUDDY_BUNDLE_ROOT, and for the same
+        // The same env-var seam shape as ORBWEAVER_SETTINGS_DIR,
+        // ORBWEAVER_PROFILE_ROOT and ORBWEAVER_BUNDLE_ROOT, and for the same
         // reason all three exist: without it a test reaches something real that
         // belongs to the person running it. Those three protect a settings file, a
         // profile directory and an icon cache. This one protects their Keychain,
@@ -479,7 +479,7 @@ namespace Orbweaver
         // poll loop and a chat path several layers up, and a flag that has to be
         // passed correctly from each of them is a flag that will eventually not be.
         internal static bool CredentialStoreDisabled =>
-            Environment.GetEnvironmentVariable("CLAUDE_BUDDY_NO_CREDENTIAL_STORE") is { Length: > 0 };
+            BrandEnv.Get(BrandEnv.NoCredentialStore) is not null;
 
         // Read the credential, or give up.
         //

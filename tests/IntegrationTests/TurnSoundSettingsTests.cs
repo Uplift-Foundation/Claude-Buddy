@@ -23,7 +23,7 @@ public class TurnSoundSettingsTests
 
     private static void PointSettingsAt(string dir)
     {
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
+        Environment.SetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR", dir);
         OrbweaverSettings.ReloadForTests();
     }
 

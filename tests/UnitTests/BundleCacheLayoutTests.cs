@@ -30,7 +30,7 @@ public sealed class BundleRootCollection
 [Collection("BundleRoot")]
 public class BundleCacheLayoutTests : IDisposable
 {
-    private const string Override = "CLAUDE_BUDDY_BUNDLE_ROOT";
+    private const string Override = "ORBWEAVER_BUNDLE_ROOT";
 
     private readonly string? _previous = Environment.GetEnvironmentVariable(Override);
     private readonly string _scratch =

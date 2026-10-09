@@ -190,7 +190,7 @@ namespace Orbweaver
         //
         // environment overrides the child's variables; a null value removes one.
         // It exists so a test can point the real installers at a scratch HOME and
-        // CLAUDE_BUDDY_SETTINGS_DIR without touching the test process's own.
+        // ORBWEAVER_SETTINGS_DIR without touching the test process's own.
         internal static HookInstallResult Run(
             string file, string[] arguments, string label,
             int timeoutMs = TimeoutMs,
@@ -304,6 +304,14 @@ namespace Orbweaver
         // themselves strip and re-add. homeDirectory is a parameter so a test can
         // point at a scratch directory.
         //
+        // Either name, on either platform (CB-256). This used to look only for
+        // ClaudeBuddyHook, so from phase 2 on a profile the installer had just
+        // wired — which names OrbweaverHook and strips the old script — read as
+        // un-wired, and the Settings card said the install had failed. Not
+        // WslIntegration.SettingsTextMentionsHook, although it also knows both
+        // names: that one is for a WSL distro and counts only the .ps1 on
+        // purpose, while a native profile on a Mac carries the .sh.
+        //
         // On Windows a profile can live in the native home, in a WSL distro's home
         // (as \\wsl.localhost\... UNC paths), or in both, and one saved name can be
         // WSL-only with no native directory at all; so "wired" means wired in any
@@ -322,13 +330,22 @@ namespace Orbweaver
             try
             {
                 var path = Path.Combine(homeDirectory, profileName, "settings.json");
-                return File.Exists(path) && File.ReadAllText(path).Contains("ClaudeBuddyHook");
+                return File.Exists(path) && SettingsTextMentionsHook(File.ReadAllText(path));
             }
             catch
             {
                 return false;
             }
         }
+
+        private static readonly string[] HookScriptNames =
+        [
+            Brand.HookScriptShell, Brand.HookScriptPowerShell,
+            Brand.Legacy.HookScriptShell, Brand.Legacy.HookScriptPowerShell,
+        ];
+
+        internal static bool SettingsTextMentionsHook(string text) =>
+            HookScriptNames.Any(name => text.Contains(name, StringComparison.OrdinalIgnoreCase));
     }
 
     internal enum HookInstallOutcome { Ok, ScriptNotFound, Failed, TimedOut, Threw }

@@ -268,21 +268,28 @@ echo "so existing sessions will not produce orbs until they are restarted."
 
 # --- extra Codex accounts -----------------------------------------------------
 
+# The app's environment overrides are ORBWEAVER_* since the rename, and the old
+# CLAUDE_BUDDY_* spelling still works for a shell that exports it. A copy per
+# script rather than a sourced file, because each script is installed on its own.
+# CB-256: ORBWEAVER_<name>, falling back to the pre-rename CLAUDE_BUDDY_<name>.
+brand_env() { local n="ORBWEAVER_$1" l="CLAUDE_BUDDY_$1"; printf '%s' "${!n:-${!l:-}}"; }
+
 # The directory names saved in the app's own settings, one per line. JXA for the
 # reason the merge above uses it, and a missing file is not an error.
 #
-# The path honours CLAUDE_BUDDY_SETTINGS_DIR like the app does, and follows HOME
+# The path honours ORBWEAVER_SETTINGS_DIR like the app does, and follows HOME
 # when it is unset. A failed read is reported on stderr instead of being thrown
 # away, so "could not read the list" no longer looks like "no extra homes" (CB-258).
 # With no override, Orbweaver's folder first, then the pre-rename ClaudeBuddy
 # one: on upgrade day this runs before the new app has started and moved the
 # folder, and reading only the new path then would quietly wire zero extra
-# profiles. When CLAUDE_BUDDY_SETTINGS_DIR is set it is the only path read, so a
-# test instance never falls through to the real list.
+# profiles. When ORBWEAVER_SETTINGS_DIR (or its old spelling) is set it is the
+# only path read, so a test instance never falls through to the real list.
 saved_profiles() {
-  local settings
-  if [[ -n "${CLAUDE_BUDDY_SETTINGS_DIR:-}" ]]; then
-    settings="$CLAUDE_BUDDY_SETTINGS_DIR/settings.json"
+  local settings override
+  override="$(brand_env SETTINGS_DIR)"
+  if [[ -n "$override" ]]; then
+    settings="$override/settings.json"
   else
     local support="$HOME/Library/Application Support"
     settings="$support/Orbweaver/settings.json"

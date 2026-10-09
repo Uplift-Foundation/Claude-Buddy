@@ -14,7 +14,7 @@ namespace Orbweaver.Tests;
 // Every one of those asserts the same thing: that *CrashLog.Directory* reports
 // the scoped value. **None of them asserts that CrashLog.Directory is the only
 // way the log directory is reached** — and that is a different claim. A writer
-// that called Environment.GetEnvironmentVariable("CLAUDE_BUDDY_LOG_DIR") for
+// that called Environment.GetEnvironmentVariable("ORBWEAVER_LOG_DIR") for
 // itself would bypass the scope entirely, land on whatever the process-wide
 // variable currently says, and reopen exactly the race the scope was built to
 // close. Every existing test would still pass, because every existing test
@@ -31,55 +31,94 @@ namespace Orbweaver.Tests;
 // test on purpose — the property it protects is "no other code does this",
 // which no amount of exercising the code that exists can establish. A new
 // bypass is caught when it is written rather than when it next races.
+//
+// Since CB-256 the variable has two spellings and every brand variable is read
+// through BrandEnv, so the one guard became two, and the fence got wider rather
+// than narrower: (a) nothing in application source outside BrandEnv.cs reads
+// *any* brand variable straight from the environment, in either spelling — so
+// the only way to the log directory's variable is BrandEnv — and (b) the
+// BrandEnv read of LogDir appears exactly once, in CrashLog.cs.
 public class LogDirSingleReadSiteTests
 {
-    private const string Variable = "CLAUDE_BUDDY_LOG_DIR";
+    // The exact text of a direct read. Matching the call rather than the bare
+    // name keeps the many comments that discuss the variables out of the
+    // count — they mention them, they do not read them, and a guard that fired
+    // on prose would be turned off within a week. The third form is a name
+    // built from BrandEnv's own constants and handed to the environment, which
+    // would bypass the helper as surely as a literal.
+    private static readonly string[] DirectReads =
+    [
+        "GetEnvironmentVariable(\"" + BrandEnv.Prefix,
+        "GetEnvironmentVariable(\"" + BrandEnv.LegacyPrefix,
+        "GetEnvironmentVariable(BrandEnv.",
+    ];
 
-    // The exact text of a read. Matching the call rather than the bare name
-    // keeps the many comments that discuss the variable out of the count —
-    // they mention it, they do not read it, and a guard that fired on prose
-    // would be turned off within a week.
-    private const string Read = "GetEnvironmentVariable(\"" + Variable + "\")";
+    // The one sanctioned read, in both of BrandEnv.Get's overloads.
+    private const string LogDirRead = "BrandEnv.Get(BrandEnv.LogDir";
+
+    [Fact]
+    public void No_brand_variable_is_read_around_BrandEnv()
+    {
+        var root = RepositoryRoot();
+
+        var offenders = ApplicationSources(root)
+            .Where(path => Path.GetFileName(path) != "BrandEnv.cs")
+            .Select(path => (path, hits: DirectReads.Sum(read => Hits(File.ReadAllText(path), read))))
+            .Where(x => x.hits > 0)
+            .ToList();
+
+        Assert.True(
+            offenders.Count == 0,
+            "application source must read ORBWEAVER_* / CLAUDE_BUDDY_* variables through "
+            + "BrandEnv.Get, which owns both spellings and their precedence. Found direct reads in:"
+            + Environment.NewLine + Describe(root, offenders));
+    }
 
     [Fact]
     public void The_log_directory_variable_is_read_in_exactly_one_place()
     {
         var root = RepositoryRoot();
 
-        var offenders = Directory
-            .EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
-            .Where(IsApplicationSource)
-            .Select(path => (path, hits: Hits(File.ReadAllText(path))))
+        var offenders = ApplicationSources(root)
+            .Select(path => (path, hits: Hits(File.ReadAllText(path), LogDirRead)))
             .Where(x => x.hits > 0)
-            .OrderBy(x => x.path, StringComparer.Ordinal)
             .ToList();
-
-        var described = string.Join(
-            Environment.NewLine,
-            offenders.Select(o => $"  {Path.GetRelativePath(root, o.path)} ({o.hits})"));
 
         // Named rather than counted, so a failure says which file to look at
         // instead of only that the number moved.
         Assert.True(
             offenders.Count == 1 && offenders[0].hits == 1,
-            $"{Variable} must be read in exactly one place in application source — "
+            $"{BrandEnv.Name(BrandEnv.LogDir)} must be read in exactly one place in application source — "
             + "CrashLog.Directory, which the AsyncLocal scope takes precedence over. "
             + "Anything else bypasses the scope and reopens the race that "
             + "CrashLog.ScopeForTests exists to close. Found:"
-            + Environment.NewLine + (described.Length == 0 ? "  (nowhere)" : described));
+            + Environment.NewLine + Describe(root, offenders));
 
         Assert.Equal("CrashLog.cs", Path.GetFileName(offenders[0].path));
     }
 
-    private static int Hits(string text)
+    private static IEnumerable<string> ApplicationSources(string root) =>
+        Directory
+            .EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
+            .Where(path => IsApplicationSource(Path.GetRelativePath(root, path)))
+            .OrderBy(path => path, StringComparer.Ordinal);
+
+    private static string Describe(string root, List<(string path, int hits)> offenders) =>
+        offenders.Count == 0
+            ? "  (nowhere)"
+            : string.Join(
+                Environment.NewLine,
+                offenders.Select(o => $"  {Path.GetRelativePath(root, o.path)} ({o.hits})"));
+
+    private static int Hits(string text, string read)
     {
         var hits = 0;
-        var at = text.IndexOf(Read, StringComparison.Ordinal);
+        var at = text.IndexOf(read, StringComparison.Ordinal);
 
         while (at >= 0)
         {
             hits++;
-            at = text.IndexOf(Read, at + Read.Length, StringComparison.Ordinal);
+            at = text.IndexOf(read, at + read.Length, StringComparison.Ordinal);
         }
 
         return hits;
@@ -90,15 +129,19 @@ public class LogDirSingleReadSiteTests
     // legitimately drive the variable — LogDirIsolationTests uses it as the
     // control that proves the scope is doing something) and never build
     // output, where a stale copy of a deleted file would fail this for a
-    // reason nobody could act on.
-    private static bool IsApplicationSource(string path)
+    // reason nobody could act on. Judged on the path relative to the root, so a
+    // checkout that happens to live under a directory called "tools" is not
+    // excluded wholesale, and never under .claude, where agent worktrees keep
+    // whole second copies of the tree.
+    private static bool IsApplicationSource(string relativePath)
     {
-        var parts = path.Split(Path.DirectorySeparatorChar);
+        var parts = relativePath.Split(Path.DirectorySeparatorChar);
 
         return !parts.Contains("tests")
             && !parts.Contains("bin")
             && !parts.Contains("obj")
-            && !parts.Contains("tools");
+            && !parts.Contains("tools")
+            && !parts.Contains(".claude");
     }
 
     // Resolved from this file's own compile-time path rather than from the

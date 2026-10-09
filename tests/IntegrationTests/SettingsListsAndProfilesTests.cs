@@ -23,7 +23,7 @@ public class SettingsListsAndProfilesTests
     {
         var dir = Path.Combine(Path.GetTempPath(), "cb-settings-lists-" + Guid.NewGuid());
         Directory.CreateDirectory(dir);
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
+        Environment.SetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR", dir);
         OrbweaverSettings.ReloadForTests();
     }
 
@@ -141,11 +141,11 @@ public class SettingsListsAndProfilesTests
     public void TheAccountListSurvivesARestart()
     {
         FreshSettings();
-        var dir = Environment.GetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR")!;
+        var dir = Environment.GetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR")!;
 
         OrbweaverSettings.SetRemoteControlProfileDirs(new[] { ".claude", ".claude-work" });
 
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
+        Environment.SetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR", dir);
         OrbweaverSettings.ReloadForTests();
 
         Assert.Equal(new[] { ".claude", ".claude-work" }, OrbweaverSettings.RemoteControlProfileDirs);
@@ -157,11 +157,11 @@ public class SettingsListsAndProfilesTests
     public void AnExtraClaudeCodeProfileIsAddedAndPersisted()
     {
         FreshSettings();
-        var dir = Environment.GetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR")!;
+        var dir = Environment.GetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR")!;
 
         OrbweaverSettings.AddClaudeCodeProfileDir(".claude-work");
 
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
+        Environment.SetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR", dir);
         OrbweaverSettings.ReloadForTests();
 
         Assert.Contains(".claude-work", OrbweaverSettings.ClaudeCodeProfileDirs);
@@ -262,7 +262,7 @@ public class SettingsListsAndProfilesTests
     public void AProfilesNameAndColourRoundTripThroughDisk()
     {
         FreshSettings();
-        var dir = Environment.GetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR")!;
+        var dir = Environment.GetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR")!;
 
         OrbweaverSettings.Update("Claude-Profile-1", p =>
         {
@@ -273,7 +273,7 @@ public class SettingsListsAndProfilesTests
             p.TintWindow = false;
         });
 
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
+        Environment.SetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR", dir);
         OrbweaverSettings.ReloadForTests();
 
         var saved = OrbweaverSettings.For("Claude-Profile-1");

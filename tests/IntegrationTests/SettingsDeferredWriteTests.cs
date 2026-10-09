@@ -25,7 +25,7 @@ public class SettingsDeferredWriteTests
     {
         var dir = Path.Combine(Path.GetTempPath(), "cb-deferred-" + Guid.NewGuid());
         Directory.CreateDirectory(dir);
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
+        Environment.SetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR", dir);
         OrbweaverSettings.ReloadForTests();
         return dir;
     }
@@ -131,7 +131,7 @@ public class SettingsDeferredWriteTests
         if (OperatingSystem.IsWindows())
         {
             Environment.SetEnvironmentVariable(
-                "CLAUDE_BUDDY_SETTINGS_DIR", @"C:\cb-tests\no:such|dir");
+                "ORBWEAVER_SETTINGS_DIR", @"C:\cb-tests\no:such|dir");
             OrbweaverSettings.ReloadForTests();
 
             OrbweaverSettings.TwoLetterGlyphs = !OrbweaverSettings.TwoLetterGlyphs;

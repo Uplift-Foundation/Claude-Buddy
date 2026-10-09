@@ -14,12 +14,12 @@ namespace Orbweaver.IntegrationTests;
 // The unit tests cover the parse against hand-written paths, which is where the
 // awkward cases live. This is the other half CLAUDE.md asks for: the same rule
 // against a real directory tree, created the way the app creates one, through
-// the CLAUDE_BUDDY_BUNDLE_ROOT seam. The two fail differently — a parser gets an
+// the ORBWEAVER_BUNDLE_ROOT seam. The two fail differently — a parser gets an
 // edge case wrong, a seam gets the whole layout wrong — and a layout change in
 // ClaudeDesktopBundles would leave every unit test green while every real
 // instance stopped being recognised.
 // Own collection, mirroring BundleRootCollection in tests/UnitTests and for the
-// same reason: this class moves CLAUDE_BUDDY_BUNDLE_ROOT, which is process-wide,
+// same reason: this class moves ORBWEAVER_BUNDLE_ROOT, which is process-wide,
 // and xUnit runs collections in parallel within one assembly. Anything else
 // reading ClaudeDesktopBundles.Root while this class has it pointed at a temp
 // directory would see a root that vanishes from under it when Dispose deletes
@@ -37,7 +37,7 @@ public sealed class IntegrationBundleRootCollection
 [Collection("BundleRoot")]
 public class OrphanedCloneLayoutTests : IDisposable
 {
-    private const string RootVariable = "CLAUDE_BUDDY_BUNDLE_ROOT";
+    private const string RootVariable = "ORBWEAVER_BUNDLE_ROOT";
 
     private readonly string? _before = Environment.GetEnvironmentVariable(RootVariable);
     private readonly string _root = Path.Combine(

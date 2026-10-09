@@ -31,7 +31,7 @@ public class HotkeyActionsTests : IDisposable
     {
         var dir = Path.Combine(Path.GetTempPath(), "cb-hotkey-actions-" + Guid.NewGuid());
         Directory.CreateDirectory(dir);
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
+        Environment.SetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR", dir);
         OrbweaverSettings.ReloadForTests();
 
         // No real CLI probe and no real session scan behind the window.

@@ -16,7 +16,7 @@ namespace Orbweaver
     // works, with derived colours and folder names.
     //
     // Profiles are keyed by folder name rather than by path, so moving the
-    // profile root (the CLAUDE_BUDDY_PROFILE_ROOT override) keeps your settings,
+    // profile root (the ORBWEAVER_PROFILE_ROOT override) keeps your settings,
     // and renaming a folder deliberately starts fresh.
     internal static class OrbweaverSettings
     {
@@ -137,7 +137,7 @@ namespace Orbweaver
         };
 
         // Excluded from coverage: reads the real user profile directory. Every
-        // test in this repo runs with CLAUDE_BUDDY_SETTINGS_DIR pointed elsewhere,
+        // test in this repo runs with ORBWEAVER_SETTINGS_DIR pointed elsewhere,
         // which is the whole point — a suite that read this would be reading, and
         // on a bad day writing, the developer's own settings.json.
         [ExcludeFromCodeCoverage]
@@ -147,13 +147,14 @@ namespace Orbweaver
         // on macOS. SpecialFolder.ApplicationData resolves to both, so this is one
         // expression rather than a platform branch.
         //
-        // Test seam, same pattern as CLAUDE_BUDDY_PROFILE_ROOT
+        // Test seam, same pattern as ORBWEAVER_PROFILE_ROOT
         // (ClaudeDesktopManager.cs): without it, a test that so much as reads a
         // setting touches the developer's real settings.json, and a test that
         // writes one touches it for good — settings.json does not follow HOME on
-        // macOS, so there is no per-test-run isolation otherwise.
+        // macOS, so there is no per-test-run isolation otherwise. Read through
+        // BrandEnv, so the pre-rename spelling still redirects it.
         public static string Directory =>
-            Environment.GetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR") is { Length: > 0 } scratch
+            BrandEnv.Get(BrandEnv.SettingsDir) is { } scratch
                 ? scratch
                 : Path.Combine(
                     Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
@@ -2335,7 +2336,7 @@ namespace Orbweaver
             node is JsonValue value && value.TryGetValue<bool>(out var result) ? result : fallback;
 
         // Test seam: this class is static, so it caches _model and _loaded for
-        // the life of the process. A test that points CLAUDE_BUDDY_SETTINGS_DIR
+        // the life of the process. A test that points ORBWEAVER_SETTINGS_DIR
         // at a fresh directory between cases still needs this to make that
         // directory actually get read again instead of the previous case's
         // cached model. Not for anything else — production code never needs to

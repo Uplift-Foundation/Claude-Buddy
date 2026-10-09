@@ -42,8 +42,8 @@ namespace Orbweaver
     // could have created the new Logs folder before now, which is why the Logs
     // rule below is a merge rather than move-or-nothing.
     //
-    // Does nothing at all while CLAUDE_BUDDY_SETTINGS_DIR, CLAUDE_BUDDY_LOG_DIR
-    // or CLAUDE_BUDDY_BUNDLE_ROOT is set. Every test suite sets the first, and
+    // Does nothing at all while ORBWEAVER_SETTINGS_DIR, ORBWEAVER_LOG_DIR
+    // or ORBWEAVER_BUNDLE_ROOT is set. Every test suite sets the first, and
     // a migration that ran under it would move a developer's real folder.
     internal static class DataDirMigration
     {
@@ -99,8 +99,9 @@ namespace Orbweaver
         // bundles) or does not need.
         internal static readonly IReadOnlyList<string> SnapshotFiles = [SettingsFile, PeerIdentityFile];
 
+        // BrandEnv suffixes, so either spelling of any of the three counts.
         internal static readonly IReadOnlyList<string> OverrideVariables =
-            ["CLAUDE_BUDDY_SETTINGS_DIR", "CLAUDE_BUDDY_LOG_DIR", "CLAUDE_BUDDY_BUNDLE_ROOT"];
+            [BrandEnv.SettingsDir, BrandEnv.LogDir, BrandEnv.BundleRoot];
 
         // ---- the rules ------------------------------------------------------
 
@@ -119,7 +120,7 @@ namespace Orbweaver
         }
 
         internal static bool OverrideSet(Func<string, string?> environment) =>
-            OverrideVariables.Any(name => environment(name) is { Length: > 0 });
+            OverrideVariables.Any(suffix => BrandEnv.Get(suffix, environment) is not null);
 
         // Where the two roots are on each platform, given the folders the OS
         // reports. Each new path is built exactly as its reader builds it —

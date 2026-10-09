@@ -11,7 +11,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Avalonia for ClaudeBuddySettings' Dispatcher use only; nothing here
+    <!-- Avalonia for OrbweaverSettings' Dispatcher use only; nothing here
          starts a UI, the same arrangement ArrangementTests already uses. -->
     <PackageReference Include="Avalonia" Version="11.3.7" />
     <PackageReference Include="BouncyCastle.Cryptography" Version="2.7.0" />
@@ -22,6 +22,16 @@
          that spoke to the gateway its own way could answer a question the app
          would answer differently, which is the one thing it must not do. -->
     <Compile Include="../../OrbweaverSettings.cs" />
+    <!-- What OrbweaverSettings and StatusDirectory now lean on that is pure
+         and window-free: the brand names, the env-var reader (CB-256) and the
+         orb-size clamp. The file list is by hand, so a dependency added to one
+         of the files above breaks this build and nothing else — which is how
+         it had been broken since the rename's phase 2 without anyone seeing;
+         `dotnet build tools/openclaw-probe` is the check. NewChatCli and
+         AudioVolume are restated in Shims.cs instead, for the reasons there. -->
+    <Compile Include="../../Brand.cs" />
+    <Compile Include="../../BrandEnv.cs" />
+    <Compile Include="../../OrbSizing.cs" />
     <!-- ClusterMode, which the settings' heartbeat and cron modes are typed as.
          Pure and window-free, so compiling it in costs nothing. -->
     <Compile Include="../../OrbClusters.cs" />

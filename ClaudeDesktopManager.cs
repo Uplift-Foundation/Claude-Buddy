@@ -138,7 +138,7 @@ namespace Orbweaver
         // it — so this only needs a scratch-override branch, not a platform
         // one.
         public static string ProfileRoot =>
-            Environment.GetEnvironmentVariable("CLAUDE_BUDDY_PROFILE_ROOT") is { Length: > 0 } scratch
+            BrandEnv.Get(BrandEnv.ProfileRoot) is { } scratch
                 ? scratch
                 : OperatingSystem.IsWindows()
                     ? Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData)

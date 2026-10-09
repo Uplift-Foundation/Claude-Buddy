@@ -40,14 +40,14 @@ namespace Orbweaver
         // Windows — each platform's own answer to "where do logs go", rather than
         // a directory of this app's invention next to settings.json.
         //
-        // The env override is the same test seam as CLAUDE_BUDDY_SETTINGS_DIR and
+        // The env override is the same test seam as ORBWEAVER_SETTINGS_DIR and
         // exists for the same reason: without it a test that exercises this
         // writes into the developer's real log directory, and the one thing a
         // crash log must not do is fill up with test noise.
         internal static string Directory =>
             Scoped.Value is { Length: > 0 } flowed
                 ? flowed
-                : Environment.GetEnvironmentVariable("CLAUDE_BUDDY_LOG_DIR") is { Length: > 0 } scratch
+                : BrandEnv.Get(BrandEnv.LogDir) is { } scratch
                     ? scratch
                     : DefaultDirectory;
 
@@ -55,7 +55,7 @@ namespace Orbweaver
         // added because the variable's width is itself the defect (CB — see the
         // branch that introduced this).
         //
-        // CLAUDE_BUDDY_LOG_DIR is process-wide, so a test class that points it
+        // ORBWEAVER_LOG_DIR is process-wide, so a test class that points it
         // at a scratch directory has published that directory to every other
         // test running at the same time. That would be harmless if only the
         // classes that know about the variable could write here — but the write
@@ -110,7 +110,7 @@ namespace Orbweaver
         }
 
         // Excluded from coverage: reads the real user profile. Every test runs
-        // with CLAUDE_BUDDY_LOG_DIR pointed at a scratch directory, which is the
+        // with ORBWEAVER_LOG_DIR pointed at a scratch directory, which is the
         // point of the seam above.
         [ExcludeFromCodeCoverage]
         private static string DefaultDirectory =>

@@ -65,7 +65,7 @@ public class VoicePreviewCustomCommandTests
 
     private static void Point(string dir, string command)
     {
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
+        Environment.SetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR", dir);
         OrbweaverSettings.ReloadForTests();
         OrbweaverSettings.SpeakCommand = command;
     }
@@ -141,7 +141,7 @@ public class VoicePreviewCustomCommandTests
     public async Task ThePreviewRunsTheUsersCommandWithTheVoiceAndSampleAndStopsItsWholeTree()
     {
         var dir = NewDir();
-        var previousDir = Environment.GetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR");
+        var previousDir = Environment.GetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR");
         var transitions = new List<Speak>();
         void Record(Speak s) { lock (transitions) transitions.Add(s); }
 
@@ -183,7 +183,7 @@ public class VoicePreviewCustomCommandTests
             TextToSpeech.StateChanged -= Record;
             KillSurvivors();
             TextToSpeech.Cancel();
-            Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", previousDir);
+            Environment.SetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR", previousDir);
             OrbweaverSettings.ReloadForTests();
             VoicePreview.ResetForTests();
         }
@@ -193,7 +193,7 @@ public class VoicePreviewCustomCommandTests
     public async Task ACommandThatCannotStartLeavesTheButtonIdleAndSubstitutesNothing()
     {
         var dir = NewDir();
-        var previousDir = Environment.GetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR");
+        var previousDir = Environment.GetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR");
         var transitions = new List<Speak>();
         void Record(Speak s) { lock (transitions) transitions.Add(s); }
 
@@ -223,7 +223,7 @@ public class VoicePreviewCustomCommandTests
             TextToSpeech.SilenceForTests = true;
             TextToSpeech.StateChanged -= Record;
             TextToSpeech.Cancel();
-            Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", previousDir);
+            Environment.SetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR", previousDir);
             OrbweaverSettings.ReloadForTests();
             VoicePreview.ResetForTests();
         }

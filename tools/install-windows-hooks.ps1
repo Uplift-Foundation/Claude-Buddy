@@ -104,11 +104,14 @@ $ErrorActionPreference = 'Stop'
 # the Inno installer runs this before the new app has started and moved the
 # folder, and reading only the new path then would wire zero extra profiles.
 function Get-ConfiguredExtraProfileDirs {
-    # CLAUDE_BUDDY_SETTINGS_DIR first and alone, as the app and the macOS
+    # ORBWEAVER_SETTINGS_DIR first and alone, as the app and the macOS
     # installers do, so a test instance pointed at a scratch directory is not
-    # wired from the real list (CB-258). Otherwise Orbweaver's folder, then the
-    # pre-rename ClaudeBuddy one.
-    if ($env:CLAUDE_BUDDY_SETTINGS_DIR) {
+    # wired from the real list (CB-258); its pre-rename spelling still works
+    # (CB-256), and the new one wins when both are set. Otherwise Orbweaver's
+    # folder, then the pre-rename ClaudeBuddy one.
+    if ($env:ORBWEAVER_SETTINGS_DIR) {
+        $path = Join-Path $env:ORBWEAVER_SETTINGS_DIR 'settings.json'
+    } elseif ($env:CLAUDE_BUDDY_SETTINGS_DIR) {
         $path = Join-Path $env:CLAUDE_BUDDY_SETTINGS_DIR 'settings.json'
     } else {
         $path = Join-Path $env:APPDATA 'Orbweaver\settings.json'
@@ -359,7 +362,7 @@ if ($touchNative) {
 # native Windows hooks ultimately shell out to powershell.exe as a normal
 # Windows process, so $env:TEMP resolves to the same real folder either way --
 # a WSL session and a native session show up as two independent orbs in one
-# running ClaudeBuddy.exe, which is the whole point of doing this.
+# running Orbweaver.exe, which is the whole point of doing this.
 # ---------------------------------------------------------------------------
 
 $wslExe = Join-Path $env:SystemRoot 'System32\wsl.exe'
@@ -549,7 +552,7 @@ function Invoke-WslTimeout {
 # wins. Still one wsl.exe call: the fallback chain runs as a single compound
 # command inside it, not as separate invocations.
 function Get-WslDistroInfo([string] $Distro) {
-    $marker = '__CLAUDEBUDDY_SPLIT__'
+    $marker = '__ORBWEAVER_SPLIT__'
     $findClaude = "command -v claude 2>/dev/null" +
         " || bash -ic 'command -v claude' 2>/dev/null" +
         " || { command -v zsh >/dev/null 2>&1 && zsh -ic 'command -v claude' 2>/dev/null; }" +
