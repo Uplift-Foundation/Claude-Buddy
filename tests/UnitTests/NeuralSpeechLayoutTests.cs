@@ -36,11 +36,13 @@ public class NeuralSpeechLayoutTests : IDisposable
         if (Directory.Exists(_root)) Directory.Delete(_root, recursive: true);
     }
 
-    private void PlaceEngine(string version)
+    private void PlaceEngine(string version) => PlaceEngine(version, NeuralSpeech.EngineExeName);
+
+    private void PlaceEngine(string version, string exeName)
     {
         var dir = Path.Combine(_root, version);
         Directory.CreateDirectory(dir);
-        File.WriteAllText(Path.Combine(dir, NeuralSpeech.EngineExeName), "not really an engine");
+        File.WriteAllText(Path.Combine(dir, exeName), "not really an engine");
     }
 
     private void PlaceModel()
@@ -68,8 +70,18 @@ public class NeuralSpeechLayoutTests : IDisposable
     [Fact]
     public void TheEngineBinaryIsNamedForThePlatform()
     {
-        var expected = OperatingSystem.IsWindows() ? "ClaudeBuddySpeech.exe" : "ClaudeBuddySpeech";
+        var expected = OperatingSystem.IsWindows() ? "OrbweaverSpeech.exe" : "OrbweaverSpeech";
         Assert.Equal(expected, NeuralSpeech.EngineExeName);
+    }
+
+    // A legacy name equal to the current one would make the fallback below
+    // pass while recognising nothing new.
+    [Fact]
+    public void TheLegacyEngineNameIsADifferentFileForThePlatform()
+    {
+        var expected = OperatingSystem.IsWindows() ? "ClaudeBuddySpeech.exe" : "ClaudeBuddySpeech";
+        Assert.Equal(expected, NeuralSpeech.LegacyEngineExeName);
+        Assert.NotEqual(NeuralSpeech.EngineExeName, NeuralSpeech.LegacyEngineExeName);
     }
 
     // Derived from the platform rather than hardcoded, because asserting a
@@ -109,6 +121,72 @@ public class NeuralSpeechLayoutTests : IDisposable
         Directory.CreateDirectory(Path.Combine(_root, "0.1.0-beta"));
 
         Assert.Null(NeuralSpeech.NewestOtherEngine());
+    }
+
+    // ---- engines downloaded before the phase-3 rename (CB-256) ------------
+    //
+    // Every engine on a user's disk today is ClaudeBuddySpeech[.exe]. The first
+    // phase-3 build asks for OrbweaverSpeech, so without these the version bump
+    // that renames the engine would also be the one that silences it until the
+    // download finishes, or for good if it fails.
+
+    [Fact]
+    public void ALegacyNamedEngineInAnOlderVersionIsStillAFallback()
+    {
+        PlaceEngine("0.1.0-beta", NeuralSpeech.LegacyEngineExeName);
+
+        Assert.Equal(
+            Path.Combine(_root, "0.1.0-beta", NeuralSpeech.LegacyEngineExeName),
+            NeuralSpeech.NewestOtherEngine());
+    }
+
+    // Both names in one directory: an engine published under the new name
+    // and a stale copy of the old one. The current name speaks.
+    [Fact]
+    public void WhenBothNamesSitInOneDirectoryTheCurrentOneWins()
+    {
+        PlaceEngine("0.1.0-beta", NeuralSpeech.LegacyEngineExeName);
+        PlaceEngine("0.1.0-beta", NeuralSpeech.EngineExeName);
+
+        Assert.Equal(
+            Path.Combine(_root, "0.1.0-beta", NeuralSpeech.EngineExeName),
+            NeuralSpeech.NewestOtherEngine());
+    }
+
+    // Version still decides before name does: preferring the name across
+    // directories would pick a two-release-old engine over last release's.
+    [Fact]
+    public void TheNewestVersionWinsWhicheverNameItsEngineCarries()
+    {
+        PlaceEngine("0.1.0-beta", NeuralSpeech.EngineExeName);
+        PlaceEngine("0.2.0-beta", NeuralSpeech.LegacyEngineExeName);
+
+        Assert.Equal(
+            Path.Combine(_root, "0.2.0-beta", NeuralSpeech.LegacyEngineExeName),
+            NeuralSpeech.NewestOtherEngine());
+    }
+
+    // Negative control for the three above: a directory holding some other
+    // file is not an engine under either name.
+    [Fact]
+    public void ADirectoryWithNeitherNameIsNoFallback()
+    {
+        PlaceEngine("0.1.0-beta", "SomethingElse");
+
+        Assert.Null(NeuralSpeech.NewestOtherEngine());
+    }
+
+    // And the speaking path end to end: a legacy-named older engine plus the
+    // model is usable, and still counts as needing this build's engine.
+    [Fact]
+    public void ALegacyNamedEngineIsUsableButNeedsUpdating()
+    {
+        PlaceEngine("0.1.0-beta", NeuralSpeech.LegacyEngineExeName);
+        PlaceModel();
+
+        Assert.False(NeuralSpeech.Installed);
+        Assert.True(NeuralSpeech.Usable);
+        Assert.True(NeuralSpeech.NeedsUpdate);
     }
 
     // The dormant bug the VersionOrder comparer exists to prevent, asserted end

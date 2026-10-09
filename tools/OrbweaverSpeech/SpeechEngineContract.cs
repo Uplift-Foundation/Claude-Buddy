@@ -2,7 +2,7 @@ namespace Orbweaver
 {
     // The names both halves of the app-to-engine contract spell, in one file
     // compiled into both: the side-car engine picks it up from its own folder,
-    // and ClaudeBuddy.csproj links it in explicitly past its tools\** removal.
+    // and Orbweaver.csproj links it in explicitly past its tools\** removal.
     // One constant rather than two copies and a test that they agree, because
     // a copy that drifts does not fail loudly — the engine just ignores the
     // new name and speaks at full volume, which sounds like the slider being

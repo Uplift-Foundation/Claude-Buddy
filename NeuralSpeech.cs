@@ -9,7 +9,7 @@ namespace Orbweaver
 {
     // The optional high-quality speech engine: a neural TTS model (Kokoro) run by
     // a separate downloaded process. See TextToSpeech, which routes to it when the
-    // user has opted in, and tools/ClaudeBuddySpeech for the engine itself.
+    // user has opted in, and tools/OrbweaverSpeech for the engine itself.
     //
     // Downloaded rather than shipped because the engine's dependencies weigh
     // ~82MB on disk, 66MB of it phoneme lexicons for languages this never uses.
@@ -25,7 +25,7 @@ namespace Orbweaver
     internal static class NeuralSpeech
     {
         // Read from this assembly rather than written down here, so it cannot
-        // drift from ClaudeBuddy.csproj's <Version> — which the README calls the
+        // drift from Orbweaver.csproj's <Version> — which the README calls the
         // single source of truth for the shipped version, and which the packaging
         // scripts and the release workflow all parse out of that one element.
         //
@@ -113,8 +113,18 @@ namespace Orbweaver
         public static string UserVoicesDirectory =>
             Path.Combine(OrbweaverSettings.Directory, "voices");
         internal static string ModelPath => Path.Combine(Root, "kokoro-fp16.onnx");
-        internal static string EngineExeName =>
-            OperatingSystem.IsWindows() ? $"{Brand.SpeechEngineName}.exe" : Brand.SpeechEngineName;
+        internal static string EngineExeName => ExeName(Brand.SpeechEngineName);
+
+        // What every engine downloaded before phase 3 (CB-256) is called. Only
+        // NewestOtherEngine looks for it: an engine already on disk keeps
+        // speaking under its old name while this build's own engine downloads,
+        // or when that download fails. The download itself never accepts it —
+        // a release that ships this build's version under the old stem is a
+        // broken release, and saying so beats quietly installing it.
+        internal static string LegacyEngineExeName => ExeName(Brand.Legacy.SpeechEngineName);
+
+        private static string ExeName(string stem) =>
+            OperatingSystem.IsWindows() ? $"{stem}.exe" : stem;
 
         internal static string EnginePath => Path.Combine(Root, EngineVersion, EngineExeName);
 
@@ -196,10 +206,14 @@ namespace Orbweaver
             {
                 if (!Directory.Exists(Root)) return null;
 
+                // Either name, the current one preferred within a directory.
+                // Newest version still decides first: a legacy-named engine one
+                // release back beats a current-named one two releases back.
                 return Directory.EnumerateDirectories(Root)
-                    .Where(directory => File.Exists(Path.Combine(directory, EngineExeName)))
-                    .OrderByDescending(directory => Path.GetFileName(directory), VersionOrder)
-                    .Select(directory => Path.Combine(directory, EngineExeName))
+                    .Select(directory => (directory, exe: EngineIn(directory)))
+                    .Where(found => found.exe is not null)
+                    .OrderByDescending(found => Path.GetFileName(found.directory), VersionOrder)
+                    .Select(found => found.exe)
                     .FirstOrDefault();
             }
             catch (Exception ex)
@@ -210,6 +224,13 @@ namespace Orbweaver
                 return null;
             }
         }
+
+        // The engine executable in one version directory, or null: the
+        // current name if it is there, else the pre-phase-3 one.
+        private static string? EngineIn(string directory) =>
+            new[] { EngineExeName, LegacyEngineExeName }
+                .Select(name => Path.Combine(directory, name))
+                .FirstOrDefault(File.Exists);
 
         // Newest by version number, not by string. An ordinal sort puts
         // "0.10.0-beta" *below* "0.2.0-beta", which would pick a year-old engine
@@ -340,7 +361,7 @@ namespace Orbweaver
 
                     // Extract beside the target and rename, the same
                     // crash-safety the model download and settings writes use: a
-                    // half-extracted directory containing ClaudeBuddySpeech.exe
+                    // half-extracted directory containing OrbweaverSpeech.exe
                     // would make Installed true while the engine is unusable.
                     var staging = target + ".tmp";
                     if (Directory.Exists(staging)) Directory.Delete(staging, recursive: true);

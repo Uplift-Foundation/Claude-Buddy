@@ -36,7 +36,7 @@ public class SpeechEngineContractTests
     [Fact]
     public void TheEngineSpellsTheNameFromTheSharedFile()
     {
-        var program = Read("tools", "ClaudeBuddySpeech", "Program.cs");
+        var program = Read("tools", "OrbweaverSpeech", "Program.cs");
 
         Assert.Contains("SpeechEngineContract.VolumeEnvVar", program);
         Assert.DoesNotContain("\"" + SpeechEngineContract.VolumeEnvVar + "\"", program);
@@ -46,8 +46,8 @@ public class SpeechEngineContractTests
     public void TheSharedFileLivesWithTheEngineAndIsLinkedIntoTheApp()
     {
         Assert.Contains("\"" + SpeechEngineContract.VolumeEnvVar + "\"",
-            Read("tools", "ClaudeBuddySpeech", "SpeechEngineContract.cs"));
-        Assert.Contains(@"tools\ClaudeBuddySpeech\SpeechEngineContract.cs", Read("Orbweaver.csproj"));
+            Read("tools", "OrbweaverSpeech", "SpeechEngineContract.cs"));
+        Assert.Contains(@"tools\OrbweaverSpeech\SpeechEngineContract.cs", Read("Orbweaver.csproj"));
     }
 
     // The contract stamp (CB-200 second review): the engine's csproj writes
@@ -60,7 +60,7 @@ public class SpeechEngineContractTests
     [Fact]
     public void TheEngineBuildStampsTheContractVersionTheAppExpects()
     {
-        var csproj = Read("tools", "ClaudeBuddySpeech", "ClaudeBuddySpeech.csproj");
+        var csproj = Read("tools", "OrbweaverSpeech", "OrbweaverSpeech.csproj");
         Assert.Contains("<SpeechEngineStampFile>" + SpeechEngineContract.StampFileName + "</SpeechEngineStampFile>", csproj);
         Assert.Contains("AfterTargets=\"Build\"", csproj);
         Assert.Contains("AfterTargets=\"Publish\"", csproj);
@@ -68,7 +68,7 @@ public class SpeechEngineContractTests
         var pattern = System.Text.RegularExpressions.Regex.Match(csproj, @"'(ContractVersion = \(\\d\+\);)'").Groups[1].Value;
         Assert.Equal(@"ContractVersion = (\d+);", pattern);
 
-        var source = Read("tools", "ClaudeBuddySpeech", "SpeechEngineContract.cs");
+        var source = Read("tools", "OrbweaverSpeech", "SpeechEngineContract.cs");
         var stamped = System.Text.RegularExpressions.Regex.Match(source, pattern).Groups[1].Value;
         Assert.Equal(SpeechEngineContract.ContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture), stamped);
     }

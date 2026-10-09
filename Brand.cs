@@ -28,12 +28,13 @@ namespace Orbweaver
     //
     // What deliberately is *not* flipped here, or not here at all:
     //
-    // - SpeechEngineName and AssemblyName. Both are binary names rather than
-    //   names a user's disk holds: the speech engine's is its <AssemblyName>,
-    //   its release zip's stem and the exe inside every speech-engine folder
-    //   already downloaded, and the app's follows the csproj. Flipping either
-    //   constant without the project it names buys a 404 or a tray icon that
-    //   resolves to nothing. They move with the binaries in phase 3.
+    // - SpeechEngineName and AssemblyName, in phase 2. Both are binary names
+    //   rather than names a user's disk holds: the speech engine's is its
+    //   <AssemblyName>, its release zip's stem and the exe inside every
+    //   speech-engine folder already downloaded, and the app's follows the
+    //   csproj. Flipping either constant without the project it names buys a
+    //   404 or a tray icon that resolves to nothing, so both moved with the
+    //   binaries in phase 3 (CB-256) instead.
     // - MacBundleId. Automation and Accessibility consent are tied to it, and
     //   it is never renamed, phase 3 included.
     // - MachineNames' relay prefix. Nothing creates a relay any more; the
@@ -88,9 +89,14 @@ namespace Orbweaver
         // claims both and holds both (Program.cs, SingleInstance.ClaimAll).
         internal const string SingleInstanceMutexName = "Orbweaver_SingleInstance_Mutex";
 
-        // The neural speech engine's executable and release-asset stem. Not
-        // flipped in phase 2; see the header.
-        internal const string SpeechEngineName = "ClaudeBuddySpeech";
+        // The neural speech engine's executable and release-asset stem.
+        // Five places have to agree on it or the toggle in Settings downloads
+        // a 404: this constant, the engine csproj's <AssemblyName>, the zip
+        // stem in both build-speech-engine scripts and release.yml's two
+        // upload globs. None of the other four can read a C# constant, and CI
+        // never runs a release, so SpeechEngineNameConsistencyTests reads all
+        // four files and checks them against this.
+        internal const string SpeechEngineName = "OrbweaverSpeech";
 
         // The macOS bundle id. Automation and Accessibility consent are tied to
         // it, so it is never renamed casually — see tools/build-macos-app.sh.
@@ -127,6 +133,11 @@ namespace Orbweaver
             // The executable every build before phase 3 shipped as: ClaudeBuddy.exe
             // on Windows, Contents/MacOS/ClaudeBuddy in the macOS bundle.
             internal const string Executable = "ClaudeBuddy";
+            // The speech engine's executable before phase 3. Every engine
+            // already downloaded into speech-engine/<version>/ is named this,
+            // and NeuralSpeech.NewestOtherEngine still speaks through one
+            // while this build's own engine downloads.
+            internal const string SpeechEngineName = "ClaudeBuddySpeech";
         }
     }
 }

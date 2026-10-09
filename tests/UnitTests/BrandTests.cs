@@ -14,8 +14,8 @@ public class BrandTests
     //
     // CB-255 (phase 2) is that deliberate update: the names a user's disk and
     // OS hold flip to Orbweaver, each with its migration. SpeechEngineName and
-    // AssemblyName are binary names and stay until phase 3; MacBundleId never
-    // moves.
+    // AssemblyName are binary names and flipped with their binaries in phase 3
+    // (CB-256); MacBundleId never moves.
     [Theory]
     [InlineData(nameof(Brand.DisplayName), Brand.DisplayName, "Orbweaver")]
     [InlineData(nameof(Brand.ShortName), Brand.ShortName, "Orbweaver")]
@@ -25,7 +25,7 @@ public class BrandTests
     [InlineData(nameof(Brand.HookScriptPowerShell), Brand.HookScriptPowerShell, "OrbweaverHook.ps1")]
     [InlineData(nameof(Brand.HookScriptShell), Brand.HookScriptShell, "OrbweaverHook.sh")]
     [InlineData(nameof(Brand.SingleInstanceMutexName), Brand.SingleInstanceMutexName, "Orbweaver_SingleInstance_Mutex")]
-    [InlineData(nameof(Brand.SpeechEngineName), Brand.SpeechEngineName, "ClaudeBuddySpeech")]
+    [InlineData(nameof(Brand.SpeechEngineName), Brand.SpeechEngineName, "OrbweaverSpeech")]
     [InlineData(nameof(Brand.MacBundleId), Brand.MacBundleId, "io.github.wtvamp.claudebuddy")]
     [InlineData(nameof(Brand.HotkeyWindowClass), Brand.HotkeyWindowClass, "OrbweaverGlobalHotkeyWindow")]
     [InlineData(nameof(Brand.AssemblyName), Brand.AssemblyName, "Orbweaver")]
@@ -49,6 +49,7 @@ public class BrandTests
     [InlineData(nameof(Brand.Legacy.HookScriptShell), Brand.Legacy.HookScriptShell, "ClaudeBuddyHook.sh")]
     [InlineData(nameof(Brand.Legacy.SingleInstanceMutexName), Brand.Legacy.SingleInstanceMutexName, "ClaudeBuddy_SingleInstance_Mutex")]
     [InlineData(nameof(Brand.Legacy.Executable), Brand.Legacy.Executable, "ClaudeBuddy")]
+    [InlineData(nameof(Brand.Legacy.SpeechEngineName), Brand.Legacy.SpeechEngineName, "ClaudeBuddySpeech")]
     public void EachLegacyNameIsTheStringOldBuildsShipped(string member, string actual, string shipped)
     {
         Assert.True(actual == shipped, $"Brand.Legacy.{member} is \"{actual}\", shipped as \"{shipped}\"");
@@ -65,6 +66,7 @@ public class BrandTests
     [InlineData(Brand.Legacy.HookScriptPowerShell, Brand.HookScriptPowerShell)]
     [InlineData(Brand.Legacy.HookScriptShell, Brand.HookScriptShell)]
     [InlineData(Brand.Legacy.SingleInstanceMutexName, Brand.SingleInstanceMutexName)]
+    [InlineData(Brand.Legacy.SpeechEngineName, Brand.SpeechEngineName)]
     public void EachLegacyNameDiffersFromTheCurrentOne(string legacy, string current)
     {
         Assert.NotEqual(legacy, current);
