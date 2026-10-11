@@ -842,6 +842,23 @@ namespace ClaudeBuddy
     {
         private readonly string _service;
 
+        // The last successful read and the stamp it was taken at. When the stamp
+        // has not moved, the cached result is returned without calling
+        // SecItemCopyMatching — which is the call that prompts. The CLI rewrites
+        // the keychain item on every token refresh and that rewrite resets the
+        // item's ACL, wiping any "Always Allow" grant for this app. Without a
+        // cache every poll cycle would re-prompt, which is what CB-259 fixed.
+        //
+        // The cache is two-tier: in-memory (survives within a process) and on
+        // disk (survives across restarts). The disk cache lives in Buddy's own
+        // app-support directory, one file per keychain service, at 0600. On
+        // launch the stamp is checked (prompt-free), and if it matches the disk
+        // cache the credential is loaded from the file instead of the keychain —
+        // so a restart after the CLI refreshed its token is the only case that
+        // prompts, not every restart.
+        private CredentialRead? _cached;
+        private string? _cachedStamp;
+
         internal KeychainCredentialSource(string? service = null) =>
             _service = service ?? ClaudeCliCredentials.KeychainService;
 
@@ -856,32 +873,35 @@ namespace ClaudeBuddy
         public CredentialRead Read()
         {
             // A test process never asks the OS for this.
-            //
-            // The seam is here rather than at SourcesFor because SourcesFor's
-            // answer is itself a tested decision — ClaudeCloudCredentialPlatformTests
-            // asserts macOS gets this class, and it should keep doing so.
-            // Constructing one queries nothing; only this call does.
-            //
-            // The cost of not having it was measured, not imagined. A headless
-            // suite that reaches here waits out UnmeasuredReadBudget — forty-five
-            // seconds — for a consent dialog with nobody in front of it, leaks the
-            // pool thread parked inside Security.framework (see ReadWithinAsync on
-            // why that thread never comes back), and does it again for the next
-            // test that gets this far. Two abandoned UiTests hosts were found on a
-            // developer's machine at forty-three and eighty minutes, re-parented to
-            // launchd and still burning CPU.
-            //
-            // **It is invisible in CI, which is what let it survive.** A runner has
-            // no "Claude Code-credentials" item, so the query fails fast and the
-            // suite is green. The prompt only exists on a machine where somebody
-            // has actually logged in — the machine of whoever is trying to get work
-            // done. Green there, hung here, which is the worst shape a test has.
             if (ClaudeCliCredentials.CredentialStoreDisabled)
             {
                 return new CredentialRead(CredentialOutcome.NotLoggedIn, null, null,
                     "the credential store is disabled for this process");
             }
 
+            var stamp = MacOSKeychain.ModificationStamp(_service);
+
+            // Tier 1: in-memory cache.
+            if (_cached is { Outcome: CredentialOutcome.Found } cached
+                && stamp is not null
+                && string.Equals(stamp, _cachedStamp, StringComparison.Ordinal))
+            {
+                return cached;
+            }
+
+            // Tier 2: disk cache — survives restarts, never prompts.
+            if (stamp is not null)
+            {
+                var diskRead = ReadDiskCache(stamp);
+                if (diskRead is { Outcome: CredentialOutcome.Found })
+                {
+                    _cached = diskRead;
+                    _cachedStamp = stamp;
+                    return diskRead;
+                }
+            }
+
+            // Tier 3: the real keychain read — this is the call that prompts.
             var (outcome, json, detail) = MacOSKeychain.ReadGenericPassword(_service);
             if (outcome != CredentialOutcome.Found)
             {
@@ -889,7 +909,92 @@ namespace ClaudeBuddy
                     detail ?? ClaudeCliCredentials.Describe(outcome));
             }
 
-            return ClaudeCliCredentials.ParseCredentials(json, DateTimeOffset.UtcNow);
+            var read = ClaudeCliCredentials.ParseCredentials(json, DateTimeOffset.UtcNow);
+            if (read.Outcome == CredentialOutcome.Found)
+            {
+                _cached = read;
+                _cachedStamp = stamp;
+                WriteDiskCache(stamp, json);
+            }
+
+            return read;
+        }
+
+        private string CacheDir
+        {
+            get
+            {
+                var appSupport = Path.Combine(
+                    Environment.GetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR")
+                        is { Length: > 0 } scratch
+                        ? scratch
+                        : Path.Combine(
+                            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                            "ClaudeBuddy"),
+                    "credential-cache");
+                return appSupport;
+            }
+        }
+
+        private string CacheFilePath =>
+            Path.Combine(CacheDir, _service.Replace('/', '_').Replace('\\', '_') + ".json");
+
+        private CredentialRead? ReadDiskCache(string currentStamp)
+        {
+            try
+            {
+                var path = CacheFilePath;
+                if (!File.Exists(path)) return null;
+
+                var text = File.ReadAllText(path);
+                using var doc = JsonDocument.Parse(text);
+                var root = doc.RootElement;
+
+                if (!root.TryGetProperty("stamp", out var stampEl)
+                    || stampEl.GetString() is not { } savedStamp
+                    || !string.Equals(savedStamp, currentStamp, StringComparison.Ordinal))
+                {
+                    return null;
+                }
+
+                if (!root.TryGetProperty("credential", out var credEl)
+                    || credEl.GetRawText() is not { Length: > 0 } credJson)
+                {
+                    return null;
+                }
+
+                return ClaudeCliCredentials.ParseCredentials(credJson, DateTimeOffset.UtcNow);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private void WriteDiskCache(string? stamp, string? credentialJson)
+        {
+            if (stamp is null || credentialJson is null) return;
+
+            try
+            {
+                var dir = CacheDir;
+                Directory.CreateDirectory(dir);
+
+                var path = CacheFilePath;
+                var json = $"{{\"stamp\":{JsonSerializer.Serialize(stamp)},\"credential\":{credentialJson}}}";
+                File.WriteAllText(path, json);
+
+                if (OperatingSystem.IsMacOS() || OperatingSystem.IsLinux())
+                {
+                    File.SetUnixFileMode(path,
+                        UnixFileMode.UserRead | UnixFileMode.UserWrite);
+                }
+            }
+            catch
+            {
+                // Best effort — failing to cache just means the next launch
+                // prompts again, which is the pre-cache behaviour.
+            }
         }
     }
 }
