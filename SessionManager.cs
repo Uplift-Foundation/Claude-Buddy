@@ -82,6 +82,31 @@ namespace ClaudeBuddy
         [JsonPropertyName("cli")]
         public string Cli { get; set; } = "";
 
+        // How Claude Code was started, in its own words: CLAUDE_CODE_ENTRYPOINT,
+        // which the hook copies through for Claude Code sessions only. "cli"
+        // for a terminal, "sdk-cli" for `claude -p` and other SDK callers,
+        // "claude-desktop" for a session the Claude Desktop app hosts.
+        //
+        // Serialized for the same reason Cli directly above is: the hook is
+        // what knows it, and ResetSessionToIdle writes this object back over
+        // the hook's file, so a hook-owned fact has to survive that round trip.
+        // Absent reads as "", which every file older than CB-265 does.
+        [JsonPropertyName("entrypoint")]
+        public string Entrypoint { get; set; } = "";
+
+        public const string DesktopEntrypoint = "claude-desktop";
+
+        // A Claude Code session the Claude Desktop app started and owns
+        // (CB-265). It has no terminal by nature, not because it is headless:
+        // clicking its orb brings the hosting app forward, and its stdin is
+        // the app's, so the chat panel reads it but cannot type into it.
+        // Claude Code only — a Codex process spawned from a Desktop session's
+        // Bash tool inherits the variable, and is not hosted by anything.
+        [JsonIgnore]
+        public bool IsDesktopHosted =>
+            Source == SessionSource.ClaudeCode
+            && string.Equals(Entrypoint, DesktopEntrypoint, StringComparison.OrdinalIgnoreCase);
+
         // Which kind of thing this session is. Derived from Cli rather than
         // stored, by SourceOf, and never serialized — an enum here because it
         // is entirely internal and a typo should not compile, a string on the
