@@ -277,6 +277,18 @@ namespace ClaudeBuddy
         [ExcludeFromCodeCoverage]
         private static List<(string Dir, string? ConfigDir)> Accounts()
         {
+            string?[]? transcripts;
+            lock (Cache.Gate) transcripts = _liveTranscripts;
+
+            return Accounts(transcripts);
+        }
+
+        // The same, filtered by the transcripts given rather than the ones the
+        // scan last noted — which is how Stop asks only the account that owns
+        // the one session it was handed (CB-264).
+        [ExcludeFromCodeCoverage]
+        private static List<(string Dir, string? ConfigDir)> Accounts(IReadOnlyList<string?>? transcripts)
+        {
             var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             var inherited = Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR");
             var inheritedDir = string.IsNullOrWhiteSpace(inherited)
@@ -286,9 +298,6 @@ namespace ClaudeBuddy
             var all = new List<(string Dir, string? ConfigDir)> { (inheritedDir, null) };
             all.AddRange(ExtraAccountDirs(home, ClaudeBuddySettings.ClaudeCodeProfileDirs, inherited)
                 .Select(dir => (dir, (string?)dir)));
-
-            string?[]? transcripts;
-            lock (Cache.Gate) transcripts = _liveTranscripts;
 
             var ask = AccountsToAsk(all.Select(a => a.Dir).ToList(), transcripts);
             return all.Where(a => ask.Contains(a.Dir, StringComparer.OrdinalIgnoreCase)).ToList();
@@ -483,10 +492,32 @@ namespace ClaudeBuddy
         [ExcludeFromCodeCoverage]
         private static Dictionary<string, string>? ReadOne(string claude, string? configDir)
         {
+            // --json is documented as not needing a tty, which is what makes it
+            // usable from a GUI app at all.
+            if (Run(claude, configDir, "agents", "--json") is not (0, var stdout)) return null;
+
             try
             {
-                // --json is documented as not needing a tty, which is what
-                // makes it usable from a GUI app at all.
+                return Parse(stdout);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        // One `claude` invocation under one account: its exit code and stdout,
+        // or null for a CLI that could not be started or never answered. Split
+        // out of ReadOne when Stop became the second caller (CB-264); the
+        // reasons for draining both pipes and for the timeout are ReadOne's,
+        // stated above.
+        //
+        // Excluded from coverage: this is the process launch and nothing else.
+        [ExcludeFromCodeCoverage]
+        private static (int ExitCode, string Stdout)? Run(string claude, string? configDir, params string[] args)
+        {
+            try
+            {
                 var psi = new ProcessStartInfo(claude)
                 {
                     UseShellExecute = false,
@@ -495,8 +526,7 @@ namespace ClaudeBuddy
                     CreateNoWindow = true
                 };
 
-                psi.ArgumentList.Add("agents");
-                psi.ArgumentList.Add("--json");
+                foreach (var arg in args) psi.ArgumentList.Add(arg);
 
                 if (configDir is not null) psi.Environment["CLAUDE_CONFIG_DIR"] = configDir;
 
@@ -515,14 +545,125 @@ namespace ClaudeBuddy
                 var stdout = outTask.GetAwaiter().GetResult();
                 errTask.GetAwaiter().GetResult();
 
-                if (process.ExitCode != 0) return null;
-
-                return Parse(stdout);
+                return (process.ExitCode, stdout);
             }
             catch
             {
                 return null;
             }
+        }
+
+        // --- CB-264: ending a background job --------------------------------
+        //
+        // Signalling a job's worker does not end the job. The daemon hosts it,
+        // and a job that still has work in front of it — parked on a question,
+        // the case that matters, since a parked job is exactly the one somebody
+        // gives up on — is resumed on a fresh worker within seconds, orb and
+        // all. Measured on a scratch job blocked on a permission prompt: SIGTERM
+        // to its pid, listed without one for about nine seconds, then back on a
+        // new pid, still blocked, with nothing in the daemon's own log. A
+        // finished job given the same signal stays gone, which is why most End
+        // clicks looked as though they worked. Observed live first: a parked
+        // job ended "several times" from its orb, back every time.
+        //
+        // `claude stop <id>` is the daemon's own verb for it, and it holds: the
+        // same scratch job, stopped that way, left the active listing and read
+        // `stopped` under --all. Its conversation is kept, which the CLI states
+        // and which is the right default for a gesture with no confirm.
+
+        // Whether End should ask the daemon before reaching for a signal.
+        //
+        // Only Claude Code has a daemon. A listing that names the session in any
+        // state is reason enough — a finished job is harmless to stop — and so
+        // is a listing that could not be read, since Unknown says nothing about
+        // the session and Stop reads a fresh one of its own before acting.
+        // NotAJob, an answer actually read, is the one case worth skipping: a
+        // terminal session, which costs the click a pointless subprocess.
+        internal static bool WorthAskingTheDaemon(
+            SessionSource source, Dictionary<string, string>? states, string sessionId) =>
+            source == SessionSource.ClaudeCode && Phase(states, sessionId) != JobPhase.NotAJob;
+
+        // The daemon's short id for the job running this session, off a raw
+        // `claude agents --json`. Null when no background row is running it.
+        //
+        // Read off the row rather than derived, for the reason Parse gives: a
+        // resumed job keeps its first session's id while running a new one —
+        // the live case was job 80b19c48 running session f5e13eda-…, so
+        // JobIdOf would have stopped nothing, or something else. The short id
+        // is matched only for a row that names no session, the same fallback
+        // Parse keeps, and for no other reason.
+        internal static string? JobIdFor(string json, string sessionId)
+        {
+            if (string.IsNullOrEmpty(sessionId)) return null;
+
+            JsonDocument document;
+            try
+            {
+                document = JsonDocument.Parse(json);
+            }
+            catch (JsonException)
+            {
+                return null;
+            }
+
+            using (document)
+            {
+                if (document.RootElement.ValueKind != JsonValueKind.Array) return null;
+
+                string? fallback = null;
+                foreach (var entry in document.RootElement.EnumerateArray())
+                {
+                    if (entry.ValueKind != JsonValueKind.Object) continue;
+                    if (Text(entry, "id") is not { Length: > 0 } jobId) continue;
+
+                    var named = Text(entry, "sessionId");
+                    if (named == sessionId) return jobId;
+                    if (string.IsNullOrEmpty(named) && jobId == JobIdOf(sessionId)) fallback ??= jobId;
+                }
+
+                return fallback;
+            }
+        }
+
+        // Asks the daemon that owns this session to stop its job. True only
+        // when a daemon named the job and `claude stop` said yes; false sends
+        // the caller back to the signal it always used, so a machine where the
+        // CLI cannot be reached ends sessions exactly as it did before.
+        //
+        // Every account the transcript could belong to is asked, through the
+        // same attribution the listing uses — one, ordinarily — and the stop
+        // goes to the daemon whose listing named the job, never another: two
+        // daemons' eight-character ids can collide (see Merge), and a stop
+        // sent to the wrong one would end somebody else's job.
+        //
+        // Excluded from coverage: two process launches. What decides which job
+        // is JobIdFor, and which accounts is AccountsToAsk, both covered.
+        [ExcludeFromCodeCoverage]
+        internal static bool Stop(string sessionId, string? transcriptPath)
+        {
+            var claude = ClaudeBinary.Path;
+            if (claude is null) return false;
+
+            foreach (var (_, configDir) in Accounts(new[] { transcriptPath }))
+            {
+                if (Run(claude, configDir, "agents", "--json") is not (0, var listing)) continue;
+                if (JobIdFor(listing, sessionId) is not { } jobId) continue;
+
+                var stopped = Run(claude, configDir, "stop", jobId) is (0, _);
+                if (stopped) Invalidate();
+                return stopped;
+            }
+
+            return false;
+        }
+
+        // A stopped job leaves the listing, and the next scan should see that
+        // rather than a cached row for up to ten seconds that would keep its
+        // orb up — the same orb the user just asked to be rid of.
+        [ExcludeFromCodeCoverage]
+        private static void Invalidate()
+        {
+            lock (Cache.Gate) _stamp = Environment.TickCount64 - CacheMs;
         }
 
         // `claude agents --json` turned into the states IsLive asks about, keyed
