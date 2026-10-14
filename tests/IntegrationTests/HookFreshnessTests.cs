@@ -229,7 +229,12 @@ namespace ClaudeBuddy.Tests
         {
             var expected = Write("app/OrbweaverHook.ps1", "x");
 
-            Assert.Equal(expected, HookFreshness.BundledScript("OrbweaverHook.ps1", Path.Combine(_root, "app")));
+            // Normalised, because Write joins with "/" and the code under test
+            // with the platform separator; on Windows those are the same file
+            // spelled two ways, which is what the Windows CI leg caught.
+            Assert.Equal(
+                Path.GetFullPath(expected),
+                Path.GetFullPath(HookFreshness.BundledScript("OrbweaverHook.ps1", Path.Combine(_root, "app"))!));
         }
 
         [Fact]
