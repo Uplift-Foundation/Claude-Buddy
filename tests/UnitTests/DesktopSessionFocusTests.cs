@@ -188,6 +188,25 @@ public class DesktopSessionFocusTests
         Assert.False(DesktopSessionFocus.LooksLikeDesktopMain("", onWindows: true));
     }
 
+    [Fact]
+    public void OnWindowsAWindowsAppsPathInALaunchersArgumentsIsNotTheHost()
+    {
+        const string app = @"C:\Program Files\WindowsApps\Claude_1.0_x64__abc\app\Claude.exe";
+
+        Assert.True(DesktopSessionFocus.LooksLikeDesktopMain($"\"{app}\" --squirrel", onWindows: true));
+        Assert.False(DesktopSessionFocus.LooksLikeDesktopMain($"C:\\Windows\\System32\\cmd.exe /c \"{app}\"", onWindows: true));
+        Assert.False(DesktopSessionFocus.LooksLikeDesktopMain($"\"C:\\tools\\launcher.exe\" \"{app}\"", onWindows: true));
+    }
+
+    [Theory]
+    [InlineData("\"C:\\a b\\x.exe\" --flag", "C:\\a b\\x.exe")]
+    [InlineData("\"C:\\a b\\x.exe", "C:\\a b\\x.exe")]
+    [InlineData("C:\\a b\\x.EXE --flag", "C:\\a b\\x.EXE")]
+    [InlineData("  claude --flag", "claude")]
+    [InlineData("claude", "claude")]
+    public void ExecutableOfTakesTheProgramNotItsArguments(string command, string expected) =>
+        Assert.Equal(expected, DesktopSessionFocus.ExecutableOf(command));
+
     // --- FallbackPid ------------------------------------------------------------
 
     [Fact]

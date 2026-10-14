@@ -82,10 +82,39 @@ namespace ClaudeBuddy
 
             if (onWindows)
             {
-                return command.Contains(WindowsAppsMarker, StringComparison.OrdinalIgnoreCase)
+                // The marker has to be in the executable itself, not merely
+                // somewhere on the line: a launcher or shell above the session
+                // whose *arguments* name a WindowsApps path would otherwise be
+                // taken for the host and activated in its place.
+                return ExecutableOf(command).Contains(WindowsAppsMarker, StringComparison.OrdinalIgnoreCase)
                     && !command.Contains("--type=", StringComparison.Ordinal);
             }
 
+            return MacMainEndsAt(command);
+        }
+
+        // The executable part of a Windows command line: the quoted first
+        // token when it is quoted, which Win32_Process gives for anything under
+        // Program Files; otherwise everything up to the first ".exe", since an
+        // unquoted path can still contain spaces; failing both, the first word.
+        internal static string ExecutableOf(string command)
+        {
+            var line = command.TrimStart();
+            if (line.StartsWith('"'))
+            {
+                var close = line.IndexOf('"', 1);
+                return close < 0 ? line[1..] : line[1..close];
+            }
+
+            var exe = line.IndexOf(".exe", StringComparison.OrdinalIgnoreCase);
+            if (exe >= 0) return line[..(exe + 4)];
+
+            var space = line.IndexOf(' ');
+            return space < 0 ? line : line[..space];
+        }
+
+        private static bool MacMainEndsAt(string command)
+        {
             var from = 0;
             while (true)
             {

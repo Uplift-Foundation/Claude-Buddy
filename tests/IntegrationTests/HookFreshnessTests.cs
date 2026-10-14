@@ -233,13 +233,16 @@ namespace ClaudeBuddy.Tests
         }
 
         [Fact]
-        public void BundledScriptIsFoundByWalkingUpFromASourceBuild()
+        public void ASourceBuildNeverFindsTheRepoCopyAndSoNeverRefreshes()
         {
-            var expected = Write("repo/OrbweaverHook.sh", "x");
+            // The repo-root script is right there, four levels up — and must
+            // not be used, or `dotnet run` from any worktree overwrites the
+            // user's installed hook with that branch's version.
+            Write("repo/OrbweaverHook.sh", "x");
             var baseDir = Path.Combine(_root, "repo", "bin", "Debug", "net10.0");
             Directory.CreateDirectory(baseDir);
 
-            Assert.Equal(expected, HookFreshness.BundledScript("OrbweaverHook.sh", baseDir));
+            Assert.Null(HookFreshness.BundledScript("OrbweaverHook.sh", baseDir));
         }
 
         [Fact]

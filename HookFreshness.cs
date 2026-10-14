@@ -61,14 +61,16 @@ namespace ClaudeBuddy
             var resources = Path.Combine(baseDirectory, "..", "Resources", name);
             if (File.Exists(resources)) return Path.GetFullPath(resources);
 
-            var dir = new DirectoryInfo(baseDirectory);
-            for (var i = 0; i < 6 && dir is not null; i++, dir = dir.Parent)
-            {
-                var candidate = Path.Combine(dir.FullName, name);
-                if (File.Exists(candidate)) return candidate;
-            }
-
-            return null;
+            // Beside the exe and nowhere further up. A source build used to be
+            // found by walking up to the repo root, which meant any `dotnet run`
+            // from a feature worktree overwrote the user's real installed hook
+            // with that branch's copy — on a machine where a dozen agents build
+            // a dozen branches, the installed hook would be whichever ran last.
+            // The build does not copy the script into bin/, so a source build
+            // finds nothing here and refreshes nothing, which is the point:
+            // only an installed app speaks for what the installed hook should be.
+            var beside = Path.Combine(baseDirectory, name);
+            return File.Exists(beside) ? beside : null;
         }
 
         // What happened to one installed copy, for the log.
