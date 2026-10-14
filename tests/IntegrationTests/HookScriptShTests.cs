@@ -72,6 +72,7 @@ public class HookScriptShTests
         psi.Environment.Remove("GROK_HOOK_EVENT");
         psi.Environment.Remove("GROK_WORKSPACE_ROOT");
         psi.Environment.Remove("GROK_HOME");
+        psi.Environment.Remove("CLAUDE_CODE_ENTRYPOINT");
         if (extraEnv is not null)
         {
             foreach (var (key, value) in extraEnv)
@@ -549,5 +550,69 @@ public class HookScriptShTests
         AssertSilentSuccess(result);
 
         Assert.True(File.Exists(StatusFile(tmp.FullName, "unknown")));
+    }
+
+    // CB-265: the hook records CLAUDE_CODE_ENTRYPOINT as "entrypoint" so the app
+    // can keep an orb for a Claude Code session Claude Desktop launched, which
+    // has no terminal at all. The harness strips the variable from every
+    // child (this suite itself usually runs inside Claude Code, where it is
+    // "cli"), so each case below sets exactly what it is about.
+    private static string EntrypointRun(string agent, string? entrypoint, string sessionId)
+    {
+        var tmp = Directory.CreateTempSubdirectory("cb-hook-");
+        var payload = Payload(new { session_id = sessionId, cwd = "/tmp/proj", transcript_path = "" });
+        var env = new Dictionary<string, string>
+        {
+            ["CODEX_HOME"] = EmptyCodexHome(tmp.FullName),
+            ["GROK_HOME"] = Path.Combine(tmp.FullName, "grok-home")
+        };
+        if (entrypoint is not null) env["CLAUDE_CODE_ENTRYPOINT"] = entrypoint;
+
+        var result = RunHook(agent, "idle", payload, tmp.FullName, env);
+        AssertSilentSuccess(result);
+        return File.ReadAllText(StatusFile(tmp.FullName, sessionId));
+    }
+
+    [UnixFact]
+    public void DesktopEntrypointIsRecordedForAClaudeSession()
+    {
+        var status = EntrypointRun("claude", "claude-desktop", "ep-desktop");
+
+        Assert.Contains("\"cli\":\"claude\",\"entrypoint\":\"claude-desktop\",\"cwd\"", status);
+        Assert.True(JsonSerializer.Deserialize<SessionStatus>(status)!.IsDesktopHosted);
+    }
+
+    [UnixFact]
+    public void ACliEntrypointIsRecordedAsIsAndIsNotDesktop()
+    {
+        var status = EntrypointRun("claude", "cli", "ep-cli");
+
+        Assert.Contains("\"entrypoint\":\"cli\"", status);
+        Assert.False(JsonSerializer.Deserialize<SessionStatus>(status)!.IsDesktopHosted);
+    }
+
+    [UnixFact]
+    public void AnUnsetEntrypointIsWrittenEmpty()
+    {
+        var status = EntrypointRun("claude", null, "ep-unset");
+
+        Assert.Contains("\"entrypoint\":\"\"", status);
+    }
+
+    [UnixFact]
+    public void QuotesAndBackslashesAreStrippedFromTheEntrypointSoTheJsonSurvives()
+    {
+        var status = EntrypointRun("claude", "claude-\"desk\\top x", "ep-hostile");
+
+        Assert.Contains("\"entrypoint\":\"claude-desktopx\"", status);
+        // The whole file must still parse; an unescaped quote would break it.
+        Assert.Equal("claude-desktopx", JsonSerializer.Deserialize<SessionStatus>(status)!.Entrypoint);
+    }
+
+    [UnixFact]
+    public void CodexAndGrokFilesNeverCarryAnEntrypointEvenWhenTheVariableIsInherited()
+    {
+        Assert.Contains("\"entrypoint\":\"\"", EntrypointRun("codex", "claude-desktop", "ep-codex"));
+        Assert.Contains("\"entrypoint\":\"\"", EntrypointRun("grok", "claude-desktop", "ep-grok"));
     }
 }

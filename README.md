@@ -905,6 +905,12 @@ automatically. A second Linux user account inside the same distro is the one
 combination left unwired, since that needs hooks added inside *their* account
 specifically — the "By hand" section further down still covers that case.
 
+## Claude Desktop sessions
+
+A Claude Code session started from the Code tab of the Claude Desktop app has no terminal at all: no tty, no `TERM_PROGRAM`, no tmux pane. The hook still fires for it, and what it records is the one thing that tells it apart from a terminal session, an `entrypoint` field holding Claude Code's own `CLAUDE_CODE_ENTRYPOINT` (`claude-desktop` for Desktop, `cli` or `sdk-cli` elsewhere). Only a Claude Code file carries it; Codex and Grok files write it empty, and the hook keeps just `A-Z a-z 0-9 _ -` from the value so it can never break the JSON. A file from an older hook has no such key and reads as not Desktop-hosted, which is what it was.
+
+The app uses that field to keep such a session's orb rather than dropping it for having nowhere to focus, and clicking the orb brings Claude Desktop forward instead of trying to find a terminal. It cannot jump to the exact conversation, and typing goes through Claude Desktop, not the orb's chat panel. Updating the app does not rewrite an installed hook; re-run the hook installer (or let the app refresh its copy of the script) so Desktop sessions start recording the field. `docs/claude-desktop-sessions-findings.md` separates what was measured on a Mac from what is assumed for Windows.
+
 ## Background jobs and parked sessions
 
 Claude Code can run work with nobody sitting in front of it: a background job
@@ -2589,7 +2595,8 @@ outside the app (a launchd agent, an installer replacing the bundle) stopped it.
   string all live there.
 - **Click-to-focus coverage**: `TerminalFocuser.cs` maps what the hook
   scripts record (`term_program`, iTerm session UUID, tty, tmux socket/pane
-  on macOS; `term_pid` on Windows; `session_pid` on both) to an AppleScript that selects the right
+  on macOS; `term_pid` on Windows; `session_pid` on both; and `entrypoint`,
+  which marks a Claude Desktop-hosted session that has no terminal to focus) to an AppleScript that selects the right
   window, an `open -a` activation, or a `SetForegroundWindow` call. Adding a
   terminal only means adding a case if you want *exact tab* selection for it
   — plain activation already works for anything that lives in an `.app`.

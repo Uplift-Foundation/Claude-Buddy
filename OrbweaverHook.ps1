@@ -404,6 +404,15 @@ if ($Agent -eq 'grok' -and $State -ne 'ended') {
     } catch {}
 }
 
+# Claude Code's CLAUDE_CODE_ENTRYPOINT: "cli" in a terminal, "claude-desktop"
+# when Claude Desktop's Code tab spawned it. Only Claude Code sets it, so a
+# Codex or Grok file gets '' even if inherited. Reduced to [A-Za-z0-9_-] to
+# match the .sh hook, so the two write the same value for the same input.
+$entrypoint = ''
+if ($Agent -eq 'claude' -and $env:CLAUDE_CODE_ENTRYPOINT) {
+    $entrypoint = $env:CLAUDE_CODE_ENTRYPOINT -replace '[^A-Za-z0-9_-]', ''
+}
+
 $status = @{
     state           = $State
 
@@ -411,6 +420,7 @@ $status = @{
     # Code one. A file from a hook older than this key has none, which reads as
     # Claude Code -- which is what it was.
     cli             = $Agent
+    entrypoint      = $entrypoint
     cwd             = $cwd
     title           = $title
     color           = $color
