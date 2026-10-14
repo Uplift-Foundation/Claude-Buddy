@@ -60,7 +60,8 @@ public class SessionScanTests
             string title = "", string cwd = "/Users/user/project",
             int? pid = null, string termProgram = "iTerm.app",
             DateTime? written = null, string tty = "/dev/ttys004",
-            string tmuxPane = "", string transcriptPath = "")
+            string tmuxPane = "", string transcriptPath = "",
+            string entrypoint = "")
         {
             var path = Path.Combine(Dir, sessionId + ".txt");
             File.WriteAllText(path, System.Text.Json.JsonSerializer.Serialize(new SessionStatus
@@ -74,6 +75,7 @@ public class SessionScanTests
                 Tty = tty,
                 TmuxPane = tmuxPane,
                 TranscriptPath = transcriptPath,
+                Entrypoint = entrypoint,
             }));
 
             if (written is not null) File.SetLastWriteTimeUtc(path, written.Value);
@@ -1286,6 +1288,29 @@ public class SessionScanTests
         manager.ScanAndUpdate();
 
         Assert.DoesNotContain("headless", OrbIds(manager));
+    }
+
+    // CB-265. The same blind Claude Code file, once as Claude Desktop's and
+    // once as each other entrypoint's. Only Desktop's becomes an orb; the
+    // others are the negative controls, and sit beside the Codex case above.
+    // The listing is a seam, never the machine's real daemon.
+    [AvaloniaTheory]
+    [InlineData(SessionStatus.DesktopEntrypoint, true)]
+    [InlineData("cli", false)]
+    [InlineData("sdk-cli", false)]
+    [InlineData("", false)]
+    public void AClaudeDesktopFileWithNoTerminalBecomesAnOrbAndItsTwinsDoNot(
+        string entrypoint, bool becomesAnOrb)
+    {
+        // One scratch per case: all of them record this process's pid, and two
+        // files sharing a pid supersede each other, which is a different rule.
+        using var scratch = new Scratch();
+        scratch.Write("blind", entrypoint: entrypoint, tty: "", termProgram: "");
+
+        var manager = Manager(scratch, jobListing: () => Listing());
+        manager.ScanAndUpdate();
+
+        Assert.Equal(becomesAnOrb, OrbIds(manager).Contains("blind"));
     }
 
     // --- broadcasts that touch every orb ---

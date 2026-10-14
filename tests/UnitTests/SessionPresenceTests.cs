@@ -120,6 +120,44 @@ public class SessionPresenceTests
             Status(), knowsATerminal: true, sharesItsPid: false));
     }
 
+    // CB-265. Claude Desktop's sessions have a pid and no terminal, which is
+    // exactly the first shape above — and the daemon has never heard of them,
+    // so asking would spawn `claude agents --json` for an answer that cannot
+    // matter. The "cli" twin is the control that the gate itself is unchanged.
+    [Fact]
+    public void AClaudeDesktopSessionIsNeverWorthAskingTheDaemonAbout()
+    {
+        var desktop = Status();
+        desktop.Entrypoint = SessionStatus.DesktopEntrypoint;
+        var cli = Status();
+        cli.Entrypoint = "cli";
+
+        Assert.False(SessionPresence.WorthAskingTheDaemon(
+            desktop, knowsATerminal: false, sharesItsPid: false));
+        Assert.False(SessionPresence.WorthAskingTheDaemon(
+            desktop, knowsATerminal: true, sharesItsPid: true));
+        Assert.True(SessionPresence.WorthAskingTheDaemon(
+            cli, knowsATerminal: false, sharesItsPid: false));
+    }
+
+    [Fact]
+    public void AClaudeDesktopSessionCanBeDismissedButNotEnded()
+    {
+        var desktop = Status();
+        desktop.Entrypoint = SessionStatus.DesktopEntrypoint;
+
+        Assert.True(SessionPresence.CanDismiss(desktop));
+        Assert.False(SessionPresence.CanEndSession(desktop));
+
+        // Controls: same pid, any other entrypoint, End is offered.
+        foreach (var entrypoint in new[] { "cli", "sdk-cli", "" })
+        {
+            var other = Status();
+            other.Entrypoint = entrypoint;
+            Assert.True(SessionPresence.CanEndSession(other));
+        }
+    }
+
     // The third shape, and the one that was missing. An Agent-View-dispatched
     // background session does not fork a process — it starts a second
     // conversation inside the `claude` process already running — so its file
