@@ -1738,6 +1738,7 @@ namespace ClaudeBuddy
             string sessionId, SessionStatus status,
             ISet<string> leadsWithLiveAgents) =>
             status.Source == SessionSource.ClaudeCode
+            && !status.IsDesktopHosted
             && !KnowsATerminal(status)
             && (leadsWithLiveAgents.Contains(sessionId)
                 || status.SessionPid <= 0);
@@ -1819,7 +1820,12 @@ namespace ClaudeBuddy
             // appears. It appears within the first exchange, and the trade is a
             // brand-new session's orb arriving late against a phantom's never
             // leaving.
+            //
+            // Claude Desktop's sessions are exempt (CB-265): the conversation is
+            // in Desktop's Code tab and the click opens Desktop, so neither a
+            // terminal nor a readable transcript is what the orb is for.
             if (status.IsLocalCli
+                && !status.IsDesktopHosted
                 && !KnowsATerminal(status)
                 && !leadsWithLiveAgents.Contains(sessionId)
                 && !string.IsNullOrEmpty(status.TranscriptPath)
@@ -1847,7 +1853,10 @@ namespace ClaudeBuddy
             // not because it is a leftover. That used to be covered for free
             // by the pid test below — a background agent recorded no pid — and
             // is now stated, because the hook records its real pid.
+            // Claude Desktop hosts its sessions with no tty, TERM_PROGRAM or pane
+            // by design (CB-265, measured), so it is exempt here too.
             if (status.IsLocalCli
+                && !status.IsDesktopHosted
                 && string.IsNullOrEmpty(status.Tty)
                 && string.IsNullOrEmpty(status.TermProgram)
                 && string.IsNullOrEmpty(status.TmuxPane)
