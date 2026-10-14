@@ -575,8 +575,18 @@ mkdir -p "$DIR"
 # app has an enum for it and the whole point is that a typo shouldn't be
 # indistinguishable from a Claude Code session. A file from an older hook has
 # no such key, which reads as Claude Code, which is what it was.
-printf '{"state":"%s","cli":"%s","cwd":"%s","title":"%s","color":"%s","term_program":"%s","term_id":"%s","tty":"%s","tmux_socket":"%s","tmux_pane":"%s","tmux_bin":"%s","session_pid":%s,"transcript_path":"%s"}' \
-    "$STATE" "$AGENT" "$CWD" "$TITLE" "$COLOR" "$TERM_PROGRAM" "$TERM_ID" "$TTY" \
+# "entrypoint" is how Claude Code says what launched it: "cli" in a terminal,
+# "claude-desktop" when Claude Desktop's Code tab spawned it with no terminal at
+# all. The app needs it to keep such a session's orb, which would otherwise be
+# dropped for having nowhere to focus. Only Claude Code sets the variable, so a
+# Codex or Grok file gets "" even if the hook inherited it from a parent
+# claude. Reduced to [A-Za-z0-9_-] because it is interpolated into JSON by
+# printf, and a quote or backslash in it would corrupt the file.
+ENTRYPOINT=""
+[ "$AGENT" = "claude" ] && ENTRYPOINT=$(printf '%s' "${CLAUDE_CODE_ENTRYPOINT:-}" | tr -cd 'A-Za-z0-9_-')
+
+printf '{"state":"%s","cli":"%s","entrypoint":"%s","cwd":"%s","title":"%s","color":"%s","term_program":"%s","term_id":"%s","tty":"%s","tmux_socket":"%s","tmux_pane":"%s","tmux_bin":"%s","session_pid":%s,"transcript_path":"%s"}' \
+    "$STATE" "$AGENT" "$ENTRYPOINT" "$CWD" "$TITLE" "$COLOR" "$TERM_PROGRAM" "$TERM_ID" "$TTY" \
     "$TMUX_SOCKET" "$TMUX_PANE_ID" "$TMUX_BIN" "${SESSION_PID:-0}" "$TRANSCRIPT" > "$FILE"
 
 exit 0

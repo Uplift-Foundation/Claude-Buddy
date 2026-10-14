@@ -81,6 +81,7 @@ public class HookScriptPs1Tests
         psi.Environment.Remove("GROK_HOOK_EVENT");
         psi.Environment.Remove("GROK_WORKSPACE_ROOT");
         psi.Environment.Remove("GROK_HOME");
+        psi.Environment.Remove("CLAUDE_CODE_ENTRYPOINT");
 
         if (extraEnv is not null)
         {
@@ -502,4 +503,88 @@ public class HookScriptPs1Tests
 
     [PwshFact]
     public void CodexRolloutFallback_FindsTheRolloutFile_WithoutCrashingOrPrinting_Pwsh() => CodexRolloutFallback_FindsTheRolloutFile_WithoutCrashingOrPrintingCase("pwsh");
+
+    // CB-265: same contract as the bash twin -- CLAUDE_CODE_ENTRYPOINT is
+    // recorded as "entrypoint", sanitized to [A-Za-z0-9_-], claude only.
+    private static string EntrypointRun(string exe, string agent, string? entrypoint, string sessionId)
+    {
+        var tempDir = Directory.CreateTempSubdirectory("cb-hook-ps1-").FullName;
+        var codexHome = Path.Combine(tempDir, "codex-home");
+        Directory.CreateDirectory(codexHome);
+        var grokHome = Path.Combine(tempDir, "grok-home");
+        Directory.CreateDirectory(grokHome);
+        var payload = Payload(new { session_id = sessionId, cwd = "C:\\proj", transcript_path = "" });
+        var env = new Dictionary<string, string> { ["CODEX_HOME"] = codexHome, ["GROK_HOME"] = grokHome };
+        if (entrypoint is not null) env["CLAUDE_CODE_ENTRYPOINT"] = entrypoint;
+
+        var result = RunHook(exe, agent, "idle", payload, tempDir, env);
+        AssertSilentSuccess(result);
+        return File.ReadAllText(StatusFile(tempDir, sessionId));
+    }
+
+    private static void DesktopEntrypointIsRecordedForAClaudeSessionCase(string exe)
+    {
+        var status = EntrypointRun(exe, "claude", "claude-desktop", "ep-desktop");
+
+        Assert.Contains("\"entrypoint\":\"claude-desktop\"", status);
+        Assert.True(JsonSerializer.Deserialize<SessionStatus>(status)!.IsDesktopHosted);
+    }
+
+    private static void ACliEntrypointIsRecordedAsIsAndIsNotDesktopCase(string exe)
+    {
+        var status = EntrypointRun(exe, "claude", "cli", "ep-cli");
+
+        Assert.Contains("\"entrypoint\":\"cli\"", status);
+        Assert.False(JsonSerializer.Deserialize<SessionStatus>(status)!.IsDesktopHosted);
+    }
+
+    private static void AnUnsetEntrypointIsWrittenEmptyCase(string exe)
+    {
+        var status = EntrypointRun(exe, "claude", null, "ep-unset");
+
+        Assert.Contains("\"entrypoint\":\"\"", status);
+    }
+
+    private static void QuotesAndBackslashesAreStrippedFromTheEntrypointCase(string exe)
+    {
+        var status = EntrypointRun(exe, "claude", "claude-\"desk\\top x", "ep-hostile");
+
+        Assert.Equal("claude-desktopx", JsonSerializer.Deserialize<SessionStatus>(status)!.Entrypoint);
+    }
+
+    private static void CodexAndGrokFilesNeverCarryAnEntrypointCase(string exe)
+    {
+        Assert.Contains("\"entrypoint\":\"\"", EntrypointRun(exe, "codex", "claude-desktop", "ep-codex"));
+        Assert.Contains("\"entrypoint\":\"\"", EntrypointRun(exe, "grok", "claude-desktop", "ep-grok"));
+    }
+
+    [WindowsPowerShellFact]
+    public void DesktopEntrypointIsRecordedForAClaudeSession_Powershell51() => DesktopEntrypointIsRecordedForAClaudeSessionCase("powershell");
+
+    [PwshFact]
+    public void DesktopEntrypointIsRecordedForAClaudeSession_Pwsh() => DesktopEntrypointIsRecordedForAClaudeSessionCase("pwsh");
+
+    [WindowsPowerShellFact]
+    public void ACliEntrypointIsRecordedAsIsAndIsNotDesktop_Powershell51() => ACliEntrypointIsRecordedAsIsAndIsNotDesktopCase("powershell");
+
+    [PwshFact]
+    public void ACliEntrypointIsRecordedAsIsAndIsNotDesktop_Pwsh() => ACliEntrypointIsRecordedAsIsAndIsNotDesktopCase("pwsh");
+
+    [WindowsPowerShellFact]
+    public void AnUnsetEntrypointIsWrittenEmpty_Powershell51() => AnUnsetEntrypointIsWrittenEmptyCase("powershell");
+
+    [PwshFact]
+    public void AnUnsetEntrypointIsWrittenEmpty_Pwsh() => AnUnsetEntrypointIsWrittenEmptyCase("pwsh");
+
+    [WindowsPowerShellFact]
+    public void QuotesAndBackslashesAreStrippedFromTheEntrypoint_Powershell51() => QuotesAndBackslashesAreStrippedFromTheEntrypointCase("powershell");
+
+    [PwshFact]
+    public void QuotesAndBackslashesAreStrippedFromTheEntrypoint_Pwsh() => QuotesAndBackslashesAreStrippedFromTheEntrypointCase("pwsh");
+
+    [WindowsPowerShellFact]
+    public void CodexAndGrokFilesNeverCarryAnEntrypoint_Powershell51() => CodexAndGrokFilesNeverCarryAnEntrypointCase("powershell");
+
+    [PwshFact]
+    public void CodexAndGrokFilesNeverCarryAnEntrypoint_Pwsh() => CodexAndGrokFilesNeverCarryAnEntrypointCase("pwsh");
 }

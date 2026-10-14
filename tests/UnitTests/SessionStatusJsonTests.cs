@@ -4,16 +4,16 @@ using Xunit;
 namespace ClaudeBuddy.Tests;
 
 // Covers the JSON shape of SessionStatus (SessionManager.cs ~11-145) against
-// the exact literal ClaudeBuddyHook.sh writes. Per this repo's fixture rule
+// the exact literal OrbweaverHook.sh writes. Per this repo's fixture rule
 // (CLAUDE.md, Testing section), a fixture should come from real output, not
 // memory. There's no live hook run to capture here, so instead the fixture
 // is derived from the hook script's own printf — the line that writes $FILE:
 //
-//   printf '{"state":"%s","cli":"%s","cwd":"%s","title":"%s","color":"%s",
+//   printf '{"state":"%s","cli":"%s","entrypoint":"%s","cwd":"%s","title":"%s","color":"%s",
 //   "term_program":"%s","term_id":"%s","tty":"%s","tmux_socket":"%s",
 //   "tmux_pane":"%s","tmux_bin":"%s","session_pid":%s,"transcript_path":"%s"}'
 //
-// (ClaudeBuddyHook.sh, near the end). That field list and order is the real,
+// (OrbweaverHook.sh, near the end). That field list and order is the real,
 // load-bearing contract — just as authoritative as a captured file, since it
 // is literally what every macOS hook write produces.
 public class SessionStatusJsonTests
@@ -22,7 +22,7 @@ public class SessionStatusJsonTests
     // the one unquoted field, because the shell script substitutes a bare
     // number there.
     private const string HookProducedJson =
-        "{\"state\":\"generating\",\"cli\":\"codex\",\"cwd\":\"/Users/user/project\"," +
+        "{\"state\":\"generating\",\"cli\":\"codex\",\"entrypoint\":\"\",\"cwd\":\"/Users/user/project\"," +
         "\"title\":\"Fix the login bug\",\"color\":\"green\"," +
         "\"term_program\":\"vscode\",\"term_id\":\"term-1\",\"tty\":\"/dev/ttys002\"," +
         "\"tmux_socket\":\"default\",\"tmux_pane\":\"%3\",\"tmux_bin\":\"/opt/homebrew/bin/tmux\"," +
@@ -36,6 +36,7 @@ public class SessionStatusJsonTests
         Assert.NotNull(status);
         Assert.Equal("generating", status!.State);
         Assert.Equal("codex", status.Cli);
+        Assert.Equal("", status.Entrypoint);
         Assert.Equal("/Users/user/project", status.Cwd);
         Assert.Equal("Fix the login bug", status.Title);
         Assert.Equal("green", status.Color);
@@ -105,5 +106,49 @@ public class SessionStatusJsonTests
         Assert.NotNull(status);
         Assert.Equal("idle", status!.State);
         Assert.Equal("codex", status.Cli);
+    }
+
+    // CB-265 -----------------------------------------------------------------
+
+    // A status file from a hook older than the "entrypoint" key has none; that
+    // must read as "" and as not Desktop-hosted, not throw or guess.
+    [Fact]
+    public void Deserialize_LegacyFileWithoutEntrypoint_ReadsAsEmptyAndNotDesktop()
+    {
+        const string legacy = "{\"state\":\"idle\",\"cli\":\"claude\",\"cwd\":\"/tmp\"}";
+
+        var status = JsonSerializer.Deserialize<SessionStatus>(legacy);
+
+        Assert.NotNull(status);
+        Assert.Equal("", status!.Entrypoint);
+        Assert.False(status.IsDesktopHosted);
+    }
+
+    [Fact]
+    public void Serialize_KeepsEntrypointSoAResetRoundTripCannotEraseIt()
+    {
+        var json = JsonSerializer.Serialize(new SessionStatus { State = "idle", Entrypoint = "claude-desktop" });
+
+        Assert.Contains("\"entrypoint\":\"claude-desktop\"", json);
+        Assert.True(JsonSerializer.Deserialize<SessionStatus>(json)!.IsDesktopHosted);
+        // IsDesktopHosted is derived and [JsonIgnore]: never written to a hook-owned file.
+        Assert.DoesNotContain("IsDesktopHosted", json);
+    }
+
+    [Theory]
+    [InlineData("claude-desktop", SessionSource.ClaudeCode, true)]
+    [InlineData("Claude-Desktop", SessionSource.ClaudeCode, true)]
+    [InlineData("CLAUDE-DESKTOP", SessionSource.ClaudeCode, true)]
+    [InlineData("claude-desktop", SessionSource.Codex, false)]
+    [InlineData("claude-desktop", SessionSource.Grok, false)]
+    [InlineData("cli", SessionSource.ClaudeCode, false)]
+    [InlineData("sdk-cli", SessionSource.ClaudeCode, false)]
+    [InlineData("", SessionSource.ClaudeCode, false)]
+    public void IsDesktopHosted_NeedsClaudeCodeAndTheDesktopEntrypoint(
+        string entrypoint, SessionSource source, bool expected)
+    {
+        var status = new SessionStatus { Entrypoint = entrypoint, Source = source };
+
+        Assert.Equal(expected, status.IsDesktopHosted);
     }
 }
