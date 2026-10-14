@@ -1711,7 +1711,8 @@ public class SessionScanTests
         Func<int, SessionDependents.Verdict>? dependents = null,
         bool? onWindows = null,
         Func<string, string?>? transcriptHunt = null,
-        Action<int, SessionDependents.Verdict>? terminate = null)
+        Action<int, SessionDependents.Verdict>? terminate = null,
+        Func<string, string?, bool>? stopJob = null)
     {
         // Both CLIs on, for the reason Scan above states at length.
         ClaudeBuddySettings.ClaudeCodeEnabled = true;
@@ -1731,7 +1732,11 @@ public class SessionScanTests
             transcriptHunt: transcriptHunt,
             dependents: dependents ?? (_ => SessionDependents.Nothing),
             onWindows: onWindows,
-            terminate: terminate);
+            terminate: terminate,
+            // Never the real `claude stop`, which would ask this machine's own
+            // daemon about this machine's own jobs (CB-264). A test that wants
+            // the daemon to say yes says so.
+            stopJob: stopJob ?? ((_, _) => false));
         if (sweepGrace is not null) manager.SweepGrace = sweepGrace.Value;
         return manager;
     }
@@ -2890,6 +2895,133 @@ public class SessionScanTests
         // the next gesture, not a double click — is not swallowed by it.
         await manager.EndSession("dbl");
         Assert.Equal(2, kills);
+    }
+
+    // --- CB-264: a background job is stopped by its daemon -----------------
+    //
+    // Signalling a parked job's worker only makes the daemon resume it on a new
+    // pid, which is the orb the user ended coming straight back. These pin the
+    // routing; which job id the daemon is handed is BackgroundJobsStopTests'.
+
+    private static SessionStatus EndableJob(int pid = NeverAllocatedPid) =>
+        new() { Source = SessionSource.ClaudeCode, SessionPid = pid, TranscriptPath = "/x/projects/p/job-1.jsonl" };
+
+    [AvaloniaFact]
+    public async Task AParkedJobIsStoppedByItsDaemonAndNeverSignalled()
+    {
+        using var scratch = new Scratch();
+
+        var uiThread = Environment.CurrentManagedThreadId;
+        var stops = new List<(string Session, string? Transcript, int Thread)>();
+        var kills = 0;
+        var manager = Manager(scratch, () => Listing(("job-1", "blocked")),
+            terminate: (_, _) => Interlocked.Increment(ref kills),
+            stopJob: (session, transcript) =>
+            {
+                lock (stops) stops.Add((session, transcript, Environment.CurrentManagedThreadId));
+                return true;
+            });
+        StatusesOf(manager)["job-1"] = EndableJob();
+
+        await manager.EndSession("job-1");
+
+        var stop = Assert.Single(stops);
+        Assert.Equal("job-1", stop.Session);
+        Assert.Equal("/x/projects/p/job-1.jsonl", stop.Transcript);
+        Assert.NotEqual(uiThread, stop.Thread);
+        Assert.Equal(0, kills);
+    }
+
+    // A daemon that could not be asked, or did not know the job, leaves the
+    // session to the signal it always got — never to nothing.
+    [AvaloniaFact]
+    public async Task AJobTheDaemonDidNotStopFallsBackToTheSignal()
+    {
+        using var scratch = new Scratch();
+
+        var stops = 0;
+        var killed = new List<int>();
+        var manager = Manager(scratch, () => Listing(("job-1", "blocked")),
+            terminate: (pid, _) => { lock (killed) killed.Add(pid); },
+            stopJob: (_, _) => { Interlocked.Increment(ref stops); return false; });
+        StatusesOf(manager)["job-1"] = EndableJob();
+
+        await manager.EndSession("job-1");
+
+        Assert.Equal(1, stops);
+        Assert.Equal(new[] { NeverAllocatedPid }, killed);
+    }
+
+    // A listing that names the session as nothing is a terminal session, and
+    // costs the click no subprocess.
+    [AvaloniaFact]
+    public async Task ATerminalSessionNeverAsksTheDaemon()
+    {
+        using var scratch = new Scratch();
+
+        var stops = 0;
+        var kills = 0;
+        var manager = Manager(scratch, () => Listing(("someone-else", "blocked")),
+            terminate: (_, _) => Interlocked.Increment(ref kills),
+            stopJob: (_, _) => { Interlocked.Increment(ref stops); return true; });
+        StatusesOf(manager)["terminal"] = EndableJob();
+
+        await manager.EndSession("terminal");
+
+        Assert.Equal(0, stops);
+        Assert.Equal(1, kills);
+    }
+
+    // No listing at all says nothing about the session, so the daemon is still
+    // asked — Stop reads a fresh listing of its own before it acts.
+    [AvaloniaFact]
+    public async Task AnUnreadableListingStillAsksTheDaemon()
+    {
+        using var scratch = new Scratch();
+
+        var stops = 0;
+        var kills = 0;
+        var manager = Manager(scratch, () => null,
+            terminate: (_, _) => Interlocked.Increment(ref kills),
+            stopJob: (_, _) => { Interlocked.Increment(ref stops); return true; });
+        StatusesOf(manager)["job-1"] = EndableJob();
+
+        await manager.EndSession("job-1");
+
+        Assert.Equal(1, stops);
+        Assert.Equal(0, kills);
+    }
+
+    // The re-check, again, for the new hop: a stop that failed while a scan
+    // gave the id a new pid must not fall back to signalling the pid the click
+    // saw.
+    [AvaloniaFact]
+    public async Task ASessionThatChangedDuringTheStopIsNotKilled()
+    {
+        using var scratch = new Scratch();
+
+        using var gate = new ManualResetEventSlim(false);
+        using var asked = new ManualResetEventSlim(false);
+        var kills = 0;
+        var manager = Manager(scratch, () => Listing(("job-1", "blocked")),
+            terminate: (_, _) => Interlocked.Increment(ref kills),
+            stopJob: (_, _) =>
+            {
+                asked.Set();
+                Assert.True(gate.Wait(TimeSpan.FromSeconds(10)));
+                return false;
+            });
+        var statuses = StatusesOf(manager);
+        statuses["job-1"] = EndableJob();
+
+        var ending = manager.EndSession("job-1");
+        await Task.Run(() => Assert.True(asked.Wait(TimeSpan.FromSeconds(10))));
+
+        statuses["job-1"] = EndableJob(NeverAllocatedPid - 1);
+        gate.Set();
+        await ending;
+
+        Assert.Equal(0, kills);
     }
 
     // The click observes its task: a read that throws is written to crash.log

@@ -27,8 +27,15 @@ namespace ClaudeBuddy
     // Only ever the session's own pid. Not TermPid, which is the terminal the
     // user is typing in; not the daemon, which hosts every other background job
     // on the machine. One worker hosts exactly one session — each row of
-    // `claude agents --json` names a distinct pid — so this ends exactly what
-    // the menu item said it would.
+    // `claude agents --json` names a distinct pid — so this ends exactly the
+    // process the menu item named.
+    //
+    // The process, not necessarily the job (CB-264). A background job whose
+    // worker is signalled while it still has work in front of it is resumed by
+    // the daemon on a fresh pid, so for a job this would end nothing at all.
+    // SessionManager.EndSession therefore asks the daemon first, through
+    // BackgroundJobs.Stop, and only reaches here for a session that is not a
+    // job or a daemon that could not be asked.
     //
     // **That last paragraph is false for exactly one shape, and this is what
     // CB-26 added.** For the husk a backgrounded turn leaves behind, the

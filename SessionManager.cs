@@ -427,7 +427,8 @@ namespace ClaudeBuddy
             Func<string, AgentViewer?>? agentViewer = null,
             Func<IReadOnlyList<int>, IReadOnlyDictionary<int, AgentTeam.Membership>>? teams = null,
             Action<int, SessionDependents.Verdict>? terminate = null,
-            string? legacyStatusDir = null)
+            string? legacyStatusDir = null,
+            Func<string, string?, bool>? stopJob = null)
         {
             _statusDir = statusDir;
             _legacyStatusDir = legacyStatusDir;
@@ -452,6 +453,7 @@ namespace ClaudeBuddy
             _agentViewer = agentViewer ?? AgentTeamViewer.For;
             _teams = teams ?? AgentTeam.OfAll;
             _terminate = terminate ?? SessionTerminator.Terminate;
+            _stopJob = stopJob ?? BackgroundJobs.Stop;
 
             // AccountOrbs starts out visible, and nothing used to tell it
             // otherwise until a switch was flipped — so launching with every
@@ -479,6 +481,13 @@ namespace ClaudeBuddy
         // UI thread and that a refused session is never handed to it, without
         // a test signalling anything real.
         private readonly Action<int, SessionDependents.Verdict> _terminate;
+
+        // What asks the daemon to stop a background job, by session id and
+        // transcript path, answering whether it did (CB-264). A seam for the
+        // reason _terminate is one: the real one runs `claude stop` against
+        // whatever daemon is on the machine running the suite, which on a
+        // developer's Mac is their own, with their own jobs in it.
+        private readonly Func<string, string?, bool> _stopJob;
 
         // Every subprocess question this pass needs, asked. Runs on
         // ScheduleScan's background thread in production, and inline for
@@ -4409,6 +4418,14 @@ namespace ClaudeBuddy
         // it asked. UI-thread state, like _statuses, and released in a finally
         // that also runs on the UI thread, because every await above it
         // resumes there.
+        //
+        // A background job is asked to stop by its daemon before anything is
+        // signalled (CB-264). Signalling the worker of a parked job only makes
+        // the daemon resume it on a new pid, so the orb the user ended came
+        // straight back; BackgroundJobs.Stop has the measurement. Same hop and
+        // same re-check as the kill: the stop runs on a pool thread, and when
+        // the daemon could not be asked, the session is checked again before
+        // falling back to the signal it always got.
         public async Task EndSession(string sessionId)
         {
             if (!_statuses.TryGetValue(sessionId, out var status)) return;
@@ -4422,6 +4439,16 @@ namespace ClaudeBuddy
 
                 var dependents = await Task.Run(() => read(pid));
                 if (SessionDependents.BlocksTermination(dependents)) return;
+                if (!StillEndable(sessionId, pid)) return;
+
+                var source = status.Source;
+                var transcript = status.TranscriptPath;
+                var listing = _jobListing;
+                var stop = _stopJob;
+                var stopped = await Task.Run(() =>
+                    BackgroundJobs.WorthAskingTheDaemon(source, listing(), sessionId)
+                    && stop(sessionId, transcript));
+                if (stopped) return;
                 if (!StillEndable(sessionId, pid)) return;
 
                 var terminate = _terminate;
