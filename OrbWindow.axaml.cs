@@ -2790,6 +2790,11 @@ namespace ClaudeBuddy
             // for a conversation that has never been on this disk.
             if (TryOpenInBrowser()) return;
 
+            // A Claude Desktop-hosted session has no terminal; its window is the
+            // destination. Before the terminal path for the same reason as the
+            // arm above — that path would go hunting a pane that does not exist.
+            if (TryOpenClaudeDesktop()) return;
+
             if (!(_lastStatus?.IsLocalCli ?? false) && TryOpenRemoteChat()) return;
 
             TerminalFocuser.Focus(
@@ -3578,6 +3583,22 @@ namespace ClaudeBuddy
             if (!ClickRouting.OpensInABrowser(_lastStatus)) return false;
 
             CloudSessionLink.Open(_lastStatus!.Url);
+            return true;
+        }
+
+        // Excluded from coverage for TryOpenInBrowser's reason: its one effect
+        // raises another application's window, which a headless run must not do
+        // (and a headless suite cannot click a local orb for the same reason the
+        // terminal path is not clicked). The rule is ClickRouting.OpensClaudeDesktop
+        // and the walk is DesktopSessionFocus.Focus, both seamed and covered.
+        [ExcludeFromCodeCoverage]
+        internal bool TryOpenClaudeDesktop()
+        {
+            if (!ClickRouting.OpensClaudeDesktop(_lastStatus)) return false;
+
+            var status = _lastStatus!;
+            System.Threading.Tasks.Task.Run(() =>
+                DesktopSessionFocus.Focus(status, AcknowledgeFromAnyThread));
             return true;
         }
 
