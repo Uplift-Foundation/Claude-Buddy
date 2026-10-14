@@ -1,3 +1,4 @@
+using System.Threading;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
@@ -223,6 +224,55 @@ public class ChatPanelScreenshots : IDisposable
         ScreenshotHelper.Flush();
         ScreenshotHelper.CaptureAlreadyShown(
             ChatPanelTestAccess.Instance!, "chat-panel-parked-attach.png");
+    }
+
+    // A session Claude Desktop hosts (CB-265): the transcript reads like any
+    // other, and where the composer would be there is a sentence saying typing
+    // goes through Claude Desktop. A real LocalCliChatSession rather than a fake,
+    // so the picture is what the production class decides to say — and no attach
+    // button, since `claude attach` cannot find a Desktop conversation.
+    [AvaloniaFact]
+    public void ADesktopHostedSessionIsReadOnlyAndSaysWhereToType()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "cb-shot-desktop-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var transcript = Path.Combine(dir, "t.jsonl");
+            File.WriteAllText(transcript,
+                "{\"type\":\"user\",\"uuid\":\"u1\",\"timestamp\":\"2026-10-14T12:00:00Z\","
+                + "\"message\":{\"role\":\"user\",\"content\":\"summarise the open PRs\"}}\n"
+                + "{\"type\":\"assistant\",\"uuid\":\"a1\",\"timestamp\":\"2026-10-14T12:00:01Z\","
+                + "\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\","
+                + "\"text\":\"Three are ready to merge; one is waiting on review.\"}]}}\n");
+
+            var id = "screenshot-" + Guid.NewGuid();
+            _sessionIdsToClean.Add(id);
+            var session = new LocalCliChatSession(id, new SessionStatus
+            {
+                Source = SessionSource.ClaudeCode,
+                Cli = "claude",
+                Entrypoint = SessionStatus.DesktopEntrypoint,
+                TranscriptPath = transcript,
+                SessionPid = Environment.ProcessId,
+                State = "idle",
+            });
+            session.Start();
+            for (var i = 0; i < 400 && session.History.Count == 0; i++)
+            {
+                Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+                Thread.Sleep(5);
+            }
+
+            ChatPanel.OpenFor(NewOrb(), session);
+            ScreenshotHelper.Flush();
+            ScreenshotHelper.CaptureAlreadyShown(
+                ChatPanelTestAccess.Instance!, "chat-panel-desktop-readonly.png");
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { /* best effort */ }
+        }
     }
 
     // CloseFor rather than HideFor since CB-110. On a transient panel the two

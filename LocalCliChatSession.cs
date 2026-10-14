@@ -42,7 +42,7 @@ namespace ClaudeBuddy
     //    trivially, since the whole turn is all there ever is.
     internal sealed class LocalCliChatSession :
         IRemoteChatSession, IRemoteChatBacklog, IRemoteChatComposer, IRemoteChatPrompts,
-        IRemoteChatImages, IRemoteChatSlashCommands, IRemoteChatElsewhere, IDisposable
+        IRemoteChatImages, IRemoteChatSlashCommands, IRemoteChatElsewhere, IRemoteChatReadOnly, IDisposable
     {
         // How much of the tail to read when the panel first opens.
         //
@@ -589,7 +589,26 @@ namespace ClaudeBuddy
         public string ComposerHint =>
             ComposerHintFor(
                 TerminalFocuser.CanSendQuietly(_status), ChannelIsMessaging, _format.ReplyEnabled(),
-                _status.Shape, _status.Presence);
+                _status.Shape, _status.Presence, _status.IsDesktopHosted);
+
+        // --- read-only (Claude Desktop) ---
+        //
+        // A session Claude Desktop hosts is read here and written there: the
+        // transcript tails exactly like any other, but there is no terminal to
+        // type into and no registry socket this app should message (CB-265), so
+        // the composer is replaced by the hint's sentence. Typing "goes through
+        // Claude Desktop", which is what clicking the orb opens.
+        //
+        // Fixed for the session's lifetime — a session's entrypoint does not
+        // change under it — so ReadOnlyChanged is never raised and its accessors
+        // hold nothing; it exists because the panel subscribes to the interface.
+        public bool IsReadOnly => _status.IsDesktopHosted;
+
+        // No browser address: Desktop's own window is the destination, and the
+        // orb click is the way to it, so the panel offers no link beside the note.
+        public string? ReplyUrl => null;
+
+        public event Action? ReadOnlyChanged { add { } remove { } }
 
         // Both answers are reachable from a test this way, where they were not
         // before: whether there is a pane to type into depends on a real tmux and
@@ -619,10 +638,18 @@ namespace ClaudeBuddy
         // the same "attach and read it" answer a background job with no
         // registry gets below, rather than inviting a message that goes
         // nowhere.
+        internal const string DesktopComposerHint =
+            "Typing goes through Claude Desktop — click the orb to open it";
+
         internal static string ComposerHintFor(
             bool canSendQuietly, bool canDeliver, bool replyEnabled,
-            LocalSessionShape shape, OrbPresence presence)
+            LocalSessionShape shape, OrbPresence presence, bool desktopHosted = false)
         {
+            // Ahead of everything: a Desktop-hosted session reports no terminal
+            // and no pane, which every arm below would explain as the wrong
+            // problem. The user's way in is the orb they are looking at.
+            if (desktopHosted) return DesktopComposerHint;
+
             if (canDeliver && !canSendQuietly)
             {
                 return presence == OrbPresence.Finished
@@ -894,6 +921,11 @@ namespace ClaudeBuddy
         internal static string NoPaneNote(
             SessionStatus status, LocalSessionShape shape, bool onMacOS, bool onWindows)
         {
+            // Desktop-hosted: the panel is read-only, so this is only reached by
+            // a caller that sent anyway. WhyNot already says where to reply, and
+            // "Reply in the terminal instead" would name a window that is not there.
+            if (status.IsDesktopHosted) return TerminalTyping.WhyNot(status, onMacOS, onWindows);
+
             if (!string.IsNullOrEmpty(status.TmuxPane)) return "Couldn't find tmux to type with.";
 
             // Three problems that all end in "nothing was typed", and the note
