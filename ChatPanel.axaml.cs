@@ -932,6 +932,13 @@ namespace ClaudeBuddy
             // the panel is open*, which is why this also runs on
             // ReadOnlyChanged rather than only at bind.
             //
+            // CB-266: a Claude Desktop session is the second thing that flips
+            // while the panel is up — read-only until its chat is put on Remote
+            // Control (or "Show cloud sessions" is turned on), sendable after, and
+            // read-only again if the bridge ends or the API refuses it. Nothing
+            // here is Desktop-specific: LocalCliChatSession raises
+            // ReadOnlyChanged and this redraws, so the panel is never rebound.
+            //
             // The hint is kept rather than dropped with the box, because it says
             // where the session *can* be replied to. Hiding the box and
             // explaining nothing would leave a panel that looks truncated.

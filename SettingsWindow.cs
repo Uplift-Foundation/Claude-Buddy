@@ -1496,7 +1496,9 @@ namespace ClaudeBuddy
                     + "(one prompt per account), and a prompt you decline is not asked again until that login changes or you press Retry; directories not listed are not seen. If no orbs appear, the line below says how far the read "
                     + "got. Its chat panel can also send into the session, and its right-click "
                     + "menu can archive or delete it, as the account that owns it, using that "
-                    + "same login.")
+                    + "same login. A Claude Desktop chat that has Remote Control on is sent "
+                    + "into with that same login too, and what you send arrives there as a "
+                    + "teammate's request rather than as your own typing.")
             };
 
             // Progressive disclosure, the same as every other section here: off
