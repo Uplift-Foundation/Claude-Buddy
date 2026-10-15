@@ -73,6 +73,7 @@ public class HookScriptShTests
         psi.Environment.Remove("GROK_WORKSPACE_ROOT");
         psi.Environment.Remove("GROK_HOME");
         psi.Environment.Remove("CLAUDE_CODE_ENTRYPOINT");
+        psi.Environment.Remove("CLAUDE_CODE_HOST_SESSION_ID");
         if (extraEnv is not null)
         {
             foreach (var (key, value) in extraEnv)
@@ -557,7 +558,8 @@ public class HookScriptShTests
     // has no terminal at all. The harness strips the variable from every
     // child (this suite itself usually runs inside Claude Code, where it is
     // "cli"), so each case below sets exactly what it is about.
-    private static string EntrypointRun(string agent, string? entrypoint, string sessionId)
+    private static string EntrypointRun(
+        string agent, string? entrypoint, string sessionId, string? hostSessionId = null)
     {
         var tmp = Directory.CreateTempSubdirectory("cb-hook-");
         var payload = Payload(new { session_id = sessionId, cwd = "/tmp/proj", transcript_path = "" });
@@ -567,6 +569,7 @@ public class HookScriptShTests
             ["GROK_HOME"] = Path.Combine(tmp.FullName, "grok-home")
         };
         if (entrypoint is not null) env["CLAUDE_CODE_ENTRYPOINT"] = entrypoint;
+        if (hostSessionId is not null) env["CLAUDE_CODE_HOST_SESSION_ID"] = hostSessionId;
 
         var result = RunHook(agent, "idle", payload, tmp.FullName, env);
         AssertSilentSuccess(result);
@@ -578,7 +581,7 @@ public class HookScriptShTests
     {
         var status = EntrypointRun("claude", "claude-desktop", "ep-desktop");
 
-        Assert.Contains("\"cli\":\"claude\",\"entrypoint\":\"claude-desktop\",\"cwd\"", status);
+        Assert.Contains("\"cli\":\"claude\",\"entrypoint\":\"claude-desktop\",\"host_session_id\":\"\",\"cwd\"", status);
         Assert.True(JsonSerializer.Deserialize<SessionStatus>(status)!.IsDesktopHosted);
     }
 
@@ -614,5 +617,45 @@ public class HookScriptShTests
     {
         Assert.Contains("\"entrypoint\":\"\"", EntrypointRun("codex", "claude-desktop", "ep-codex"));
         Assert.Contains("\"entrypoint\":\"\"", EntrypointRun("grok", "claude-desktop", "ep-grok"));
+    }
+
+    // CB-266: Claude Desktop's own id for the chat, recorded right after
+    // "entrypoint" so the app can find the chat's Remote Control bridge. Invented
+    // id throughout: a real one names a real chat on a real machine.
+    private const string InventedHostId = "local_00000000-aaaa-bbbb-cccc-000000000001";
+
+    [UnixFact]
+    public void TheHostSessionIdIsRecordedRightAfterTheEntrypointForAClaudeSession()
+    {
+        var status = EntrypointRun("claude", "claude-desktop", "hs-claude", InventedHostId);
+
+        Assert.Contains(
+            "\"entrypoint\":\"claude-desktop\",\"host_session_id\":\"" + InventedHostId + "\",\"cwd\"", status);
+        Assert.Equal(InventedHostId, JsonSerializer.Deserialize<SessionStatus>(status)!.HostSessionId);
+    }
+
+    [UnixFact]
+    public void AnUnsetHostSessionIdIsWrittenEmpty()
+    {
+        var status = EntrypointRun("claude", "cli", "hs-unset");
+
+        Assert.Contains("\"host_session_id\":\"\"", status);
+        Assert.Equal("", JsonSerializer.Deserialize<SessionStatus>(status)!.HostSessionId);
+    }
+
+    [UnixFact]
+    public void CodexAndGrokFilesNeverCarryAHostSessionIdEvenWhenTheVariableIsInherited()
+    {
+        Assert.Contains("\"host_session_id\":\"\"", EntrypointRun("codex", "claude-desktop", "hs-codex", InventedHostId));
+        Assert.Contains("\"host_session_id\":\"\"", EntrypointRun("grok", "claude-desktop", "hs-grok", InventedHostId));
+    }
+
+    [UnixFact]
+    public void QuotesBackslashesAndSpacesAreStrippedFromTheHostSessionIdSoTheJsonSurvives()
+    {
+        var status = EntrypointRun("claude", "claude-desktop", "hs-hostile", "local_ab\"c\\d e/..");
+
+        Assert.Contains("\"host_session_id\":\"local_abcde\"", status);
+        Assert.Equal("local_abcde", JsonSerializer.Deserialize<SessionStatus>(status)!.HostSessionId);
     }
 }

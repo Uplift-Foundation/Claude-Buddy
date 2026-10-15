@@ -139,6 +139,7 @@ public class HookPidWalkShTests
         psi.Environment.Remove("GROK_HOOK_EVENT");
         psi.Environment.Remove("GROK_WORKSPACE_ROOT");
         psi.Environment.Remove("CLAUDE_CODE_ENTRYPOINT");
+        psi.Environment.Remove("CLAUDE_CODE_HOST_SESSION_ID");
 
         using var process = Process.Start(psi)
             ?? throw new InvalidOperationException("Failed to start python3");

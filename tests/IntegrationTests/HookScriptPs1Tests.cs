@@ -82,6 +82,7 @@ public class HookScriptPs1Tests
         psi.Environment.Remove("GROK_WORKSPACE_ROOT");
         psi.Environment.Remove("GROK_HOME");
         psi.Environment.Remove("CLAUDE_CODE_ENTRYPOINT");
+        psi.Environment.Remove("CLAUDE_CODE_HOST_SESSION_ID");
 
         if (extraEnv is not null)
         {
@@ -587,4 +588,57 @@ public class HookScriptPs1Tests
 
     [PwshFact]
     public void CodexAndGrokFilesNeverCarryAnEntrypoint_Pwsh() => CodexAndGrokFilesNeverCarryAnEntrypointCase("pwsh");
+
+    // CB-266: the host session id, same contract as the bash twin. Invented id:
+    // a real one names a real chat on a real machine. PowerShell serializes a
+    // hashtable in no promised key order, so these parse the file and read the
+    // property rather than pinning bytes the way the bash cases do.
+    private const string InventedHostId = "local_00000000-aaaa-bbbb-cccc-000000000001";
+
+    private static string HostRun(string exe, string agent, string? hostId, string sessionId)
+    {
+        var tempDir = Directory.CreateTempSubdirectory("cb-hook-ps1-").FullName;
+        var codexHome = Path.Combine(tempDir, "codex-home");
+        Directory.CreateDirectory(codexHome);
+        var grokHome = Path.Combine(tempDir, "grok-home");
+        Directory.CreateDirectory(grokHome);
+        var payload = Payload(new { session_id = sessionId, cwd = "C:\\proj", transcript_path = "" });
+        var env = new Dictionary<string, string> { ["CODEX_HOME"] = codexHome, ["GROK_HOME"] = grokHome };
+        if (hostId is not null) env["CLAUDE_CODE_HOST_SESSION_ID"] = hostId;
+
+        var result = RunHook(exe, agent, "idle", payload, tempDir, env);
+        AssertSilentSuccess(result);
+        return JsonSerializer.Deserialize<SessionStatus>(File.ReadAllText(StatusFile(tempDir, sessionId)))!.HostSessionId;
+    }
+
+    private static void HostSessionIdIsRecordedForAClaudeSessionCase(string exe) =>
+        Assert.Equal(InventedHostId, HostRun(exe, "claude", InventedHostId, "hs-claude"));
+
+    private static void AnUnsetHostSessionIdIsWrittenEmptyCase(string exe) =>
+        Assert.Equal("", HostRun(exe, "claude", null, "hs-unset"));
+
+    private static void HostSessionIdIsStrippedAndClaudeOnlyCase(string exe)
+    {
+        Assert.Equal("local_abcde", HostRun(exe, "claude", "local_ab\"c\\d e/..", "hs-hostile"));
+        Assert.Equal("", HostRun(exe, "codex", InventedHostId, "hs-codex"));
+        Assert.Equal("", HostRun(exe, "grok", InventedHostId, "hs-grok"));
+    }
+
+    [WindowsPowerShellFact]
+    public void HostSessionIdIsRecordedForAClaudeSession_Powershell51() => HostSessionIdIsRecordedForAClaudeSessionCase("powershell");
+
+    [PwshFact]
+    public void HostSessionIdIsRecordedForAClaudeSession_Pwsh() => HostSessionIdIsRecordedForAClaudeSessionCase("pwsh");
+
+    [WindowsPowerShellFact]
+    public void AnUnsetHostSessionIdIsWrittenEmpty_Powershell51() => AnUnsetHostSessionIdIsWrittenEmptyCase("powershell");
+
+    [PwshFact]
+    public void AnUnsetHostSessionIdIsWrittenEmpty_Pwsh() => AnUnsetHostSessionIdIsWrittenEmptyCase("pwsh");
+
+    [WindowsPowerShellFact]
+    public void HostSessionIdIsStrippedAndClaudeOnly_Powershell51() => HostSessionIdIsStrippedAndClaudeOnlyCase("powershell");
+
+    [PwshFact]
+    public void HostSessionIdIsStrippedAndClaudeOnly_Pwsh() => HostSessionIdIsStrippedAndClaudeOnlyCase("pwsh");
 }
