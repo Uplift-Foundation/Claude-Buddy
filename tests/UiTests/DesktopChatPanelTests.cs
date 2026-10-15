@@ -85,7 +85,7 @@ public class DesktopChatPanelTests : IDisposable
 
         Assert.True(session.IsReadOnly);
         Assert.Null(session.ReplyUrl);
-        Assert.Equal(LocalCliChatSession.DesktopComposerHint, session.ComposerHint);
+        Assert.Equal(LocalCliChatSession.DesktopNoBridgeHint, session.ComposerHint);
         Assert.False(session.CanOpenElsewhere);
 
         // ReadOnlyChanged is part of the contract and never raised; subscribing
@@ -106,7 +106,7 @@ public class DesktopChatPanelTests : IDisposable
         var session = new LocalCliChatSession("s1", DesktopStatus(Transcript(), entrypoint));
 
         Assert.False(session.IsReadOnly);
-        Assert.NotEqual(LocalCliChatSession.DesktopComposerHint, session.ComposerHint);
+        Assert.NotEqual(LocalCliChatSession.DesktopNoBridgeHint, session.ComposerHint);
     }
 
     // --- the panel ---------------------------------------------------------------
@@ -118,7 +118,7 @@ public class DesktopChatPanelTests : IDisposable
 
         Assert.False(Find<Grid>("ComposerRow").IsVisible);
         Assert.True(Find<Control>("ReadOnlyBox").IsVisible);
-        Assert.Equal(LocalCliChatSession.DesktopComposerHint, Find<TextBlock>("ReadOnlyNote").Text);
+        Assert.Equal(LocalCliChatSession.DesktopNoBridgeHint, Find<TextBlock>("ReadOnlyNote").Text);
         Assert.False(Find<TextBlock>("ReadOnlyLink").IsVisible);
         Assert.False(Find<TextBlock>("SessionLink").IsVisible);
         Assert.False(Find<Control>("AttachButton").IsVisible);

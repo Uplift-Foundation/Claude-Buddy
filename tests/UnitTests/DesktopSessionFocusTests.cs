@@ -403,7 +403,7 @@ public class DesktopSessionFocusTests
     {
         var why = TerminalTyping.WhyNot(Desktop(), onMacOS, onWindows);
 
-        Assert.Equal($"Claude Desktop {TerminalTyping.CantTypePhrase} — reply in its Code tab.", why);
+        Assert.Equal($"Claude Desktop {TerminalTyping.CantTypePhrase} — reply in its Code tab, or turn on Remote Control for the chat to send from here.", why);
         Assert.Contains(TerminalTyping.CantTypePhrase, why);
     }
 
@@ -412,21 +412,22 @@ public class DesktopSessionFocusTests
     [Fact]
     public void TheComposerHintForADesktopSessionWinsOverEveryOtherArm()
     {
-        const string hint = "Typing goes through Claude Desktop — click the orb to open it";
+        // CB-266: the Desktop arm moved out of ComposerHintFor into
+        // DesktopComposerHintFor, which the session asks before it asks about
+        // terminals, so none of the terminal arms can explain the wrong problem.
+        Assert.StartsWith("Typing goes through Claude Desktop — click the orb to open it",
+            LocalCliChatSession.DesktopNoBridgeHint);
 
-        foreach (var (canSend, canDeliver) in new[] { (false, false), (true, false), (false, true) })
+        foreach (var replyEnabled in new[] { false, true })
         {
-            Assert.Equal(hint, LocalCliChatSession.ComposerHintFor(
-                canSend, canDeliver, replyEnabled: false,
-                LocalSessionShape.Background, OrbPresence.NeedsInput, desktopHosted: true));
+            Assert.Equal(LocalCliChatSession.DesktopNoBridgeHint,
+                LocalCliChatSession.DesktopComposerHintFor(Desktop(), null, cloudEnabled: true, replyEnabled));
         }
-
-        Assert.Equal(hint, LocalCliChatSession.DesktopComposerHint);
 
         // Control: the same inputs for an ordinary session say something else.
         Assert.Equal("Needs input — attach to reply", LocalCliChatSession.ComposerHintFor(
             false, false, replyEnabled: false,
-            LocalSessionShape.Background, OrbPresence.NeedsInput, desktopHosted: false));
+            LocalSessionShape.Background, OrbPresence.NeedsInput));
     }
 
     [Fact]

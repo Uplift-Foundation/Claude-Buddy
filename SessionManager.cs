@@ -3381,7 +3381,12 @@ namespace ClaudeBuddy
                 return existing;
             }
 
-            var chat = new LocalCliChatSession(sessionId, status);
+            // CB-266: the shared cloud client and credential lookup, so a bridged
+            // Claude Desktop chat sends through the same HttpClient and Keychain
+            // consent surface as the cloud panels. Neither is touched until a
+            // send, and "Show cloud sessions" gates that.
+            var chat = new LocalCliChatSession(sessionId, status,
+                cloudApi: CloudChatApi, credentialsFor: CloudChatCredentialsFor);
             _chats[sessionId] = chat;
             chat.Start();
             return chat;

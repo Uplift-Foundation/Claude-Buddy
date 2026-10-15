@@ -125,4 +125,28 @@ public class ClaudeConfigRootsTests
             ClaudeBuddySettings.RemoveClaudeCodeProfileDir(".claude-work");
         }
     }
+
+    // RootOfTranscript: which account a transcript belongs to, read off its path
+    // (CB-266). Pure, so it needs no settings and the Settings collection is only
+    // incidental to these.
+    [Theory]
+    [InlineData("/home/w/.claude/projects/-home-w-code/abc.jsonl", "/home/w/.claude")]
+    [InlineData("/home/w/.claude-board/projects/-x/abc.jsonl", "/home/w/.claude-board")]
+    [InlineData("C:\\Users\\w\\.claude\\projects\\C--code\\abc.jsonl", "C:\\Users\\w\\.claude")]
+    // A slug that is itself called projects does not shift the answer.
+    [InlineData("/home/w/.claude/projects/projects/abc.jsonl", "/home/w/.claude")]
+    [InlineData("/projects/x/abc.jsonl", "/")]
+    public void TheRootIsTheParentOfTheProjectsSegment(string path, string expected) =>
+        Assert.Equal(expected, ClaudeConfigRoots.RootOfTranscript(path));
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("/home/w/.claude/sessions/abc.jsonl")]
+    // "projects" as the file name, or as the first segment with nothing before it.
+    [InlineData("/home/w/.claude/projects")]
+    [InlineData("projects/x/abc.jsonl")]
+    public void APathWithNoUsableProjectsSegmentIsUnknown(string? path) =>
+        Assert.Null(ClaudeConfigRoots.RootOfTranscript(path));
 }
