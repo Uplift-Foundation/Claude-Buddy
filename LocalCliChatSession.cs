@@ -127,7 +127,12 @@ namespace ClaudeBuddy
                                    Func<string, string?>? findTranscript = null,
                                    SessionMessenger? messenger = null,
                                    Func<string, SessionRegistry.Entry?>? findRegistry = null,
-                                   Func<string, string, FileSystemWatcher>? startWatcher = null)
+                                   Func<string, string, FileSystemWatcher>? startWatcher = null,
+                                   ICloudApi? cloudApi = null,
+                                   Func<string?, ICloudCredentialSource>? credentialsFor = null,
+                                   Func<bool>? cloudEnabled = null,
+                                   Func<SessionStatus, bool>? focusDesktop = null,
+                                   Action<SessionStatus, string>? focusTerminal = null)
         {
             SessionId = sessionId;
             _status = status;
@@ -138,7 +143,35 @@ namespace ClaudeBuddy
             _findRegistry = findRegistry ?? (id => SessionRegistry.Find(
                 SessionRegistry.Scan(ClaudeConfigRoots.All()), id, ProcessLiveness.IsRunning));
             _startWatcher = startWatcher ?? StartRealWatcher;
+            _cloudApi = cloudApi;
+            _credentialsFor = credentialsFor;
+            _cloudEnabled = cloudEnabled ?? (() => ClaudeBuddySettings.ClaudeCloudEnabled);
+            _focusDesktop = focusDesktop ?? FocusDesktopWindow;
+            _focusTerminal = focusTerminal ?? FocusTerminalWindow;
+            _announced = DesktopView();
         }
+
+        // CB-266: what sending into a Remote Control-bridged Claude Desktop chat
+        // needs, passed in rather than built here so the app has one HttpClient
+        // and one Keychain consent surface for every panel (SessionManager owns
+        // them), and so a test drives the whole send through fakes. Either being
+        // null means the bridge is not wired and the session behaves as if
+        // "Show cloud sessions" were off.
+        private readonly ICloudApi? _cloudApi;
+        private readonly Func<string?, ICloudCredentialSource>? _credentialsFor;
+        private readonly Func<bool> _cloudEnabled;
+        private readonly Func<SessionStatus, bool> _focusDesktop;
+        private readonly Action<SessionStatus, string> _focusTerminal;
+
+        // Same two seams as the cloud panel's: a credential read is given a
+        // budget, and the one retry waits on a clock a test can fake.
+        internal TimeSpan ReadBudget { get; init; } = ClaudeCliCredentials.UnmeasuredReadBudget;
+        internal Func<TimeSpan, CancellationToken, Task> Delay { get; init; } = Task.Delay;
+
+        // The API's own refusal to take messages into this chat, learned from the
+        // first one (there is no pre-flight). Cleared when the chat's bridge id
+        // changes, because a refusal is a fact about one bridge session.
+        private CloudSendability? _refusal;
 
         private readonly Func<string, string?> _findTranscript;
         private readonly SessionMessenger _messenger;
@@ -185,7 +218,15 @@ namespace ClaudeBuddy
         // waiting state is the entire permission-prompt mechanism.
         public void UpdateStatus(SessionStatus status)
         {
+            // CB-266: whether the composer is offered can flip under an open
+            // panel — Remote Control switched on in Desktop, the cloud setting
+            // toggled, a refusal landing — so ReadOnlyChanged says so and the
+            // panel redraws without being rebound.
+            if (!string.Equals(_status.BridgeSessionId, status.BridgeSessionId, StringComparison.Ordinal))
+                _refusal = null;
+
             _status = status;
+            AnnounceView();
             if (!string.IsNullOrEmpty(status.Title)) DisplayName = status.Title;
 
             Start();
@@ -482,7 +523,7 @@ namespace ClaudeBuddy
                     foreach (var m in mapped)
                     {
                         if (m.Uuid is not null && !_seen.Add(m.Uuid)) continue;
-                        Add(m.Turn);
+                        AddRow(m.Turn, m.Uuid);
                     }
                 });
             });
@@ -586,29 +627,103 @@ namespace ClaudeBuddy
             !TerminalFocuser.CanSendQuietly(_status)
             && TerminalFocuser.CanDeliver(_status, SessionId, _findRegistry);
 
-        public string ComposerHint =>
-            ComposerHintFor(
+        public string ComposerHint => _status.IsDesktopHosted
+            ? DesktopComposerHintFor(_status, _refusal, CloudOn, _format.ReplyEnabled(), IsBusy)!
+            : ComposerHintFor(
                 TerminalFocuser.CanSendQuietly(_status), ChannelIsMessaging, _format.ReplyEnabled(),
-                _status.Shape, _status.Presence, _status.IsDesktopHosted);
+                _status.Shape, _status.Presence);
 
-        // --- read-only (Claude Desktop) ---
+        // --- Claude Desktop (CB-265 read-only, CB-266 send over Remote Control) ---
         //
         // A session Claude Desktop hosts is read here and written there: the
         // transcript tails exactly like any other, but there is no terminal to
-        // type into and no registry socket this app should message (CB-265), so
-        // the composer is replaced by the hint's sentence. Typing "goes through
-        // Claude Desktop", which is what clicking the orb opens.
+        // type into and no registry socket this app should message (CB-265). One
+        // way in exists when the chat is on Remote Control: the same
+        // POST /v1/code/sessions/<bridge>/events the cloud panel uses, with the
+        // Claude Code login on this machine. It arrives in the session as a
+        // *peer message* (measured, CB-266), not as the user's typing — Claude
+        // treats it as a teammate's request and it cannot approve a permission
+        // prompt — so the composer says so rather than pretending to be the
+        // keyboard.
         //
-        // Fixed for the session's lifetime — a session's entrypoint does not
-        // change under it — so ReadOnlyChanged is never raised and its accessors
-        // hold nothing; it exists because the panel subscribes to the interface.
-        public bool IsReadOnly => _status.IsDesktopHosted;
+        // Gated on "Show cloud sessions", the setting that promises no credential
+        // read when off; no setting of its own.
+        internal const string DesktopNoBridgeHint =
+            "Typing goes through Claude Desktop — click the orb to open it. To send from here, turn on "
+            + "Remote Control for this chat: type /rc in its Code tab, or switch on Settings › Claude Code › "
+            + "Connect new sessions to Remote Control in Claude Desktop.";
 
-        // No browser address: Desktop's own window is the destination, and the
-        // orb click is the way to it, so the panel offers no link beside the note.
-        public string? ReplyUrl => null;
+        internal const string DesktopCloudOffHint =
+            "This chat is on Remote Control. To send from here, turn on \"Show cloud sessions\" in "
+            + "Orbweaver's Settings — sending uses the Claude Code login stored on this machine.";
 
-        public event Action? ReadOnlyChanged { add { } remove { } }
+        internal const string DesktopBridgedHint =
+            "Message… (arrives as a teammate's request, via Remote Control)";
+
+        internal const string DesktopNotPermittedHint =
+            "The API refused messages to this chat from the Claude Code login on this machine. "
+            + "Claude Desktop may be signed into a different account than the Claude Code CLI.";
+
+        internal const string DesktopBridgeGoneHint =
+            "This chat's Remote Control session has ended or was archived. "
+            + "Type /rc in its Code tab to reconnect.";
+
+        private bool CloudOn =>
+            _cloudApi is not null && _credentialsFor is not null && _cloudEnabled();
+
+        private bool IsBusy => string.Equals(_status.State, "generating", StringComparison.OrdinalIgnoreCase);
+
+        // Whether the composer is taken away. Pure, so each row of the table is a
+        // case: not bridged, cloud off, or a refusal the API has given.
+        internal static bool DesktopReadOnly(SessionStatus status, CloudSendability? refusal, bool cloudEnabled) =>
+            status.IsDesktopHosted && (!status.IsBridgedDesktop || !cloudEnabled || refusal is not null);
+
+        // What the composer says. Null for a session that is not Desktop-hosted,
+        // so a caller cannot mistake "not my case" for an empty sentence.
+        internal static string? DesktopComposerHintFor(
+            SessionStatus status, CloudSendability? refusal, bool cloudEnabled, bool replyEnabled,
+            bool busy = false)
+        {
+            if (!status.IsDesktopHosted) return null;
+            if (!status.IsBridgedDesktop) return DesktopNoBridgeHint;
+            if (!cloudEnabled) return DesktopCloudOffHint;
+
+            if (refusal is { } refused)
+            {
+                return refused == CloudSendability.NotPermitted ? DesktopNotPermittedHint : DesktopBridgeGoneHint;
+            }
+
+            if (!replyEnabled) return "Replying is off";
+            return busy ? CloudChatSendability.BusyHint : DesktopBridgedHint;
+        }
+
+        public bool IsReadOnly => DesktopReadOnly(_status, _refusal, CloudOn);
+
+        // The chat in a browser, once there is a bridge to point at — shown beside
+        // the note and above the composer. Null with no bridge: Desktop's own
+        // window is then the destination and the orb click is the way to it.
+        public string? ReplyUrl => _status.IsBridgedDesktop ? ClaudeCloudRoster.UrlFor(_status.BridgeSessionId) : null;
+
+        public event Action? ReadOnlyChanged;
+
+        // The three things the panel draws from this class for a Desktop session,
+        // compared across a status update. A non-Desktop session has none of them.
+        private (bool ReadOnly, string? Url, string? Hint) DesktopView() =>
+            _status.IsDesktopHosted ? (IsReadOnly, ReplyUrl, ComposerHint) : (false, null, null);
+
+        // What the panel was last told. Compared against rather than read before
+        // and after one call, because the cloud setting can move between two
+        // scans without this class being involved at all.
+        private (bool ReadOnly, string? Url, string? Hint) _announced;
+
+        private void AnnounceView()
+        {
+            var now = DesktopView();
+            if (_announced == now) return;
+
+            _announced = now;
+            ReadOnlyChanged?.Invoke();
+        }
 
         // Both answers are reachable from a test this way, where they were not
         // before: whether there is a pane to type into depends on a real tmux and
@@ -638,18 +753,10 @@ namespace ClaudeBuddy
         // the same "attach and read it" answer a background job with no
         // registry gets below, rather than inviting a message that goes
         // nowhere.
-        internal const string DesktopComposerHint =
-            "Typing goes through Claude Desktop — click the orb to open it";
-
         internal static string ComposerHintFor(
             bool canSendQuietly, bool canDeliver, bool replyEnabled,
-            LocalSessionShape shape, OrbPresence presence, bool desktopHosted = false)
+            LocalSessionShape shape, OrbPresence presence)
         {
-            // Ahead of everything: a Desktop-hosted session reports no terminal
-            // and no pane, which every arm below would explain as the wrong
-            // problem. The user's way in is the orb they are looking at.
-            if (desktopHosted) return DesktopComposerHint;
-
             if (canDeliver && !canSendQuietly)
             {
                 return presence == OrbPresence.Finished
@@ -744,7 +851,77 @@ namespace ClaudeBuddy
         private DateTimeOffset _pendingAt;
 
         public Task<ChatSendOutcome> SendAsync(string text) =>
-            SendCoreAsync(typedText: text, displayText: text, imageBytes: null);
+            _status.IsDesktopHosted
+                ? SendViaBridgeAsync(text)
+                : SendCoreAsync(typedText: text, displayText: text, imageBytes: null);
+
+        // The uuid the bridge send went out with, held beside _pending so the
+        // transcript row that comes back — Claude Code keeps the uuid the event
+        // carried (measured, CB-266) — settles the bubble exactly, where matching
+        // on text alone would fold two identical messages into one.
+        private string? _pendingUuid;
+
+        internal const string DesktopPicturesNote =
+            "Pictures can't be sent to a Claude Desktop chat from here.";
+
+        // Send into a Remote Control-bridged Claude Desktop chat (CB-266). Mirrors
+        // the cloud panel's send through CloudTurnSender, with the two differences
+        // that matter: the session is *local*, so the echo comes back through the
+        // transcript this class already tails rather than a cloud history, and the
+        // message arrives as a peer message, which ChatTranscript unwraps.
+        //
+        // **The bubble appears after the 2xx, never before**, for the cloud
+        // panel's reason: a refusal would otherwise have to take a bubble back.
+        // Not awaited with ConfigureAwait(false) — the continuation touches the
+        // history and raises events, which belong on the UI thread this was
+        // called from.
+        internal async Task<ChatSendOutcome> SendViaBridgeAsync(string text)
+        {
+            if (!_format.ReplyEnabled())
+            {
+                Note(ReplyingOffNote);
+                return ChatSendOutcome.Failed;
+            }
+
+            if (IsReadOnly)
+            {
+                Note("Not sent: " + ComposerHint);
+                return ChatSendOutcome.Failed;
+            }
+
+            var source = _credentialsFor!(ClaudeConfigRoots.RootOfTranscript(_status.TranscriptPath));
+            var attempt = await CloudTurnSender.SendUserTurnAsync(
+                _cloudApi!, source, ReadBudget, _status.BridgeSessionId, text, Delay, CancellationToken.None);
+
+            if (attempt.Result != CloudSendResult.Sent)
+            {
+                Note(attempt.Note!);
+
+                if (attempt.Result == CloudSendResult.NotSent
+                    && attempt.Outcome is { } outcome
+                    && CloudChatSendability.RefusalFor(outcome) is { } refusal)
+                {
+                    _refusal ??= refusal;
+                    AnnounceView();
+                }
+
+                return ChatSendOutcome.Failed;
+            }
+
+            // The row can beat the 2xx back to this thread: if the transcript
+            // already delivered it, there is nothing to add or to wait for.
+            if (_seen.Contains(attempt.Uuid)) return ChatSendOutcome.Sent;
+
+            var mine = new ChatTurn { Role = ChatRole.User, Text = text, IsComplete = true };
+            Add(mine);
+
+            _pending = mine;
+            _pendingUuid = attempt.Uuid;
+            _pendingRaw = text.Trim();
+            _pendingCaption = _pendingRaw;
+            _pendingAt = DateTimeOffset.Now;
+            return ChatSendOutcome.Sent;
+        }
 
         // The picture is already a file by the time this is called — the
         // panel wrote it there before pasting its path in, the same way a
@@ -763,6 +940,15 @@ namespace ClaudeBuddy
         public async Task<ChatSendOutcome> SendWithImagesAsync(string text, IReadOnlyList<string> imagePaths)
         {
             if (imagePaths.Count == 0) return await SendAsync(text);
+
+            // A picture's path typed into a terminal is how the CLIs take one; a
+            // peer message has no such channel, so refuse rather than send a path
+            // the other side cannot open.
+            if (_status.IsDesktopHosted)
+            {
+                Note(DesktopPicturesNote);
+                return ChatSendOutcome.Failed;
+            }
 
             var caption = text.Trim();
             var typed = imagePaths.Aggregate(caption, (line, path) => line.Length == 0 ? path : line + " " + path);
@@ -1025,9 +1211,17 @@ namespace ClaudeBuddy
         // Matched on text and bounded by time: an identical message sent twice
         // an hour apart must not have the second one swallowed by a stale
         // pending turn that never arrived.
-        private bool Reconcile(ChatTurn incoming)
+        private bool Reconcile(ChatTurn incoming, string? uuid)
         {
             if (_pending is null) return false;
+
+            // The bridge send's own uuid is conclusive, and needs no time bound:
+            // it is the id this message went out with, not a guess from its text.
+            if (_pendingUuid is not null && string.Equals(uuid, _pendingUuid, StringComparison.Ordinal)
+                && !ReferenceEquals(incoming, _pending))
+            {
+                return Settle(incoming);
+            }
 
             if (DateTimeOffset.Now - _pendingAt > TimeSpan.FromMinutes(2))
             {
@@ -1076,8 +1270,14 @@ namespace ClaudeBuddy
             // if any, is left alone rather than replaced from incoming — it
             // was already read straight from the file that was pasted, and
             // is the same picture either way this matched.
-            var settled = _pending;
+            return Settle(incoming);
+        }
+
+        private bool Settle(ChatTurn incoming)
+        {
+            var settled = _pending!;
             _pending = null;
+            _pendingUuid = null;
 
             settled.Text = incoming.Text;
             TurnUpdated?.Invoke(settled);
@@ -1162,8 +1362,24 @@ namespace ClaudeBuddy
             if (_waiting) await RefreshPromptAsync();
         }
 
-        public void AnswerElsewhere() =>
-            TerminalFocuser.Focus(_status, null, SessionId);
+        // A Desktop session has no terminal for TerminalFocuser to find, so its
+        // Focus returned early and this button did nothing (CB-265's gap). Its
+        // window is Desktop's, which is where the orb click goes too.
+        public void AnswerElsewhere()
+        {
+            if (_status.IsDesktopHosted) _focusDesktop(_status);
+            else _focusTerminal(_status, SessionId);
+        }
+
+        // Excluded from coverage: each activates another application's window or
+        // a terminal. Which one is chosen is AnswerElsewhere's decision above,
+        // covered through the seams.
+        [ExcludeFromCodeCoverage]
+        private static bool FocusDesktopWindow(SessionStatus status) => DesktopSessionFocus.Focus(status, null);
+
+        [ExcludeFromCodeCoverage]
+        private static void FocusTerminalWindow(SessionStatus status, string sessionId) =>
+            TerminalFocuser.Focus(status, null, sessionId);
 
         // --- plumbing ---
 
@@ -1174,9 +1390,13 @@ namespace ClaudeBuddy
             Text = text
         });
 
-        private void Add(ChatTurn turn)
+        private void Add(ChatTurn turn) => AddRow(turn, null);
+
+        // The row's uuid rides along so a bridge send's own echo can be matched
+        // on it; Add stays one-argument because everything else has no uuid.
+        private void AddRow(ChatTurn turn, string? uuid)
         {
-            if (Reconcile(turn)) return;
+            if (Reconcile(turn, uuid)) return;
 
             _history.Add(turn);
             Trim();

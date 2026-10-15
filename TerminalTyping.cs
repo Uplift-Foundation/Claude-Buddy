@@ -280,7 +280,7 @@ namespace ClaudeBuddy
                 return "this isn't a CLI session on that machine, so there is nowhere to type.";
 
             if (status.IsDesktopHosted)
-                return $"Claude Desktop {CantTypePhrase} — reply in its Code tab.";
+                return $"Claude Desktop {CantTypePhrase} — reply in its Code tab, or turn on Remote Control for the chat to send from here.";
 
             var program = string.IsNullOrWhiteSpace(status.TermProgram)
                 ? "its terminal"
