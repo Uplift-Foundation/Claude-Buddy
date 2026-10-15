@@ -107,6 +107,25 @@ namespace ClaudeBuddy
             Source == SessionSource.ClaudeCode
             && string.Equals(Entrypoint, DesktopEntrypoint, StringComparison.OrdinalIgnoreCase);
 
+        // Claude Desktop's own id for the chat, CLAUDE_CODE_HOST_SESSION_ID
+        // ("local_<uuid>"), which names the per-chat record Desktop keeps under
+        // its profile's claude-code-sessions folder (CB-266). Hook-owned and
+        // serialized, for the round-trip reason Entrypoint gives.
+        [JsonPropertyName("host_session_id")]
+        public string HostSessionId { get; set; } = "";
+
+        // The claude.ai session a Desktop chat is bridged to by Remote Control,
+        // read from that record each scan — so it can appear or vanish while the
+        // session runs (`/rc`). App-derived, so never written to the file.
+        [JsonIgnore]
+        public string BridgeSessionId { get; set; } = "";
+
+        // A Desktop chat the panel can send into through claude.ai. What it
+        // sends arrives as a peer message, not as the user's own typing —
+        // measured, see CB-266 — and the composer says so.
+        [JsonIgnore]
+        public bool IsBridgedDesktop => IsDesktopHosted && !string.IsNullOrEmpty(BridgeSessionId);
+
         // Which kind of thing this session is. Derived from Cli rather than
         // stored, by SourceOf, and never serialized — an enum here because it
         // is entirely internal and a typo should not compile, a string on the
