@@ -30,7 +30,7 @@ public class DesktopStatusRoundTripTests
             "Could not find OrbweaverHook.sh by walking up from " + AppContext.BaseDirectory);
     }
 
-    private static SessionStatus RunAndDeserialize(string agent, string? entrypoint)
+    private static SessionStatus RunAndDeserialize(string agent, string? entrypoint, string? hostSessionId = null)
     {
         var tmp = Directory.CreateTempSubdirectory("cb-desktop-rt-");
         var psi = new ProcessStartInfo
@@ -49,11 +49,12 @@ public class DesktopStatusRoundTripTests
         psi.Environment["GROK_HOME"] = Path.Combine(tmp.FullName, "grok-home");
         foreach (var name in new[]
         {
-            "CLAUDE_CODE_ENTRYPOINT", "TERM_PROGRAM", "TMUX", "TMUX_PANE", "ITERM_SESSION_ID",
+            "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_HOST_SESSION_ID", "TERM_PROGRAM", "TMUX", "TMUX_PANE", "ITERM_SESSION_ID",
             "GROK_SESSION_ID", "GROK_HOOK_EVENT", "GROK_WORKSPACE_ROOT",
         })
             psi.Environment.Remove(name);
         if (entrypoint is not null) psi.Environment["CLAUDE_CODE_ENTRYPOINT"] = entrypoint;
+        if (hostSessionId is not null) psi.Environment["CLAUDE_CODE_HOST_SESSION_ID"] = hostSessionId;
 
         using var process = Process.Start(psi)
             ?? throw new InvalidOperationException("failed to start bash");
@@ -86,6 +87,24 @@ public class DesktopStatusRoundTripTests
         // The shape that got these orbs dropped: no terminal handle anywhere.
         Assert.Equal("", status.TermProgram);
         Assert.Equal("", status.TmuxPane);
+    }
+
+    // CB-266: the host id survives the real hook and the app's deserializer, and
+    // the app-derived BridgeSessionId is not something the file can carry.
+    [UnixFact]
+    public void ADesktopSessionsHostIdReadsBackAndItsBridgeStaysUnset()
+    {
+        var status = RunAndDeserialize("claude", "claude-desktop", "local_00000000-aaaa-bbbb-cccc-000000000002");
+
+        Assert.Equal("local_00000000-aaaa-bbbb-cccc-000000000002", status.HostSessionId);
+        Assert.Equal("", status.BridgeSessionId);
+        Assert.False(status.IsBridgedDesktop);
+    }
+
+    [UnixFact]
+    public void ACodexFileWrittenUnderADesktopEnvironmentCarriesNoHostId()
+    {
+        Assert.Equal("", RunAndDeserialize("codex", "claude-desktop", "local_00000000-aaaa-bbbb-cccc-000000000002").HostSessionId);
     }
 
     [UnixFact]

@@ -472,7 +472,8 @@ namespace ClaudeBuddy
             Func<IReadOnlyList<int>, IReadOnlyDictionary<int, AgentTeam.Membership>>? teams = null,
             Action<int, SessionDependents.Verdict>? terminate = null,
             string? legacyStatusDir = null,
-            Func<string, string?, bool>? stopJob = null)
+            Func<string, string?, bool>? stopJob = null,
+            Func<SessionStatus, string?>? desktopBridge = null)
         {
             _statusDir = statusDir;
             _legacyStatusDir = legacyStatusDir;
@@ -498,6 +499,13 @@ namespace ClaudeBuddy
             _teams = teams ?? AgentTeam.OfAll;
             _terminate = terminate ?? SessionTerminator.Terminate;
             _stopJob = stopJob ?? BackgroundJobs.Stop;
+
+            // One lookup for the life of the manager, because what makes it
+            // cheap is its memo of each record's mtime. A lambda over the
+            // clock, since BridgeFor takes "now" so its re-look interval is
+            // testable without waiting.
+            var bridges = new DesktopBridgeLookup();
+            _desktopBridge = desktopBridge ?? (status => bridges.BridgeFor(status, DateTime.UtcNow));
 
             // AccountOrbs starts out visible, and nothing used to tell it
             // otherwise until a switch was flipped — so launching with every
@@ -532,6 +540,24 @@ namespace ClaudeBuddy
         // whatever daemon is on the machine running the suite, which on a
         // developer's Mac is their own, with their own jobs in it.
         private readonly Func<string, string?, bool> _stopJob;
+
+        // Which claude.ai session a Claude Desktop chat is bridged to by Remote
+        // Control, read from the chat's own record (CB-266). A seam because the
+        // real one reads the machine's Claude Desktop profiles, and the scan
+        // suites must neither depend on nor touch whatever chats the developer
+        // running them happens to have.
+        private readonly Func<SessionStatus, string?> _desktopBridge;
+
+        // The cloud roster lists a Desktop chat that is on Remote Control a
+        // second time, as a session of its own, under the id its record names.
+        // That one chat must be one orb, and the local one wins: it has the
+        // process, the transcript and the click target. True when a local
+        // Desktop chat is bridged to cloudId, so the cloud block skips it.
+        // (ClaudeCloudRoster.Keep already drops `bridge`-kind rows; this is the
+        // belt for a row it does not recognise.)
+        internal static bool CloudShadowedByLocal(string cloudId, IEnumerable<SessionStatus> locals) =>
+            locals.Any(local => local.IsBridgedDesktop
+                                && string.Equals(local.BridgeSessionId, cloudId, StringComparison.Ordinal));
 
         // Every subprocess question this pass needs, asked. Runs on
         // ScheduleScan's background thread in production, and inline for
@@ -2293,6 +2319,20 @@ namespace ClaudeBuddy
             var candidatesByCwd =
                 new Dictionary<(string Cwd, SessionSource Source, string Agent), IReadOnlyList<LocalPersona.Candidate>>();
 
+            // Which Remote Control bridge each Claude Desktop chat is on, before
+            // anything below reads it: the cloud block asks whether a cloud row
+            // is one of these chats, and the chat panel reads it off the status
+            // this pass publishes. Re-derived every pass — `/rc` can switch it on
+            // or off while the session runs — and cheap, because the lookup
+            // memoises on the record's mtime.
+            foreach (var entry in found)
+            {
+                if (entry.Status.IsDesktopHosted)
+                {
+                    entry.Status.BridgeSessionId = _desktopBridge(entry.Status) ?? "";
+                }
+            }
+
             // The gateway's sessions join the same list the status files
             // produced, so everything downstream — ordering, stacking, pinning,
             // the tray, the removal pass — stays a single code path. Empty and
@@ -2495,6 +2535,9 @@ namespace ClaudeBuddy
             // place. There are no rooms, no leads, and no local anything.
             foreach (var session in ClaudeCloudSessions.Snapshot())
             {
+                // A Desktop chat on Remote Control is already an orb of its own.
+                if (CloudShadowedByLocal(session.Id, found.Select(entry => entry.Status))) continue;
+
                 found.Add(new ScanEntry(
                     "cloud:" + session.Id,
                     new SessionStatus

@@ -585,8 +585,15 @@ mkdir -p "$DIR"
 ENTRYPOINT=""
 [ "$AGENT" = "claude" ] && ENTRYPOINT=$(printf '%s' "${CLAUDE_CODE_ENTRYPOINT:-}" | tr -cd 'A-Za-z0-9_-')
 
-printf '{"state":"%s","cli":"%s","entrypoint":"%s","cwd":"%s","title":"%s","color":"%s","term_program":"%s","term_id":"%s","tty":"%s","tmux_socket":"%s","tmux_pane":"%s","tmux_bin":"%s","session_pid":%s,"transcript_path":"%s"}' \
-    "$STATE" "$AGENT" "$ENTRYPOINT" "$CWD" "$TITLE" "$COLOR" "$TERM_PROGRAM" "$TERM_ID" "$TTY" \
+# "host_session_id" is Claude Desktop's own id for the chat
+# (CLAUDE_CODE_HOST_SESSION_ID, "local_<uuid>"), which names the per-chat record
+# the app reads to find a Remote Control bridge (CB-266). Same rules as
+# entrypoint: Claude Code only, and reduced to [A-Za-z0-9_-] for printf.
+HOST_SESSION_ID=""
+[ "$AGENT" = "claude" ] && HOST_SESSION_ID=$(printf '%s' "${CLAUDE_CODE_HOST_SESSION_ID:-}" | tr -cd 'A-Za-z0-9_-')
+
+printf '{"state":"%s","cli":"%s","entrypoint":"%s","host_session_id":"%s","cwd":"%s","title":"%s","color":"%s","term_program":"%s","term_id":"%s","tty":"%s","tmux_socket":"%s","tmux_pane":"%s","tmux_bin":"%s","session_pid":%s,"transcript_path":"%s"}' \
+    "$STATE" "$AGENT" "$ENTRYPOINT" "$HOST_SESSION_ID" "$CWD" "$TITLE" "$COLOR" "$TERM_PROGRAM" "$TERM_ID" "$TTY" \
     "$TMUX_SOCKET" "$TMUX_PANE_ID" "$TMUX_BIN" "${SESSION_PID:-0}" "$TRANSCRIPT" > "$FILE"
 
 exit 0

@@ -9,7 +9,7 @@ namespace ClaudeBuddy.Tests;
 // memory. There's no live hook run to capture here, so instead the fixture
 // is derived from the hook script's own printf — the line that writes $FILE:
 //
-//   printf '{"state":"%s","cli":"%s","entrypoint":"%s","cwd":"%s","title":"%s","color":"%s",
+//   printf '{"state":"%s","cli":"%s","entrypoint":"%s","host_session_id":"%s","cwd":"%s","title":"%s","color":"%s",
 //   "term_program":"%s","term_id":"%s","tty":"%s","tmux_socket":"%s",
 //   "tmux_pane":"%s","tmux_bin":"%s","session_pid":%s,"transcript_path":"%s"}'
 //
@@ -22,7 +22,7 @@ public class SessionStatusJsonTests
     // the one unquoted field, because the shell script substitutes a bare
     // number there.
     private const string HookProducedJson =
-        "{\"state\":\"generating\",\"cli\":\"codex\",\"entrypoint\":\"\",\"cwd\":\"/Users/user/project\"," +
+        "{\"state\":\"generating\",\"cli\":\"codex\",\"entrypoint\":\"\",\"host_session_id\":\"\",\"cwd\":\"/Users/user/project\"," +
         "\"title\":\"Fix the login bug\",\"color\":\"green\"," +
         "\"term_program\":\"vscode\",\"term_id\":\"term-1\",\"tty\":\"/dev/ttys002\"," +
         "\"tmux_socket\":\"default\",\"tmux_pane\":\"%3\",\"tmux_bin\":\"/opt/homebrew/bin/tmux\"," +
@@ -133,6 +133,57 @@ public class SessionStatusJsonTests
         Assert.True(JsonSerializer.Deserialize<SessionStatus>(json)!.IsDesktopHosted);
         // IsDesktopHosted is derived and [JsonIgnore]: never written to a hook-owned file.
         Assert.DoesNotContain("IsDesktopHosted", json);
+    }
+
+    // CB-266 -----------------------------------------------------------------
+
+    // Invented id; a real one names a real chat.
+    private const string HostId = "local_00000000-aaaa-bbbb-cccc-000000000030";
+
+    [Fact]
+    public void Deserialize_ReadsHostSessionIdAndALegacyFileReadsEmpty()
+    {
+        var status = JsonSerializer.Deserialize<SessionStatus>(
+            "{\"state\":\"idle\",\"cli\":\"claude\",\"entrypoint\":\"claude-desktop\",\"host_session_id\":\""
+            + HostId + "\",\"cwd\":\"/tmp\"}");
+        var legacy = JsonSerializer.Deserialize<SessionStatus>("{\"state\":\"idle\",\"cwd\":\"/tmp\"}");
+
+        Assert.Equal(HostId, status!.HostSessionId);
+        Assert.Equal("", legacy!.HostSessionId);
+    }
+
+    // Hook-owned, so it is serialized (a reset round trip must not erase it);
+    // the bridge is app-derived, so it must never reach a hook-owned file.
+    [Fact]
+    public void Serialize_KeepsHostSessionIdButNeverTheBridge()
+    {
+        var json = JsonSerializer.Serialize(new SessionStatus
+        {
+            State = "idle",
+            Entrypoint = "claude-desktop",
+            HostSessionId = HostId,
+            BridgeSessionId = "session_01InventedBridgeEEEE",
+        });
+
+        Assert.Contains("\"host_session_id\":\"" + HostId + "\"", json);
+        Assert.DoesNotContain("session_01InventedBridgeEEEE", json);
+        Assert.DoesNotContain("BridgeSessionId", json);
+        Assert.DoesNotContain("IsBridgedDesktop", json);
+        Assert.Equal("", JsonSerializer.Deserialize<SessionStatus>(json)!.BridgeSessionId);
+    }
+
+    [Theory]
+    [InlineData("claude-desktop", SessionSource.ClaudeCode, "session_01X", true)]
+    [InlineData("claude-desktop", SessionSource.ClaudeCode, "", false)]
+    [InlineData("cli", SessionSource.ClaudeCode, "session_01X", false)]
+    [InlineData("claude-desktop", SessionSource.Codex, "session_01X", false)]
+    [InlineData("", SessionSource.ClaudeCode, "", false)]
+    public void IsBridgedDesktop_NeedsADesktopChatAndABridgeId(
+        string entrypoint, SessionSource source, string bridge, bool expected)
+    {
+        var status = new SessionStatus { Entrypoint = entrypoint, Source = source, BridgeSessionId = bridge };
+
+        Assert.Equal(expected, status.IsBridgedDesktop);
     }
 
     [Theory]

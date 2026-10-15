@@ -413,6 +413,14 @@ if ($Agent -eq 'claude' -and $env:CLAUDE_CODE_ENTRYPOINT) {
     $entrypoint = $env:CLAUDE_CODE_ENTRYPOINT -replace '[^A-Za-z0-9_-]', ''
 }
 
+# Claude Desktop's own id for the chat (CLAUDE_CODE_HOST_SESSION_ID,
+# "local_<uuid>"), which names the per-chat record the app reads to find a
+# Remote Control bridge (CB-266). Same rules and sanitising as the entrypoint.
+$hostSessionId = ''
+if ($Agent -eq 'claude' -and $env:CLAUDE_CODE_HOST_SESSION_ID) {
+    $hostSessionId = $env:CLAUDE_CODE_HOST_SESSION_ID -replace '[^A-Za-z0-9_-]', ''
+}
+
 $status = @{
     state           = $State
 
@@ -421,6 +429,7 @@ $status = @{
     # Claude Code -- which is what it was.
     cli             = $Agent
     entrypoint      = $entrypoint
+    host_session_id = $hostSessionId
     cwd             = $cwd
     title           = $title
     color           = $color
