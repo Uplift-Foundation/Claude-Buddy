@@ -549,6 +549,9 @@
                      and not written to. Hidden by default, and swapped for the
                      row below by ApplyComposerAffordances — at bind, and again
                      whenever the session raises ReadOnlyChanged.
+                     A Claude Desktop chat uses this box too (CB-266): it is
+                     read-only until the chat is on Remote Control, and can flip
+                     back.
 
                      A sentence rather than a disabled TextBox, which is the
                      opposite of what IRemoteChatComposer argues for elsewhere in
