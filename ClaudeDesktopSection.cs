@@ -4,7 +4,7 @@ using Avalonia.Controls;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // The Claude Desktop block of the status-bar menu. TrayController calls
     // Append() and otherwise knows nothing about profiles, so removing this
@@ -78,7 +78,7 @@ namespace ClaudeBuddy
             // same split the orbs use, where colour is identity and never
             // competes with state.
             var folder = Path.GetFileName(profile.Directory);
-            if (ClaudeBuddySettings.For(folder).ShowSwatch)
+            if (OrbweaverSettings.For(folder).ShowSwatch)
             {
                 item.Icon = Swatch(
                     ClaudeDesktopColors.For(folder, profile.IsDefault),

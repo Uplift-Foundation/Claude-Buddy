@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // The answer to the one question a pane claim cannot answer: is the Claude
     // process displayed in this pane still running this *session*? A pane id is

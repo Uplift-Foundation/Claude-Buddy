@@ -1,7 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Starts a packaged (MSIX) app with a command line, unelevated, from the
     // interactive desktop session — the real implementation of what

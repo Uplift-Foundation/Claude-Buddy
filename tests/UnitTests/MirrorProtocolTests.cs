@@ -1,7 +1,7 @@
 using System.Text;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Covers MirrorProtocol — the wire format two Claude Buddies use to show each
 // other's sessions verbatim.

@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests
+namespace Orbweaver.Tests
 {
     // Whether a CLI's hook is installed, for CB-168's new-chat dialog.
     //

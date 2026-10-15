@@ -5,7 +5,7 @@ using System.Net.Sockets;
 using System.Security.Authentication;
 using System.Security.Cryptography.X509Certificates;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // A direct connection to another copy of this app.
     //

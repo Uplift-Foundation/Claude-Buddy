@@ -1,4 +1,4 @@
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // What one OpenClaw transcript costs while nobody is looking at it, and
     // which ones to let go of — CB-92.

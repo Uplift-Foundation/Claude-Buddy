@@ -1,10 +1,10 @@
 using System;
 using System.IO;
 using Avalonia.Media;
-using ClaudeBuddy.Tests;
+using Orbweaver.Tests;
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 // ClaudeDesktopBundles' view of its own cache: where a profile's cloned
 // Claude.app goes, whether one is there, and whether the icon colour on disk is
@@ -30,7 +30,7 @@ public sealed class BundleRootCollection
 [Collection("BundleRoot")]
 public class BundleCacheLayoutTests : IDisposable
 {
-    private const string Override = "CLAUDE_BUDDY_BUNDLE_ROOT";
+    private const string Override = "ORBWEAVER_BUNDLE_ROOT";
 
     private readonly string? _previous = Environment.GetEnvironmentVariable(Override);
     private readonly string _scratch =

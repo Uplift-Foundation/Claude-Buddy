@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The explicit half of PersonaMarkdown — the bullets, bold fields, table rows
 // and front-matter keys that came out of OpenClawWorkspaceIdentity unchanged.

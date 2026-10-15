@@ -5,7 +5,7 @@ using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Threading;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // The account orbs, their cards, and the poll that feeds them.
     //
@@ -236,7 +236,7 @@ namespace ClaudeBuddy
         // the row if it has never been moved.
         private static void Place(AccountOrbWindow orb, string key, int index)
         {
-            var saved = ClaudeBuddySettings.OrbPositionFor(PositionKey(key == string.Empty ? null : key));
+            var saved = OrbweaverSettings.OrbPositionFor(PositionKey(key == string.Empty ? null : key));
             if (saved is not null)
             {
                 orb.Position = new PixelPoint(saved.X, saved.Y);
@@ -260,7 +260,7 @@ namespace ClaudeBuddy
         private void OnMoved(AccountOrbWindow orb)
         {
             var configDir = orb.AccountKey == string.Empty ? null : orb.AccountKey;
-            ClaudeBuddySettings.SetOrbPosition(
+            OrbweaverSettings.SetOrbPosition(
                 PositionKey(configDir), orb.Position.X, orb.Position.Y);
 
             if (_cards.TryGetValue(orb.AccountKey, out var card)) card.Reposition(orb);
@@ -440,15 +440,15 @@ namespace ClaudeBuddy
         }
 
         private static bool AnyEnabled() =>
-            ClaudeBuddySettings.AccountUsageEnabled
-            || ClaudeBuddySettings.GrokAccountUsageEnabled
-            || ClaudeBuddySettings.CodexAccountUsageEnabled;
+            OrbweaverSettings.AccountUsageEnabled
+            || OrbweaverSettings.GrokAccountUsageEnabled
+            || OrbweaverSettings.CodexAccountUsageEnabled;
 
         private static bool SourceEnabled(AccountUsageSource source) => source switch
         {
-            AccountUsageSource.Grok => ClaudeBuddySettings.GrokAccountUsageEnabled,
-            AccountUsageSource.Codex => ClaudeBuddySettings.CodexAccountUsageEnabled,
-            _ => ClaudeBuddySettings.AccountUsageEnabled
+            AccountUsageSource.Grok => OrbweaverSettings.GrokAccountUsageEnabled,
+            AccountUsageSource.Codex => OrbweaverSettings.CodexAccountUsageEnabled,
+            _ => OrbweaverSettings.AccountUsageEnabled
         };
 
         private void PruneDisabledSources()

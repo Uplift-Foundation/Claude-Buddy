@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 // Every question a panel asks about a remote session has to reach the client
 // that actually holds the answer.

@@ -4,7 +4,7 @@ using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using Microsoft.Win32.SafeHandles;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Best-effort "take me to that session's terminal" for a left-click on
     // an orb. Silently does nothing when the status file predates the hook
@@ -1755,7 +1755,7 @@ namespace ClaudeBuddy
 
         // OrbWindow sets ShowActivated="False" (it's a click-to-act overlay,
         // not something that should steal keyboard focus just by existing),
-        // so clicking it never makes ClaudeBuddy.exe the foreground process —
+        // so clicking it never makes Orbweaver.exe the foreground process —
         // hence WindowsForegroundWindow's AttachThreadInput dance below.
         private static bool FocusWindows(SessionStatus status)
         {
@@ -1772,7 +1772,7 @@ namespace ClaudeBuddy
                 // the case it was tested in: switching *away* from some other
                 // tab. Selecting the tab that is already current is a no-op, so
                 // it raises nothing — and clicking an orb or its mic has just
-                // made Claude Buddy the foreground app, so "already on the
+                // made Orbweaver the foreground app, so "already on the
                 // right tab" left the terminal behind us. Dictation into a
                 // session you were already looking at typed into the flyout
                 // instead, which is exactly the shape of "it only works if

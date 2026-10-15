@@ -6,7 +6,7 @@ using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // The menu-bar / notification-area presence: one status item whose icon
     // reflects the most urgent state across all sessions (waiting beats
@@ -265,7 +265,7 @@ namespace ClaudeBuddy
             // Hidden entirely unless the feature is on, so the menu does not
             // grow a line about machines for the majority who have not asked
             // for any.
-            if (ClaudeBuddySettings.PeerLinkEnabled)
+            if (OrbweaverSettings.PeerLinkEnabled)
             {
                 var remoteItem = new NativeMenuItem("Connect to other machines");
                 remoteItem.Click += (_, _) => ConnectToOtherMachines();
@@ -336,7 +336,7 @@ namespace ClaudeBuddy
             // QA (CB-167) round 3, finding 5: the ChimePlayer.StopAll call
             // that used to live here moved to App.OnFrameworkInitializationCompleted's
             // desktop.Exit handler, because this Shutdown was only ever the
-            // tray menu's own Quit — the orb menu's "Exit Claude Buddy" and
+            // tray menu's own Quit — the orb menu's "Exit Orbweaver" and
             // the OS's Cmd-Q both call desktop.Shutdown() directly and never
             // ran through here, so either one used to leave a chime
             // orphaned. Exit fires for every path that ends in

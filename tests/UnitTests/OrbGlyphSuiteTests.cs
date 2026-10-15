@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests
+namespace Orbweaver.Tests
 {
     // OrbGlyph and ChatSpeaker, as tests rather than as an exe you have to
     // remember to run.

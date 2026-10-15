@@ -2,7 +2,7 @@ using System.Buffers.Binary;
 using System.Globalization;
 using System.Text;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // The one file format a Kokoro voice is: a NumPy `.npy` array of style
     // vectors, `(510, 1, 256)` little-endian float32 on every voice this

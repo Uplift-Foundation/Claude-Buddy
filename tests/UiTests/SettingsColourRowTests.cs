@@ -6,7 +6,7 @@ using Avalonia.LogicalTree;
 using Avalonia.Media;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The colour rows, and the guard that stops a theme choosing a user's colours for
 // them.
@@ -152,7 +152,7 @@ public class SettingsColourRowTests
             PersonSets(picker, Color.FromRgb(shipped.R, shipped.G, shipped.B));
 
             Assert.True(
-                string.IsNullOrEmpty(ClaudeBuddySettings.WaitingColor),
+                string.IsNullOrEmpty(OrbweaverSettings.WaitingColor),
                 "picking the colour it already is must not freeze today's default into the file");
         }
         finally

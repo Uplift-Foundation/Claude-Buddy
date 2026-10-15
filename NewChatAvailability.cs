@@ -1,4 +1,4 @@
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // One row of CB-168's new-chat dialog: a CLI, whether it can be launched,
     // and why not / what to watch out for if it can.
@@ -100,7 +100,7 @@ namespace ClaudeBuddy
     internal sealed record NewChatAccountHome(string DefaultDirName, string EnvVar)
     {
         internal static readonly NewChatAccountHome ClaudeCode =
-            new(ClaudeBuddySettings.DefaultRemoteControlProfileDir, "CLAUDE_CONFIG_DIR");
+            new(OrbweaverSettings.DefaultRemoteControlProfileDir, "CLAUDE_CONFIG_DIR");
 
         internal static readonly NewChatAccountHome Codex = new(".codex", "CODEX_HOME");
 

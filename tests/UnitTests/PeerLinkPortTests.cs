@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 // Which port the link listens on.
 //
@@ -22,19 +22,19 @@ public class PeerLinkPortTests
         // The case that shipped wrong. A settings.json with no peerLinkPort key
         // deserialises to 0, which is every install that has never touched the
         // setting — that is to say, all of them.
-        Assert.Equal(PeerLink.DefaultPort, ClaudeBuddySettings.PortToBind(0));
+        Assert.Equal(PeerLink.DefaultPort, OrbweaverSettings.PortToBind(0));
     }
 
     [Fact]
     public void AChosenPortIsHonoured()
     {
-        Assert.Equal(9100, ClaudeBuddySettings.PortToBind(9100));
+        Assert.Equal(9100, OrbweaverSettings.PortToBind(9100));
     }
 
     [Fact]
     public void TheDefaultItselfIsHonoured()
     {
-        Assert.Equal(PeerLink.DefaultPort, ClaudeBuddySettings.PortToBind(PeerLink.DefaultPort));
+        Assert.Equal(PeerLink.DefaultPort, OrbweaverSettings.PortToBind(PeerLink.DefaultPort));
     }
 
     [Theory]
@@ -48,13 +48,13 @@ public class PeerLinkPortTests
         // arrives — the headless case in this project is administered exactly
         // that way. Falling back beats refusing to listen at all, which would
         // read as the feature being broken rather than the number being wrong.
-        Assert.Equal(PeerLink.DefaultPort, ClaudeBuddySettings.PortToBind(stored));
+        Assert.Equal(PeerLink.DefaultPort, OrbweaverSettings.PortToBind(stored));
     }
 
     [Fact]
     public void TheBoundariesAreWhereTheyShouldBe()
     {
-        Assert.Equal(1, ClaudeBuddySettings.PortToBind(1));
-        Assert.Equal(65535, ClaudeBuddySettings.PortToBind(65535));
+        Assert.Equal(1, OrbweaverSettings.PortToBind(1));
+        Assert.Equal(65535, OrbweaverSettings.PortToBind(65535));
     }
 }

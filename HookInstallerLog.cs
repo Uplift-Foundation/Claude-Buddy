@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // What each hook-installer run actually did (CB-258).
     //

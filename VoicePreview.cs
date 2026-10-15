@@ -4,7 +4,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Threading.Tasks;
 using Avalonia.Threading;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // The settings window's "hear this voice" button (CB-222): one fixed sentence,
     // spoken in the voice the picker shows, through the same TextToSpeech channel

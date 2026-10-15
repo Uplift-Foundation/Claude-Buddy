@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Why a global hotkey is not on the chord its setting names — the Notes
     // HotkeyRegistry.Plan writes when two actions resolve to one chord.

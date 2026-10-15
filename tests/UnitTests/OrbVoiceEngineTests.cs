@@ -2,9 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Xunit;
-using static ClaudeBuddy.TextToSpeech;
+using static Orbweaver.TextToSpeech;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-200, second review: the Speech volume row has to know when an orb's own
 // voice runs on a different engine from the global one. Warren's vibe
@@ -112,10 +112,10 @@ public class OrbVoiceEngineTests
     public void PersonaVoicesAreGatheredFromEveryRegistry()
     {
         const string pin = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-        var savedPin = ClaudeBuddySettings.OpenClawFingerprint;
+        var savedPin = OrbweaverSettings.OpenClawFingerprint;
         try
         {
-            ClaudeBuddySettings.OpenClawFingerprint = pin;
+            OrbweaverSettings.OpenClawFingerprint = pin;
             LocalPersonas.SetForTests(new Dictionary<string, LocalPersona.Persona>
             {
                 ["local-1"] = new("Jen", "female_03", null, null, null, Array.Empty<string>()),
@@ -147,7 +147,7 @@ public class OrbVoiceEngineTests
             LocalPersonas.SetForTests(new Dictionary<string, LocalPersona.Persona>());
             PeerPersonas.SetForTests(new Dictionary<string, MirrorProtocol.PeerPersona>());
             OpenClawSessions.SetIdentitiesForTests(new Dictionary<string, OpenClawSessions.AgentIdentity>());
-            ClaudeBuddySettings.OpenClawFingerprint = savedPin;
+            OrbweaverSettings.OpenClawFingerprint = savedPin;
         }
     }
 

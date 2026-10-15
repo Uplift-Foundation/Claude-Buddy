@@ -13,7 +13,7 @@ using Avalonia.Controls.Shapes;
 using Avalonia.Styling;
 using Avalonia.Threading;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     public partial class OrbWindow : Window
     {
@@ -74,7 +74,7 @@ namespace ClaudeBuddy
         public Color LinkColor { get; private set; } = PlainLink;
 
         // Seeded from the settings-backed colour at field-init time, the same way
-        // SessionManager seeds OrbsVisible from ClaudeBuddySettings.ShowOrbs.
+        // SessionManager seeds OrbsVisible from OrbweaverSettings.ShowOrbs.
         private readonly SolidColorBrush _orbBrush = new(OrbColors.Idle);
 
         // The two halves of this orb's identity, for the chat panel's header.
@@ -436,7 +436,7 @@ namespace ClaudeBuddy
             // the reason the lifecycle rows above give, and held exactly as
             // the OpenClaw rows are: an armed row or an answer survives the
             // two-second refresh, and the menu closing puts the words back.
-            var cloud = CloudOrbActions.Offer(status.Source, SessionId, ClaudeBuddySettings.ClaudeCloudEnabled);
+            var cloud = CloudOrbActions.Offer(status.Source, SessionId, OrbweaverSettings.ClaudeCloudEnabled);
             ArchiveCloudItem.IsVisible = cloud.Archive;
             DeleteCloudItem.IsVisible = cloud.Delete;
             if (!_cloudRowsHeld) RestoreCloudRows();
@@ -1027,9 +1027,9 @@ namespace ClaudeBuddy
 
         // This orb's own override if it has one, the global slider if not.
         // Keyed by SoundKey — the per-agent key the override is stored under,
-        // see ClaudeBuddySettings.OrbSizes.
+        // see OrbweaverSettings.OrbSizes.
         internal bool ApplyEffectiveOrbSize() =>
-            ApplyOrbSize(OrbSizing.Effective(ClaudeBuddySettings.OrbSizeFor(SoundKey), ClaudeBuddySettings.OrbSize));
+            ApplyOrbSize(OrbSizing.Effective(OrbweaverSettings.OrbSizeFor(SoundKey), OrbweaverSettings.OrbSize));
 
         private bool _isTeamMember;
 
@@ -1089,7 +1089,7 @@ namespace ClaudeBuddy
 
         // Smaller with two letters than with one, so the wider glyph still
         // fits inside the same 36px circle rather than crowding its edge.
-        private static double BaseGlyphFontSize => ClaudeBuddySettings.TwoLetterGlyphs ? 12.0 : 16.0;
+        private static double BaseGlyphFontSize => OrbweaverSettings.TwoLetterGlyphs ? 12.0 : 16.0;
 
         // Settings' "Two-letter initials" toggle changes how every already-
         // open orb's glyph reads without waiting for that session's next
@@ -1305,7 +1305,7 @@ namespace ClaudeBuddy
         // The letters themselves live in OrbGlyph, which is pure and tested;
         // this only supplies the one thing that is not — the user's setting.
         private static string GlyphFor(string label) =>
-            OrbGlyph.For(label, ClaudeBuddySettings.TwoLetterGlyphs);
+            OrbGlyph.For(label, OrbweaverSettings.TwoLetterGlyphs);
 
         // The colour comes from OrbColors so this switch is about *motion* only —
         // one state-to-colour mapping in the app, not two that can drift apart.
@@ -1860,7 +1860,7 @@ namespace ClaudeBuddy
             // because dictation had nowhere to go for them; the chat panel is
             // that somewhere, and StopRecording opens it with the words in its
             // input box rather than sending them.
-            bool micOn = ClaudeBuddySettings.VoiceInputEnabled;
+            bool micOn = OrbweaverSettings.VoiceInputEnabled;
             _flyout.SetMicVisible(micOn);
 
             // Only on local sessions. A gateway orb opens its panel when you
@@ -2749,9 +2749,9 @@ namespace ClaudeBuddy
 
         internal static string ActionFor(int clicks) => clicks switch
         {
-            1 => ClaudeBuddySettings.ClickAction,
-            2 => ClaudeBuddySettings.DoubleClickAction,
-            _ => ClaudeBuddySettings.TripleClickAction
+            1 => OrbweaverSettings.ClickAction,
+            2 => OrbweaverSettings.DoubleClickAction,
+            _ => OrbweaverSettings.TripleClickAction
         };
 
         internal void RunClickAction(int clicks)
@@ -3323,7 +3323,7 @@ namespace ClaudeBuddy
         // this doesn't have.
         internal void RebuildSoundSubmenus()
         {
-            var over = ClaudeBuddySettings.OrbTurnSoundFor(SoundKey);
+            var over = OrbweaverSettings.OrbTurnSoundFor(SoundKey);
 
             BuildSoundSubmenu(SoundFinishedMenuItem, over?.Finished,
                 SystemSoundCatalog.DefaultFinishedSoundName, includeSummary: true,
@@ -3398,13 +3398,13 @@ namespace ClaudeBuddy
         // which of the two it is rather than which number it currently draws.
         internal void RebuildSizeSubmenu()
         {
-            var over = ClaudeBuddySettings.OrbSizeFor(SoundKey);
+            var over = OrbweaverSettings.OrbSizeFor(SoundKey);
 
             SizeMenuItem.Items.Clear();
 
             var defaultItem = new MenuItem
             {
-                Header = $"Default ({SizeLabel(ClaudeBuddySettings.OrbSize)})",
+                Header = $"Default ({SizeLabel(OrbweaverSettings.OrbSize)})",
                 ToggleType = MenuItemToggleType.CheckBox,
                 IsChecked = over is null
             };
@@ -3435,26 +3435,26 @@ namespace ClaudeBuddy
         // window — there is nothing else to move, so this orb resizes itself.
         private void SetSizeOverride(double? size)
         {
-            ClaudeBuddySettings.SetOrbSize(SoundKey, size);
+            OrbweaverSettings.SetOrbSize(SoundKey, size);
 
             if (SizeRelayoutRequested is { } relayout) relayout();
             else ApplyEffectiveOrbSize();
         }
 
         // Reads the other trigger's current override so writing one never
-        // clobbers the other — ClaudeBuddySettings.SetOrbTurnSound takes
+        // clobbers the other — OrbweaverSettings.SetOrbTurnSound takes
         // both fields together, and OrbTurnSound has no "leave unchanged"
         // value of its own to pass instead.
         private void SetFinishedSoundOverride(string? value)
         {
-            var over = ClaudeBuddySettings.OrbTurnSoundFor(SoundKey);
-            ClaudeBuddySettings.SetOrbTurnSound(SoundKey, value, over?.Attention);
+            var over = OrbweaverSettings.OrbTurnSoundFor(SoundKey);
+            OrbweaverSettings.SetOrbTurnSound(SoundKey, value, over?.Attention);
         }
 
         private void SetAttentionSoundOverride(string? value)
         {
-            var over = ClaudeBuddySettings.OrbTurnSoundFor(SoundKey);
-            ClaudeBuddySettings.SetOrbTurnSound(SoundKey, over?.Finished, value);
+            var over = OrbweaverSettings.OrbTurnSoundFor(SoundKey);
+            OrbweaverSettings.SetOrbTurnSound(SoundKey, over?.Finished, value);
         }
 
         // QA round 2 (HIGH): called from UpdateFrom on every poll rather
@@ -3480,7 +3480,7 @@ namespace ClaudeBuddy
         // migration onto an unoccupied key, write nothing there, and still
         // clear the override out from under the old key on the way out.
         // Reachable on a real machine, not a contrived edge case: the hook
-        // writes cwd with no fallback (ClaudeBuddyHook.sh:70), so a single
+        // writes cwd with no fallback (OrbweaverHook.sh:70), so a single
         // status write missing it is enough to blank the key for one poll.
         // Skipped entirely instead — the window keeps using its last real
         // key, the same resilience a missing title already gets by falling
@@ -3503,10 +3503,10 @@ namespace ClaudeBuddy
             var hadKey = !string.IsNullOrEmpty(SoundKey);
             if (hadKey)
             {
-                var stale = ClaudeBuddySettings.OrbTurnSoundFor(SoundKey);
-                if (stale is not null && ClaudeBuddySettings.OrbTurnSoundFor(key) is null)
+                var stale = OrbweaverSettings.OrbTurnSoundFor(SoundKey);
+                if (stale is not null && OrbweaverSettings.OrbTurnSoundFor(key) is null)
                 {
-                    ClaudeBuddySettings.SetOrbTurnSound(key, stale.Finished, stale.Attention);
+                    OrbweaverSettings.SetOrbTurnSound(key, stale.Finished, stale.Attention);
                 }
 
                 // CB-198's size override rides the same key, so it migrates by
@@ -3515,10 +3515,10 @@ namespace ClaudeBuddy
                 // 200% chosen before the title arrived must not snap back to
                 // the slider the moment it does, and a shared key must not be
                 // emptied out from under the other orb using it.
-                var staleSize = ClaudeBuddySettings.OrbSizeFor(SoundKey);
-                if (staleSize is not null && ClaudeBuddySettings.OrbSizeFor(key) is null)
+                var staleSize = OrbweaverSettings.OrbSizeFor(SoundKey);
+                if (staleSize is not null && OrbweaverSettings.OrbSizeFor(key) is null)
                 {
-                    ClaudeBuddySettings.SetOrbSize(key, staleSize);
+                    OrbweaverSettings.SetOrbSize(key, staleSize);
                 }
             }
 

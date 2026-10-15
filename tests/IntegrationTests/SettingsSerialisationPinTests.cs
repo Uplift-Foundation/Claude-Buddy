@@ -5,7 +5,7 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-241's guard, for this assembly. tests/UnitTests/SettingsSerialisationPinTests
 // has the story and the reasoning; it is copied here rather than shared because
@@ -37,10 +37,10 @@ public class SettingsSerialisationPinTests
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null)
         {
-            if (File.Exists(Path.Combine(dir.FullName, "ClaudeBuddy.csproj"))) return dir.FullName;
+            if (File.Exists(Path.Combine(dir.FullName, "Orbweaver.csproj"))) return dir.FullName;
             dir = dir.Parent;
         }
-        throw new InvalidOperationException("Could not find ClaudeBuddy.csproj above " + AppContext.BaseDirectory);
+        throw new InvalidOperationException("Could not find Orbweaver.csproj above " + AppContext.BaseDirectory);
     }
 
     private static string WithoutLineComments(string source) =>

@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The pure decision CB-178 is actually about: given the outcome of a mutex
 // claim, does this process go on to start the UI or exit cleanly? See

@@ -10,7 +10,7 @@ using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // ChatPanel is a process-wide singleton (see its own header comment: two
 // panels would fight over being the key window), so every test here has to
@@ -607,7 +607,7 @@ public class ChatPanelTests : IDisposable
     {
         var orb = NewOrb();
         orb.PositionKey = "ui-agent-oversized-" + Guid.NewGuid();
-        ClaudeBuddySettings.SetChatPanelSize(orb.PositionKey, 5000, 5000);
+        OrbweaverSettings.SetChatPanelSize(orb.PositionKey, 5000, 5000);
 
         ChatPanel.OpenFor(orb, NewFake());
         FlushRender();
@@ -626,7 +626,7 @@ public class ChatPanelTests : IDisposable
     {
         var orb = NewOrb();
         orb.PositionKey = "ui-agent-tiny-" + Guid.NewGuid();
-        ClaudeBuddySettings.SetChatPanelSize(orb.PositionKey, 10, 10);
+        OrbweaverSettings.SetChatPanelSize(orb.PositionKey, 10, 10);
 
         ChatPanel.OpenFor(orb, NewFake());
         FlushRender();
@@ -663,8 +663,8 @@ public class ChatPanelTests : IDisposable
         // by an earlier test in this process could still be sitting on it —
         // flush before dropping the model so this test cannot destroy someone
         // else's pending write as a side effect.
-        ClaudeBuddySettings.FlushPendingSave();
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.FlushPendingSave();
+        OrbweaverSettings.ReloadForTests();
 
         // Wrong size back on screen after a relaunch is the whole bug, so the
         // panel is put back to the shipped size first: a restore that silently

@@ -1,7 +1,7 @@
 using System.Text;
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 // Covers PeerDiscovery's decisions — what an announcement is allowed to be, and
 // how long a machine stays listed after it stops announcing.

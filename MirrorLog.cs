@@ -1,7 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Text;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // What the mirror actually did with a frame, written down.
     //
@@ -47,11 +47,10 @@ namespace ClaudeBuddy
         {
             try
             {
-                var dir = ClaudeBuddySettings.Directory;
+                var dir = OrbweaverSettings.Directory;
                 if (string.IsNullOrEmpty(dir)) return null;
 
-                var asked = !string.IsNullOrWhiteSpace(
-                                Environment.GetEnvironmentVariable("CLAUDE_BUDDY_MIRROR_LOG"))
+                var asked = !string.IsNullOrWhiteSpace(BrandEnv.Get(BrandEnv.MirrorLog))
                             || File.Exists(System.IO.Path.Combine(dir, "mirror-log"));
 
                 if (!asked) return null;

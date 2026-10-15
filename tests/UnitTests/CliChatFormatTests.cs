@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Covers CliChatFormat.cs's For() dispatch. The record's whole point is
 // documented as "the list is short on purpose" — only Map (which parser

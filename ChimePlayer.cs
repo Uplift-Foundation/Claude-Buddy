@@ -2,7 +2,7 @@ using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Plays one short sound file to completion, capped at five seconds, as a
     // process of its own — never TextToSpeech's tracked process, and never
@@ -629,7 +629,7 @@ namespace ClaudeBuddy
         // applied — read per chime, so a slider move is heard on the very
         // next one, including the preview beside it.
         internal static Process? BuildProcess(string path) =>
-            BuildProcess(path, ClaudeBuddySettings.AlertVolume);
+            BuildProcess(path, OrbweaverSettings.AlertVolume);
 
         internal static Process? BuildProcess(string path, double volume)
         {

@@ -1,9 +1,9 @@
 using Avalonia;
 using Avalonia.Headless;
 
-[assembly: AvaloniaTestApplication(typeof(ClaudeBuddy.Tests.TestAppBuilder))]
+[assembly: AvaloniaTestApplication(typeof(Orbweaver.Tests.TestAppBuilder))]
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Unlike tests/UiTests, this project turns real rendering ON
 // (UseHeadlessDrawing = false, plus .UseSkia()) — the whole point of this
@@ -31,7 +31,7 @@ namespace ClaudeBuddy.Tests;
 public class TestAppBuilder
 {
     public static AppBuilder BuildAvaloniaApp() =>
-        AppBuilder.Configure<ClaudeBuddy.App>()
+        AppBuilder.Configure<Orbweaver.App>()
             .UseSkia()
             .UseHeadless(new AvaloniaHeadlessPlatformOptions { UseHeadlessDrawing = false });
 }

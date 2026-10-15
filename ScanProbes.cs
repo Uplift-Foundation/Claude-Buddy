@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Where a `claude agents` viewer for a directory is sitting: its tmux
     // server and pane when it runs inside tmux, and its tty either way.

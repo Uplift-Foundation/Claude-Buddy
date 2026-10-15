@@ -1,6 +1,6 @@
 using System;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Decides when a scroll-to-end settle loop has watched layout long enough
     // to stop, with no window, no dispatcher and no scroll viewer behind it —

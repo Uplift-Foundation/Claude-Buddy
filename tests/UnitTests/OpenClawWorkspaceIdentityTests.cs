@@ -1,7 +1,7 @@
 using System.Text.Json;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 [Collection("Settings")]
 public class OpenClawWorkspaceIdentityTests : IDisposable
@@ -255,10 +255,10 @@ public class OpenClawWorkspaceIdentityTests : IDisposable
     [Fact]
     public void MissingWorkspaceMetadataLeavesGatewayIdentityAndGlobalVoiceInPlace()
     {
-        var savedVoice = ClaudeBuddySettings.SpeakVoice;
+        var savedVoice = OrbweaverSettings.SpeakVoice;
         try
         {
-            ClaudeBuddySettings.SpeakVoice = "Global voice";
+            OrbweaverSettings.SpeakVoice = "Global voice";
             var json = JsonDocument.Parse("""
                 { "id": "main", "displayName": "Gateway name",
                   "identity": { "avatarUrl": "data:image/png;base64,AQ==" } }
@@ -275,7 +275,7 @@ public class OpenClawWorkspaceIdentityTests : IDisposable
         }
         finally
         {
-            ClaudeBuddySettings.SpeakVoice = savedVoice;
+            OrbweaverSettings.SpeakVoice = savedVoice;
             OpenClawSessions.SetIdentitiesForTests(
                 new Dictionary<string, OpenClawSessions.AgentIdentity>());
         }

@@ -1,7 +1,7 @@
 using System;
 using Avalonia.Input;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // What Cmd+= and Cmd+- mean, and what the step either side of the current
     // size is. Pure, and deliberately window-free for the same reason

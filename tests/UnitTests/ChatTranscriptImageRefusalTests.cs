@@ -1,7 +1,7 @@
 using System.Linq;
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 // Two arms of ChatTranscript's picture handling that its other suites do not
 // reach, both about a picture arriving alongside something that is not a

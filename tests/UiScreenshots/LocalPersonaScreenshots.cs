@@ -2,7 +2,7 @@ using Avalonia.Headless.XUnit;
 using SkiaSharp;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The two visible surfaces a CLAUDE.md persona changes, drawn through real
 // Skia rather than the null renderer.
@@ -137,11 +137,11 @@ public class LocalPersonaScreenshots
     {
         var project = WriteFixture();
         var sessionId = "local-persona-2x-capture-" + Guid.NewGuid();
-        var before = ClaudeBuddySettings.OrbSize;
+        var before = OrbweaverSettings.OrbSize;
 
         try
         {
-            ClaudeBuddySettings.OrbSize = 2.0;
+            OrbweaverSettings.OrbSize = 2.0;
             Publish(sessionId, project);
 
             var orb = new OrbWindow(sessionId);
@@ -151,7 +151,7 @@ public class LocalPersonaScreenshots
         }
         finally
         {
-            ClaudeBuddySettings.OrbSize = before;
+            OrbweaverSettings.OrbSize = before;
             LocalPersonas.SetForTests(new Dictionary<string, LocalPersona.Persona>());
             OpenClawAvatars.Forget(LocalPersonas.AvatarKey(sessionId));
             if (Directory.Exists(project)) Directory.Delete(project, true);

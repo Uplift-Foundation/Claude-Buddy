@@ -2,7 +2,7 @@ using System;
 using Avalonia.Headless.XUnit;
 using Xunit;
 
-namespace ClaudeBuddy.UiTests;
+namespace Orbweaver.UiTests;
 
 // A few one-line answers that nothing else happened to ask for. Each is small,
 // and each is the sort of thing that goes wrong quietly.
@@ -46,12 +46,12 @@ public class SmallSurfacesTests
     [AvaloniaFact]
     public void EachFormatReadsItsOwnChatAndReplySettings()
     {
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
 
-        ClaudeBuddySettings.ClaudeCodeChatEnabled = true;
-        ClaudeBuddySettings.ClaudeCodeReplyEnabled = false;
-        ClaudeBuddySettings.CodexChatEnabled = false;
-        ClaudeBuddySettings.CodexReplyEnabled = true;
+        OrbweaverSettings.ClaudeCodeChatEnabled = true;
+        OrbweaverSettings.ClaudeCodeReplyEnabled = false;
+        OrbweaverSettings.CodexChatEnabled = false;
+        OrbweaverSettings.CodexReplyEnabled = true;
 
         Assert.True(CliChatFormat.ClaudeCode.ChatEnabled());
         Assert.False(CliChatFormat.ClaudeCode.ReplyEnabled());

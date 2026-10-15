@@ -1,7 +1,7 @@
-using ClaudeBuddy;
+using Orbweaver;
 using Xunit;
 
-namespace ClaudeBuddy.IntegrationTests;
+namespace Orbweaver.IntegrationTests;
 
 // The liveness rule against a real file, read through the real tail window.
 //

@@ -1,4 +1,4 @@
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // The little CLI mark an orb wears so Claude, Codex, Grok and OpenClaw
     // read apart from across the room.

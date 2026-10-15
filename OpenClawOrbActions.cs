@@ -1,6 +1,6 @@
 using System.Text.Json;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // CB-170: what an OpenClaw orb's two gateway rows — "Interrupt the current
     // run" and "End the conversation" — need to know, and what to make of the

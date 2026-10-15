@@ -4,7 +4,7 @@ using System.Management;
 using System.Runtime.Versioning;
 using System.Text.RegularExpressions;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Which Claude Desktop instances are running right now, and which profile
     // directory each one was launched against — the Windows counterpart to

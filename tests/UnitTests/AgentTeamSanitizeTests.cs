@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Covers AgentTeam.cs ~110-145. Both values come from a process this app
 // doesn't own (a team member's own command line), read via ps/tasklist, so

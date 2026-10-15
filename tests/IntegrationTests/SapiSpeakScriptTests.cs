@@ -1,9 +1,9 @@
 using System.Diagnostics;
 using System.Text;
-using ClaudeBuddy;
+using Orbweaver;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-184: TextToSpeech's Windows script used to interpolate the spoken text
 // and the voice name into single-quoted literals, escaping only U+0027.

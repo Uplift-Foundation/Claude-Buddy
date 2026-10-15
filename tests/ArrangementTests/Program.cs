@@ -1,4 +1,4 @@
-using ClaudeBuddy.Tests;
+using Orbweaver.Tests;
 
 // The orb-geometry sweep, run by hand.
 //

@@ -1,6 +1,6 @@
 using Avalonia.Media.Imaging;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Where a picture pasted into the chat panel is written before its path
     // is typed into a terminal — the outgoing counterpart of OpenClawMedia,

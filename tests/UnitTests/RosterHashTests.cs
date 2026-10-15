@@ -1,7 +1,7 @@
 using System.Text;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-216: the rules that let an unchanged roster go unsent. A peer asks every
 // ten seconds and each answer embedded every persona picture, about 17 MB per

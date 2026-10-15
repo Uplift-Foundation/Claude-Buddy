@@ -3,7 +3,7 @@ using Avalonia.Headless.XUnit;
 using SkiaSharp;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // What a room orb looks like once it is wearing the people in it.
 //
@@ -72,7 +72,7 @@ public class OrbRoomCompositeScreenshots
         var rows = cast.Select((agent, i) =>
             $$"""{"key":"agent:{{agent.Name}}:discord:channel:{{id}}","lastActivityAt":{{now - i * 1000}}}""");
 
-        ClaudeBuddySettings.OpenClawActiveWithinMinutes = ClaudeBuddySettings.OpenClawActiveWithinAll;
+        OrbweaverSettings.OpenClawActiveWithinMinutes = OrbweaverSettings.OpenClawActiveWithinAll;
 
         OpenClawSessions.Parse(
             JsonDocument.Parse($$"""{"sessions":[{{string.Join(",", rows)}}]}""").RootElement,

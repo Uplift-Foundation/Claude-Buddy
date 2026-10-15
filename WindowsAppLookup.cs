@@ -3,7 +3,7 @@ using System.Runtime.Versioning;
 using System.Xml;
 using Microsoft.Win32;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Resolves Claude Desktop's AUMID (Application User Model ID) without
     // hardcoding it, so a reinstall under a different publisher id or a

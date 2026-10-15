@@ -2,7 +2,7 @@ using System.Reflection;
 using System.Text.Json;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Everything in ClaudeDesktopManager that is a decision rather than a call into
 // the OS.
@@ -25,7 +25,7 @@ public class ClaudeDesktopManagerTests
 {
     // ---- scratch -------------------------------------------------------
 
-    private const string RootVariable = "CLAUDE_BUDDY_PROFILE_ROOT";
+    private const string RootVariable = "ORBWEAVER_PROFILE_ROOT";
 
     // A profile root nobody else owns, pointed at through the env-var seam
     // ClaudeDesktopManager already has for exactly this (ProfileRoot's own
@@ -661,7 +661,7 @@ public class ClaudeDesktopManagerTests
 
         try
         {
-            ClaudeBuddySettings.Update("Claude-work", p => p.Name = "Day job");
+            OrbweaverSettings.Update("Claude-work", p => p.Name = "Day job");
 
             var named = ClaudeDesktopManager.Compose(new ClaudeDesktopManager.ScanResult(
                 true, "unrelated", new[] { ("Claude-work", canonical) },
@@ -669,7 +669,7 @@ public class ClaudeDesktopManagerTests
 
             Assert.Equal("Day job", named.Profiles[0].DisplayName);
 
-            ClaudeBuddySettings.Update("Claude-work", p => p.Name = "");
+            OrbweaverSettings.Update("Claude-work", p => p.Name = "");
 
             var unnamed = ClaudeDesktopManager.Compose(new ClaudeDesktopManager.ScanResult(
                 true, "unrelated", new[] { ("Claude-work", canonical) },
@@ -679,7 +679,7 @@ public class ClaudeDesktopManagerTests
         }
         finally
         {
-            ClaudeBuddySettings.RemoveProfile("Claude-work");
+            OrbweaverSettings.RemoveProfile("Claude-work");
         }
     }
 
@@ -746,16 +746,16 @@ public class ClaudeDesktopManagerTests
         {
             var before = ClaudeDesktopManager.DigestOf(snapshot);
 
-            ClaudeBuddySettings.Update("Claude-tinted", p => p.Color = "purple");
+            OrbweaverSettings.Update("Claude-tinted", p => p.Color = "purple");
             var recoloured = ClaudeDesktopManager.DigestOf(snapshot);
             Assert.NotEqual(before, recoloured);
 
-            ClaudeBuddySettings.Update("Claude-tinted", p => p.ShowSwatch = false);
+            OrbweaverSettings.Update("Claude-tinted", p => p.ShowSwatch = false);
             Assert.NotEqual(recoloured, ClaudeDesktopManager.DigestOf(snapshot));
         }
         finally
         {
-            ClaudeBuddySettings.RemoveProfile("Claude-tinted");
+            OrbweaverSettings.RemoveProfile("Claude-tinted");
         }
     }
 
@@ -920,7 +920,7 @@ public class ClaudeDesktopManagerTests
         Assert.Equal("dark", after.RootElement.GetProperty("userThemeMode").GetString());
 
         // And no temporary left beside it.
-        Assert.False(File.Exists(path + ".claude-buddy.tmp"));
+        Assert.False(File.Exists(path + $".{Brand.Slug}.tmp"));
     }
 
     [Fact]
@@ -961,7 +961,7 @@ public class ClaudeDesktopManagerTests
 
         Assert.Equal("config rewrite unsafe", ClaudeDesktopManager.WriteThemeMode(directory, "dark"));
         Assert.Equal(original, File.ReadAllText(path));
-        Assert.False(File.Exists(path + ".claude-buddy.tmp"));
+        Assert.False(File.Exists(path + $".{Brand.Slug}.tmp"));
     }
 
     [Fact]
@@ -1112,7 +1112,7 @@ public class ClaudeDesktopManagerTests
     }
 
     // The numbering reuses a gap rather than climbing forever, which is exactly
-    // why ClaudeBuddySettings.RemoveProfile has to forget a deleted profile's
+    // why OrbweaverSettings.RemoveProfile has to forget a deleted profile's
     // name and colour: otherwise the next Claude-Profile-2 inherits them.
     [Fact]
     public void TheNumberingFillsInAGapRatherThanClimbing()
@@ -1208,20 +1208,20 @@ public class ClaudeDesktopManagerTests
         using var scratch = new Scratch();
         var directory = scratch.RealProfile("Claude-forgotten");
 
-        ClaudeBuddySettings.Update("Claude-forgotten", p =>
+        OrbweaverSettings.Update("Claude-forgotten", p =>
         {
             p.Name = "Old name";
             p.Color = "purple";
         });
-        Assert.Equal("Old name", ClaudeBuddySettings.For("Claude-forgotten").Name);
+        Assert.Equal("Old name", OrbweaverSettings.For("Claude-forgotten").Name);
 
         ClaudeDesktopManager.ForgetProfile(directory);
 
         // Back to the defaults a never-seen folder gets — null, meaning "no
         // choice made", rather than "Old name" waiting for the next profile that
         // happens to reuse the number.
-        Assert.Null(ClaudeBuddySettings.For("Claude-forgotten").Name);
-        Assert.Null(ClaudeBuddySettings.For("Claude-forgotten").Color);
+        Assert.Null(OrbweaverSettings.For("Claude-forgotten").Name);
+        Assert.Null(OrbweaverSettings.For("Claude-forgotten").Color);
     }
 
     // ---- ProcessAlive ----------------------------------------------

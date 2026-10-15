@@ -2,7 +2,7 @@ using System.IO;
 using System.Reflection;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-250 QA: BrandTests pins the constants and a handful of derived names.
 // These pin the rest of the call sites that build a path, an asset name or a
@@ -54,13 +54,15 @@ public class BrandCallSiteTests
     }
 
     // The speech engine is a release asset: the URL names a file that exists on
-    // GitHub, and the exe name is what the unzipped folder holds.
+    // GitHub, and the exe name is what the unzipped folder holds. Spelled out
+    // as the full string rather than built from Brand, so a change to the stem
+    // shows up here as the URL a user's machine will actually fetch.
     [Fact]
     public void TheSpeechEngineUrlNamesTheShippedAsset()
     {
         Assert.Equal(
             "https://github.com/Uplift-Foundation/Claude-Buddy/releases/download/"
-            + $"v{NeuralSpeech.EngineVersion}/ClaudeBuddySpeech-{NeuralSpeech.EngineVersion}-{NeuralSpeech.EngineRid}.zip",
+            + $"v{NeuralSpeech.EngineVersion}/OrbweaverSpeech-{NeuralSpeech.EngineVersion}-{NeuralSpeech.EngineRid}.zip",
             NeuralSpeech.EngineUrl);
     }
 
@@ -68,8 +70,18 @@ public class BrandCallSiteTests
     public void TheSpeechEngineExeIsTheShippedName()
     {
         Assert.Equal(
-            OperatingSystem.IsWindows() ? "ClaudeBuddySpeech.exe" : "ClaudeBuddySpeech",
+            OperatingSystem.IsWindows() ? "OrbweaverSpeech.exe" : "OrbweaverSpeech",
             NeuralSpeech.EngineExeName);
+    }
+
+    // What every engine downloaded before phase 3 is called, which the
+    // fallback still has to recognise on disk.
+    [Fact]
+    public void TheLegacySpeechEngineExeIsTheNameOldReleasesShipped()
+    {
+        Assert.Equal(
+            OperatingSystem.IsWindows() ? "ClaudeBuddySpeech.exe" : "ClaudeBuddySpeech",
+            NeuralSpeech.LegacyEngineExeName);
     }
 
     // The installed hook: the folder under ~/.claude and the script filename,

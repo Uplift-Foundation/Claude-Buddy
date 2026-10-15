@@ -66,6 +66,15 @@ jobs:
       - name: Unit tests (merge-coverage.py)
         run: python tools/test-merge-coverage.py
 
+      # CB-256: no unrecorded "Claude Buddy" may reappear. The tests prove the
+      # checker; the second step runs it on this tree against the exact-count
+      # allow-list in tools/brand-allowlist.txt.
+      - name: Unit tests (check-brand.py)
+        run: python tools/test-check-brand.py
+
+      - name: Brand check (check-brand.py)
+        run: python tools/check-brand.py
+
       # CB-237: runs publish-screenshots.yml's real publish step against a local
       # bare repository. Skips itself on Windows -- that workflow runs on ubuntu.
       - name: Unit tests (publish-screenshots.yml)
@@ -100,7 +109,7 @@ jobs:
       - name: Integration tests (xUnit)
         run: dotnet test tests/IntegrationTests -c Release --logger "trx;LogFileName=integration-tests.trx" --results-directory TestResults
 
-      # xUnit v3 now (see tests/UiTests/ClaudeBuddy.UiTests.csproj's own
+      # xUnit v3 now (see tests/UiTests/Orbweaver.UiTests.csproj's own
       # comment for why), which drops the old VSTest-hosted `dotnet test`
       # path outright on the .NET 10 SDK — `--logger`/`--results-directory`
       # are silently ignored under Microsoft Testing Platform, so trx
@@ -318,7 +327,7 @@ jobs:
           retention-days: 14
 
       - name: Build
-        run: dotnet publish ClaudeBuddy.csproj -c Release -r ${{ matrix.rid }} -p:DebugType=none --nologo
+        run: dotnet publish Orbweaver.csproj -c Release -r ${{ matrix.rid }} -p:DebugType=none --nologo
 
       # Packaging is where the fiddly, platform-specific work lives (inside-out
       # codesigning, Inno Setup), so exercise it here rather than discovering a

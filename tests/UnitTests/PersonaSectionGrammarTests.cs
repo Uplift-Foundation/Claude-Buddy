@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The colon-less `Label Value` form, and the persona section that is the only
 // place it is read.

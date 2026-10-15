@@ -2,7 +2,7 @@ using System.Buffers.Binary;
 using System.Text;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The seam CB-136 actually added: reading real `.npy` files off a disk,
 // averaging them, and writing the result where the engine will find it.
@@ -14,7 +14,7 @@ namespace ClaudeBuddy.Tests;
 // user sees, and they are all about a filesystem.
 //
 // [Collection("LogDir")] for two reasons at once. This class points
-// CLAUDE_BUDDY_LOG_DIR at a scratch directory, which is what that collection
+// ORBWEAVER_LOG_DIR at a scratch directory, which is what that collection
 // exists to serialise; and VoiceBlends' materialised-slug table and its paths
 // override are process-wide statics, which need serialising too. One
 // collection covers both because this is the only class in this assembly that
@@ -39,7 +39,7 @@ public class VoiceBlendFileTests : IDisposable
         Directory.CreateDirectory(_engineVoices);
         Directory.CreateDirectory(_userVoices);
 
-        // AsyncLocal rather than CLAUDE_BUDDY_LOG_DIR: _logDir is asserted
+        // AsyncLocal rather than ORBWEAVER_LOG_DIR: _logDir is asserted
         // about below, so it must not be a name any parallel test can see.
         // See CrashLog.ScopeForTests for the whole argument.
         _logScope = CrashLog.ScopeForTests(_logDir);

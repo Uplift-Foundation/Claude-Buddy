@@ -3,7 +3,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 // OpenClawSessions.StartConversationAsync: CB-168's OpenClaw "start a new
 // chat" entry point. The method itself is [ExcludeFromCodeCoverage] — it

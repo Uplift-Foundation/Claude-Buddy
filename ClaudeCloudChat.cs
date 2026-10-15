@@ -7,7 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Threading;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Reading a cloud session's transcript.
     //
@@ -448,7 +448,7 @@ namespace ClaudeBuddy
         // makes for the whole cloud arm; a panel opened before the switch was
         // flipped must not be a way round it. A seam so a test does not depend on
         // the settings file of the machine running it.
-        internal Func<bool> Enabled { get; init; } = () => ClaudeBuddySettings.ClaudeCloudEnabled;
+        internal Func<bool> Enabled { get; init; } = () => OrbweaverSettings.ClaudeCloudEnabled;
 
         // The live event stream, primary whenever there is one. Null means none —
         // the polling loop is then the only live source, which is also what this

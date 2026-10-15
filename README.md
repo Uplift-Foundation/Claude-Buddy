@@ -1,4 +1,6 @@
-# Claude Buddy
+# Orbweaver
+
+*Formerly Claude Buddy.* If you are looking for Claude Buddy, this is it: same app, new name.
 
 One tiny always-on-top orb per running Claude Code session, stacked in the
 top-right corner of your screen. Runs on **Windows and macOS** (Avalonia,
@@ -29,7 +31,7 @@ path; the right-click menu leads with both, then offers to reset that session
 to idle, **dismiss the orb** (removes it from screen by deleting its status
 file — the session itself carries on, and its next hook event puts the orb
 back), **end the session** (sends its `claude` process a polite terminate;
-deliberate, irreversible, and never automatic), or exit Claude Buddy entirely.
+deliberate, irreversible, and never automatic), or exit Orbweaver entirely.
 The last two only appear for a session this app can actually act on: a local
 CLI session for dismiss, and one whose pid was recorded for end.
 
@@ -46,7 +48,7 @@ same mark.
 
 **Left-click-drag an orb to put it wherever you want**, and it stays there:
 it holds that spot as other sessions come and go (the rest of the stack
-closes up behind it), and it's remembered across restarts of Claude Buddy —
+closes up behind it), and it's remembered across restarts of Orbweaver —
 per working directory, since session ids are new every time. Right-click →
 **"Reset this orb's position"** to give the placement up and have that
 orb rejoin the default top-right column. Two live sessions in the same
@@ -187,7 +189,7 @@ session's terminal**, best-effort:
 
   1. *The click has to arrive at all.* macOS spends the click that activates an
      inactive app: the window comes forward, the view never sees it, unless it
-     answers `YES` to `acceptsFirstMouse:`. Claude Buddy is a background app and
+     answers `YES` to `acceptsFirstMouse:`. Orbweaver is a background app and
      is essentially never the active one when you're on another desktop, so the
      first click was always the one being eaten — it looked exactly like "single
      click does nothing, double click works". Avalonia's view doesn't implement
@@ -327,7 +329,7 @@ Details worth knowing:
 
   What Windows gets today: session orbs, the tray icon and menu, click-to-focus,
   chat names and colours, the settings window, persisted settings under
-  `%APPDATA%\ClaudeBuddy`, **and the profile section** — `LaunchWindows` passes
+  `%APPDATA%\Orbweaver`, **and the profile section** — `LaunchWindows` passes
   `--user-data-dir` through `ActivateApplication`, and `WindowsProcessScan` reads
   it back off `Win32_Process.CommandLine`, the equivalent of `KERN_PROCARGS2` on
   macOS with no memory reading needed. What does *not* port is the tinted Dock
@@ -380,13 +382,13 @@ surface, since with zero sessions there are no orbs to right-click:
   Finder, the .exe) keeps the defaults permanently: it's baked into the bundle
   at build time, and rewriting an installed app at runtime is exactly the
   privacy wall the Claude Desktop Dock-icon tinting already has to work around.
-- **Quit Claude Buddy**.
+- **Quit Orbweaver**.
 
 On macOS the menu opens on a left-click of the menu-bar icon. On Windows it's
 a **right-click**, and there's one wrinkle worth knowing: Windows 11 does not
 put newly registered tray icons on the taskbar. It files them in the hidden
 overflow behind the **`^`** chevron, so after the first launch you'll find
-Claude Buddy there — drag it onto the taskbar once to pin it (that's what
+Orbweaver there — drag it onto the taskbar once to pin it (that's what
 sets `IsPromoted` in `HKCU\Control Panel\NotifyIconSettings`, which Windows
 then remembers). Nothing to configure in the app; it's how Windows 11 treats
 every new icon.
@@ -464,8 +466,8 @@ way for this app to sound better on Windows is to bring its own model.
 
 **High-quality voice (experimental)** in the settings window does that. It
 downloads a neural speech engine and its model — about 300 MB in total, once —
-into `%APPDATA%\ClaudeBuddy\speech-engine` (`~/Library/Application
-Support/ClaudeBuddy/speech-engine` on macOS), and speaks entirely on this
+into `%APPDATA%\Orbweaver\speech-engine` (`~/Library/Application
+Support/Orbweaver/speech-engine` on macOS), and speaks entirely on this
 machine. No cloud service, no API key, nothing leaves the computer, same as
 dictation.
 
@@ -496,8 +498,8 @@ Apache-2.0 and their licence travels inside the downloaded bundle.
 
 #### Adding voices
 
-Drop `.npy` Kokoro voice files into `%APPDATA%\ClaudeBuddy\voices`
-(`~/Library/Application Support/ClaudeBuddy/voices` on macOS) and they
+Drop `.npy` Kokoro voice files into `%APPDATA%\Orbweaver\voices`
+(`~/Library/Application Support/Orbweaver/voices` on macOS) and they
 appear in the picker alongside the bundled ones. That directory is deliberately
 outside the engine's own folder, which an upgrade replaces wholesale — anything
 put beside the bundled voices would be deleted by the next release.
@@ -525,7 +527,7 @@ If you want a different engine, a different voice, or a chain of both, point the
 app at your own command and it will use that instead of anything built in:
 
 ```jsonc
-// %APPDATA%\ClaudeBuddy\settings.json  (~/Library/Application Support/… on macOS)
+// %APPDATA%\Orbweaver\settings.json  (~/Library/Application Support/… on macOS)
 "speakCommand": "C:\\tools\\my-voice.cmd",
 "speakCommandArgs": ["--voice", "whatever"]
 ```
@@ -656,7 +658,7 @@ Details worth knowing:
   Only `codesign --verify --strict` objects, over the xattr.
 - **Clones go stale after a Claude update.** Squirrel only updates
   `/Applications/Claude.app`, so **Dock icons → Rebuild after a Claude update**
-  re-clones. Bundles live in `~/Library/Application Support/ClaudeBuddy/bundles/`
+  re-clones. Bundles live in `~/Library/Application Support/Orbweaver/bundles/`
   and are pure cache — deleting them only costs the colours. Each is named
   exactly `Claude.app` inside a per-profile directory, because the process scan
   matches on the path suffix `/Claude.app/Contents/MacOS/Claude`; naming bundles
@@ -770,23 +772,23 @@ Details worth knowing:
   the app can do about it.
 - **Each profile is a separate device** as far as the server is concerned —
   its own `ant-did`.
-- `CLAUDE_BUDDY_PROFILE_ROOT` overrides the directory profiles are discovered
+- `ORBWEAVER_PROFILE_ROOT` (formerly `CLAUDE_BUDDY_PROFILE_ROOT`, which still works) overrides the directory profiles are discovered
   in, which is how to try this out without touching your real one.
-- `CLAUDE_BUDDY_BUNDLE_ROOT` overrides where the cloned, recoloured `Claude.app`
+- `ORBWEAVER_BUNDLE_ROOT` (formerly `CLAUDE_BUDDY_BUNDLE_ROOT`, which still works) overrides where the cloned, recoloured `Claude.app`
   bundles are cached (normally
-  `~/Library/Application Support/ClaudeBuddy/bundles`). Same purpose: the cache
+  `~/Library/Application Support/Orbweaver/bundles`). Same purpose: the cache
   holds real 753MB clones whose icons you are looking at, so anything poking at
   it — a test, or a manual experiment — should be pointed somewhere else first.
   Deleting either directory costs nothing but the coloured icons, which are
   rebuilt on next launch.
 
 It works by watching a small folder in the OS temp directory
-(`%TEMP%\claude_buddy\` on Windows, `$TMPDIR/claude_buddy/` on macOS) that
+(`%TEMP%\orbweaver\` on Windows, `$TMPDIR/orbweaver/` on macOS) that
 fills up with one JSON status file per session — `<session_id>.txt`,
 containing `{"state": "...", "cwd": "...", "title": "...", "color": "...", ...}`
 — written by a tiny script that Claude Code hooks invoke:
-`ClaudeBuddyHook.ps1` (PowerShell, Windows/WSL) or
-`ClaudeBuddyHook.sh` (bash, macOS). No network calls, no polling of Claude
+`OrbweaverHook.ps1` (PowerShell, Windows/WSL) or
+`OrbweaverHook.sh` (bash, macOS). No network calls, no polling of Claude
 Code itself, no persistent process beyond the hook calls themselves.
 
 An orb goes away when any of six things happens.
@@ -885,10 +887,10 @@ it should not have, the session's next hook event writes it back.
 
 Right-click → "Reset this session to idle" is still there for a local CLI
 session whose process is alive but whose orb is stuck amber. It changes only
-Claude Buddy's local status record and the next hook event can replace it with
+Orbweaver's local status record and the next hook event can replace it with
 the session's real state. OpenClaw sessions instead say that OpenClaw controls
 their state, and remote-control sessions say that their other machine does;
-Claude Buddy does not offer a reset that cannot change either one.
+Orbweaver does not offer a reset that cannot change either one.
 
 **Scope**: this only tracks Claude Code sessions that read a `settings.json`
 you've wired up per step 2 below. Each Claude Code install — WSL (per Linux
@@ -897,7 +899,7 @@ session won't show up until you add the matching hooks to *its* config.
 The app itself doesn't care where a status file came from. On Windows, both
 WSL and native Windows hooks ultimately run `powershell.exe` as a normal
 Windows process, so `$env:TEMP` resolves to the same real folder either way
-and their orbs happily stack together in one running `ClaudeBuddy.exe`.
+and their orbs happily stack together in one running `Orbweaver.exe`.
 This is just a matter of wiring more hook configs, not a hard limitation — the
 Windows installer, `install-windows-hooks.ps1 -Wsl`, and the running app's
 Settings window (see below) all reach every WSL distro's *default* Linux user
@@ -950,7 +952,7 @@ handed to Claude Code's own IPC socket for that session rather than typed
 into a pane that doesn't exist, and it reads at the session's next turn, not
 immediately — the composer says so ("Message it — it reads this at its next
 turn") rather than implying a pane it doesn't have. It arrives as a message
-from Claude Buddy, not as keystrokes, so **built-in slash commands don't run**
+from Orbweaver, not as keystrokes, so **built-in slash commands don't run**
 this way, though a project's own custom skill commands do, since those are
 just instructions the model reads. This works both for a background job on
 this machine and, over the mirror link, for one on a peer machine — the same
@@ -964,7 +966,7 @@ under the orb with that session's conversation in it — what it said, what it i
 thinking, the tools it reached for — and a line to type in.
 
 **It is the same conversation as the terminal's, not a copy.** Claude Code
-writes every session's transcript to a file, the hook already tells Claude Buddy
+writes every session's transcript to a file, the hook already tells Orbweaver
 where, and the panel reads it. So anything you type in the terminal shows up in
 the panel. And sending from the panel types into the session's tmux pane, so
 anything you send from the orb shows up in the terminal too, exactly as if you
@@ -1038,11 +1040,11 @@ For the three local CLIs, it checks whichever it can actually find on this machi
 
 A local CLI shows up disabled, with a reason, when it can't be found on PATH or in its usual install locations — the same install locations `ClaudeBinary`, `CodexBinary` and `GrokBinary` already check for everything else in this app.
 
-A local CLI can also be enabled but carry a warning instead: this means the binary was found but its Claude Buddy hook isn't installed, so **Start** will open a real terminal running it, but no orb will appear until the hook is wired up (Settings → the CLI's own section, or `install-hooks.sh`/`.ps1` from a terminal).
+A local CLI can also be enabled but carry a warning instead: this means the binary was found but its Orbweaver hook isn't installed, so **Start** will open a real terminal running it, but no orb will appear until the hook is wired up (Settings → the CLI's own section, or `install-hooks.sh`/`.ps1` from a terminal).
 
-That's the same rule every orb in this app already depends on: an orb is drawn from a status file the CLI's own hook writes, so a CLI running with no hook installed is genuinely running and genuinely invisible to Claude Buddy at the same time.
+That's the same rule every orb in this app already depends on: an orb is drawn from a status file the CLI's own hook writes, so a CLI running with no hook installed is genuinely running and genuinely invisible to Orbweaver at the same time.
 
-**An Account picker appears when the selected CLI has a second account configured** — the additional-accounts list in that CLI's own section of Settings. Each CLI offers only its own list, headed by Default. Claude Code launches the chosen account with `CLAUDE_CONFIG_DIR`, Codex with `CODEX_HOME` and Grok with `GROK_HOME`. Default sets none of them, so the CLI uses its usual `~/.claude`, `~/.codex` or `~/.grok`, or whatever the variable already says if Claude Buddy itself was started with one. The dialog remembers the last account per CLI. With no extra accounts configured for a CLI, there is no picker, and the picker never appears for OpenClaw. If the chosen account's folder doesn't exist, a line under the picker says what will happen: Codex refuses to start, Grok creates a fresh, logged-out account there, and Claude Code starts first-run setup. **Start** stays enabled, because a folder you're about to set up on purpose is a fine reason to go ahead.
+**An Account picker appears when the selected CLI has a second account configured** — the additional-accounts list in that CLI's own section of Settings. Each CLI offers only its own list, headed by Default. Claude Code launches the chosen account with `CLAUDE_CONFIG_DIR`, Codex with `CODEX_HOME` and Grok with `GROK_HOME`. Default sets none of them, so the CLI uses its usual `~/.claude`, `~/.codex` or `~/.grok`, or whatever the variable already says if Orbweaver itself was started with one. The dialog remembers the last account per CLI. With no extra accounts configured for a CLI, there is no picker, and the picker never appears for OpenClaw. If the chosen account's folder doesn't exist, a line under the picker says what will happen: Codex refuses to start, Grok creates a fresh, logged-out account there, and Claude Code starts first-run setup. **Start** stays enabled, because a folder you're about to set up on purpose is a fine reason to go ahead.
 
 **OpenClaw is the odd one of the four, because there's no local binary and no terminal to open.** Choosing it replaces the folder combo with a picker over the agents your gateway already knows about, sorted by the name you'd recognise rather than by its config id. **Start** doesn't open a terminal at all — it asks the gateway to create a brand-new conversation with the chosen agent and opens it straight into a chat panel, the same panel every other agent conversation in this app already uses.
 
@@ -1050,7 +1052,7 @@ OpenClaw shows up disabled, with a reason stated directly under the row rather t
 
 ## Global hotkeys
 
-Three system-wide hotkeys, all working whether or not Claude Buddy has focus:
+Three system-wide hotkeys, all working whether or not Orbweaver has focus:
 
 | Default | Does | Override key |
 | --- | --- | --- |
@@ -1286,8 +1288,8 @@ re-read only when one of them actually changes: the app stats them on its
 ordinary two-second poll and opens nothing until a size or a timestamp moves.
 
 **A picture that is skipped says so.** One line goes into `persona.log`, beside
-the crash log — `~/Library/Logs/ClaudeBuddy` on macOS,
-`%LOCALAPPDATA%\ClaudeBuddy\Logs` on Windows — naming the file, the reason (too
+the crash log — `~/Library/Logs/Orbweaver` on macOS,
+`%LOCALAPPDATA%\Orbweaver\Logs` on Windows — naming the file, the reason (too
 large, escapes root, not a picture path, or unreadable)
 and the cap, once per distinct message however many sessions ask. Before that line existed an oversized
 portrait was dropped in silence and looked exactly like a persona that had named
@@ -1323,8 +1325,8 @@ the same rules a single voice is, so `sky` finds `af_sky`.
 
 **What happens then**: the app averages the parts' style vectors, weighted, and
 writes the result once into the same voices directory *Adding voices* above
-describes — `%APPDATA%\ClaudeBuddy\voices`, or
-`~/Library/Application Support/ClaudeBuddy/voices` — as a real Kokoro voice
+describes — `%APPDATA%\Orbweaver\voices`, or
+`~/Library/Application Support/Orbweaver/voices` — as a real Kokoro voice
 named for the mixture, `af_blend_sky50-nicole50.npy` for the example above. It
 is built on the first speak and reused after that, appears in the engine's own
 voice list, and survives an engine upgrade like anything else in that directory.
@@ -1360,7 +1362,7 @@ twenty or thirty agents out of one repository.
 
 ## OpenClaw agents (experimental, off by default)
 
-Claude Buddy can also show an orb for each recently active session on an
+Orbweaver can also show an orb for each recently active session on an
 [OpenClaw](https://docs.openclaw.ai) gateway — the agents you talk to through
 Discord or its TUI — beside your Claude Code ones. They breathe when idle and
 pulse violet while an agent is working, the same as any other orb.
@@ -1378,7 +1380,7 @@ OpenClaw agents**, then give it:
 
 The first connection asks the gateway to pair this machine, and then waits: on
 the gateway, run `openclaw devices approve --latest` and check it names
-`gateway-client` before approving. Claude Buddy asks for **`operator.read` and
+`gateway-client` before approving. Orbweaver asks for **`operator.read` and
 nothing else**, so it can see what your agents are doing and cannot ask them to
 do anything.
 
@@ -1389,10 +1391,10 @@ one agent commonly has a DM with you, a DM with someone else and two channels
 going at once.
 
 **Workspace identity overrides are local and explicit.** When `agents.list`
-names an agent workspace, Claude Buddy reads root-level Markdown files there:
+names an agent workspace, Orbweaver reads root-level Markdown files there:
 `IDENTITY.md` first, then `SOUL.md`, then the remaining `*.md` files by filename.
 Use OpenClaw's bullet format, for example `- Name: Aurora`,
-`- Avatar: avatars/aurora.png`, and Claude Buddy's `- Voice: Samantha`. Voice
+`- Avatar: avatars/aurora.png`, and Orbweaver's `- Voice: Samantha`. Voice
 also accepts the deliberate field labels `Voice Name`, `Speech Voice`, and `TTS
 Voice`, in Markdown bullets, bold fields, two-cell tables, or YAML front matter.
 Labels are case-insensitive and the first valid value for each field wins. A
@@ -1409,9 +1411,9 @@ then by an unambiguous normalized shorthand; a missing or ambiguous match keeps
 the global voice. Avatar paths are
 local to that workspace (no URLs or data URIs), cannot escape it, and are capped
 at 2 MB. Missing or invalid fields retain the identity or voice supplied by the
-gateway and Claude Buddy settings.
+gateway and Orbweaver settings.
 
-When the gateway is on a paired Claude Buddy peer rather than this machine,
+When the gateway is on a paired Orbweaver peer rather than this machine,
 the direct Peer Link can optionally provide the already-resolved profile voice
 and rate. It sends only the requested agent id, voice label, rate, and the
 gateway certificate pin; it never reads or transfers workspace files. Both
@@ -1421,7 +1423,7 @@ so an unavailable peer continues to use the normal global-voice fallback.
 
 **An agent's picture is its orb, and a channel's orb is everyone in it.** An
 agent with an avatar set in OpenClaw wears it instead of its letters, with the
-state moving out to the ring. The orb Claude Buddy draws for a *channel* — the
+state moving out to the ring. The orb Orbweaver draws for a *channel* — the
 one every agent talking in that channel points at — is cut into a wedge per
 member: half each for two agents, quarters for four. Someone with no picture
 still takes a wedge, in the colour their ring wears everywhere else, and a
@@ -1452,7 +1454,7 @@ how long a session lingers *after* it goes quiet.
 
 Be aware that the gateway's own idea of "recent" is unreliable — it reported
 nearly two hours since last activity for a Discord chat that was happening at
-that moment — so Claude Buddy also counts anything it has watched happen since
+that moment — so Orbweaver also counts anything it has watched happen since
 it started. Conversations from before it connected are the ones that depend on
 the setting.
 
@@ -1494,7 +1496,7 @@ The heart marks **where a heartbeat lands**, not which individual turns were
 one — the gateway does not report heartbeats at all, and its own Control UI
 hides their prompts the same way. Two honest consequences: an agent whose
 heartbeat is switched off still gets a heart (whether it is enabled is config
-behind a scope Claude Buddy does not ask for), and a heartbeat retargeted at a
+behind a scope Orbweaver does not ask for), and a heartbeat retargeted at a
 channel with a job's `session` override is not marked. See
 `docs/openclaw-findings.md` for what was measured.
 
@@ -1555,10 +1557,10 @@ separately rather than coming along with the first.
 **If the status row says `can't reach the gateway: No route to host`, check
 macOS's Local Network permission before you check your network.** macOS grants
 local network access per app *identity*, and installing an upgrade replaces the
-app bundle — so the permission does not survive the update, and Claude Buddy
+app bundle — so the permission does not survive the update, and Orbweaver
 silently loses the ability to reach a gateway that is running perfectly well.
 Open **System Settings → Privacy & Security → Local Network** and make sure
-Claude Buddy is switched on. The app now says so in that row itself, but the
+Orbweaver is switched on. The app now says so in that row itself, but the
 underlying error still reads like a network fault, which is why it is worth
 naming here.
 
@@ -1622,7 +1624,7 @@ Some things the rings deliberately do not do:
   cannot, because Grok writes its credit figure once when it starts and never
   again for the life of that process.
 
-**Where the numbers come from.** Claude Buddy asks Claude Code itself, once
+**Where the numbers come from.** Orbweaver asks Claude Code itself, once
 every five minutes per account, over the same control protocol its SDK uses —
 roughly `claude -p --input-format stream-json` with a `get_usage` request and
 `CLAUDE_CONFIG_DIR` set. Two consequences worth knowing:
@@ -1632,7 +1634,7 @@ roughly `claude -p --input-format stream-json` with a `get_usage` request and
   `claude` process per account per poll, which is the reason for the
   five-minute floor — Claude Code caches the underlying fetch for five minutes,
   so asking more often could not return a newer number anyway.
-- **Nothing here touches your credentials.** Claude Buddy never reads your
+- **Nothing here touches your credentials.** Orbweaver never reads your
   login token or your keychain; Claude Code handles its own authentication and
   simply answers the question. That is also why this works the same on macOS
   and Windows.
@@ -1647,7 +1649,7 @@ change. If it does, the orbs go quiet rather than showing something wrong.
 ## Sessions on other machines (off by default)
 
 If you run Claude Code on more than one machine — a desktop at home, a server,
-a laptop you left on — Claude Buddy can show those sessions as orbs too, and let
+a laptop you left on — Orbweaver can show those sessions as orbs too, and let
 you send them instructions.
 
 There are two ways it can reach them, and it prefers the second when it is
@@ -1662,11 +1664,11 @@ is at the end of it.
 The requirement is that the session on the other machine has **Remote Control
 on** (`claude --remote-control`, or `/remote-control` in a running session).
 Those are the sessions you could already reach from your phone; this makes them
-reachable from Claude Buddy as well. A session without it stays invisible here,
+reachable from Orbweaver as well. A session without it stays invisible here,
 which is the right default — it is also how you keep one private.
 
 How it works is worth knowing, because it explains the one cost. Anthropic's
-Remote Control relay has no API for third-party apps, so Claude Buddy cannot ask
+Remote Control relay has no API for third-party apps, so Orbweaver cannot ask
 it anything directly. What it can do is start **a hidden Claude Code session of
 its own** with Remote Control on, because such a session is given tools that
 reach the account's other sessions wherever they are. That session is the relay:
@@ -1683,7 +1685,7 @@ Turn it on in **Settings → Other machines**, then:
   profiles** first.
 - **Stop the relay after** — how long it may sit unused before shutting down. It
   starts again by itself the next time you open or send to a remote session.
-- **Start the relay when Claude Buddy starts** — for the machine nobody is
+- **Start the relay when Orbweaver starts** — for the machine nobody is
   sitting at. The live view below is *served* by the Buddy on the other
   machine, and until this switch existed that Buddy's relay could only be
   started by a hand on that machine — a headless Mac in a cupboard could never
@@ -1707,7 +1709,7 @@ can see appear a few seconds later, badged `⇄`.
 
 Clicking one opens a chat panel, since there is no terminal on this machine to
 jump to. What that panel *is* depends on one thing: **whether the other machine
-is also running Claude Buddy.**
+is also running Orbweaver.**
 
 **If it is, you get a live view.** The panel shows that session's own
 conversation — the same words the person sitting in front of it sees — because
@@ -1773,7 +1775,7 @@ passed.
 ### Connecting directly instead (both platforms, off by default)
 
 Everything above goes through Anthropic's Remote Control cloud, carried by a
-hidden Claude Code session that Claude Buddy runs as a relay. That works from a
+hidden Claude Code session that Orbweaver runs as a relay. That works from a
 hotel, and it has two costs that are hard to miss once you have watched it: it
 uses your Claude account, and a transcript arrives in **minutes** — the relay's
 *model* retypes the transcript by hand, about four minutes per six kilobytes.
@@ -1794,9 +1796,9 @@ happen once:
    Local Network access and Windows raises a firewall prompt. Both are the
    feature working; a "no" here looks exactly like the network being broken.
 
-**Agent teams on the other machine show as teams.** Over a direct link, a team running on the other machine draws an orb for its lead and one for each member, linked by the same arrows a team on this machine gets, each member wearing its own agent name and team colour rather than the title every member inherits from its lead. A member is shown only when its lead is: a team whose lead has Remote Control off stays hidden, members and all. This needs Claude Buddy on both machines, since it is the Buddy over there that knows which session belongs to which team.
+**Agent teams on the other machine show as teams.** Over a direct link, a team running on the other machine draws an orb for its lead and one for each member, linked by the same arrows a team on this machine gets, each member wearing its own agent name and team colour rather than the title every member inherits from its lead. A member is shown only when its lead is: a team whose lead has Remote Control off stays hidden, members and all. This needs Orbweaver on both machines, since it is the Buddy over there that knows which session belongs to which team.
 
-**Remote orbs, and the team shape between them, need Claude Buddy running on the far machine.** Everything this machine draws for another one comes over the direct link from the Buddy running there. The far Buddy knows its own sessions, which agent team each one belongs to, and which session leads it, and it sends all of that. A machine reached only through Remote Control, with no Buddy on it, draws no orbs here at all: not its sessions, not its team, not its lead. Claude Code's own Remote Control peer list does show each team member as a separate row, but Buddy doesn't read that list. Its relay poller was removed in favour of the direct link.
+**Remote orbs, and the team shape between them, need Orbweaver running on the far machine.** Everything this machine draws for another one comes over the direct link from the Buddy running there. The far Buddy knows its own sessions, which agent team each one belongs to, and which session leads it, and it sends all of that. A machine reached only through Remote Control, with no Buddy on it, draws no orbs here at all: not its sessions, not its team, not its lead. Claude Code's own Remote Control peer list does show each team member as a separate row, but Buddy doesn't read that list. Its relay poller was removed in favour of the direct link.
 
 Two situations need a different route in, and both have one.
 
@@ -1806,7 +1808,7 @@ window for the same five minutes:
 
 ```bash
 ssh your-mini
-echo 123456 > "$HOME/Library/Application Support/ClaudeBuddy/pair-open"
+echo 123456 > "$HOME/Library/Application Support/Orbweaver/pair-open"
 ```
 
 Then pair from the machine that does have a screen, typing that code. The file
@@ -1818,7 +1820,7 @@ machine by address** with its address (and `:port` if you changed it) and the
 code it is showing. Its name fills itself in as soon as it answers, because the
 machine on the other end is the one that knows it.
 
-Both machines still need Claude Buddy running, but the far one no longer needs
+Both machines still need Orbweaver running, but the far one no longer needs
 Remote Control on, or a Claude account at all: this path never asks a model for
 anything.
 
@@ -1853,7 +1855,7 @@ Network access was refused or lost. It is tied to the app's code signature and
 **does not survive an upgrade**, and the symptom is a connection error that
 reads like an ordinary network fault. `ping`, `nc`, `curl` and `ssh` are all
 Apple-signed and exempt from the gate, so every obvious check will tell you the
-machine is perfectly reachable while Claude Buddy cannot open a socket to it.
+machine is perfectly reachable while Orbweaver cannot open a socket to it.
 Check System Settings → Privacy & Security → Local Network. `docs/` and CB-38
 have the full diagnosis.
 
@@ -1863,7 +1865,7 @@ The section above is about your Claude Code sessions on machines you own. This o
 
 There is nothing to sign in to. It reads the login the Claude Code CLI already stores on this machine, which means that on macOS the read raises a Keychain prompt naming an item you have probably never looked at. **Choose "Always Allow"**, so you are not asked every time — though Claude Code refreshing its own login can bring the prompt back, so do not be surprised to see it again. Declining it is the one way to make this feature quietly do nothing: the switch stays on, no orb ever appears, and nothing else on screen says why. The status line under the switch is where the real answer goes, so read that first if the orbs do not turn up.
 
-**You can read and reply to a cloud session in Claude Buddy's chat panel** — hover the orb and press the keyboard button, the same way you would for any session whose conversation lives somewhere else. It is the same panel every other orb opens — the transcript comes from the session's own events, so it is the same conversation you would see in the browser. Type and press Enter to send, and your message goes in as the next turn exactly as if you had typed it at claude.ai/code: sent as the account that owns the session, with that account's Claude Code login, so there is still nothing to sign in to. A message sent while the session is working is queued behind the current turn rather than refused. While a reply is running a **Stop** button (■) sits beside Send, and pressing it interrupts that turn; it is hidden, not greyed, whenever there is nothing to stop.
+**You can read and reply to a cloud session in Orbweaver's chat panel** — hover the orb and press the keyboard button, the same way you would for any session whose conversation lives somewhere else. It is the same panel every other orb opens — the transcript comes from the session's own events, so it is the same conversation you would see in the browser. Type and press Enter to send, and your message goes in as the next turn exactly as if you had typed it at claude.ai/code: sent as the account that owns the session, with that account's Claude Code login, so there is still nothing to sign in to. A message sent while the session is working is queued behind the current turn rather than refused. While a reply is running a **Stop** button (■) sits beside Send, and pressing it interrupts that turn; it is hidden, not greyed, whenever there is nothing to stop.
 
 **You can archive or delete a cloud session from its orb's right-click menu.** *Archive this session* stops it and takes its orb away; claude.ai still lists it under archived, with its history readable. *Delete this session…* removes it from your account, history and all, and cannot be undone. Both ask for a second click before they do anything — the row says *Click again to archive*, or *Click again to delete — this can't be undone*, and gives up on its own after a few seconds — and both go out as the account that owns the session, like a send. The orb goes the moment the request succeeds, and a chat panel open on it turns read-only. If the request is refused, the row says why in the endpoint's own terms and the orb stays. Delete is checked by reading the session back afterwards: "Deleted" on the row means that read found it gone, and "Deleted — not yet confirmed" means the delete was accepted but the read could not say so yet — the orb goes either way, and the next refresh of the list settles it.
 
@@ -1890,11 +1892,11 @@ is needed; the .NET runtime is bundled.
 
 | Platform | File |
 | --- | --- |
-| macOS, Apple silicon | `ClaudeBuddy-<version>-osx-arm64.dmg` |
-| macOS, Intel | `ClaudeBuddy-<version>-osx-x64.dmg` |
-| Windows 10/11, 64-bit | `ClaudeBuddy-<version>-win-x64-setup.exe` |
+| macOS, Apple silicon | `Orbweaver-<version>-osx-arm64.dmg` |
+| macOS, Intel | `Orbweaver-<version>-osx-x64.dmg` |
+| Windows 10/11, 64-bit | `Orbweaver-<version>-win-x64-setup.exe` |
 
-**macOS**: open the DMG, drag Claude Buddy to Applications, then double-click
+**macOS**: open the DMG, drag Orbweaver to Applications, then double-click
 **Install Hooks.command** — that runs step 2 below for you. The
 builds are signed and notarized, so they open without a Gatekeeper override.
 
@@ -1905,10 +1907,16 @@ yet, so SmartScreen shows a warning — choose *More info → Run anyway*.
 Uninstall through Apps & Features; that also removes the hook entries from
 `settings.json`.
 
+The install folder keeps the name `Programs\ClaudeBuddy` on purpose: setups
+from before the rename installed there, and an upgrade installs over the
+existing folder instead of leaving a second copy behind. The program inside it
+is `Orbweaver.exe`; the setup removes the old `ClaudeBuddy.exe` when it
+upgrades.
+
 **Crash keep-alive.** If **Serve on launch** (Settings → Remote Control) is
-turned on, both installers also register a way for the OS to bring Claude
-Buddy back after a crash — a launchd `LaunchAgent` on macOS, a Scheduled Task
-triggered off Windows' own Application Error event on Windows. Neither is on
+turned on, both installers also register a way for the OS to bring
+Orbweaver back after a crash — a launchd `LaunchAgent` on macOS, a Scheduled
+Task triggered off Windows' own Application Error event on Windows. Neither is on
 by default: it only registers for a machine already told to keep serving,
 because a keep-alive that came back after every exit — including a deliberate
 Quit — would be worse than the crash it exists to survive. Both are built to
@@ -1916,7 +1924,7 @@ restart the app only after it actually dies (a nonzero exit or crash), never
 after a normal Quit, and both come out again if you turn that setting back off
 and re-run the installer (macOS: re-run **Install Hooks.command**; Windows:
 re-run the setup), or if you uninstall outright. See `tools/install-hooks.sh`
-and `tools/ClaudeBuddy.iss` for the detail — this is a floor under crashes,
+and `tools/Orbweaver.iss` for the detail — this is a floor under crashes,
 not a fix for what a restart itself costs: it drops and re-registers both of
 the app's Remote Control relays, so the other end of a pairing sees an
 `HTTP 409` until its next poll.
@@ -1933,7 +1941,7 @@ on either platform.
 #### macOS — build the app bundle
 
 ```bash
-./tools/build-macos-app.sh             # -> dist/Claude Buddy.app
+./tools/build-macos-app.sh             # -> dist/Orbweaver.app
 ./tools/build-macos-app.sh --install   # ...and copy it to /Applications
 ./tools/build-macos-app.sh --rid osx-x64   # cross-build for Intel
 ```
@@ -1941,20 +1949,20 @@ on either platform.
 Then launch it like any other app: double-click it in Finder, or
 
 ```bash
-open "dist/Claude Buddy.app"      # or: open -a "Claude Buddy"
+open "dist/Orbweaver.app"      # or: open -a "Orbweaver"
 ```
 
 Nothing appears in the Dock and nothing opens a window — **look for the orb
 in the menu bar**, that's the app running. Quit it from that menu.
 
-`--install` replaces a running copy rather than adding a second one: it stops the Claude Buddy already running from `/Applications`, installs, and leaves exactly one running the new build — started by the crash keep-alive if "Serve on launch" is on, otherwise relaunched for you. Nothing is started if nothing was running. Only one Claude Buddy runs per user however it was launched — a second launch from a terminal, ssh or an agent shell finds the first and exits quietly.
+`--install` replaces a running copy rather than adding a second one: it stops the Orbweaver already running from `/Applications`, installs, and leaves exactly one running the new build — started by the crash keep-alive if "Serve on launch" is on, otherwise relaunched for you. Nothing is started if nothing was running. Only one Orbweaver runs per user however it was launched — a second launch from a terminal, ssh or an agent shell finds the first and exits quietly.
 
 The bundle is worth using over the loose binary for reasons beyond
 double-clickability: it's `LSUIElement`, so macOS itself treats it as a
 menu-bar app; it declares `NSAppleEventsUsageDescription`, without which
 macOS won't even offer the Automation prompt that click-to-focus depends on;
 and it has a stable code identity, so that Automation grant attaches to
-"Claude Buddy" rather than to whichever terminal launched a bare binary.
+"Orbweaver" rather than to whichever terminal launched a bare binary.
 A local build is ad-hoc signed, which means each rebuild changes the signature
 and macOS may ask for Automation permission again — expected, not a bug. Set
 `MACOS_SIGNING_IDENTITY` to a "Developer ID Application: …" identity to get a
@@ -1968,7 +1976,7 @@ dotnet publish -c Release -r osx-arm64   # macOS on Apple silicon
 dotnet publish -c Release -r osx-x64     # macOS on Intel
 ```
 
-The binary lands in `bin/Release/net10.0/<rid>/publish/ClaudeBuddy` (`.exe`
+The binary lands in `bin/Release/net10.0/<rid>/publish/Orbweaver` (`.exe`
 on Windows) — it's self-contained, so you can copy that one file anywhere
 (e.g. a `Tools` folder) and run it without needing .NET installed
 separately. For local hacking on either platform, plain `dotnet run` works
@@ -1983,7 +1991,7 @@ whatever directories you dragged.
 
 The icons are generated, not checked in as hand-drawn art — rerun
 `python3 tools/make-icons.py` (stdlib only) after editing it to regenerate
-`Assets/` (the tray PNGs, the `.app` icon source, and `ClaudeBuddy.ico` for
+`Assets/` (the tray PNGs, the `.app` icon source, and `Orbweaver.ico` for
 the Windows executable and installer).
 
 #### Build the installers
@@ -1991,12 +1999,12 @@ the Windows executable and installer).
 The same scripts CI runs, so a local run reproduces a release artifact:
 
 ```bash
-./tools/build-macos-dmg.sh                    # -> dist/ClaudeBuddy-<ver>-osx-arm64.dmg
+./tools/build-macos-dmg.sh                    # -> dist/Orbweaver-<ver>-osx-arm64.dmg
 ./tools/build-macos-dmg.sh --rid osx-x64      # Intel
 ```
 
 ```powershell
-.\tools\build-windows-installer.ps1           # -> dist\ClaudeBuddy-<ver>-win-x64-setup.exe
+.\tools\build-windows-installer.ps1           # -> dist\Orbweaver-<ver>-win-x64-setup.exe
 ```
 
 The Windows one needs [Inno Setup 6](https://jrsoftware.org/isdl.php)
@@ -2005,7 +2013,7 @@ testing — see [Releasing](#releasing) for what CI adds on top.
 
 ## 2. Wire up your agent CLIs
 
-Claude Buddy tracks **Claude Code**, **OpenAI's Codex CLI**, and **Grok Build**.
+Orbweaver tracks **Claude Code**, **OpenAI's Codex CLI**, and **Grok Build**.
 Each install you
 want tracked (WSL, native Windows, macOS, ...) needs its own copy of the hooks
 added to *its own* config — installs don't share config.
@@ -2021,12 +2029,12 @@ setup — or picks up the second CLI after you install it. Pass `--uninstall` /
 ```bash
 ./tools/install-hooks.sh
 # installed from a DMG instead of a clone? it ships inside the app:
-"/Applications/Claude Buddy.app/Contents/Resources/install-hooks.sh"
+"/Applications/Orbweaver.app/Contents/Resources/install-hooks.sh"
 ```
 
 ```powershell
 .\tools\install-hooks.ps1
-# or, installed from the setup:
+# or, installed from the setup (the folder keeps its pre-rename name):
 & "$env:LOCALAPPDATA\Programs\ClaudeBuddy\tools\install-hooks.ps1"
 ```
 
@@ -2055,7 +2063,7 @@ Two differences from a Claude Code orb, both because Grok works differently:
 - **Usage orbs** (Settings → Grok Build) draw the weekly credit window Grok
   already fetches. Grok has no five-hour cap, so that ring is omitted rather
   than drawn at zero. The figure is as fresh as the last Grok session on this
-  machine — Claude Buddy does not hold Grok's login token — and the orb says so
+  machine — Orbweaver does not hold Grok's login token — and the orb says so
   rather than implying otherwise: Grok writes its credit figure once, at
   startup, so a machine that last ran `grok` on Monday shows a dimmed orb and a
   card reading "Usage as of 2d ago".
@@ -2077,7 +2085,7 @@ See `docs/grok-findings.md` for what was measured on a real session.
 **Codex will not run a hook it has not been told to trust.** A `hooks.json`
 written by anything other than Codex starts out untrusted, so after wiring, the
 first time you start Codex, accept the hook review it shows you — or run
-`/hooks` inside it and trust the Claude Buddy entries. Until you do, no hook
+`/hooks` inside it and trust the Orbweaver entries. Until you do, no hook
 fires, no Codex orb appears, and **nothing anywhere tells you why**. Editing
 `hooks.json` later, including re-running the installer, changes its hash and
 asks you again.
@@ -2093,7 +2101,7 @@ rather than because the support is unfinished:
   from Codex — `/rename` if you've set one, otherwise Codex's own title, taken
   from your first message.
 - **Usage orbs** (Settings → Codex sessions) draw the five-hour and weekly
-  windows, and they are **live**: Claude Buddy asks `codex app-server` for them
+  windows, and they are **live**: Orbweaver asks `codex app-server` for them
   directly, which costs no model call, needs no session open, and never touches
   Codex's login token. If Codex cannot be reached that way it falls back to the
   windows Codex writes onto each turn of the rollout — the newest snapshot that
@@ -2132,7 +2140,7 @@ to wire it anyway); `-Uninstall` (the full teardown, as opposed to
 originally wired, so an uninstall never leaves a dangling hook pointing at a
 deleted script. The Windows installer offers a matching **"Also wire up hooks
 for Claude Code running under WSL"** checkbox (shown only when it detects
-`wsl.exe`), and once Claude Buddy is running, its **Settings window** lists
+`wsl.exe`), and once Orbweaver is running, its **Settings window** lists
 every WSL distro with a checkbox per distro to wire or unwire it on the spot —
 no script or installer re-run needed for that. Both routes only reach each
 distro's *default* Linux user (see the Scope note above).
@@ -2189,9 +2197,9 @@ up actually runs, then open **that install's** `~/.claude/settings.json`
 - **Claude Code on macOS** → `claude-hooks-snippet-macos.json`. First copy
   the hook script into place and make it executable:
   ```bash
-  mkdir -p ~/.claude/claude-buddy
-  cp ClaudeBuddyHook.sh ~/.claude/claude-buddy/
-  chmod +x ~/.claude/claude-buddy/ClaudeBuddyHook.sh
+  mkdir -p ~/.claude/orbweaver
+  cp OrbweaverHook.sh ~/.claude/orbweaver/
+  chmod +x ~/.claude/orbweaver/OrbweaverHook.sh
   ```
   The snippet references it via `$HOME`, so there's no username to replace.
 - **Claude Code running inside WSL** → `claude-hooks-snippet-wsl.json`. Only
@@ -2199,13 +2207,13 @@ up actually runs, then open **that install's** `~/.claude/settings.json`
   hooks.ps1 -Wsl`, the installer checkbox, and the app's Settings window (see
   "The scripted way" above) all handle a distro's *default* user
   automatically, and are the easier route for that case. For a second account:
-  copy `ClaudeBuddyHook.ps1` to a local Windows folder (e.g.
-  `%LOCALAPPDATA%\ClaudeBuddy\`) and replace every `<YOUR_USERNAME>` in the
+  copy `OrbweaverHook.ps1` to a local Windows folder (e.g.
+  `%LOCALAPPDATA%\Orbweaver\`) and replace every `<YOUR_USERNAME>` in the
   snippet with your Windows username. `~/.claude/settings.json` here means
   the Linux user's home directory (e.g. `/home/<user>/.claude/settings.json`)
   — a completely separate file from any Windows-side config.
 - **Claude Code installed natively on Windows** (not through WSL) →
-  `claude-hooks-snippet-windows.json`. Same `ClaudeBuddyHook.ps1` copy and
+  `claude-hooks-snippet-windows.json`. Same `OrbweaverHook.ps1` copy and
   `<YOUR_USERNAME>` replacement; `~/.claude/settings.json` here means
   `C:\Users\<YOUR_USERNAME>\.claude\settings.json`. One copy of the .ps1 is
   enough for both Windows-side variants — every install's hooks can point
@@ -2265,7 +2273,7 @@ shows the config for the session you run it in.
 ### Platform notes
 
 **macOS**: the hooks call `bash` with the script's absolute path — nothing
-else needed. The script writes to `$TMPDIR/claude_buddy/`, which is the
+else needed. The script writes to `$TMPDIR/orbweaver/`, which is the
 same per-user folder .NET's `Path.GetTempPath()` returns, so the app and
 hooks agree automatically. No `jq` dependency; the script extracts
 `session_id`/`cwd`/`transcript_path` with `sed`, and the chat name and color
@@ -2326,11 +2334,11 @@ shell in between): `claude-hooks-snippet-windows.json` calls plain
 outside WSL). `-ExecutionPolicy Bypass` is still needed for the same
 reason as WSL.
 
-Both Windows-side variants land in the same real `%TEMP%\claude_buddy\`
+Both Windows-side variants land in the same real `%TEMP%\orbweaver\`
 folder, since `powershell.exe` resolves `$env:TEMP` to the actual Windows
 temp directory regardless of which shell launched it — so a WSL session
 and a native Windows session can run side by side and show up as two
-independent orbs in the same `ClaudeBuddy.exe`.
+independent orbs in the same `Orbweaver.exe`.
 
 These symptoms (and an earlier WSL-only one from before this script
 existed — unescaped `$env:TEMP` getting mangled by the outer Linux shell
@@ -2344,24 +2352,26 @@ Windows.
 
 ## 3. (Optional) Launch it automatically
 
-- **Windows**: the installer does this if you tick "Start Claude Buddy
+- **Windows**: the installer does this if you tick "Start Orbweaver
   automatically when I sign in". By hand: press `Win+R`, type `shell:startup`,
-  and drop a shortcut to `ClaudeBuddy.exe` in the folder that opens.
+  and drop a shortcut to `Orbweaver.exe` in the folder that opens. A shortcut
+  you made by hand to the old `ClaudeBuddy.exe` stops working after the
+  rename; delete it and create a new one pointing at `Orbweaver.exe`.
 - **macOS**: install the app (from the DMG, or
   `./tools/build-macos-app.sh --install`), then System Settings → General →
-  Login Items → **+** → pick **Claude Buddy** from /Applications.
+  Login Items → **+** → pick **Orbweaver** from /Applications.
 
 It'll then start quietly whenever you log in.
 
 ## Releasing
 
 Releases are built by `.github/workflows/release.yml` and triggered by a tag.
-`ClaudeBuddy.csproj`'s `<Version>` is the single source of truth — the
+`Orbweaver.csproj`'s `<Version>` is the single source of truth — the
 packaging scripts and the installer filenames all read it, and CI refuses to
 publish if the tag disagrees with it.
 
 ```bash
-# 1. bump <Version> in ClaudeBuddy.csproj, e.g. to 0.2.0-beta
+# 1. bump <Version> in Orbweaver.csproj, e.g. to 0.2.0-beta
 # 2. write .github/release-notes/v0.2.0-beta.md
 # 3. commit, then:
 git tag v0.2.0-beta && git push origin v0.2.0-beta
@@ -2371,7 +2381,7 @@ CI then builds both DMGs and the Windows setup, signs and notarizes the macOS
 ones, generates `SHA256SUMS.txt`, and publishes a release using those notes.
 A tag containing a hyphen is marked as a prerelease automatically.
 
-The release also carries `ClaudeBuddySpeech-<version>-<rid>.zip` for each of
+The release also carries `OrbweaverSpeech-<version>-<rid>.zip` for each of
 `win-x64`, `osx-arm64` and `osx-x64` — the optional high-quality speech engine.
 Those assets are not decoration: the toggle in the settings window downloads the
 one matching its own version *and architecture* from this exact release, so a
@@ -2397,7 +2407,7 @@ builds unsigned and that's fine. Maintainer-side certificate setup lives in
 
 One consequence worth knowing while working on the macOS side: notarization
 requires the hardened runtime, and the hardened runtime requires the
-entitlements in `tools/ClaudeBuddy.entitlements` — JIT and unsigned executable
+entitlements in `tools/Orbweaver.entitlements` — JIT and unsigned executable
 memory for CoreCLR, library validation off for the bundled native libs, and
 Apple Events for click-to-focus. Removing any of them still notarizes cleanly
 but breaks the app at runtime, so they can only be validated by running a
@@ -2405,13 +2415,13 @@ signed build.
 
 ## When it crashes
 
-Buddy writes unhandled exceptions to a file, on by default and with nothing to
+Orbweaver writes unhandled exceptions to a file, on by default and with nothing to
 switch on:
 
 | | |
 | --- | --- |
-| macOS | `~/Library/Logs/ClaudeBuddy/crash.log` |
-| Windows | `%LOCALAPPDATA%\ClaudeBuddy\Logs\crash.log` |
+| macOS | `~/Library/Logs/Orbweaver/crash.log` |
+| Windows | `%LOCALAPPDATA%\Orbweaver\Logs\crash.log` |
 
 One entry per crash, newest last, each starting with `===` and a timestamp, and
 naming which of three paths caught it — a throw nothing caught
@@ -2526,7 +2536,7 @@ outside the app (a launchd agent, an installer replacing the bundle) stopped it.
   `null` for Forever. `waiting` is exempt either way, see above. The choices
   the settings window offers live in `LifetimeChoices` in
   `SettingsWindow.cs`.
-- **Reading `settings.json` by hand**: `ClaudeBuddySettings.cs` maps every field
+- **Reading `settings.json` by hand**: `OrbweaverSettings.cs` maps every field
   itself rather than deserializing a type, and the whole read sits in one
   `catch` that falls back to *all* defaults — so a wrong-typed value costs you
   the entire file, profile names and dragged orb positions included. The
@@ -2534,7 +2544,7 @@ outside the app (a launchd agent, an installer replacing the bundle) stopped it.
   `"idle": 5` there degrades to the default colour and nothing else. The older
   fields still use `GetValue<T>()` and still have the sharp edge.
 - **The settings window**: `SettingsWindow.cs`, built in code rather than
-  XAML. `ClaudeBuddy --settings` opens it straight at launch, which beats
+  XAML. `Orbweaver --settings` opens it straight at launch, which beats
   clicking through the status-bar menu when the window itself is what you're
   editing.
 
@@ -2616,4 +2626,4 @@ outside the app (a launchd agent, an installer replacing the bundle) stopped it.
   `SessionManager.SoundKeyFor`.
 - **Volume** (CB-200): two independent levels in settings, `speechVolume` and `alertVolume`, each 0 to 1 and defaulting to 1 — at which every backend gets exactly the argv, script and text it got before the sliders existed. `AudioVolume.cs` owns every rule turning a level into a backend's units: `[[volm N]]` embedded in the text for `say` (which has no volume flag), `SpeechSynthesizer.Volume` 0–100 for SAPI, a `CLAUDEBUDDY_SPEECH_VOLUME` environment variable for the Kokoro engine (which hands it to `afplay -v` on macOS and KokoroSharp's own `SetVolume` on Windows), `afplay -v` for macOS chimes, and a sample-scaled cached copy of the WAV for Windows chimes, since `Media.SoundPlayer` has no volume. A custom `speakCommand` gets the same `CLAUDEBUDDY_SPEECH_VOLUME`, always set, and applies it only if it reads it. The slider is never greyed out; a note under it says so whenever the engine that will speak is a custom command — globally, or for any orb whose persona voice resolves to one (`SessionIdentity.OrbEngines`, from the in-memory persona registries and the already-built voice list; if no list has been built yet, the note states both caveats as rules). A `speakEngine` of `custom` with no command configured speaks with a system voice and gets no note; the Alert slider does not depend on the engine.
   - **What the levels do not promise.** A percentage is a position on the slider, not a decibel figure. `say`'s `[[volm]]` is not linear for every voice: measured by rendering to a file, Ava (Premium) scaled linearly, but Samantha, Karen and Susan (Enhanced) at 50% came out at about 25% amplitude. SAPI applies its own curve too. On Windows, a chime is made quieter by scaling a copy of the WAV's samples, which works for uncompressed PCM and 32-bit float only — every sound under `C:\Windows\Media` qualifies, but a compressed WAV you chose yourself (ADPCM, MP3-in-WAV and the like) plays at full volume, and the Alert volume row says so on Windows. A malformed WAV plays unscaled the same way rather than failing.
-  - **The high-quality voice needs this version's engine.** Kokoro receives the level through `CLAUDEBUDDY_SPEECH_VOLUME`, which engines from before CB-200 ignore — they speak at full volume. Right after an upgrade, until the new engine finishes downloading (and on a development build whose engine was never published), Buddy speaks through the older engine it already has, and the Speech volume row says "Takes effect once the updated voice engine is installed" beneath a slider that still saves the level for when it arrives — and says the same for orbs whose own voice is Kokoro when the global one is not. Which engine can honour it is judged by what the engine *is*, not where it sits: its build writes `engine-contract.txt` beside the executable (from `SpeechEngineContract.ContractVersion`, currently `1` = honours the volume variable), and an engine folder without one — any engine released before CB-200, including one that shares this build's version number and so its folder — is treated as ignoring the level. The variable's name and the stamp's live in `tools/ClaudeBuddySpeech/SpeechEngineContract.cs`, the one file compiled into both the app and the engine.
+  - **The high-quality voice needs this version's engine.** Kokoro receives the level through `CLAUDEBUDDY_SPEECH_VOLUME`, which engines from before CB-200 ignore — they speak at full volume. Right after an upgrade, until the new engine finishes downloading (and on a development build whose engine was never published), Buddy speaks through the older engine it already has, and the Speech volume row says "Takes effect once the updated voice engine is installed" beneath a slider that still saves the level for when it arrives — and says the same for orbs whose own voice is Kokoro when the global one is not. Which engine can honour it is judged by what the engine *is*, not where it sits: its build writes `engine-contract.txt` beside the executable (from `SpeechEngineContract.ContractVersion`, currently `1` = honours the volume variable), and an engine folder without one — any engine released before CB-200, including one that shares this build's version number and so its folder — is treated as ignoring the level. The variable's name and the stamp's live in `tools/OrbweaverSpeech/SpeechEngineContract.cs`, the one file compiled into both the app and the engine.

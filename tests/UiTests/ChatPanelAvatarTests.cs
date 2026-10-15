@@ -8,7 +8,7 @@ using Avalonia.Threading;
 using SkiaSharp;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The chat panel's portrait: what it wears when the session it is bound to is
 // a gateway agent (with or without a picture of its own), and what it wears
@@ -292,7 +292,7 @@ public class ChatPanelAvatarTests : IDisposable
         Flush();
 
         var panel = ChatPanelTestAccess.Instance!;
-        var expected = OrbGlyph.For("Some Fallback Title", ClaudeBuddySettings.TwoLetterGlyphs);
+        var expected = OrbGlyph.For("Some Fallback Title", OrbweaverSettings.TwoLetterGlyphs);
         Assert.Equal(expected, panel.AvatarEmoji.Text);
     }
 }

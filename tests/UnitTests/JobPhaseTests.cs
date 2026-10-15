@@ -1,7 +1,7 @@
 using System.Collections.Generic;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // BackgroundJobs.Phase: what the daemon says a background session is *doing*,
 // as opposed to IsLive's "is it still worth an orb".

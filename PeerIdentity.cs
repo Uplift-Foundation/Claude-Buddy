@@ -3,7 +3,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // This machine's identity to another copy of this app, and its memory of the
     // ones it has been paired with.
@@ -36,7 +36,7 @@ namespace ClaudeBuddy
         // that vanished on reboot would ask the user to re-pair every machine
         // every time, which is the one part of this that cannot be automatic.
         private static string Path_ =>
-            System.IO.Path.Combine(ClaudeBuddySettings.Directory, "peer-identity.json");
+            System.IO.Path.Combine(OrbweaverSettings.Directory, "peer-identity.json");
 
         private static readonly object Gate = new();
         private static Stored? _cached;
@@ -176,7 +176,7 @@ namespace ClaudeBuddy
 
         // A test seam, and the only one this file needs: everything else is
         // deterministic given a certificate and a directory, and the directory
-        // already moves with CLAUDE_BUDDY_SETTINGS_DIR.
+        // already moves with ORBWEAVER_SETTINGS_DIR.
         internal static void ForgetForTests()
         {
             lock (Gate) _cached = null;
@@ -230,7 +230,7 @@ namespace ClaudeBuddy
         {
             try
             {
-                Directory.CreateDirectory(ClaudeBuddySettings.Directory);
+                Directory.CreateDirectory(OrbweaverSettings.Directory);
                 File.WriteAllText(Path_, JsonSerializer.Serialize(stored, Json));
 
                 // Owner-only, the same as openclaw-devices.json. A no-op concept

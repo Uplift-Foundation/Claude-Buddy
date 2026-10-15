@@ -1,10 +1,10 @@
 using System.Text.Json;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Covers the JSON shape of SessionStatus (SessionManager.cs ~11-145) against
-// the exact literal ClaudeBuddyHook.sh writes. Per this repo's fixture rule
+// the exact literal OrbweaverHook.sh writes. Per this repo's fixture rule
 // (CLAUDE.md, Testing section), a fixture should come from real output, not
 // memory. There's no live hook run to capture here, so instead the fixture
 // is derived from the hook script's own printf — the line that writes $FILE:
@@ -13,7 +13,7 @@ namespace ClaudeBuddy.Tests;
 //   "term_program":"%s","term_id":"%s","tty":"%s","tmux_socket":"%s",
 //   "tmux_pane":"%s","tmux_bin":"%s","session_pid":%s,"transcript_path":"%s"}'
 //
-// (ClaudeBuddyHook.sh, near the end). That field list and order is the real,
+// (OrbweaverHook.sh, near the end). That field list and order is the real,
 // load-bearing contract — just as authoritative as a captured file, since it
 // is literally what every macOS hook write produces.
 public class SessionStatusJsonTests
@@ -94,7 +94,7 @@ public class SessionStatusJsonTests
     [Fact]
     public void Deserialize_ToleratesAnUnknownExtraKeyWithoutThrowing()
     {
-        // Independent of ClaudeBuddySettings' own _unknownKeys mechanism —
+        // Independent of OrbweaverSettings' own _unknownKeys mechanism —
         // this is System.Text.Json's default tolerance for a future hook
         // writing a key this build has never heard of.
         const string withExtraKey =

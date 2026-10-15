@@ -1,4 +1,4 @@
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Who the copy gesture belongs to when two things in the panel can both
     // hold a selection.

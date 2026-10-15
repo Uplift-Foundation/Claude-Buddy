@@ -1,11 +1,11 @@
-namespace ClaudeBuddy
+namespace Orbweaver
 {
-    // The CLI processes Claude Buddy starts for its own purposes, so that the
+    // The CLI processes Orbweaver starts for its own purposes, so that the
     // scan can tell them apart from the ones the user started.
     //
     // They are indistinguishable at the status file. A `claude -p` spawned to
     // write a spoken summary runs the user's hooks like any other session, so
-    // ClaudeBuddyHook.sh writes it a status file and an orb appears for a
+    // OrbweaverHook.sh writes it a status file and an orb appears for a
     // conversation nobody had — one that lives a few seconds, cannot be clicked
     // anywhere useful, and shifts the arrangement of the real orbs around it on
     // the way in and out. SpeechSummary's own header calls the summariser "a

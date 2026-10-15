@@ -5,7 +5,7 @@ using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // A connection to one OpenClaw gateway: TLS, the JSON-RPC handshake it
     // demands, and request/response correlation over a single socket.
@@ -72,7 +72,7 @@ namespace ClaudeBuddy
         // Read per connection rather than cached: changing the setting restarts
         // the connection, and the gateway treats the new scope set as a fresh
         // pairing to approve.
-        private static string[] Scopes => ClaudeBuddySettings.OpenClawReplyEnabled
+        private static string[] Scopes => OrbweaverSettings.OpenClawReplyEnabled
             ? new[] { "operator.read", "operator.write" }
             : new[] { "operator.read" };
 

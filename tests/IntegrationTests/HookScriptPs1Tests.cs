@@ -2,7 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Exercises OrbweaverHook.ps1 -- the PowerShell twin of OrbweaverHook.sh --
 // as a real subprocess, under BOTH interpreters (CB-227). Every Windows

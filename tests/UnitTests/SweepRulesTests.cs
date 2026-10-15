@@ -1,7 +1,7 @@
 using System;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The two rules the hygiene sweep rests on. What is on the other side of them is
 // File.Delete against a file the app does not own, so both are worth stating

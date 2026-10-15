@@ -7,7 +7,7 @@ using Avalonia.Media.Imaging;
 using Avalonia.VisualTree;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // One capture per scenario in tests/UiTests/ChatPanelTests.cs. Same
 // singleton-cleanup rule as that suite: ChatPanel is one window shared by
@@ -594,11 +594,11 @@ public class ChatPanelScreenshots : IDisposable
     [AvaloniaFact]
     public void AnEnlargedPanelIsStillAReadableConversation()
     {
-        var was = ClaudeBuddySettings.ChatTextScale;
+        var was = OrbweaverSettings.ChatTextScale;
 
         try
         {
-            ClaudeBuddySettings.ChatTextScale = 1.75;
+            OrbweaverSettings.ChatTextScale = 1.75;
 
             var fake = NewFake(new[]
             {
@@ -629,7 +629,7 @@ public class ChatPanelScreenshots : IDisposable
         {
             // Every other capture in this assembly draws at the shipped size,
             // and the suite shares one process.
-            ClaudeBuddySettings.ChatTextScale = was;
+            OrbweaverSettings.ChatTextScale = was;
             ChatPanel.ReapplyTextScale();
         }
     }

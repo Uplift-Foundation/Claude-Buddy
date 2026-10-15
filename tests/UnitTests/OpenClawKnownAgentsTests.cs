@@ -1,7 +1,7 @@
 using System.Collections.Generic;
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 // OpenClawSessions.KnownAgents(): the list CB-168's new-chat dialog reads to
 // build its OpenClaw agent picker. Sourced from the same table LoadAgentNamesAsync

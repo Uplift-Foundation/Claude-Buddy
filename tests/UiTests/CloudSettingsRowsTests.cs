@@ -6,7 +6,7 @@ using Avalonia.Interactivity;
 using Avalonia.LogicalTree;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-164's settings section, driven the way SettingsWindowCoverageTests next
 // door drives the others: call the production row builder directly, never walk
@@ -31,7 +31,7 @@ public class CloudSettingsRowsTests
 
     private static void Reset()
     {
-        ClaudeBuddySettings.ClaudeCloudEnabled = false;
+        OrbweaverSettings.ClaudeCloudEnabled = false;
         ClaudeCloudSessions.SetStateForTests("off");
     }
 
@@ -60,7 +60,7 @@ public class CloudSettingsRowsTests
         Reset();
         try
         {
-            ClaudeBuddySettings.ClaudeCloudEnabled = true;
+            OrbweaverSettings.ClaudeCloudEnabled = true;
 
             Assert.Equal(3, NewWindow().ClaudeCloudRows().Length);
         }
@@ -189,7 +189,7 @@ public class CloudSettingsRowsTests
 
             toggle.IsChecked = true;
 
-            Assert.True(ClaudeBuddySettings.ClaudeCloudEnabled);
+            Assert.True(OrbweaverSettings.ClaudeCloudEnabled);
         }
         finally
         {
@@ -205,7 +205,7 @@ public class CloudSettingsRowsTests
         Reset();
         try
         {
-            ClaudeBuddySettings.ClaudeCloudEnabled = true;
+            OrbweaverSettings.ClaudeCloudEnabled = true;
             ClaudeCloudSessions.SetStateForTests("checking…");
 
             var window = NewWindow();
@@ -230,7 +230,7 @@ public class CloudSettingsRowsTests
         Reset();
         try
         {
-            ClaudeBuddySettings.ClaudeCloudEnabled = true;
+            OrbweaverSettings.ClaudeCloudEnabled = true;
             ClaudeCloudSessions.SetStateForTests("checking…");
 
             var window = NewWindow();
@@ -273,7 +273,7 @@ public class CloudSettingsRowsTests
         Reset();
         try
         {
-            ClaudeBuddySettings.ClaudeCloudEnabled = true;
+            OrbweaverSettings.ClaudeCloudEnabled = true;
             ClaudeCloudSessions.SetStateForTests("something stale");
 
             var rows = NewWindow().ClaudeCloudRows();
@@ -299,7 +299,7 @@ public class CloudSettingsRowsTests
             // budget and the assertion always won the race. The green was a
             // symptom of the hang, not evidence of the behaviour. Now that a test
             // process refuses the credential store outright
-            // (CLAUDE_BUDDY_NO_CREDENTIAL_STORE, see ClaudeCliCredentials), the
+            // (ORBWEAVER_NO_CREDENTIAL_STORE, see ClaudeCliCredentials), the
             // read returns instantly and the loop moves the state on before this
             // line runs — so the test had to start asserting something that is
             // actually true rather than something that was merely slow.
@@ -320,7 +320,7 @@ public class CloudSettingsRowsTests
         Reset();
         try
         {
-            ClaudeBuddySettings.ClaudeCloudEnabled = true;
+            OrbweaverSettings.ClaudeCloudEnabled = true;
             var board = TwoAccountBoard();
             ClaudeCloudSessions.SetBoardForTests(board);
 

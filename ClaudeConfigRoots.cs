@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Every Claude Code config directory on this machine: the default ~/.claude
     // plus each extra account the user runs out of a CLAUDE_CONFIG_DIR alias.
@@ -26,7 +26,7 @@ namespace ClaudeBuddy
 
             var roots = new List<string> { Path.Combine(home, ".claude") };
 
-            foreach (var extra in ClaudeBuddySettings.ClaudeCodeProfileDirs)
+            foreach (var extra in OrbweaverSettings.ClaudeCodeProfileDirs)
             {
                 // A blank entry is what a half-finished settings edit leaves
                 // behind, and Path.Combine would quietly answer $HOME for it —

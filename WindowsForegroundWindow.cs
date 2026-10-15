@@ -1,7 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Shared by TerminalFocuser (click an orb, focus its terminal) and
     // ClaudeDesktopManager (click a running profile, focus its window) — both

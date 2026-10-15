@@ -8,7 +8,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // What a room send actually puts on the wire, over an in-memory socket.
 //
@@ -327,8 +327,8 @@ public class OpenClawRoomSendTests : IDisposable
     [Fact]
     public async Task TheRecentSpeakerCarriesItOverTheFirstByKey()
     {
-        ClaudeBuddySettings.ReloadForTests();
-        ClaudeBuddySettings.OpenClawReplyEnabled = true;
+        OrbweaverSettings.ReloadForTests();
+        OrbweaverSettings.OpenClawReplyEnabled = true;
 
         var (socket, gateway) = await ConnectedAsync();
         using (gateway)
@@ -357,8 +357,8 @@ public class OpenClawRoomSendTests : IDisposable
     [Fact]
     public async Task TheAnswerFollowsTheTranscriptsRatherThanTheKeys()
     {
-        ClaudeBuddySettings.ReloadForTests();
-        ClaudeBuddySettings.OpenClawReplyEnabled = true;
+        OrbweaverSettings.ReloadForTests();
+        OrbweaverSettings.OpenClawReplyEnabled = true;
 
         var (socket, gateway) = await ConnectedAsync();
         using (gateway)
@@ -384,8 +384,8 @@ public class OpenClawRoomSendTests : IDisposable
     [Fact]
     public async Task ItIsTheNewestTurnThatDecidesNotTheBusiestMember()
     {
-        ClaudeBuddySettings.ReloadForTests();
-        ClaudeBuddySettings.OpenClawReplyEnabled = true;
+        OrbweaverSettings.ReloadForTests();
+        OrbweaverSettings.OpenClawReplyEnabled = true;
 
         var (socket, gateway) = await ConnectedAsync();
         using (gateway)
@@ -411,8 +411,8 @@ public class OpenClawRoomSendTests : IDisposable
     [Fact]
     public async Task BeingSpokenToDoesNotWinAMemberTheSend()
     {
-        ClaudeBuddySettings.ReloadForTests();
-        ClaudeBuddySettings.OpenClawReplyEnabled = true;
+        OrbweaverSettings.ReloadForTests();
+        OrbweaverSettings.OpenClawReplyEnabled = true;
 
         var (socket, gateway) = await ConnectedAsync();
         using (gateway)
@@ -449,8 +449,8 @@ public class OpenClawRoomSendTests : IDisposable
     [Fact]
     public async Task ARoomThatCanSendSendsAndSaysNothing()
     {
-        ClaudeBuddySettings.ReloadForTests();
-        ClaudeBuddySettings.OpenClawReplyEnabled = true;
+        OrbweaverSettings.ReloadForTests();
+        OrbweaverSettings.OpenClawReplyEnabled = true;
 
         var (socket, gateway) = await ConnectedAsync();
         using (gateway)
@@ -498,8 +498,8 @@ public class OpenClawRoomSendTests : IDisposable
     [Fact]
     public async Task ArrivedMessagesDoNotEvictTheNoteExplainingAnEarlierFailure()
     {
-        ClaudeBuddySettings.ReloadForTests();
-        ClaudeBuddySettings.OpenClawReplyEnabled = false;
+        OrbweaverSettings.ReloadForTests();
+        OrbweaverSettings.OpenClawReplyEnabled = false;
 
         var (_, gateway) = await ConnectedAsync();
         using (gateway)
@@ -512,7 +512,7 @@ public class OpenClawRoomSendTests : IDisposable
             await room.SendAsync("the one that never went");
             Assert.Contains(room.History, t => t.Text.Contains("Replying is off"));
 
-            ClaudeBuddySettings.OpenClawReplyEnabled = true;
+            OrbweaverSettings.OpenClawReplyEnabled = true;
 
             // Forty successful sends — more than the cap — each of which the
             // gateway records and hands back, as a real conversation would.

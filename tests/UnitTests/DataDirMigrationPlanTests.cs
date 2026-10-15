@@ -1,7 +1,7 @@
 using Xunit;
-using static ClaudeBuddy.DataDirMigration;
+using static Orbweaver.DataDirMigration;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-255 §2: the decisions the data-dir migration makes, with no folder behind
 // any of them. The executor that acts on these is driven against temp folders
@@ -40,10 +40,15 @@ public class DataDirMigrationPlanTests
         Assert.Equal(expected, string.Join(",", Plan(RootKind.Logs, legacy, @new, newHasSettings, overrideSet)));
     }
 
+    // In either spelling (CB-256): a developer whose shell still exports the
+    // pre-rename name must not have a real folder moved under a test run.
     [Theory]
-    [InlineData("CLAUDE_BUDDY_SETTINGS_DIR")]
-    [InlineData("CLAUDE_BUDDY_LOG_DIR")]
-    [InlineData("CLAUDE_BUDDY_BUNDLE_ROOT")]
+    [InlineData("ORBWEAVER_SETTINGS_DIR")]
+    [InlineData("ORBWEAVER_LOG_DIR")]
+    [InlineData("ORBWEAVER_BUNDLE_ROOT")]
+    [InlineData(BrandEnv.LegacyPrefix + BrandEnv.SettingsDir)]
+    [InlineData(BrandEnv.LegacyPrefix + BrandEnv.LogDir)]
+    [InlineData(BrandEnv.LegacyPrefix + BrandEnv.BundleRoot)]
     public void Any_one_of_the_three_overrides_switches_it_off(string name)
     {
         Assert.True(OverrideSet(variable => variable == name ? "/scratch" : null));
@@ -56,7 +61,7 @@ public class DataDirMigrationPlanTests
     {
         Assert.False(OverrideSet(_ => null));
         Assert.False(OverrideSet(_ => ""));
-        Assert.False(OverrideSet(variable => variable == "CLAUDE_BUDDY_PROFILE_ROOT" ? "/x" : null));
+        Assert.False(OverrideSet(variable => variable == "ORBWEAVER_PROFILE_ROOT" ? "/x" : null));
     }
 
     // On Windows only the Logs subfolder of %LOCALAPPDATA%\ClaudeBuddy moves —

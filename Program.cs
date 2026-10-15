@@ -2,7 +2,7 @@ using System.Diagnostics.CodeAnalysis;
 using Avalonia;
 using Avalonia.Threading;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Excluded from coverage: the process entry point. Main waits on the real
     // screen-lock state and then hands control to
@@ -95,6 +95,13 @@ namespace ClaudeBuddy
                     LegacyHookCleanup.Run();
                     MacOSLegacyBundle.Run();
                 },
+
+                // On macOS, re-point the crash keep-alive LaunchAgent when the
+                // program it names is gone — a drag-install over a phase-2
+                // bundle, whose executable was ClaudeBuddy (CB-256). Runs the
+                // bundle's own install-hooks.sh --keepalive-only; no-throw, and
+                // a no-op whenever the plist's program exists.
+                repairKeepAlive: KeepAliveRepair.Run,
 
                 // The serve path before the screen-lock wait below, because it
                 // needs nothing that wait exists to protect: a relay is tmux,

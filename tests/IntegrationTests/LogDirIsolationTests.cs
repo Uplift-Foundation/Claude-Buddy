@@ -1,11 +1,11 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The property that replaced an enumeration (CB — see CrashLog.ScopeForTests).
 //
 // Three pull requests in a row tried to stop CrashLogFileTests racing over
-// CLAUDE_BUDDY_LOG_DIR by listing the test classes that can reach
+// ORBWEAVER_LOG_DIR by listing the test classes that can reach
 // PersonaFiles.Reject and moving each into one xUnit collection. Each of the
 // three found a class the previous one had missed, twice because the list was
 // built by searching for an API name and the call is two frames deep. A list
@@ -36,13 +36,13 @@ public class LogDirIsolationTests : IDisposable
     public LogDirIsolationTests()
     {
         Directory.CreateDirectory(_root);
-        _envWas = Environment.GetEnvironmentVariable("CLAUDE_BUDDY_LOG_DIR");
+        _envWas = Environment.GetEnvironmentVariable("ORBWEAVER_LOG_DIR");
         PersonaLog.ResetForTests();
     }
 
     public void Dispose()
     {
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_LOG_DIR", _envWas);
+        Environment.SetEnvironmentVariable("ORBWEAVER_LOG_DIR", _envWas);
         PersonaLog.ResetForTests();
         try { Directory.Delete(_root, recursive: true); } catch { }
     }
@@ -74,7 +74,7 @@ public class LogDirIsolationTests : IDisposable
     {
         var mine = Path.Combine(_root, "scoped");
         var theirs = Path.Combine(_root, "env");
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_LOG_DIR", theirs);
+        Environment.SetEnvironmentVariable("ORBWEAVER_LOG_DIR", theirs);
 
         using (CrashLog.ScopeForTests(mine))
         {
@@ -103,7 +103,7 @@ public class LogDirIsolationTests : IDisposable
         // published through the process-wide variable instead of a scope, and
         // that is enough for a stranger to create it.
         var mine = Path.Combine(_root, "published");
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_LOG_DIR", mine);
+        Environment.SetEnvironmentVariable("ORBWEAVER_LOG_DIR", mine);
 
         Assert.False(Directory.Exists(mine));
 
@@ -129,7 +129,7 @@ public class LogDirIsolationTests : IDisposable
     {
         var mine = Path.Combine(_root, "scoped");
         var theirs = Path.Combine(_root, "env");
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_LOG_DIR", theirs);
+        Environment.SetEnvironmentVariable("ORBWEAVER_LOG_DIR", theirs);
 
         const string Sentence = "persona picture ignored: \"same-name.png\" (too large)";
 
@@ -155,7 +155,7 @@ public class LogDirIsolationTests : IDisposable
         // one file, whichever flow says it. Without this, the case above is
         // equally consistent with the dedupe having been switched off.
         var mine = Path.Combine(_root, "published");
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_LOG_DIR", mine);
+        Environment.SetEnvironmentVariable("ORBWEAVER_LOG_DIR", mine);
 
         const string Sentence = "persona picture ignored: \"repeated.png\" (too large)";
 
@@ -176,7 +176,7 @@ public class LogDirIsolationTests : IDisposable
         var outer = Path.Combine(_root, "outer");
         var inner = Path.Combine(_root, "inner");
 
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_LOG_DIR", env);
+        Environment.SetEnvironmentVariable("ORBWEAVER_LOG_DIR", env);
         Assert.Equal(env, CrashLog.Directory);
 
         using (CrashLog.ScopeForTests(outer))
@@ -200,8 +200,8 @@ public class LogDirIsolationTests : IDisposable
         // The forgetful case, stated as a test so it stays true: a class that
         // sets up no isolation at all writes to the assembly-wide scratch
         // directory TestBootstrap points the variable at, never to the
-        // developer's own ~/Library/Logs/ClaudeBuddy.
-        var floor = Environment.GetEnvironmentVariable("CLAUDE_BUDDY_LOG_DIR");
+        // developer's own ~/Library/Logs/Orbweaver.
+        var floor = Environment.GetEnvironmentVariable("ORBWEAVER_LOG_DIR");
 
         Assert.False(string.IsNullOrEmpty(floor));
         Assert.Equal(floor, CrashLog.Directory);
@@ -248,7 +248,7 @@ public class LogDirScopeFlowsFromConstructorTests : IDisposable
 
         // ...and it is genuinely the scope rather than a coincidence: the
         // environment variable says something else entirely.
-        Assert.NotEqual(_dir, Environment.GetEnvironmentVariable("CLAUDE_BUDDY_LOG_DIR"));
+        Assert.NotEqual(_dir, Environment.GetEnvironmentVariable("ORBWEAVER_LOG_DIR"));
     }
 
     [Fact]

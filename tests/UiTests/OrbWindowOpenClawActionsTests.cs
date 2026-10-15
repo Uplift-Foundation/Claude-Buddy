@@ -9,7 +9,7 @@ using Avalonia.Interactivity;
 using Avalonia.Threading;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-170: an OpenClaw orb's "Interrupt the current run" and "End the
 // conversation" rows, as a user meets them — which orbs offer them, what a

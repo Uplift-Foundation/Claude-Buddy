@@ -2,7 +2,7 @@ using System;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // The bodies a write into a cloud session carries, and what its answer means.
     //

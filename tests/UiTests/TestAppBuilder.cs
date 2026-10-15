@@ -3,7 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Threading;
 
-[assembly: AvaloniaTestApplication(typeof(ClaudeBuddy.Tests.TestAppBuilder))]
+[assembly: AvaloniaTestApplication(typeof(Orbweaver.Tests.TestAppBuilder))]
 
 // CB-183: one application and one dispatcher for the whole assembly, not a
 // fresh pair per test. Avalonia.Headless.XUnit 12.x defaults to PerTest, and
@@ -34,7 +34,7 @@ using Avalonia.Threading;
 // assumed this suite did; UiDispatcherIsolationTests pins it.
 [assembly: AvaloniaTestIsolation(AvaloniaTestIsolationLevel.PerAssembly)]
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The real App, not a stand-in built for tests. Confirmed by spike: under
 // HeadlessUnitTestSession, Application.Current.ApplicationLifetime is null,
@@ -45,7 +45,7 @@ namespace ClaudeBuddy.Tests;
 public class TestAppBuilder
 {
     public static AppBuilder BuildAvaloniaApp() =>
-        AppBuilder.Configure<ClaudeBuddy.App>()
+        AppBuilder.Configure<Orbweaver.App>()
             .UseHeadless(new AvaloniaHeadlessPlatformOptions())
             .AfterSetup(WarmUpFontManager);
 

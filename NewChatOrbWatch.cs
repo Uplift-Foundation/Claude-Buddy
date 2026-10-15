@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // The ~20s "did an orb actually appear" check CB-168's plan asks for: a
     // launch that spawned a terminal has no guarantee the CLI's hook is

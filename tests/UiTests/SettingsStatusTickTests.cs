@@ -3,7 +3,7 @@ using System.Reflection;
 using Avalonia.Headless.XUnit;
 using Xunit;
 
-namespace ClaudeBuddy.UiTests;
+namespace Orbweaver.UiTests;
 
 // The two live status lines in the settings window, and the one timer that feeds
 // them both.
@@ -32,8 +32,8 @@ public class SettingsStatusTickTests
     // feature has to be switched on before the rows are built, not after.
     private static SettingsWindow WithGateway()
     {
-        ClaudeBuddySettings.ReloadForTests();
-        ClaudeBuddySettings.OpenClawEnabled = true;
+        OrbweaverSettings.ReloadForTests();
+        OrbweaverSettings.OpenClawEnabled = true;
 
         var window = NewWindow();
         _ = window.OpenClawRows();
@@ -51,9 +51,9 @@ public class SettingsStatusTickTests
         // this test gets a look in — which is how this assertion failed the first
         // time I ran it, and is the same order-dependence this branch has spent
         // five commits removing.
-        ClaudeBuddySettings.ReloadForTests();
-        ClaudeBuddySettings.OpenClawEnabled = false;
-        ClaudeBuddySettings.RemoteControlEnabled = false;
+        OrbweaverSettings.ReloadForTests();
+        OrbweaverSettings.OpenClawEnabled = false;
+        OrbweaverSettings.RemoteControlEnabled = false;
 
         var window = NewWindow();
 
@@ -80,9 +80,9 @@ public class SettingsStatusTickTests
     [AvaloniaFact]
     public void TickingRepeatedlyWithNothingChangedIsStable()
     {
-        ClaudeBuddySettings.ReloadForTests();
-        ClaudeBuddySettings.OpenClawEnabled = true;
-        ClaudeBuddySettings.PeerLinkEnabled = true;
+        OrbweaverSettings.ReloadForTests();
+        OrbweaverSettings.OpenClawEnabled = true;
+        OrbweaverSettings.PeerLinkEnabled = true;
 
         var window = NewWindow();
         _ = window.OpenClawRows();
@@ -106,9 +106,9 @@ public class SettingsStatusTickTests
     [AvaloniaFact]
     public void OneTickServesBothLines()
     {
-        ClaudeBuddySettings.ReloadForTests();
-        ClaudeBuddySettings.OpenClawEnabled = true;
-        ClaudeBuddySettings.PeerLinkEnabled = true;
+        OrbweaverSettings.ReloadForTests();
+        OrbweaverSettings.OpenClawEnabled = true;
+        OrbweaverSettings.PeerLinkEnabled = true;
 
         var window = NewWindow();
         _ = window.OpenClawRows();

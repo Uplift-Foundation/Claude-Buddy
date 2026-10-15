@@ -7,7 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // A whole turn off the cloud event stream, end to end through the real line
 // loop: bytes in UTF-8, read by a StreamReader exactly as HttpCloudEventStream

@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Covers AgentRoster — turning `claude agents --json` into the name → session id
 // join a mirror request depends on.

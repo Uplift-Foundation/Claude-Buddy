@@ -2,7 +2,7 @@ using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.Versioning;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // What is running *underneath* a session's pid, asked before anything is
     // signalled to it.

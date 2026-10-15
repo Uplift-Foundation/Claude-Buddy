@@ -1,6 +1,6 @@
 using System.Collections.Generic;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // The text that gets handed to `osascript`, and the small pure decisions
     // around it.

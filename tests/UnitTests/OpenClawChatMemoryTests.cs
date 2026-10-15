@@ -1,8 +1,8 @@
 using Xunit;
 
-using Residency = ClaudeBuddy.OpenClawChatMemory.ChatResidency;
+using Residency = Orbweaver.OpenClawChatMemory.ChatResidency;
 
-namespace ClaudeBuddy.Tests
+namespace Orbweaver.Tests
 {
     // OpenClawChatMemory: which conversations get let go of, and which only
     // give their pictures up — CB-92.

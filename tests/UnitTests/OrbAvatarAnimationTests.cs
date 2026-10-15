@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-218: an orb's avatar steps through its frames only when it has frames to
 // step through and someone can see it.

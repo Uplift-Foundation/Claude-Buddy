@@ -1,7 +1,7 @@
 using System.Collections.Generic;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Covers BackgroundJobs: reading `claude agents --json` and deciding whether a
 // session id names a background job that is still going. Only IsLiveJob's two

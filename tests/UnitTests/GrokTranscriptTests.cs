@@ -2,7 +2,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 // Driven through GrokTranscript.Map against shapes copied from a real
 // grok 1.0.13 updates.jsonl (31 Aug 2026). See docs/grok-findings.md.

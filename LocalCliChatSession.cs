@@ -3,7 +3,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Avalonia.Threading;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // One local CLI session — Claude Code or Codex — as something the chat panel
     // can talk to.

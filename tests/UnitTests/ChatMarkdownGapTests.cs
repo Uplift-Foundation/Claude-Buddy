@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The corners of ChatMarkdown that tests/TranscriptTests' suite — compiled into
 // this assembly as TranscriptSuiteTests — does not reach.

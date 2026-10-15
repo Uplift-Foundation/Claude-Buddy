@@ -6,10 +6,10 @@ using Avalonia.Headless.XUnit;
 using Avalonia.Layout;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
-using ClaudeBuddy.Tests;
+using Orbweaver.Tests;
 using Xunit;
 
-namespace ClaudeBuddy.UiTests;
+namespace Orbweaver.UiTests;
 
 // What a room actually looks like once the gateway has said who was talking.
 //
@@ -332,8 +332,8 @@ public class ChatPanelRoomAttributionTests : IDisposable
     [AvaloniaFact]
     public async System.Threading.Tasks.Task AnUndeliverableSendPutsItsReasonOnScreen()
     {
-        ClaudeBuddySettings.ReloadForTests();
-        ClaudeBuddySettings.OpenClawReplyEnabled = true;
+        OrbweaverSettings.ReloadForTests();
+        OrbweaverSettings.OpenClawReplyEnabled = true;
 
         var quill = Member("quill");
         var room = Room("#lobby", (quill, "Quill", "#7f7"));
@@ -366,8 +366,8 @@ public class ChatPanelRoomAttributionTests : IDisposable
     [AvaloniaFact]
     public async System.Threading.Tasks.Task TheReasonSurvivesAMembersNextEvent()
     {
-        ClaudeBuddySettings.ReloadForTests();
-        ClaudeBuddySettings.OpenClawReplyEnabled = true;
+        OrbweaverSettings.ReloadForTests();
+        OrbweaverSettings.OpenClawReplyEnabled = true;
 
         var quill = Member("quill");
         var room = Room("#lobby", (quill, "Quill", "#7f7"));
