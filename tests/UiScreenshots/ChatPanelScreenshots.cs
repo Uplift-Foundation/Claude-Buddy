@@ -1,3 +1,4 @@
+using System.Threading;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
@@ -223,6 +224,126 @@ public class ChatPanelScreenshots : IDisposable
         ScreenshotHelper.Flush();
         ScreenshotHelper.CaptureAlreadyShown(
             ChatPanelTestAccess.Instance!, "chat-panel-parked-attach.png");
+    }
+
+    // A session Claude Desktop hosts (CB-265): the transcript reads like any
+    // other, and where the composer would be there is a sentence saying how to
+    // send from here (CB-266: turn on Remote Control for the chat). A real
+    // LocalCliChatSession rather than a fake, so the picture is what the
+    // production class decides to say — and no attach button, since `claude
+    // attach` cannot find a Desktop conversation.
+    [AvaloniaFact]
+    public void ADesktopHostedSessionIsReadOnlyAndSaysWhereToType()
+    {
+        WithDesktopSession(bridge: "", api: null, cloudOn: false, "chat-panel-desktop-readonly.png", _ => { });
+    }
+
+    // CB-266: the same chat once it is on Remote Control and "Show cloud
+    // sessions" is on — the composer is back, its watermark says what a send
+    // arrives as, and the browser link sits above it.
+    [AvaloniaFact]
+    public void ABridgedDesktopSessionOffersTheComposerWithTheTeammateWatermark()
+    {
+        WithDesktopSession(Bridge, new StubApi(200), cloudOn: true, "chat-panel-desktop-bridged.png", _ => { });
+    }
+
+    // CB-266: a send the API refused (409, the chat's bridge has ended). The
+    // text stays unsent, no bubble is drawn, and the composer gives way to the
+    // reason plus the link.
+    [AvaloniaFact]
+    public void ARefusedBridgeSendLeavesTheReasonAndTheLink()
+    {
+        WithDesktopSession(Bridge, new StubApi(409), cloudOn: true, "chat-panel-desktop-bridge-refused.png", session =>
+        {
+            var input = ChatPanelTestAccess.Instance!.FindControl<TextBox>("Input")!;
+            input.Text = "rebase the third PR";
+            input.RaiseEvent(new KeyEventArgs { RoutedEvent = InputElement.KeyDownEvent, Key = Key.Enter });
+
+            var readOnly = ChatPanelTestAccess.Instance!.FindControl<Control>("ReadOnlyBox")!;
+            for (var i = 0; i < 600 && !readOnly.IsVisible; i++)
+            {
+                Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+                Thread.Sleep(5);
+            }
+
+            Assert.True(session.IsReadOnly);
+            Assert.Equal(LocalCliChatSession.DesktopBridgeGoneHint, session.ComposerHint);
+        });
+    }
+
+    private const string Bridge = "session_01ScreenshotBridge123";
+
+    private sealed class StubApi : ICloudApi
+    {
+        private readonly int _status;
+
+        internal StubApi(int status) => _status = status;
+
+        public Task<CloudApiResult> SendAsync(CloudRequestContext context, CancellationToken token) =>
+            Task.FromResult(new CloudApiResult(CloudOutcomes.OutcomeFor(_status, "{}"), null));
+    }
+
+    private sealed class StubCredentials : ICloudCredentialSource
+    {
+        public string? Stamp() => "stamp";
+
+        public CredentialRead Read() =>
+            new(CredentialOutcome.Found, "sk-ant-oat01-SCREENSHOT-FAKE", null, "a credential is present");
+    }
+
+    private void WithDesktopSession(
+        string bridge, ICloudApi? api, bool cloudOn, string png, Action<LocalCliChatSession> act)
+    {
+        var replyBefore = OrbweaverSettings.ClaudeCodeReplyEnabled;
+        OrbweaverSettings.ClaudeCodeReplyEnabled = true;
+        var dir = Path.Combine(Path.GetTempPath(), "cb-shot-desktop-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var transcript = Path.Combine(dir, "t.jsonl");
+            File.WriteAllText(transcript,
+                "{\"type\":\"user\",\"uuid\":\"u1\",\"timestamp\":\"2026-10-14T12:00:00Z\","
+                + "\"message\":{\"role\":\"user\",\"content\":\"summarise the open PRs\"}}\n"
+                + "{\"type\":\"assistant\",\"uuid\":\"a1\",\"timestamp\":\"2026-10-14T12:00:01Z\","
+                + "\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\","
+                + "\"text\":\"Three are ready to merge; one is waiting on review.\"}]}}\n");
+
+            var id = "screenshot-" + Guid.NewGuid();
+            _sessionIdsToClean.Add(id);
+            var session = new LocalCliChatSession(id, new SessionStatus
+            {
+                Source = SessionSource.ClaudeCode,
+                Cli = "claude",
+                Entrypoint = SessionStatus.DesktopEntrypoint,
+                TranscriptPath = transcript,
+                SessionPid = Environment.ProcessId,
+                State = "idle",
+                BridgeSessionId = bridge,
+            },
+            cloudApi: api,
+            credentialsFor: _ => new StubCredentials(),
+            cloudEnabled: () => cloudOn)
+            {
+                Delay = (_, _) => Task.CompletedTask,
+            };
+            session.Start();
+            for (var i = 0; i < 400 && session.History.Count == 0; i++)
+            {
+                Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+                Thread.Sleep(5);
+            }
+
+            ChatPanel.OpenFor(NewOrb(), session);
+            ScreenshotHelper.Flush();
+            act(session);
+            ScreenshotHelper.Flush();
+            ScreenshotHelper.CaptureAlreadyShown(ChatPanelTestAccess.Instance!, png);
+        }
+        finally
+        {
+            OrbweaverSettings.ClaudeCodeReplyEnabled = replyBefore;
+            try { Directory.Delete(dir, recursive: true); } catch { /* best effort */ }
+        }
     }
 
     // CloseFor rather than HideFor since CB-110. On a transient panel the two

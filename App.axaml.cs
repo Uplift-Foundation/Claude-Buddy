@@ -154,6 +154,12 @@ namespace Orbweaver
                 _ = NeuralSpeech.EnsureCurrentAsync()
                     .ContinueWith(_ => TextToSpeech.InvalidateVoiceCache(), TaskScheduler.Default);
 
+                // An upgrade does not refresh the installed hook script, so a
+                // hook change never reached anyone who had already wired it.
+                // Overwrites an installed copy that differs from the bundled
+                // one, on a pool thread; never creates one (CB-265).
+                HookFreshness.StartInBackground();
+
                 // Development entry point: `Orbweaver --settings` opens the
                 // settings window at launch. It is otherwise only reachable by
                 // clicking the status-bar menu, which is awkward when the thing

@@ -93,6 +93,7 @@ namespace Orbweaver
             // and leadsWithLiveAgents is a subset of leadsNamed.
             var viewerCwds = found
                 .Where(e => e.Status.Source == SessionSource.ClaudeCode
+                            && !e.Status.IsDesktopHosted
                             && !SessionManager.KnowsATerminal(e.Status)
                             && !string.IsNullOrEmpty(e.Status.Cwd)
                             && (e.Status.SessionPid <= 0 || leadsNamed.Contains(e.SessionId)))

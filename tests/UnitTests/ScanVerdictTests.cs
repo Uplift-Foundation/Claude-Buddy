@@ -511,6 +511,75 @@ public class ScanVerdictTests
         Assert.Equal(SessionManager.ScanVerdict.NoTerminal, Reachability(blind));
     }
 
+    // CB-265. Claude Desktop hosts Claude Code with no tty, no TERM_PROGRAM and
+    // no pane, measured on a real Mac, so the no-terminal rule dropped every
+    // one of its sessions. The entrypoint is what tells them apart from a
+    // headless one, and each twin below is the negative control: the same
+    // blind file under any other entrypoint is still dropped.
+    private static SessionStatus Blind(string entrypoint, string transcript = "") =>
+        new()
+        {
+            Source = SessionSource.ClaudeCode,
+            SessionPid = 4321,
+            Entrypoint = entrypoint,
+            TranscriptPath = transcript,
+        };
+
+    [Fact]
+    public void AClaudeDesktopSessionKeepsItsOrbWithNoTerminalAtAll()
+    {
+        Assert.Equal(
+            SessionManager.ScanVerdict.Keep,
+            Reachability(Blind(SessionStatus.DesktopEntrypoint)));
+    }
+
+    [Theory]
+    [InlineData("cli")]
+    [InlineData("sdk-cli")]
+    [InlineData("")]
+    public void TheSameBlindFileUnderAnyOtherEntrypointIsStillDropped(string entrypoint)
+    {
+        Assert.Equal(
+            SessionManager.ScanVerdict.NoTerminal,
+            Reachability(Blind(entrypoint)));
+    }
+
+    [Fact]
+    public void AClaudeDesktopSessionWhoseTranscriptIsMissingIsStillKept()
+    {
+        // The conversation is in Desktop's Code tab, so a transcript this app
+        // cannot find is not "nothing to show".
+        Assert.Equal(
+            SessionManager.ScanVerdict.Keep,
+            Reachability(Blind(SessionStatus.DesktopEntrypoint, "/gone.jsonl"),
+                transcriptExists: TranscriptIsGone));
+    }
+
+    [Theory]
+    [InlineData("cli")]
+    [InlineData("sdk-cli")]
+    [InlineData("")]
+    public void TheSameMissingTranscriptUnderAnyOtherEntrypointIsNothingToShow(string entrypoint)
+    {
+        Assert.Equal(
+            SessionManager.ScanVerdict.NothingToShow,
+            Reachability(Blind(entrypoint, "/gone.jsonl"), transcriptExists: TranscriptIsGone));
+    }
+
+    [Fact]
+    public void AClaudeDesktopLeadWithLiveAgentsIsKeptAndNeverHuntsForAViewer()
+    {
+        var leads = new HashSet<string>(StringComparer.Ordinal) { "session-1" };
+        var desktop = Blind(SessionStatus.DesktopEntrypoint);
+
+        Assert.Equal(SessionManager.ScanVerdict.Keep, Reachability(desktop, leads));
+        Assert.False(SessionManager.WantsAgentViewer("session-1", desktop, leads));
+
+        // Control: the same lead under "cli" does hunt.
+        Assert.True(SessionManager.WantsAgentViewer("session-1", Blind("cli"), leads));
+        Assert.True(SessionManager.WantsAgentViewer("session-1", Blind(""), leads));
+    }
+
     [Fact]
     public void ALeadWithLiveAgentsKeepsItsOrbWithNoTerminalAtAll()
     {

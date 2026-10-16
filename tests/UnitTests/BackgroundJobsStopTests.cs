@@ -1,7 +1,7 @@
 using System.Collections.Generic;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-264: the two decisions behind ending a background job through its daemon
 // rather than by signalling its worker — whether to ask the daemon at all, and

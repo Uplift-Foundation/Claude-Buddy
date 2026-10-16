@@ -2,13 +2,13 @@ using System.Diagnostics;
 using System.Text.Json;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Opt-in, for the reason LiveBridgeFact is: each case starts a **real background
 // job** under the machine's own logged-in Claude Code account, and so spends a
 // little of its quota. Run it deliberately:
 //
-//   CLAUDE_BUDDY_LIVE_DAEMON_TESTS=1 dotnet test tests/IntegrationTests/ClaudeBuddy.IntegrationTests.csproj
+//   ORBWEAVER_LIVE_DAEMON_TESTS=1 dotnet test tests/IntegrationTests/Orbweaver.IntegrationTests.csproj
 //
 // Its own switch rather than LiveBridgeFact's, which also retags the Remote
 // Control relay for the whole process — nothing these cases want.
@@ -16,9 +16,9 @@ public sealed class LiveDaemonFactAttribute : FactAttribute
 {
     public LiveDaemonFactAttribute()
     {
-        if (Environment.GetEnvironmentVariable("CLAUDE_BUDDY_LIVE_DAEMON_TESTS") != "1")
+        if (BrandEnv.Get(BrandEnv.LiveDaemonTests) != "1")
         {
-            Skip = "opt-in: starts a real Claude Code background job and spends quota (set CLAUDE_BUDDY_LIVE_DAEMON_TESTS=1)";
+            Skip = "opt-in: starts a real Claude Code background job and spends quota (set ORBWEAVER_LIVE_DAEMON_TESTS=1)";
             return;
         }
 

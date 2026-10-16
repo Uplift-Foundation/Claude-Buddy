@@ -116,6 +116,12 @@ namespace Orbweaver
             // here at all, whatever else it has.
             if (status is not { IsLocalCli: true }) return Route.None;
 
+            // Claude Desktop hosts this session: there is no terminal, and on
+            // Windows the pid-keyed console route below would otherwise claim
+            // one — it would AttachConsole to a process with no console and type
+            // into whatever it found. Typing goes through Desktop itself.
+            if (status.IsDesktopHosted) return Route.None;
+
             // **A background job is run by a daemon precisely so that no
             // terminal has to hold it.** There is no window and no console, so
             // there is nothing to address — which is why the panel offers
@@ -193,6 +199,10 @@ namespace Orbweaver
         {
             if (route != Route.None) return Channel.Terminal;
 
+            // A Desktop-hosted session has no registry socket this app should
+            // message: replying is Claude Desktop's job (CB-265).
+            if (status is { IsDesktopHosted: true }) return Channel.None;
+
             if (status is { IsLocalCli: true, Source: SessionSource.ClaudeCode } && registryLive)
                 return Channel.Messaging;
 
@@ -268,6 +278,9 @@ namespace Orbweaver
         {
             if (status is not { IsLocalCli: true })
                 return "this isn't a CLI session on that machine, so there is nowhere to type.";
+
+            if (status.IsDesktopHosted)
+                return $"Claude Desktop {CantTypePhrase} — reply in its Code tab, or turn on Remote Control for the chat to send from here.";
 
             var program = string.IsNullOrWhiteSpace(status.TermProgram)
                 ? "its terminal"

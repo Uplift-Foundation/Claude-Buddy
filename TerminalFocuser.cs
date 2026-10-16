@@ -85,6 +85,13 @@ namespace Orbweaver
             // Code's — see the guard on it.
             if (!status.IsLocalCli) return;
 
+            // Claude Desktop hosts this session, so there is no pane or tty to
+            // find. OrbWindow.GoToSession answers the click with
+            // DesktopSessionFocus before getting here; this is the belt to that
+            // braces, for any other caller, because the failure it prevents is a
+            // terminal hunt that ends in a surprise window (CB-265).
+            if (status.IsDesktopHosted) return;
+
             // Resolving a target runs several short-lived processes (tmux
             // queries, ps walks, osascript) and waits on their output; doing
             // that on the UI thread would stall every orb's animation for the

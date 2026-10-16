@@ -66,6 +66,8 @@ public class HookRecordsTerminalHandleTests
         psi.Environment["TMPDIR"] = tmp.FullName;
 
         foreach (var name in TerminalVars) psi.Environment.Remove(name);
+        psi.Environment.Remove("CLAUDE_CODE_ENTRYPOINT");
+        psi.Environment.Remove("CLAUDE_CODE_HOST_SESSION_ID");
         foreach (var (key, value) in env) psi.Environment[key] = value;
 
         using var process = Process.Start(psi)

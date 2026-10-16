@@ -406,6 +406,29 @@ public class OrbWindowPresenceTests
         Assert.True(orb.FindControl<MenuItem>("EndSessionItem")!.IsVisible);
     }
 
+    // CB-265. Claude Desktop owns the process, so ending it from here would
+    // kill a session inside someone else's app; Dismiss still clears the file.
+    [AvaloniaFact]
+    public void AClaudeDesktopSessionIsOfferedDismissButNotEnd()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        var status = Status();
+        status.Entrypoint = SessionStatus.DesktopEntrypoint;
+        orb.UpdateFrom(status);
+
+        Assert.True(orb.FindControl<MenuItem>("DismissItem")!.IsVisible);
+        Assert.False(orb.FindControl<MenuItem>("EndSessionItem")!.IsVisible);
+
+        // Control: the same status under "cli" offers both.
+        var twin = new OrbWindow(Guid.NewGuid().ToString());
+        var cli = Status();
+        cli.Entrypoint = "cli";
+        twin.UpdateFrom(cli);
+
+        Assert.True(twin.FindControl<MenuItem>("DismissItem")!.IsVisible);
+        Assert.True(twin.FindControl<MenuItem>("EndSessionItem")!.IsVisible);
+    }
+
     // A hook older than the session_pid field. There is nothing to signal, so
     // End is not offered — but the file is still there to be dismissed.
     [AvaloniaFact]

@@ -404,6 +404,23 @@ if ($Agent -eq 'grok' -and $State -ne 'ended') {
     } catch {}
 }
 
+# Claude Code's CLAUDE_CODE_ENTRYPOINT: "cli" in a terminal, "claude-desktop"
+# when Claude Desktop's Code tab spawned it. Only Claude Code sets it, so a
+# Codex or Grok file gets '' even if inherited. Reduced to [A-Za-z0-9_-] to
+# match the .sh hook, so the two write the same value for the same input.
+$entrypoint = ''
+if ($Agent -eq 'claude' -and $env:CLAUDE_CODE_ENTRYPOINT) {
+    $entrypoint = $env:CLAUDE_CODE_ENTRYPOINT -replace '[^A-Za-z0-9_-]', ''
+}
+
+# Claude Desktop's own id for the chat (CLAUDE_CODE_HOST_SESSION_ID,
+# "local_<uuid>"), which names the per-chat record the app reads to find a
+# Remote Control bridge (CB-266). Same rules and sanitising as the entrypoint.
+$hostSessionId = ''
+if ($Agent -eq 'claude' -and $env:CLAUDE_CODE_HOST_SESSION_ID) {
+    $hostSessionId = $env:CLAUDE_CODE_HOST_SESSION_ID -replace '[^A-Za-z0-9_-]', ''
+}
+
 $status = @{
     state           = $State
 
@@ -411,6 +428,8 @@ $status = @{
     # Code one. A file from a hook older than this key has none, which reads as
     # Claude Code -- which is what it was.
     cli             = $Agent
+    entrypoint      = $entrypoint
+    host_session_id = $hostSessionId
     cwd             = $cwd
     title           = $title
     color           = $color

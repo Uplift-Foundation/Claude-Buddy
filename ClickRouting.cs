@@ -165,6 +165,15 @@ namespace Orbweaver
         internal static bool OpensInABrowser(SessionStatus? status) =>
             status?.Source == SessionSource.ClaudeCloud;
 
+        // Whether "take me to this session" means bringing Claude Desktop forward.
+        //
+        // A session Claude Desktop hosts has no terminal to focus and no browser
+        // address: the app that owns it is the destination, and DesktopSessionFocus
+        // finds its window at click time. Null-safe for the same reason
+        // OpensInABrowser is — the orb can be clicked before its first update.
+        internal static bool OpensClaudeDesktop(SessionStatus? status) =>
+            status?.IsDesktopHosted == true;
+
         // Whether this orb should offer "Open agents view" on its right-click menu.
         //
         // The roster's new home. It is a good destination and a bad default: it is
@@ -236,6 +245,13 @@ namespace Orbweaver
         internal static ClickFallback FallbackFor(
             SessionStatus status, string? sessionId, bool paneAliveButDetached)
         {
+            // Claude Desktop owns this session, so none of the terminal answers
+            // below apply — and in particular the chat panel must not offer an
+            // attach (AttachWouldReach) for a conversation `claude attach` would
+            // not find. The click itself never reaches here for these orbs;
+            // this is the answer for the panel and the belt to that braces.
+            if (status.IsDesktopHosted) return ClickFallback.None;
+
             var named = !string.IsNullOrEmpty(sessionId);
 
             // `claude attach` is Claude Code's own verb and there is no Codex

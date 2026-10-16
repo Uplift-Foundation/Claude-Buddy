@@ -201,6 +201,36 @@ public class ScanProbesTests
         Assert.Empty(ScanProbePlan.For(found, NoTeams).ViewerCwds);
     }
 
+    // CB-265. A Claude Desktop file is a Claude Code session with a pid and no
+    // terminal, which would otherwise make the daemon worth asking and its
+    // cwd worth a viewer probe. The "cli" twin is the control.
+    [Fact]
+    public void AClaudeDesktopFileAloneAsksNothingOfTheDaemonOrTheViewers()
+    {
+        var desktop = NoTerminal(A, 100);
+        desktop.Status.Entrypoint = SessionStatus.DesktopEntrypoint;
+        var plan = ScanProbePlan.For(Found(desktop), NoTeams);
+
+        Assert.False(plan.AskTheDaemon);
+        Assert.False(plan.AskAttachClients);
+        Assert.Empty(plan.ViewerCwds);
+
+        var cli = NoTerminal(A, 100);
+        cli.Status.Entrypoint = "cli";
+        var twin = ScanProbePlan.For(Found(cli), NoTeams);
+
+        Assert.True(twin.AskTheDaemon);
+        Assert.True(twin.AskAttachClients);
+
+        // A pid-less one is the arm that wants a viewer, so it is the one
+        // that would have differed.
+        var pidless = NoTerminal(A, 0);
+        pidless.Status.Entrypoint = "";
+        Assert.Single(ScanProbePlan.For(Found(pidless), NoTeams).ViewerCwds);
+        pidless.Status.Entrypoint = SessionStatus.DesktopEntrypoint;
+        Assert.Empty(ScanProbePlan.For(Found(pidless), NoTeams).ViewerCwds);
+    }
+
     [Fact]
     public void AProcessWithNoPidIsNeverAskedForItsLead()
     {

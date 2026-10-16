@@ -368,6 +368,14 @@ namespace Orbweaver
             return table is null ? Nothing : Inspect(table, pid);
         }
 
+        // The cached table, for a caller that wants to walk it itself — the
+        // Claude Desktop click path (CB-265) climbs ppid links through it.
+        // Excluded from coverage for Table's own reason: it is the clock and a
+        // live process read, and what is done with the rows is covered where
+        // that happens.
+        [ExcludeFromCodeCoverage]
+        internal static IReadOnlyList<ProcessRow>? CurrentTable() => Table();
+
         // Excluded from coverage: the clock.
         [ExcludeFromCodeCoverage]
         private static IReadOnlyList<ProcessRow>? Table()

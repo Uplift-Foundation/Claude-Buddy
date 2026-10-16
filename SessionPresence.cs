@@ -167,6 +167,7 @@ namespace Orbweaver
         internal static bool WorthAskingTheDaemon(
             SessionStatus status, bool knowsATerminal, bool sharesItsPid) =>
             status.Source == SessionSource.ClaudeCode
+            && !status.IsDesktopHosted
             && (status.SessionPid <= 0 || !knowsATerminal || sharesItsPid);
 
         // Which of the four an orb should be drawn as.
@@ -707,7 +708,7 @@ namespace Orbweaver
         // than Dismiss with an extra clause. Such a session can still be
         // dismissed; it just cannot be ended.
         internal static bool CanEndSession(SessionStatus status) =>
-            status.IsLocalCli && status.SessionPid > 0;
+            status.IsLocalCli && !status.IsDesktopHosted && status.SessionPid > 0;
 
         // CB-170: the two OpenClaw rows. An OpenClaw conversation has no pid, so
         // CanEndSession is correctly false for every one of them and these are

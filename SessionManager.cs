@@ -82,6 +82,50 @@ namespace Orbweaver
         [JsonPropertyName("cli")]
         public string Cli { get; set; } = "";
 
+        // How Claude Code was started, in its own words: CLAUDE_CODE_ENTRYPOINT,
+        // which the hook copies through for Claude Code sessions only. "cli"
+        // for a terminal, "sdk-cli" for `claude -p` and other SDK callers,
+        // "claude-desktop" for a session the Claude Desktop app hosts.
+        //
+        // Serialized for the same reason Cli directly above is: the hook is
+        // what knows it, and ResetSessionToIdle writes this object back over
+        // the hook's file, so a hook-owned fact has to survive that round trip.
+        // Absent reads as "", which every file older than CB-265 does.
+        [JsonPropertyName("entrypoint")]
+        public string Entrypoint { get; set; } = "";
+
+        public const string DesktopEntrypoint = "claude-desktop";
+
+        // A Claude Code session the Claude Desktop app started and owns
+        // (CB-265). It has no terminal by nature, not because it is headless:
+        // clicking its orb brings the hosting app forward, and its stdin is
+        // the app's, so the chat panel reads it but cannot type into it.
+        // Claude Code only — a Codex process spawned from a Desktop session's
+        // Bash tool inherits the variable, and is not hosted by anything.
+        [JsonIgnore]
+        public bool IsDesktopHosted =>
+            Source == SessionSource.ClaudeCode
+            && string.Equals(Entrypoint, DesktopEntrypoint, StringComparison.OrdinalIgnoreCase);
+
+        // Claude Desktop's own id for the chat, CLAUDE_CODE_HOST_SESSION_ID
+        // ("local_<uuid>"), which names the per-chat record Desktop keeps under
+        // its profile's claude-code-sessions folder (CB-266). Hook-owned and
+        // serialized, for the round-trip reason Entrypoint gives.
+        [JsonPropertyName("host_session_id")]
+        public string HostSessionId { get; set; } = "";
+
+        // The claude.ai session a Desktop chat is bridged to by Remote Control,
+        // read from that record each scan — so it can appear or vanish while the
+        // session runs (`/rc`). App-derived, so never written to the file.
+        [JsonIgnore]
+        public string BridgeSessionId { get; set; } = "";
+
+        // A Desktop chat the panel can send into through claude.ai. What it
+        // sends arrives as a peer message, not as the user's own typing —
+        // measured, see CB-266 — and the composer says so.
+        [JsonIgnore]
+        public bool IsBridgedDesktop => IsDesktopHosted && !string.IsNullOrEmpty(BridgeSessionId);
+
         // Which kind of thing this session is. Derived from Cli rather than
         // stored, by SourceOf, and never serialized — an enum here because it
         // is entirely internal and a typo should not compile, a string on the
@@ -428,7 +472,8 @@ namespace Orbweaver
             Func<IReadOnlyList<int>, IReadOnlyDictionary<int, AgentTeam.Membership>>? teams = null,
             Action<int, SessionDependents.Verdict>? terminate = null,
             string? legacyStatusDir = null,
-            Func<string, string?, bool>? stopJob = null)
+            Func<string, string?, bool>? stopJob = null,
+            Func<SessionStatus, string?>? desktopBridge = null)
         {
             _statusDir = statusDir;
             _legacyStatusDir = legacyStatusDir;
@@ -454,6 +499,13 @@ namespace Orbweaver
             _teams = teams ?? AgentTeam.OfAll;
             _terminate = terminate ?? SessionTerminator.Terminate;
             _stopJob = stopJob ?? BackgroundJobs.Stop;
+
+            // One lookup for the life of the manager, because what makes it
+            // cheap is its memo of each record's mtime. A lambda over the
+            // clock, since BridgeFor takes "now" so its re-look interval is
+            // testable without waiting.
+            var bridges = new DesktopBridgeLookup();
+            _desktopBridge = desktopBridge ?? (status => bridges.BridgeFor(status, DateTime.UtcNow));
 
             // AccountOrbs starts out visible, and nothing used to tell it
             // otherwise until a switch was flipped — so launching with every
@@ -488,6 +540,24 @@ namespace Orbweaver
         // whatever daemon is on the machine running the suite, which on a
         // developer's Mac is their own, with their own jobs in it.
         private readonly Func<string, string?, bool> _stopJob;
+
+        // Which claude.ai session a Claude Desktop chat is bridged to by Remote
+        // Control, read from the chat's own record (CB-266). A seam because the
+        // real one reads the machine's Claude Desktop profiles, and the scan
+        // suites must neither depend on nor touch whatever chats the developer
+        // running them happens to have.
+        private readonly Func<SessionStatus, string?> _desktopBridge;
+
+        // The cloud roster lists a Desktop chat that is on Remote Control a
+        // second time, as a session of its own, under the id its record names.
+        // That one chat must be one orb, and the local one wins: it has the
+        // process, the transcript and the click target. True when a local
+        // Desktop chat is bridged to cloudId, so the cloud block skips it.
+        // (ClaudeCloudRoster.Keep already drops `bridge`-kind rows; this is the
+        // belt for a row it does not recognise.)
+        internal static bool CloudShadowedByLocal(string cloudId, IEnumerable<SessionStatus> locals) =>
+            locals.Any(local => local.IsBridgedDesktop
+                                && string.Equals(local.BridgeSessionId, cloudId, StringComparison.Ordinal));
 
         // Every subprocess question this pass needs, asked. Runs on
         // ScheduleScan's background thread in production, and inline for
@@ -1713,6 +1783,7 @@ namespace Orbweaver
             string sessionId, SessionStatus status,
             ISet<string> leadsWithLiveAgents) =>
             status.Source == SessionSource.ClaudeCode
+            && !status.IsDesktopHosted
             && !KnowsATerminal(status)
             && (leadsWithLiveAgents.Contains(sessionId)
                 || status.SessionPid <= 0);
@@ -1794,7 +1865,12 @@ namespace Orbweaver
             // appears. It appears within the first exchange, and the trade is a
             // brand-new session's orb arriving late against a phantom's never
             // leaving.
+            //
+            // Claude Desktop's sessions are exempt (CB-265): the conversation is
+            // in Desktop's Code tab and the click opens Desktop, so neither a
+            // terminal nor a readable transcript is what the orb is for.
             if (status.IsLocalCli
+                && !status.IsDesktopHosted
                 && !KnowsATerminal(status)
                 && !leadsWithLiveAgents.Contains(sessionId)
                 && !string.IsNullOrEmpty(status.TranscriptPath)
@@ -1822,7 +1898,10 @@ namespace Orbweaver
             // not because it is a leftover. That used to be covered for free
             // by the pid test below — a background agent recorded no pid — and
             // is now stated, because the hook records its real pid.
+            // Claude Desktop hosts its sessions with no tty, TERM_PROGRAM or pane
+            // by design (CB-265, measured), so it is exempt here too.
             if (status.IsLocalCli
+                && !status.IsDesktopHosted
                 && string.IsNullOrEmpty(status.Tty)
                 && string.IsNullOrEmpty(status.TermProgram)
                 && string.IsNullOrEmpty(status.TmuxPane)
@@ -2240,6 +2319,20 @@ namespace Orbweaver
             var candidatesByCwd =
                 new Dictionary<(string Cwd, SessionSource Source, string Agent), IReadOnlyList<LocalPersona.Candidate>>();
 
+            // Which Remote Control bridge each Claude Desktop chat is on, before
+            // anything below reads it: the cloud block asks whether a cloud row
+            // is one of these chats, and the chat panel reads it off the status
+            // this pass publishes. Re-derived every pass — `/rc` can switch it on
+            // or off while the session runs — and cheap, because the lookup
+            // memoises on the record's mtime.
+            foreach (var entry in found)
+            {
+                if (entry.Status.IsDesktopHosted)
+                {
+                    entry.Status.BridgeSessionId = _desktopBridge(entry.Status) ?? "";
+                }
+            }
+
             // The gateway's sessions join the same list the status files
             // produced, so everything downstream — ordering, stacking, pinning,
             // the tray, the removal pass — stays a single code path. Empty and
@@ -2442,6 +2535,9 @@ namespace Orbweaver
             // place. There are no rooms, no leads, and no local anything.
             foreach (var session in ClaudeCloudSessions.Snapshot())
             {
+                // A Desktop chat on Remote Control is already an orb of its own.
+                if (CloudShadowedByLocal(session.Id, found.Select(entry => entry.Status))) continue;
+
                 found.Add(new ScanEntry(
                     "cloud:" + session.Id,
                     new SessionStatus
@@ -3285,7 +3381,12 @@ namespace Orbweaver
                 return existing;
             }
 
-            var chat = new LocalCliChatSession(sessionId, status);
+            // CB-266: the shared cloud client and credential lookup, so a bridged
+            // Claude Desktop chat sends through the same HttpClient and Keychain
+            // consent surface as the cloud panels. Neither is touched until a
+            // send, and "Show cloud sessions" gates that.
+            var chat = new LocalCliChatSession(sessionId, status,
+                cloudApi: CloudChatApi, credentialsFor: CloudChatCredentialsFor);
             _chats[sessionId] = chat;
             chat.Start();
             return chat;

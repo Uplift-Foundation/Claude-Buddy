@@ -111,13 +111,54 @@ namespace Orbweaver
             }
         }
 
+        internal const string PeerPrefix = "Another Claude session sent a message:\n";
+        internal const string PeerSuffixMarker = "\n\nThis came from another Claude session";
+
+        // Measured 2026-10-14 (CB-266) on a real Remote Control session: the
+        // content is the prefix, our text, a blank line, then a paragraph of
+        // provenance and a warning against permission laundering. Only the text
+        // between is ours. Null for anything that is not that wrapper, so a
+        // caller never shows boilerplate it failed to recognise.
+        internal static string? UnwrapPeerMessage(string content)
+        {
+            if (!content.StartsWith(PeerPrefix, StringComparison.Ordinal)) return null;
+
+            var body = content[PeerPrefix.Length..];
+            var cut = body.IndexOf(PeerSuffixMarker, StringComparison.Ordinal);
+            return cut < 0 ? null : body[..cut];
+        }
+
+        private static bool IsPeerOrigin(JsonElement root) =>
+            root.TryGetProperty("origin", out var origin)
+            && origin.ValueKind == JsonValueKind.Object
+            && Str(origin, "kind") == "peer";
+
         private static void MapUser(JsonElement root, string? uuid, DateTimeOffset at, List<Row> into)
         {
             // Rows Claude Code writes to itself — hook output, command
             // scaffolding, the transcript's own bookkeeping.
-            if (Bool(root, "isMeta")) return;
+            //
+            // One isMeta row is not bookkeeping: a message another session (or
+            // this app, over Remote Control, CB-266) sends in is written as
+            // isMeta with origin.kind "peer" and its text wrapped in a sentence
+            // of provenance. It is the user's own sentence as far as the panel
+            // is concerned, so it is unwrapped and kept, uuid and all.
+            var meta = Bool(root, "isMeta");
+            if (meta && !IsPeerOrigin(root)) return;
             if (!root.TryGetProperty("message", out var message)) return;
             if (!message.TryGetProperty("content", out var content)) return;
+
+            if (meta)
+            {
+                // A peer row that is not the shape measured stays dropped, as
+                // every isMeta row was before: better a missing bubble than the
+                // provenance boilerplate shown as if the user had typed it.
+                if (content.ValueKind == JsonValueKind.String
+                    && UnwrapPeerMessage(content.GetString() ?? "") is { } ours)
+                    AddText(ours, ChatRole.User, uuid, at, into);
+
+                return;
+            }
 
             if (content.ValueKind == JsonValueKind.String)
             {
