@@ -881,7 +881,7 @@ namespace Orbweaver
 
             var stamp = MacOSKeychain.ModificationStamp(_service);
 
-            // Tier 1: in-memory cache.
+            // Tier 1: in-memory cache — stamp unchanged.
             if (_cached is { Outcome: CredentialOutcome.Found } cached
                 && stamp is not null
                 && string.Equals(stamp, _cachedStamp, StringComparison.Ordinal))
@@ -889,7 +889,23 @@ namespace Orbweaver
                 return cached;
             }
 
+            // Tier 1b: in-memory cache — stamp changed but token still valid.
+            // The CLI rewrites the keychain item on every token refresh, which
+            // resets the item's ACL and wipes any "Always Allow" grant for this
+            // app. So a stamp change means a new prompt even if the user already
+            // approved. But the OLD token is still valid until its expiresAt —
+            // OAuth access tokens typically last an hour. Using it avoids the
+            // prompt entirely; the new token is picked up on the next poll after
+            // the cached one expires.
+            if (_cached is { Outcome: CredentialOutcome.Found, ExpiresAt: { } expiry } stillGood
+                && expiry > DateTimeOffset.UtcNow.AddMinutes(2))
+            {
+                return stillGood;
+            }
+
             // Tier 2: disk cache — survives restarts, never prompts.
+            // When the stamp has changed, the disk cache's stamp won't match,
+            // but the credential it holds may still be unexpired.
             if (stamp is not null)
             {
                 var diskRead = ReadDiskCache(stamp);
@@ -898,6 +914,19 @@ namespace Orbweaver
                     _cached = diskRead;
                     _cachedStamp = stamp;
                     return diskRead;
+                }
+
+                // Stamp changed: the disk cache's stamp doesn't match, but
+                // its credential may still be valid.
+                var staleRead = ReadDiskCacheIgnoringStamp();
+                if (staleRead is { Outcome: CredentialOutcome.Found, ExpiresAt: { } diskExpiry }
+                    && diskExpiry > DateTimeOffset.UtcNow.AddMinutes(2))
+                {
+                    _cached = staleRead;
+                    // Don't update _cachedStamp — the stamp has changed, so
+                    // we'll re-check on the next poll. Once the token expires
+                    // we fall through to tier 3 and prompt once.
+                    return staleRead;
                 }
             }
 
@@ -956,6 +985,34 @@ namespace Orbweaver
                 {
                     return null;
                 }
+
+                if (!root.TryGetProperty("credential", out var credEl)
+                    || credEl.GetRawText() is not { Length: > 0 } credJson)
+                {
+                    return null;
+                }
+
+                return ClaudeCliCredentials.ParseCredentials(credJson, DateTimeOffset.UtcNow);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        // Read the disk cache without checking the stamp. Used when the stamp
+        // has changed (CLI refreshed the token) but the cached credential may
+        // still be unexpired — in which case using it avoids a prompt.
+        private CredentialRead? ReadDiskCacheIgnoringStamp()
+        {
+            try
+            {
+                var path = CacheFilePath;
+                if (!File.Exists(path)) return null;
+
+                var text = File.ReadAllText(path);
+                using var doc = JsonDocument.Parse(text);
+                var root = doc.RootElement;
 
                 if (!root.TryGetProperty("credential", out var credEl)
                     || credEl.GetRawText() is not { Length: > 0 } credJson)
