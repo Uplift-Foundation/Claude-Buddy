@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Where a click on a Claude Desktop-hosted session's orb goes: to the Claude
     // Desktop window that is running it.

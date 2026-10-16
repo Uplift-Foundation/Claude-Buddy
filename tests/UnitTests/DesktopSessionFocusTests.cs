@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The click path for a session Claude Desktop hosts (CB-265): which process is
 // the app to raise, and every decision that keeps a Desktop-hosted session off

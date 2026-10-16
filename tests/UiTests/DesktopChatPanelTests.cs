@@ -7,7 +7,7 @@ using Avalonia.Headless.XUnit;
 using Avalonia.Threading;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The chat panel bound to a *real* LocalCliChatSession for a session Claude
 // Desktop hosts (CB-265), rather than a fake told to be read-only. The fake
@@ -28,17 +28,17 @@ public class DesktopChatPanelTests : IDisposable
     // "Replying" is a per-CLI setting that is off until a user turns it on; the
     // bridged rows only mean anything with it on, so the tests turn it on and put
     // it back.
-    private readonly bool _replyBefore = ClaudeBuddySettings.ClaudeCodeReplyEnabled;
+    private readonly bool _replyBefore = OrbweaverSettings.ClaudeCodeReplyEnabled;
 
     public DesktopChatPanelTests()
     {
         Directory.CreateDirectory(_root);
-        ClaudeBuddySettings.ClaudeCodeReplyEnabled = true;
+        OrbweaverSettings.ClaudeCodeReplyEnabled = true;
     }
 
     public void Dispose()
     {
-        ClaudeBuddySettings.ClaudeCodeReplyEnabled = _replyBefore;
+        OrbweaverSettings.ClaudeCodeReplyEnabled = _replyBefore;
         foreach (var id in _toClean) ChatPanel.CloseFor(id);
         try { Directory.Delete(_root, recursive: true); } catch { /* best effort */ }
     }

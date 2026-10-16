@@ -1,7 +1,7 @@
 using System.IO;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The pure half of CB-265's hook refresh: whether to overwrite, and which paths
 // are the installed copies on each platform. Both platforms are asked here so

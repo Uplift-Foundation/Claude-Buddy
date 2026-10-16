@@ -2,7 +2,7 @@ using System.IO;
 using System.Linq;
 using Xunit;
 
-namespace ClaudeBuddy.Tests
+namespace Orbweaver.Tests
 {
     // CB-265: an app upgrade refreshes the installed hook script, without ever
     // creating one or touching anything else. Every path here is under a scratch

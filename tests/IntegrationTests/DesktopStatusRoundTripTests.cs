@@ -2,7 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-265: the seam between the real OrbweaverHook.sh and the app's own reading
 // of what it wrote. HookScriptShTests pins the bytes the hook prints; this pins

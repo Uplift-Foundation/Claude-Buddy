@@ -1,6 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Keeping the installed Claude Code hook script as new as the app (CB-265).
     //
@@ -52,7 +52,7 @@ namespace ClaudeBuddy
 
         // Where the bundled script sits in each layout the app runs from: inside
         // the .app, Contents/Resources beside the installers (BaseDirectory is
-        // Contents/MacOS); on Windows next to the exe, per ClaudeBuddy.iss's
+        // Contents/MacOS); on Windows next to the exe, per Orbweaver.iss's
         // {app}; from a source build, the repo root, found by walking up. Not
         // HookInstaller.Resolve, which looks for installers under tools/ and so
         // never finds a script that sits beside the exe.

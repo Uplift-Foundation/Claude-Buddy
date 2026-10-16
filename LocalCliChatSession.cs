@@ -145,7 +145,7 @@ namespace Orbweaver
             _startWatcher = startWatcher ?? StartRealWatcher;
             _cloudApi = cloudApi;
             _credentialsFor = credentialsFor;
-            _cloudEnabled = cloudEnabled ?? (() => ClaudeBuddySettings.ClaudeCloudEnabled);
+            _cloudEnabled = cloudEnabled ?? (() => OrbweaverSettings.ClaudeCloudEnabled);
             _focusDesktop = focusDesktop ?? FocusDesktopWindow;
             _focusTerminal = focusTerminal ?? FocusTerminalWindow;
             _announced = DesktopView();

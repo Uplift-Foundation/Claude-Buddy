@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-266: the pure rules for finding a Claude Desktop chat's Remote Control
 // bridge from the record Desktop keeps for it. Every id is invented, with the

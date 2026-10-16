@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-266: the stateful half, DesktopBridgeLookup, against fake seams. What it
 // has to get right is mostly *when it does not read*: a stat per tick for a

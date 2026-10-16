@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // What Claude Desktop remembers about one Code-tab chat, read back out of its
     // per-chat record (CB-266). Only the fields Orbweaver acts on; the record

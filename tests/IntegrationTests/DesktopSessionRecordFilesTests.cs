@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Serialises the classes that point ClaudeDesktopManager.ProfileRoot at a
 // scratch directory: the variable is process-wide, and a sibling reading the
@@ -23,7 +23,7 @@ public class DesktopSessionRecordFilesTests : IDisposable
     private const string Host = "local_00000000-aaaa-bbbb-cccc-000000000040";
     private const string Cli = "44444444-5555-6666-7777-888888888888";
     private const string Bridge = "session_01DiskFixtureGGGG";
-    private const string RootVariable = "CLAUDE_BUDDY_PROFILE_ROOT";
+    private const string RootVariable = "ORBWEAVER_PROFILE_ROOT";
 
     private static readonly DateTime Now = new(2026, 10, 14, 12, 0, 0, DateTimeKind.Utc);
 

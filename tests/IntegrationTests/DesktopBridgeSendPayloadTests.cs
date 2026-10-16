@@ -7,7 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // A send into a Remote Control-bridged Claude Desktop chat (CB-266), end to end
 // through the seam: LocalCliChatSession builds the request via CloudTurnSender,
@@ -43,11 +43,11 @@ public class DesktopBridgeSendPayloadTests : IDisposable
 
     private const string EdgeForbiddenBody = "<html></html>";
 
-    private readonly bool _replyBefore = ClaudeBuddySettings.ClaudeCodeReplyEnabled;
+    private readonly bool _replyBefore = OrbweaverSettings.ClaudeCodeReplyEnabled;
 
-    public DesktopBridgeSendPayloadTests() => ClaudeBuddySettings.ClaudeCodeReplyEnabled = true;
+    public DesktopBridgeSendPayloadTests() => OrbweaverSettings.ClaudeCodeReplyEnabled = true;
 
-    public void Dispose() => ClaudeBuddySettings.ClaudeCodeReplyEnabled = _replyBefore;
+    public void Dispose() => OrbweaverSettings.ClaudeCodeReplyEnabled = _replyBefore;
 
     private sealed class FixtureApi : ICloudApi
     {

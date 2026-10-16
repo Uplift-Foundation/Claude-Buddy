@@ -6,7 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The send shared by the cloud panel and the Desktop-bridge send (CB-266): the
 // credential read, the POST, the one retry and the words. Every case here goes

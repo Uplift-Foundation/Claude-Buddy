@@ -2,7 +2,7 @@ using System.Linq;
 using System.Text.Json;
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 // A message sent into a Remote Control-bridged Claude Desktop chat (CB-266) comes
 // back in the local transcript as a *peer* row, not as user input. The fixture is

@@ -2,7 +2,7 @@ using System.Reflection;
 using Avalonia.Headless.XUnit;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-266: a Claude Desktop chat on Remote Control appears twice if nothing
 // stops it, once as the local session the hook recorded and once as the cloud
@@ -49,7 +49,7 @@ public class DesktopBridgeScanTests
 
     private static SessionManager Manager(string dir, Func<SessionStatus, string?> bridge)
     {
-        ClaudeBuddySettings.ClaudeCodeEnabled = true;
+        OrbweaverSettings.ClaudeCodeEnabled = true;
 
         return new SessionManager(
             dir,
@@ -72,7 +72,7 @@ public class DesktopBridgeScanTests
 
     private static void PublishCloud(string id)
     {
-        ClaudeBuddySettings.ClaudeCloudEnabled = true;
+        OrbweaverSettings.ClaudeCloudEnabled = true;
         ClaudeCloudSessions.SetSnapshotForTests(new[]
         {
             new ClaudeCloudSessions.Session(
@@ -86,7 +86,7 @@ public class DesktopBridgeScanTests
     private static void PublishNothing()
     {
         ClaudeCloudSessions.SetSnapshotForTests(Array.Empty<ClaudeCloudSessions.Session>());
-        ClaudeBuddySettings.ClaudeCloudEnabled = false;
+        OrbweaverSettings.ClaudeCloudEnabled = false;
     }
 
     [AvaloniaFact]

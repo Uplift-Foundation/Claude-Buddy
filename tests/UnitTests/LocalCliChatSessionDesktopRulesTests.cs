@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The two decisions behind the Desktop composer (CB-266), as truth tables over
 // pure functions: whether the box is taken away, and what it says. No window, no

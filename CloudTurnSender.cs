@@ -3,7 +3,7 @@ using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // How a user turn left, and what to tell the person about it.
     internal enum CloudSendResult

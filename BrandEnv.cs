@@ -40,6 +40,7 @@ namespace Orbweaver
         internal const string MirrorLog = "MIRROR_LOG";
         internal const string LiveBridgeTests = "LIVE_BRIDGE_TESTS";
         internal const string LaunchTests = "LAUNCH_TESTS";
+        internal const string LiveDaemonTests = "LIVE_DAEMON_TESTS";
         internal const string KeepAliveDryRun = "KEEPALIVE_DRY_RUN";
         internal const string LaunchAgentsDir = "LAUNCHAGENTS_DIR";
         internal const string KeepAliveAppCandidates = "KEEPALIVE_APP_CANDIDATES";
@@ -49,7 +50,7 @@ namespace Orbweaver
         [
             SettingsDir, LogDir, StatusRoot, BundleRoot, ProfileRoot,
             NoCredentialStore, PersonaWalkCeiling, MirrorLog,
-            LiveBridgeTests, LaunchTests,
+            LiveBridgeTests, LaunchTests, LiveDaemonTests,
             KeepAliveDryRun, LaunchAgentsDir, KeepAliveAppCandidates, StopGraceSeconds,
         ];
 

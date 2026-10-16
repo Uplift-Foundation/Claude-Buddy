@@ -294,8 +294,8 @@ public class ChatPanelScreenshots : IDisposable
     private void WithDesktopSession(
         string bridge, ICloudApi? api, bool cloudOn, string png, Action<LocalCliChatSession> act)
     {
-        var replyBefore = ClaudeBuddySettings.ClaudeCodeReplyEnabled;
-        ClaudeBuddySettings.ClaudeCodeReplyEnabled = true;
+        var replyBefore = OrbweaverSettings.ClaudeCodeReplyEnabled;
+        OrbweaverSettings.ClaudeCodeReplyEnabled = true;
         var dir = Path.Combine(Path.GetTempPath(), "cb-shot-desktop-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
         try
@@ -341,7 +341,7 @@ public class ChatPanelScreenshots : IDisposable
         }
         finally
         {
-            ClaudeBuddySettings.ClaudeCodeReplyEnabled = replyBefore;
+            OrbweaverSettings.ClaudeCodeReplyEnabled = replyBefore;
             try { Directory.Delete(dir, recursive: true); } catch { /* best effort */ }
         }
     }

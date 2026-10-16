@@ -954,12 +954,12 @@ namespace Orbweaver
             get
             {
                 var appSupport = Path.Combine(
-                    Environment.GetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR")
+                    BrandEnv.Get(BrandEnv.SettingsDir)
                         is { Length: > 0 } scratch
                         ? scratch
                         : Path.Combine(
                             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                            "ClaudeBuddy"),
+                            Brand.DataDirName),
                     "credential-cache");
                 return appSupport;
             }

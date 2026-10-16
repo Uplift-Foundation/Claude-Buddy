@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-266: when is a cloud roster row the same conversation as a local orb? Only
 // when a local Claude Desktop chat is bridged to exactly that session. Each of

@@ -21,6 +21,7 @@ ChatHeaderMeta.cs	4	sample data: a repository path or session name; the GitHub r
 CrashLog.cs	1	comment records what happened under the old name; rewriting it would falsify the record (the app had no crash log while its data dir was still ClaudeBuddy)
 DataDirMigration.cs	3	legacy arm: the pre-rename data and log directory names being migrated
 HookInstaller.cs	1	comment records what happened under the old name; rewriting it would falsify the record (the phase 2 IsWiredIn bug)
+HookFreshness.cs	2	comment records what happened under the old name; rewriting it would falsify the record (a hook script confirmed on a real Mac still invoking the pre-rename ClaudeBuddyHook.*)
 KeepAliveRepair.cs	3	legacy arm: names the pre-rename thing a phase 2 migration recognises (the stale plist points into a phase 2 or legacy bundle)
 LegacyHookCleanup.cs	3	legacy arm: names the pre-rename thing a phase 2 migration recognises (the legacy hook folders retired after 14 days)
 MacOSLegacyBundle.cs	10	legacy arm: Claude Buddy.app and its ClaudeBuddy executable are what the rule recognises and trashes
@@ -83,6 +84,7 @@ tests/UnitTests/BrandTests.cs	11	legacy fixtures for the phase 2/3 migrations: t
 tests/UnitTests/ChatHeaderMetaTests.cs	4	sample data: a repository path or session name; the GitHub repository keeps its name
 tests/UnitTests/DataDirMigrationPlanTests.cs	5	legacy fixtures for the phase 2/3 migrations: the old names each migration must recognise
 tests/UnitTests/HookInstallerWiredTextTests.cs	3	legacy fixtures for the phase 2/3 migrations: the old names each migration must recognise
+tests/UnitTests/HookFreshnessDecideTests.cs	2	legacy fixtures: the pre-rename hook script paths HookFreshness must still recognise as an installed copy
 tests/UnitTests/JobPhaseTests.cs	3	sample data: a repository path or session name; the GitHub repository keeps its name
 tests/UnitTests/KeepAliveRepairRuleTests.cs	2	legacy fixtures for the phase 2/3 migrations: the old names each migration must recognise
 tests/UnitTests/LastReachableArmsTests.cs	1	fixture: the label an older peer sent; the framing code treats it as opaque text

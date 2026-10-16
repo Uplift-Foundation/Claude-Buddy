@@ -4,7 +4,7 @@ using Avalonia.Headless.XUnit;
 using Avalonia.Threading;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // A Claude Desktop chat on Remote Control, as the panel's session sees it
 // (CB-266): the composer flipping live under an open panel, a send through the
@@ -25,17 +25,17 @@ public class LocalCliChatSessionDesktopTests : IDisposable
     private readonly string _root =
         Path.Combine(Path.GetTempPath(), "cb-desktop-send-" + Guid.NewGuid().ToString("N"));
 
-    private readonly bool _replyBefore = ClaudeBuddySettings.ClaudeCodeReplyEnabled;
+    private readonly bool _replyBefore = OrbweaverSettings.ClaudeCodeReplyEnabled;
 
     public LocalCliChatSessionDesktopTests()
     {
         Directory.CreateDirectory(_root);
-        ClaudeBuddySettings.ClaudeCodeReplyEnabled = true;
+        OrbweaverSettings.ClaudeCodeReplyEnabled = true;
     }
 
     public void Dispose()
     {
-        ClaudeBuddySettings.ClaudeCodeReplyEnabled = _replyBefore;
+        OrbweaverSettings.ClaudeCodeReplyEnabled = _replyBefore;
         try { Directory.Delete(_root, recursive: true); } catch { /* best effort */ }
     }
 
@@ -536,7 +536,7 @@ public class LocalCliChatSessionDesktopTests : IDisposable
     public async Task ReplyingOffKeepsItsOwnNoteAndSendsNothing()
     {
         var rig = Build(Status(""));
-        ClaudeBuddySettings.ClaudeCodeReplyEnabled = false;
+        OrbweaverSettings.ClaudeCodeReplyEnabled = false;
 
         var outcome = await rig.Session.SendAsync("hello");
 
