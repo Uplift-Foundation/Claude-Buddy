@@ -1,4 +1,4 @@
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // A FileSystemWatcher that is switched on somewhere that cannot hold the
     // caller up (CB-234).

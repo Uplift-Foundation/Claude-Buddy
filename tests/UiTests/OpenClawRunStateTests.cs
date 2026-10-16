@@ -5,7 +5,7 @@ using Avalonia.Headless.XUnit;
 using Avalonia.Threading;
 using Xunit;
 
-namespace ClaudeBuddy.UiTests;
+namespace Orbweaver.UiTests;
 
 // Whether a gateway session counts as working right now, and what an event does
 // once it arrives.
@@ -28,8 +28,8 @@ public class OpenClawRunStateTests
 
     private static void Fresh()
     {
-        ClaudeBuddySettings.ReloadForTests();
-        ClaudeBuddySettings.OpenClawEnabled = true;
+        OrbweaverSettings.ReloadForTests();
+        OrbweaverSettings.OpenClawEnabled = true;
         OpenClawSessions.ForgetRunningForTests();
     }
 

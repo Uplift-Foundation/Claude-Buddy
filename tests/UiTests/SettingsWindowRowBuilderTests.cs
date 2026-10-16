@@ -6,7 +6,7 @@ using Avalonia.Headless.XUnit;
 using Avalonia.LogicalTree;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The rows as the window builds them, rather than as a test wires them.
 //
@@ -50,9 +50,9 @@ public class SettingsWindowRowBuilderTests
     [AvaloniaFact]
     public void EachClickRowWritesOnlyItsOwnSetting()
     {
-        ClaudeBuddySettings.ClickAction = "none";
-        ClaudeBuddySettings.DoubleClickAction = "none";
-        ClaudeBuddySettings.TripleClickAction = "none";
+        OrbweaverSettings.ClickAction = "none";
+        OrbweaverSettings.DoubleClickAction = "none";
+        OrbweaverSettings.TripleClickAction = "none";
 
         var window = NewWindow();
         var combos = CombosIn(window.ClickRows());
@@ -61,19 +61,19 @@ public class SettingsWindowRowBuilderTests
 
         // Index 0 is "Go to the session", which none of them starts on.
         combos[0].SelectedIndex = 0;
-        Assert.Equal("terminal", ClaudeBuddySettings.ClickAction);
-        Assert.Equal("none", ClaudeBuddySettings.DoubleClickAction);
-        Assert.Equal("none", ClaudeBuddySettings.TripleClickAction);
+        Assert.Equal("terminal", OrbweaverSettings.ClickAction);
+        Assert.Equal("none", OrbweaverSettings.DoubleClickAction);
+        Assert.Equal("none", OrbweaverSettings.TripleClickAction);
 
         combos[1].SelectedIndex = 1;
-        Assert.Equal("terminal", ClaudeBuddySettings.ClickAction);
-        Assert.Equal("chat", ClaudeBuddySettings.DoubleClickAction);
-        Assert.Equal("none", ClaudeBuddySettings.TripleClickAction);
+        Assert.Equal("terminal", OrbweaverSettings.ClickAction);
+        Assert.Equal("chat", OrbweaverSettings.DoubleClickAction);
+        Assert.Equal("none", OrbweaverSettings.TripleClickAction);
 
         combos[2].SelectedIndex = 2;
-        Assert.Equal("terminal", ClaudeBuddySettings.ClickAction);
-        Assert.Equal("chat", ClaudeBuddySettings.DoubleClickAction);
-        Assert.Equal("speak", ClaudeBuddySettings.TripleClickAction);
+        Assert.Equal("terminal", OrbweaverSettings.ClickAction);
+        Assert.Equal("chat", OrbweaverSettings.DoubleClickAction);
+        Assert.Equal("speak", OrbweaverSettings.TripleClickAction);
     }
 
     // Each row opens on its own saved value, which is the other half of the same
@@ -81,9 +81,9 @@ public class SettingsWindowRowBuilderTests
     [AvaloniaFact]
     public void EachClickRowOpensOnItsOwnSavedValue()
     {
-        ClaudeBuddySettings.ClickAction = "terminal";
-        ClaudeBuddySettings.DoubleClickAction = "chat";
-        ClaudeBuddySettings.TripleClickAction = "speak";
+        OrbweaverSettings.ClickAction = "terminal";
+        OrbweaverSettings.DoubleClickAction = "chat";
+        OrbweaverSettings.TripleClickAction = "speak";
 
         var window = NewWindow();
         var combos = CombosIn(window.ClickRows());
@@ -98,13 +98,13 @@ public class SettingsWindowRowBuilderTests
     [AvaloniaFact]
     public void ChoosingALifetimeWritesIt()
     {
-        ClaudeBuddySettings.OrbLifetimeMinutes = 1;
+        OrbweaverSettings.OrbLifetimeMinutes = 1;
         var window = NewWindow();
 
         var combo = (ComboBox)window.LifetimePicker();
         combo.SelectedIndex = 2;   // "15 minutes"
 
-        Assert.Equal(15, ClaudeBuddySettings.OrbLifetimeMinutes);
+        Assert.Equal(15, OrbweaverSettings.OrbLifetimeMinutes);
     }
 
     // "Forever" is a real choice rather than a very large number, and it is the
@@ -112,13 +112,13 @@ public class SettingsWindowRowBuilderTests
     [AvaloniaFact]
     public void ForeverIsTheLastChoiceAndMeansForever()
     {
-        ClaudeBuddySettings.OrbLifetimeMinutes = 1;
+        OrbweaverSettings.OrbLifetimeMinutes = 1;
         var window = NewWindow();
 
         var combo = (ComboBox)window.LifetimePicker();
         combo.SelectedIndex = CountOf(combo) - 1;
 
-        Assert.Equal(ClaudeBuddySettings.OrbLifetimeForever, ClaudeBuddySettings.OrbLifetimeMinutes);
+        Assert.Equal(OrbweaverSettings.OrbLifetimeForever, OrbweaverSettings.OrbLifetimeMinutes);
     }
 
     // A number hand-written into settings.json shows as itself rather than being
@@ -127,13 +127,13 @@ public class SettingsWindowRowBuilderTests
     [AvaloniaFact]
     public void AHandWrittenLifetimeIsOfferedAsItself()
     {
-        ClaudeBuddySettings.OrbLifetimeMinutes = 7;
+        OrbweaverSettings.OrbLifetimeMinutes = 7;
         var window = NewWindow();
 
         var combo = (ComboBox)window.LifetimePicker();
 
         Assert.True(combo.SelectedIndex >= 0, "a hand-written value must still be selected");
-        Assert.Equal(7, ClaudeBuddySettings.OrbLifetimeMinutes);
+        Assert.Equal(7, OrbweaverSettings.OrbLifetimeMinutes);
 
         var labels = ((IList)combo.ItemsSource!).Cast<string>().ToList();
         Assert.Contains("7 minutes", labels);
@@ -150,23 +150,23 @@ public class SettingsWindowRowBuilderTests
     [AvaloniaFact]
     public void ChoosingAnActivityWindowWritesIt()
     {
-        ClaudeBuddySettings.OpenClawActiveWithinMinutes = 60;
+        OrbweaverSettings.OpenClawActiveWithinMinutes = 60;
         var window = NewWindow();
 
         var combo = (ComboBox)window.ActiveWithinPicker();
-        var before = ClaudeBuddySettings.OpenClawActiveWithinMinutes;
+        var before = OrbweaverSettings.OpenClawActiveWithinMinutes;
 
         // Pick something other than whatever it opened on, so the handler has a
         // change to make.
         combo.SelectedIndex = combo.SelectedIndex == 0 ? 1 : 0;
 
-        Assert.NotEqual(before, ClaudeBuddySettings.OpenClawActiveWithinMinutes);
+        Assert.NotEqual(before, OrbweaverSettings.OpenClawActiveWithinMinutes);
     }
 
     [AvaloniaFact]
     public void AHandWrittenActivityWindowIsOfferedAsItself()
     {
-        ClaudeBuddySettings.OpenClawActiveWithinMinutes = 13;
+        OrbweaverSettings.OpenClawActiveWithinMinutes = 13;
         var window = NewWindow();
 
         var combo = (ComboBox)window.ActiveWithinPicker();
@@ -181,7 +181,7 @@ public class SettingsWindowRowBuilderTests
     [AvaloniaFact]
     public void ReselectingTheSameActivityWindowIsANoOp()
     {
-        ClaudeBuddySettings.OpenClawActiveWithinMinutes = 60;
+        OrbweaverSettings.OpenClawActiveWithinMinutes = 60;
         var window = NewWindow();
 
         var combo = (ComboBox)window.ActiveWithinPicker();
@@ -189,7 +189,7 @@ public class SettingsWindowRowBuilderTests
 
         combo.SelectedIndex = opened;
 
-        Assert.Equal(60, ClaudeBuddySettings.OpenClawActiveWithinMinutes);
+        Assert.Equal(60, OrbweaverSettings.OpenClawActiveWithinMinutes);
     }
 
     // --- the gateway address ---
@@ -202,7 +202,7 @@ public class SettingsWindowRowBuilderTests
     [AvaloniaFact]
     public void TheGatewayBoxOpensOnTheSavedAddress()
     {
-        ClaudeBuddySettings.OpenClawHost = "198.51.100.42";
+        OrbweaverSettings.OpenClawHost = "198.51.100.42";
         var window = NewWindow();
 
         var box = (TextBox)window.GatewayHostBox();
@@ -213,7 +213,7 @@ public class SettingsWindowRowBuilderTests
     [AvaloniaFact]
     public void TheGatewayBoxShowsAWatermarkWhenThereIsNoAddress()
     {
-        ClaudeBuddySettings.OpenClawHost = "";
+        OrbweaverSettings.OpenClawHost = "";
         var window = NewWindow();
 
         var box = (TextBox)window.GatewayHostBox();

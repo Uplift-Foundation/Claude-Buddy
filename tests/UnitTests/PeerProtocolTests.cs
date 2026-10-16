@@ -2,7 +2,7 @@ using System.Text;
 using System.Text.Json;
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 // Covers PeerProtocol — the wire format two copies of this app use over a direct
 // connection, replacing the one that existed to survive a language model

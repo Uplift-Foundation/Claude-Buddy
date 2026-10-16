@@ -13,7 +13,7 @@ using Avalonia.Platform;
 using SkiaSharp;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-171. Windows captures of this suite come back with some text rendered as
 // solid black blobs — legible on the macOS rid, unreadable on win-x64, with

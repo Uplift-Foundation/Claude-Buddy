@@ -1,6 +1,6 @@
 using System;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // How a usage ring in the danger band breathes, as a function of time (CB-219).
     //

@@ -3,9 +3,9 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.InteropServices;
 using Xunit;
-using static ClaudeBuddy.TextToSpeech;
+using static Orbweaver.TextToSpeech;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-200 QA: the Speech level's plumbing, where it meets a process launch.
 //
@@ -24,15 +24,15 @@ public class SpeechLaunchTests
 {
     private static void WithSpeechVolume(double level, Action body)
     {
-        var saved = ClaudeBuddySettings.SpeechVolume;
+        var saved = OrbweaverSettings.SpeechVolume;
         try
         {
-            ClaudeBuddySettings.SpeechVolume = level;
+            OrbweaverSettings.SpeechVolume = level;
             body();
         }
         finally
         {
-            ClaudeBuddySettings.SpeechVolume = saved;
+            OrbweaverSettings.SpeechVolume = saved;
         }
     }
 
@@ -132,15 +132,15 @@ public class SpeechLaunchTests
 
     private static void WithCommandVoice(Action body)
     {
-        var savedVoice = ClaudeBuddySettings.SpeakCommandVoice;
+        var savedVoice = OrbweaverSettings.SpeakCommandVoice;
         try
         {
-            ClaudeBuddySettings.SpeakCommandVoice = "female_03";
+            OrbweaverSettings.SpeakCommandVoice = "female_03";
             body();
         }
         finally
         {
-            ClaudeBuddySettings.SpeakCommandVoice = savedVoice;
+            OrbweaverSettings.SpeakCommandVoice = savedVoice;
         }
     }
 
@@ -156,7 +156,7 @@ public class SpeechLaunchTests
             Assert.Equal("0.3", startInfo.Environment[SpeechEngineContract.VolumeEnvVar]);
             Assert.Equal("female_03", startInfo.Environment["CLAUDEBUDDY_VOICE"]);
             Assert.Equal("/Users/me/bin/cb-voice.sh", startInfo.FileName);
-            Assert.Equal(ClaudeBuddySettings.SpeakCommandArgs, startInfo.ArgumentList);
+            Assert.Equal(OrbweaverSettings.SpeakCommandArgs, startInfo.ArgumentList);
             Assert.True(startInfo.RedirectStandardInput);
             Assert.True(startInfo.RedirectStandardOutput);
             Assert.True(startInfo.RedirectStandardError);
@@ -215,10 +215,10 @@ public class SpeechLaunchTests
     [Fact]
     public void AStaleCustomSelectionResolvesToASystemVoice()
     {
-        var saved = ClaudeBuddySettings.SpeakEngine;
+        var saved = OrbweaverSettings.SpeakEngine;
         try
         {
-            ClaudeBuddySettings.SpeakEngine = "custom";
+            OrbweaverSettings.SpeakEngine = "custom";
             var options = new System.Collections.Generic.List<VoiceOption>
             {
                 new(SpeakEngine.System, "Samantha", "Samantha (system)")
@@ -229,7 +229,7 @@ public class SpeechLaunchTests
         }
         finally
         {
-            ClaudeBuddySettings.SpeakEngine = saved;
+            OrbweaverSettings.SpeakEngine = saved;
         }
     }
 }

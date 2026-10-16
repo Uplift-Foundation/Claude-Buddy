@@ -1,4 +1,4 @@
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Enough Markdown to read a reply by, and no more.
     //

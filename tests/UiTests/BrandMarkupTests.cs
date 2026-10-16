@@ -5,7 +5,7 @@ using Avalonia.Headless.XUnit;
 using Avalonia.LogicalTree;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-250: the three names App.axaml and OrbWindow.axaml now read from code with
 // x:Static instead of spelling out. BrandTests pins the constants; what only

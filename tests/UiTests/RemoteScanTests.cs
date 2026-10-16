@@ -2,7 +2,7 @@ using System.Reflection;
 using Avalonia.Headless.XUnit;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // A scan with sessions from another machine in it.
 //
@@ -48,7 +48,7 @@ public class RemoteScanTests
 
     private static void Publish(params RemoteControlSessions.Remote[] remotes)
     {
-        ClaudeBuddySettings.PeerLinkEnabled = true;
+        OrbweaverSettings.PeerLinkEnabled = true;
         RemoteControlSessions.SetSnapshotForTests(remotes);
     }
 
@@ -75,7 +75,7 @@ public class RemoteScanTests
             .GetValue(orb)!;
 
     private static List<(OrbWindow Member, OrbWindow Lead)> LinkPairs() =>
-        (List<(OrbWindow Member, OrbWindow Lead)>)typeof(SessionManager).Assembly.GetType("ClaudeBuddy.TeamLinks")!
+        (List<(OrbWindow Member, OrbWindow Lead)>)typeof(SessionManager).Assembly.GetType("Orbweaver.TeamLinks")!
             .GetField("Pairs", BindingFlags.NonPublic | BindingFlags.Static)!.GetValue(null)!;
 
     private static SessionStatus StatusOf(SessionManager manager, string key) =>
@@ -163,7 +163,7 @@ public class RemoteScanTests
             Local("lead", Environment.ProcessId);
             Local("a", child.Id);
 
-            ClaudeBuddySettings.ClaudeCodeEnabled = true;
+            OrbweaverSettings.ClaudeCodeEnabled = true;
             Publish(
                 new RemoteControlSessions.Remote("backlog status check", "peer-1", "idle", DateTime.UtcNow,
                     ".claude", Route: "sid:lead"),
@@ -578,19 +578,19 @@ public class RemoteScanTests
             manager.ScanAndUpdate();
             Assert.NotEmpty(Orbs(manager));
 
-            ClaudeBuddySettings.RemoteControlEnabled = false;
+            OrbweaverSettings.RemoteControlEnabled = false;
         // Both transports, because "off" is now two switches. A test that
         // turns one off and leaves the other to whatever the last test set
         // is asserting about a state it did not arrange — and settings here
         // persist through ReloadForTests, since the setter writes the file.
-        ClaudeBuddySettings.PeerLinkEnabled = false;
+        OrbweaverSettings.PeerLinkEnabled = false;
             manager.ScanAndUpdate();
 
             Assert.Empty(Orbs(manager));
         }
         finally
         {
-            ClaudeBuddySettings.PeerLinkEnabled = true;
+            OrbweaverSettings.PeerLinkEnabled = true;
             PublishNothing();
         }
     }

@@ -3,7 +3,7 @@ using System.Linq;
 using System.Text.Json;
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 // CB-109: the query string this app sends when it asks the gateway for a
 // picture, and the identity that has to be on it.

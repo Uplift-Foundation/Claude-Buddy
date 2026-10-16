@@ -1,7 +1,7 @@
 using System.Collections.Generic;
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 // ClaudeDesktopOverlay.TintTarget: which Claude Desktop window, if any, should be
 // wearing its profile's colour right now.
@@ -29,8 +29,8 @@ public class OverlayTintTargetTests
 
     private static void SetTint(string folder, bool tint)
     {
-        ClaudeBuddySettings.ReloadForTests();
-        ClaudeBuddySettings.Update(folder, p => p.TintWindow = tint);
+        OrbweaverSettings.ReloadForTests();
+        OrbweaverSettings.Update(folder, p => p.TintWindow = tint);
     }
 
     [Fact]
@@ -103,7 +103,7 @@ public class OverlayTintTargetTests
     [Fact]
     public void TintsAProfileWithNoStoredSettingsAtAll()
     {
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
         var profiles = new List<ProfileView>
         {
             Profile("never-configured", running: true, pid: 100)
@@ -123,14 +123,14 @@ public class OverlayTintTargetTests
     [Fact]
     public void SetEnabledWritesTheSettingAndTheProperty()
     {
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
         var original = ClaudeDesktopOverlay.Enabled;
         try
         {
             ClaudeDesktopOverlay.SetEnabled(!original);
 
             Assert.Equal(!original, ClaudeDesktopOverlay.Enabled);
-            Assert.Equal(!original, ClaudeBuddySettings.TintActiveWindow);
+            Assert.Equal(!original, OrbweaverSettings.TintActiveWindow);
         }
         finally
         {
@@ -144,22 +144,22 @@ public class OverlayTintTargetTests
     [Fact]
     public void SetEnabledToTheCurrentValueChangesNothing()
     {
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
         var current = ClaudeDesktopOverlay.Enabled;
-        ClaudeBuddySettings.TintActiveWindow = !current;
+        OrbweaverSettings.TintActiveWindow = !current;
 
         ClaudeDesktopOverlay.SetEnabled(current);
 
         // Still the value the test put there, because SetEnabled returned before
         // writing anything.
-        Assert.Equal(!current, ClaudeBuddySettings.TintActiveWindow);
+        Assert.Equal(!current, OrbweaverSettings.TintActiveWindow);
         Assert.Equal(current, ClaudeDesktopOverlay.Enabled);
     }
 
     [Fact]
     public void SetEnabledFalseHidesEverythingWithoutNeedingAWindow()
     {
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
         var original = ClaudeDesktopOverlay.Enabled;
         try
         {

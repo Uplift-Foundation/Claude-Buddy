@@ -5,7 +5,7 @@ using Avalonia.Interactivity;
 using Avalonia.Threading;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The chat panel's answer for a session it cannot type into.
 //

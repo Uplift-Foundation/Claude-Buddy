@@ -1,7 +1,7 @@
 using System.Text.Json;
 using Xunit;
 
-namespace ClaudeBuddy.Tests
+namespace Orbweaver.Tests
 {
     // How a gateway orb learns that its session is working.
     //
@@ -43,10 +43,10 @@ namespace ClaudeBuddy.Tests
         // not because of what the gateway said.
         private static OpenClawSessions.Session? Listed(string key, int minutesAgo = 1)
         {
-            ClaudeBuddySettings.OpenClawEnabled = true;
-            ClaudeBuddySettings.OpenClawHeartbeatMode = ClusterMode.WithChats;
-            ClaudeBuddySettings.OpenClawActiveWithinMinutes =
-                ClaudeBuddySettings.OpenClawActiveWithinAll;
+            OrbweaverSettings.OpenClawEnabled = true;
+            OrbweaverSettings.OpenClawHeartbeatMode = ClusterMode.WithChats;
+            OrbweaverSettings.OpenClawActiveWithinMinutes =
+                OrbweaverSettings.OpenClawActiveWithinAll;
 
             var at = new DateTimeOffset(DateTime.UtcNow.AddMinutes(-minutesAgo)).ToUnixTimeMilliseconds();
             var json = "{\"sessions\":[{\"key\":" + JsonSerializer.Serialize(key)
@@ -203,9 +203,9 @@ namespace ClaudeBuddy.Tests
         [Fact]
         public void ASessionsChangedEventDoesNotKeepAStaleSessionRecent()
         {
-            ClaudeBuddySettings.OpenClawEnabled = true;
-            ClaudeBuddySettings.OpenClawHeartbeatMode = ClusterMode.WithChats;
-            ClaudeBuddySettings.OpenClawActiveWithinMinutes = 5;
+            OrbweaverSettings.OpenClawEnabled = true;
+            OrbweaverSettings.OpenClawHeartbeatMode = ClusterMode.WithChats;
+            OrbweaverSettings.OpenClawActiveWithinMinutes = 5;
 
             var key = Key();
             Fire("sessions.changed", key);
@@ -259,9 +259,9 @@ namespace ClaudeBuddy.Tests
 
             Fire("agent", key);
 
-            ClaudeBuddySettings.OpenClawEnabled = true;
-            ClaudeBuddySettings.OpenClawHeartbeatMode = ClusterMode.WithChats;
-            ClaudeBuddySettings.OpenClawActiveWithinMinutes = 5;
+            OrbweaverSettings.OpenClawEnabled = true;
+            OrbweaverSettings.OpenClawHeartbeatMode = ClusterMode.WithChats;
+            OrbweaverSettings.OpenClawActiveWithinMinutes = 5;
 
             // The listing says an hour ago. The event says a moment ago.
             var stale = new DateTimeOffset(DateTime.UtcNow.AddHours(-1)).ToUnixTimeMilliseconds();
@@ -278,9 +278,9 @@ namespace ClaudeBuddy.Tests
         [Fact]
         public void ASessionWithNoWatchedActivityIsStillFiltered()
         {
-            ClaudeBuddySettings.OpenClawEnabled = true;
-            ClaudeBuddySettings.OpenClawHeartbeatMode = ClusterMode.WithChats;
-            ClaudeBuddySettings.OpenClawActiveWithinMinutes = 5;
+            OrbweaverSettings.OpenClawEnabled = true;
+            OrbweaverSettings.OpenClawHeartbeatMode = ClusterMode.WithChats;
+            OrbweaverSettings.OpenClawActiveWithinMinutes = 5;
 
             var key = Key();
             var stale = new DateTimeOffset(DateTime.UtcNow.AddHours(-1)).ToUnixTimeMilliseconds();
@@ -302,9 +302,9 @@ namespace ClaudeBuddy.Tests
 
             Fire("cron", key, action: "finished");
 
-            ClaudeBuddySettings.OpenClawEnabled = true;
-            ClaudeBuddySettings.OpenClawHeartbeatMode = ClusterMode.WithChats;
-            ClaudeBuddySettings.OpenClawActiveWithinMinutes = 5;
+            OrbweaverSettings.OpenClawEnabled = true;
+            OrbweaverSettings.OpenClawHeartbeatMode = ClusterMode.WithChats;
+            OrbweaverSettings.OpenClawActiveWithinMinutes = 5;
 
             var stale = new DateTimeOffset(DateTime.UtcNow.AddHours(-1)).ToUnixTimeMilliseconds();
             var json = "{\"sessions\":[{\"key\":" + JsonSerializer.Serialize(key)
@@ -326,9 +326,9 @@ namespace ClaudeBuddy.Tests
 
             Fire("task", key, action: "upserted");
 
-            ClaudeBuddySettings.OpenClawEnabled = true;
-            ClaudeBuddySettings.OpenClawHeartbeatMode = ClusterMode.WithChats;
-            ClaudeBuddySettings.OpenClawActiveWithinMinutes = 5;
+            OrbweaverSettings.OpenClawEnabled = true;
+            OrbweaverSettings.OpenClawHeartbeatMode = ClusterMode.WithChats;
+            OrbweaverSettings.OpenClawActiveWithinMinutes = 5;
 
             var stale = new DateTimeOffset(DateTime.UtcNow.AddHours(-1)).ToUnixTimeMilliseconds();
             var json = "{\"sessions\":[{\"key\":" + JsonSerializer.Serialize(key)
@@ -524,9 +524,9 @@ namespace ClaudeBuddy.Tests
                 Assert.All(keys, k => Assert.Equal("idle", OpenClawSessions.StateFor(k, at.AddSeconds(row.T))));
             }
 
-            ClaudeBuddySettings.OpenClawEnabled = true;
-            ClaudeBuddySettings.OpenClawHeartbeatMode = ClusterMode.WithChats;
-            ClaudeBuddySettings.OpenClawActiveWithinMinutes = 5;
+            OrbweaverSettings.OpenClawEnabled = true;
+            OrbweaverSettings.OpenClawHeartbeatMode = ClusterMode.WithChats;
+            OrbweaverSettings.OpenClawActiveWithinMinutes = 5;
 
             var stale = new DateTimeOffset(DateTime.UtcNow.AddHours(-1)).ToUnixTimeMilliseconds();
             var json = "{\"sessions\":[" + string.Join(",", keys.Select(k =>
@@ -589,24 +589,24 @@ namespace ClaudeBuddy.Tests
         [Fact]
         public void RestartClearsAMidRunSessionSoItDoesNotStayPinnedAcrossAReconnect()
         {
-            var was = ClaudeBuddySettings.OpenClawEnabled;
-            var host = ClaudeBuddySettings.OpenClawHost;
+            var was = OrbweaverSettings.OpenClawEnabled;
+            var host = OrbweaverSettings.OpenClawHost;
             try
             {
                 var key = Key();
                 Fire("agent", key);
                 Assert.Equal("generating", Listed(key)!.State);
 
-                ClaudeBuddySettings.OpenClawEnabled = false;
-                ClaudeBuddySettings.OpenClawHost = "";
+                OrbweaverSettings.OpenClawEnabled = false;
+                OrbweaverSettings.OpenClawHost = "";
                 OpenClawSessions.Restart();
 
                 Assert.Equal("idle", Listed(key)!.State);
             }
             finally
             {
-                ClaudeBuddySettings.OpenClawEnabled = was;
-                ClaudeBuddySettings.OpenClawHost = host;
+                OrbweaverSettings.OpenClawEnabled = was;
+                OrbweaverSettings.OpenClawHost = host;
             }
         }
 

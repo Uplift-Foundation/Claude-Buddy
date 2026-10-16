@@ -7,7 +7,7 @@ using Avalonia.Threading;
 using SkiaSharp;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // What a CLAUDE.md persona actually does to the two surfaces a user looks at:
 // the orb, and the header of the chat panel that opens under it.
@@ -22,7 +22,7 @@ namespace ClaudeBuddy.Tests;
 // is why OrbAvatarTests exists at all, and this is the same seam one registry
 // over.
 //
-// [Collection("Settings")] because half of these read ClaudeBuddySettings while
+// [Collection("Settings")] because half of these read OrbweaverSettings while
 // constructing a window (OrbWindow picks up a colour in a field initializer)
 // and TwoLetterGlyphs is a setting these tests set outright.
 [Collection("Settings")]
@@ -31,7 +31,7 @@ public class LocalPersonaUiTests : IDisposable
     private readonly List<string> _panelsToClean = new();
     private readonly List<string> _avatarKeysToClean = new();
     private readonly List<string> _dirsToClean = new();
-    private readonly bool _twoLetterWas = ClaudeBuddySettings.TwoLetterGlyphs;
+    private readonly bool _twoLetterWas = OrbweaverSettings.TwoLetterGlyphs;
 
     public void Dispose()
     {
@@ -42,7 +42,7 @@ public class LocalPersonaUiTests : IDisposable
         // table, so a persona left behind is a persona some later class in this
         // assembly resolves for a session it never gave one to.
         LocalPersonas.SetForTests(new Dictionary<string, LocalPersona.Persona>());
-        ClaudeBuddySettings.TwoLetterGlyphs = _twoLetterWas;
+        OrbweaverSettings.TwoLetterGlyphs = _twoLetterWas;
 
         // Process-wide for the same reason the persona registry is, and with
         // a sharper consequence: left set, a later class materialises a blend
@@ -145,7 +145,7 @@ public class LocalPersonaUiTests : IDisposable
     [AvaloniaFact]
     public void APersonaNamesTheOrbAndTheOrbWearsItsLetters()
     {
-        ClaudeBuddySettings.TwoLetterGlyphs = true;
+        OrbweaverSettings.TwoLetterGlyphs = true;
 
         var sessionId = PublishPersona(Persona());
         var orb = NewOrb(sessionId);
@@ -164,7 +164,7 @@ public class LocalPersonaUiTests : IDisposable
     [AvaloniaFact]
     public void APersonaBeatsTheTitleAndAnAgentNameBeatsThePersona()
     {
-        ClaudeBuddySettings.TwoLetterGlyphs = true;
+        OrbweaverSettings.TwoLetterGlyphs = true;
 
         var sessionId = PublishPersona(Persona());
 
@@ -203,7 +203,7 @@ public class LocalPersonaUiTests : IDisposable
     [AvaloniaFact]
     public void ASessionWithNoPersonaKeepsTheTitleItAlwaysHad()
     {
-        ClaudeBuddySettings.TwoLetterGlyphs = true;
+        OrbweaverSettings.TwoLetterGlyphs = true;
 
         var orb = NewOrb("local-none-" + Guid.NewGuid());
         orb.UpdateFrom(Local(title: "Ticket Triage"));
@@ -237,7 +237,7 @@ public class LocalPersonaUiTests : IDisposable
     [AvaloniaFact]
     public void APortraitTooBigToReadLeavesTheOrbItsLetters()
     {
-        ClaudeBuddySettings.TwoLetterGlyphs = true;
+        OrbweaverSettings.TwoLetterGlyphs = true;
 
         // Was a literal 9 MiB, which cleared CB-135's 8 MiB cap but not
         // CB-146's 16 MiB one — this test kept passing regardless, since it
@@ -266,7 +266,7 @@ public class LocalPersonaUiTests : IDisposable
     [AvaloniaFact]
     public void APortraitThatHasGoneAwayLeavesTheOrbItsLetters()
     {
-        ClaudeBuddySettings.TwoLetterGlyphs = true;
+        OrbweaverSettings.TwoLetterGlyphs = true;
 
         var portrait = PortraitFile();
         File.Delete(portrait);
@@ -287,7 +287,7 @@ public class LocalPersonaUiTests : IDisposable
     [AvaloniaFact]
     public void AGatewaySessionIgnoresALocalPersonaEntirely()
     {
-        ClaudeBuddySettings.TwoLetterGlyphs = true;
+        OrbweaverSettings.TwoLetterGlyphs = true;
 
         var sessionId = "openclaw:agent:nova" + Guid.NewGuid().ToString("N")[..8] + ":main";
         LocalPersonas.SetForTests(
@@ -391,7 +391,7 @@ public class LocalPersonaUiTests : IDisposable
     [AvaloniaFact]
     public void ANamedPersonaWithNoPictureBorrowsTheOrbsCircle()
     {
-        ClaudeBuddySettings.TwoLetterGlyphs = true;
+        OrbweaverSettings.TwoLetterGlyphs = true;
 
         var sessionId = PublishPersona(Persona());
         _panelsToClean.Add(sessionId);
@@ -429,7 +429,7 @@ public class LocalPersonaUiTests : IDisposable
     [AvaloniaFact]
     public void ATeamMembersOrbKeepsItsOwnLettersRatherThanTheProjectsFace()
     {
-        ClaudeBuddySettings.TwoLetterGlyphs = true;
+        OrbweaverSettings.TwoLetterGlyphs = true;
 
         var project = Path.Combine(Path.GetTempPath(), "cb-persona-member-ui-" + Guid.NewGuid());
         var claudeDir = Path.Combine(project, ".claude");
@@ -480,8 +480,8 @@ public class LocalPersonaUiTests : IDisposable
     [AvaloniaFact]
     public void ARealScanGivesAnOrbThePersonaFromItsProjectsClaudeMd()
     {
-        ClaudeBuddySettings.TwoLetterGlyphs = true;
-        ClaudeBuddySettings.ClaudeCodeEnabled = true;
+        OrbweaverSettings.TwoLetterGlyphs = true;
+        OrbweaverSettings.ClaudeCodeEnabled = true;
 
         var project = Path.Combine(Path.GetTempPath(), "cb-persona-scan-ui-" + Guid.NewGuid());
         var statusDir = Path.Combine(Path.GetTempPath(), "cb-persona-scan-dir-" + Guid.NewGuid());
@@ -539,8 +539,8 @@ public class LocalPersonaUiTests : IDisposable
     [AvaloniaFact]
     public void ARealScanWithASpaceInTheProjectDirectoryReadsThePersonaOverTheOrdinaryNameBullet()
     {
-        ClaudeBuddySettings.TwoLetterGlyphs = true;
-        ClaudeBuddySettings.ClaudeCodeEnabled = true;
+        OrbweaverSettings.TwoLetterGlyphs = true;
+        OrbweaverSettings.ClaudeCodeEnabled = true;
 
         var project = Path.Combine(Path.GetTempPath(), "cb persona ui " + Guid.NewGuid());
         var personaDir = Path.Combine(project, ".claude", "persona");
@@ -629,8 +629,8 @@ public class LocalPersonaUiTests : IDisposable
     [AvaloniaFact]
     public void ARealScanReadsAProfileGenEmbeddedBlockAllTheWayToTheOrb()
     {
-        ClaudeBuddySettings.TwoLetterGlyphs = true;
-        ClaudeBuddySettings.ClaudeCodeEnabled = true;
+        OrbweaverSettings.TwoLetterGlyphs = true;
+        OrbweaverSettings.ClaudeCodeEnabled = true;
 
         var project = Path.Combine(Path.GetTempPath(), "cb-persona-embedded-ui-" + Guid.NewGuid());
         var pictures = Path.Combine(project, "profiles", "aurora-vance");
@@ -770,8 +770,8 @@ public class LocalPersonaUiTests : IDisposable
     [AvaloniaFact]
     public void ARealScanIgnoresTheSameYamlBlockWhenNothingMarksItAsAPersona()
     {
-        ClaudeBuddySettings.TwoLetterGlyphs = true;
-        ClaudeBuddySettings.ClaudeCodeEnabled = true;
+        OrbweaverSettings.TwoLetterGlyphs = true;
+        OrbweaverSettings.ClaudeCodeEnabled = true;
 
         var project = Path.Combine(Path.GetTempPath(), "cb-persona-unmarked-ui-" + Guid.NewGuid());
         var pictures = Path.Combine(project, "profiles", "aurora-vance");
@@ -842,8 +842,8 @@ public class LocalPersonaUiTests : IDisposable
     [AvaloniaFact]
     public void ARealScanWithNoPersonaFileLeavesTheOrbItsFolderLetters()
     {
-        ClaudeBuddySettings.TwoLetterGlyphs = true;
-        ClaudeBuddySettings.ClaudeCodeEnabled = true;
+        OrbweaverSettings.TwoLetterGlyphs = true;
+        OrbweaverSettings.ClaudeCodeEnabled = true;
 
         var project = Path.Combine(Path.GetTempPath(), "cb persona ui none " + Guid.NewGuid());
         var statusDir = Path.Combine(Path.GetTempPath(), "cb-persona-scan-none-dir-" + Guid.NewGuid());
@@ -907,8 +907,8 @@ public class LocalPersonaUiTests : IDisposable
     [AvaloniaFact]
     public void ARealScanReadsANameFromAnAttributeTableUnderAPersonaHeading()
     {
-        ClaudeBuddySettings.TwoLetterGlyphs = true;
-        ClaudeBuddySettings.ClaudeCodeEnabled = true;
+        OrbweaverSettings.TwoLetterGlyphs = true;
+        OrbweaverSettings.ClaudeCodeEnabled = true;
 
         var project = Path.Combine(Path.GetTempPath(), "cb-persona-table-" + Guid.NewGuid());
         var statusDir = Path.Combine(Path.GetTempPath(), "cb-persona-table-dir-" + Guid.NewGuid());
@@ -1004,8 +1004,8 @@ public class LocalPersonaUiTests : IDisposable
     [AvaloniaFact]
     public void ARealScanOverASchemaTableLeavesTheOrbItsFolderLetters()
     {
-        ClaudeBuddySettings.TwoLetterGlyphs = true;
-        ClaudeBuddySettings.ClaudeCodeEnabled = true;
+        OrbweaverSettings.TwoLetterGlyphs = true;
+        OrbweaverSettings.ClaudeCodeEnabled = true;
 
         var project = Path.Combine(Path.GetTempPath(), "cb-persona-schema-" + Guid.NewGuid());
         var statusDir = Path.Combine(Path.GetTempPath(), "cb-persona-schema-dir-" + Guid.NewGuid());
@@ -1077,8 +1077,8 @@ public class LocalPersonaUiTests : IDisposable
     [AvaloniaFact]
     public void ARealScanOverAPastedWorkflowLeavesTheOrbItsOwnLetters()
     {
-        ClaudeBuddySettings.TwoLetterGlyphs = true;
-        ClaudeBuddySettings.ClaudeCodeEnabled = true;
+        OrbweaverSettings.TwoLetterGlyphs = true;
+        OrbweaverSettings.ClaudeCodeEnabled = true;
 
         var project = Path.Combine(Path.GetTempPath(), "cb-persona-workflow-" + Guid.NewGuid());
         var statusDir = Path.Combine(Path.GetTempPath(), "cb-persona-workflow-dir-" + Guid.NewGuid());

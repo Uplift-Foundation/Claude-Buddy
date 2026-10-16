@@ -55,8 +55,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-VERSION="$(sed -n 's|.*<Version>\(.*\)</Version>.*|\1|p' ClaudeBuddy.csproj | head -1)"
-[[ -n "$VERSION" ]] || { echo "Could not read <Version> from ClaudeBuddy.csproj" >&2; exit 1; }
+VERSION="$(sed -n 's|.*<Version>\(.*\)</Version>.*|\1|p' Orbweaver.csproj | head -1)"
+[[ -n "$VERSION" ]] || { echo "Could not read <Version> from Orbweaver.csproj" >&2; exit 1; }
 
 SIGN_IDENTITY="${MACOS_SIGNING_IDENTITY:-}"
 APP="$DIST/$APP_NAME.app"
@@ -181,6 +181,13 @@ your settings over. If Claude Buddy was in your Login Items, add $APP_NAME
 instead (System Settings > General > Login Items). If click-to-focus or
 anything on your LAN stops working afterwards, re-grant Automation and Local
 Network for $APP_NAME in System Settings > Privacy & Security.
+
+If "Serve on launch" was on, the crash keep-alive LaunchAgent still names the
+old program inside the app, which the drag replaced. Running
+"Install Hooks.command" again points it at the new one; if you skip that,
+$APP_NAME does it itself the first time it starts, and says so in
+~/Library/Logs/Orbweaver/migration.log. Either way the keep-alive covers the
+copy launchd starts, so it is fully back after your next login.
 
 Source, issues and docs: https://github.com/Uplift-Foundation/Claude-Buddy
 MIT licensed.

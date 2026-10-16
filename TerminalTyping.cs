@@ -1,6 +1,6 @@
 using System;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // How a line of text gets into a session that is already running.
     //

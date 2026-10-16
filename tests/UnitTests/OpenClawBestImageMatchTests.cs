@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 // Which of a freshly-fetched chat.history page is the picture a live "agent"
 // event was talking about, when nothing in the live event ties back to a

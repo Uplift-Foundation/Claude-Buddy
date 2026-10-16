@@ -1,6 +1,6 @@
 using Avalonia;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // How much room an arrow between two orbs needs, on its own so that both
     // the thing that draws arrows and the thing that positions orbs can agree

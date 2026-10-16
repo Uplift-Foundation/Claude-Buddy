@@ -1,7 +1,7 @@
 using Avalonia.Headless.XUnit;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The speak button's three branches (cancel an ongoing read, read a gateway
 // agent's transcript over the wire, read a local session's own transcript
@@ -94,7 +94,7 @@ public class OrbWindowSpeakTests
     [AvaloniaFact]
     public void ClickingAGatewayOrbFiresTheRemoteSpeakPathWithoutThrowing()
     {
-        var wasEnabled = ClaudeBuddySettings.OpenClawEnabled;
+        var wasEnabled = OrbweaverSettings.OpenClawEnabled;
         try
         {
             // Disabled explicitly rather than assumed: this means
@@ -102,7 +102,7 @@ public class OrbWindowSpeakTests
             // immediately and SpeakRemoteAsync's fire-and-forget task
             // completes without ever posting to the dispatcher — the
             // "nothing to say" half of that method.
-            ClaudeBuddySettings.OpenClawEnabled = false;
+            OrbweaverSettings.OpenClawEnabled = false;
 
             var orb = new OrbWindow(Guid.NewGuid().ToString());
             orb.UpdateFrom(new SessionStatus { Source = SessionSource.OpenClaw, State = "idle", Title = "Nova" });
@@ -111,7 +111,7 @@ public class OrbWindowSpeakTests
         }
         finally
         {
-            ClaudeBuddySettings.OpenClawEnabled = wasEnabled;
+            OrbweaverSettings.OpenClawEnabled = wasEnabled;
         }
     }
 
@@ -135,7 +135,7 @@ public class OrbWindowSpeakTests
     [AvaloniaFact]
     public async System.Threading.Tasks.Task SpeakRemoteAsyncFindsARealHistoryEntryAndSchedulesTheRead()
     {
-        var wasEnabled = ClaudeBuddySettings.OpenClawEnabled;
+        var wasEnabled = OrbweaverSettings.OpenClawEnabled;
         var agent = "nova" + Guid.NewGuid().ToString("N")[..8];
         var sessionId = $"openclaw:agent:{agent}:discord:channel:1";
 
@@ -144,7 +144,7 @@ public class OrbWindowSpeakTests
 
         try
         {
-            ClaudeBuddySettings.OpenClawEnabled = true;
+            OrbweaverSettings.OpenClawEnabled = true;
 
             var chat = (OpenClawChatSession)OpenClawSessions.ChatFor(sessionId, "Nova")!;
             chat.SetHistory(new[]
@@ -169,7 +169,7 @@ public class OrbWindowSpeakTests
         finally
         {
             SpeechRequest.UtteranceForTests = null;
-            ClaudeBuddySettings.OpenClawEnabled = wasEnabled;
+            OrbweaverSettings.OpenClawEnabled = wasEnabled;
         }
     }
 

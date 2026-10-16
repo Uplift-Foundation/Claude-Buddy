@@ -7,7 +7,7 @@ using System.Text.Json.Serialization;
 using Avalonia;
 using Avalonia.Threading;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     public class SessionStatus
     {
@@ -303,7 +303,7 @@ namespace ClaudeBuddy
         OpenClaw,
 
         // A session on another machine, served over the direct link by the
-        // Claude Buddy running there (see PeerSessions). It is not local
+        // Orbweaver running there (see PeerSessions). It is not local
         // and there is no terminal here to focus, which is the distinction
         // IsLocalCli draws and the only one the rest of the app cares about.
         RemoteControl,
@@ -321,8 +321,8 @@ namespace ClaudeBuddy
         ClaudeCloud
     }
 
-    // Watches %TEMP%\claude_buddy\<session_id>.txt (one per running Claude
-    // Code session, written by ClaudeBuddyHook.ps1) and keeps one OrbWindow
+    // Watches %TEMP%\orbweaver\<session_id>.txt (one per running Claude
+    // Code session, written by OrbweaverHook.ps1) and keeps one OrbWindow
     // per session in sync. A session is considered gone once its file is
     // deleted (SessionEnd hook, on graceful exit) or hasn't been touched in
     // StaleAfter (fallback for Ctrl+C and other ungraceful termination,
@@ -339,8 +339,8 @@ namespace ClaudeBuddy
         {
             get
             {
-                var minutes = ClaudeBuddySettings.OrbLifetimeMinutes;
-                return minutes == ClaudeBuddySettings.OrbLifetimeForever
+                var minutes = OrbweaverSettings.OrbLifetimeMinutes;
+                return minutes == OrbweaverSettings.OrbLifetimeForever
                     ? null
                     : TimeSpan.FromMinutes(minutes);
             }
@@ -424,8 +424,8 @@ namespace ClaudeBuddy
         // every future writer of either global remembers to join, and this is a
         // scan that no longer reads either.
         //
-        // Same pattern, and the same argument, as CLAUDE_BUDDY_SETTINGS_DIR and
-        // CLAUDE_BUDDY_PROFILE_ROOT.
+        // Same pattern, and the same argument, as ORBWEAVER_SETTINGS_DIR and
+        // ORBWEAVER_PROFILE_ROOT.
         private readonly Func<IReadOnlyList<string>> _userConfigDirs;
 
         public SessionManager()
@@ -624,7 +624,7 @@ namespace ClaudeBuddy
         //
         // Per manager rather than static, so a test that shortens it cannot
         // change what another test class running beside it does — the same
-        // hazard ClaudeBuddySettings' process-wide statics create for the UI
+        // hazard OrbweaverSettings' process-wide statics create for the UI
         // suites, and cheaper to avoid here than to serialise around.
         internal TimeSpan SweepGrace { get; set; } = TimeSpan.FromMinutes(10);
 
@@ -664,12 +664,12 @@ namespace ClaudeBuddy
 
         // Orbs can be hidden from the tray menu; sessions keep being tracked
         // either way, so the tray icon and its menu stay accurate.
-        public bool OrbsVisible { get; private set; } = ClaudeBuddySettings.ShowOrbs;
+        public bool OrbsVisible { get; private set; } = OrbweaverSettings.ShowOrbs;
 
         // The account orbs' own switch (CB-220), independent of OrbsVisible:
         // they can be hidden while the session orbs stay, and shown while the
         // session orbs are hidden. SetOrbsVisible still moves both.
-        public bool UsageOrbsVisible { get; private set; } = ClaudeBuddySettings.ShowUsageOrbs;
+        public bool UsageOrbsVisible { get; private set; } = OrbweaverSettings.ShowUsageOrbs;
 
         // For tests that need to put account orbs on screen without a real
         // usage poll behind them.
@@ -713,7 +713,7 @@ namespace ClaudeBuddy
         // folder: a marker is not a reason to resurrect it.
         internal void SyncAutoColorMarker()
         {
-            var wanted = ClaudeBuddySettings.AutoColorSessions;
+            var wanted = OrbweaverSettings.AutoColorSessions;
 
             SyncAutoColorMarkerIn(_statusDir, wanted);
             if (_legacyStatusDir is not null) SyncAutoColorMarkerIn(_legacyStatusDir, wanted);
@@ -775,8 +775,8 @@ namespace ClaudeBuddy
             {
                 if (_grokRefresh.Tick(
                         DateTimeOffset.UtcNow,
-                        ClaudeBuddySettings.GrokAccountUsageEnabled,
-                        ClaudeBuddySettings.GrokAutoRefreshEnabled))
+                        OrbweaverSettings.GrokAccountUsageEnabled,
+                        OrbweaverSettings.GrokAutoRefreshEnabled))
                 {
                     Task.Run(GrokUsageRefresher.Refresh);
                 }
@@ -866,9 +866,9 @@ namespace ClaudeBuddy
         // switches over files that are being written regardless.
         internal static bool EnabledFor(SessionSource source) => source switch
         {
-            SessionSource.Codex => ClaudeBuddySettings.CodexEnabled,
-            SessionSource.Grok => ClaudeBuddySettings.GrokEnabled,
-            SessionSource.ClaudeCode => ClaudeBuddySettings.ClaudeCodeEnabled,
+            SessionSource.Codex => OrbweaverSettings.CodexEnabled,
+            SessionSource.Grok => OrbweaverSettings.GrokEnabled,
+            SessionSource.ClaudeCode => OrbweaverSettings.ClaudeCodeEnabled,
             _ => true
         };
 
@@ -3294,7 +3294,7 @@ namespace ClaudeBuddy
                 // that divides them.
                 var rest = sessionId.StartsWith("rc:", StringComparison.Ordinal) ? sessionId[3..] : "";
                 var split = rest.IndexOf(':');
-                var account = split > 0 ? rest[..split] : ClaudeBuddySettings.DefaultRemoteControlProfileDir;
+                var account = split > 0 ? rest[..split] : OrbweaverSettings.DefaultRemoteControlProfileDir;
                 var remoteName = split > 0 ? rest[(split + 1)..] : status.Title;
 
                 var remote = new RemoteControlChatSession(sessionId, account, remoteName);
@@ -3490,7 +3490,7 @@ namespace ClaudeBuddy
         // a false sentence in the one place that explains why the box went.
         private static void PushCloudStatus(ClaudeCloudChatSession chat, string sessionId)
         {
-            if (!ClaudeBuddySettings.ClaudeCloudEnabled) return;
+            if (!OrbweaverSettings.ClaudeCloudEnabled) return;
 
             chat.UpdateStatus(ClaudeCloudSessions.Snapshot()
                 .FirstOrDefault(s => "cloud:" + s.Id == sessionId));
@@ -3662,7 +3662,7 @@ namespace ClaudeBuddy
 
             if (OrbsVisible == visible) return;
             OrbsVisible = visible;
-            ClaudeBuddySettings.ShowOrbs = visible;
+            OrbweaverSettings.ShowOrbs = visible;
 
             foreach (var window in _windows.Values)
             {
@@ -3687,7 +3687,7 @@ namespace ClaudeBuddy
         {
             if (UsageOrbsVisible == visible) return;
             UsageOrbsVisible = visible;
-            ClaudeBuddySettings.ShowUsageOrbs = visible;
+            OrbweaverSettings.ShowUsageOrbs = visible;
             _accountOrbs.SetVisible(visible);
             UpdateTray();
         }
@@ -4099,7 +4099,7 @@ namespace ClaudeBuddy
 
             // QA (CB-167): an empty PositionKeyFor is a deliberate "no key"
             // — a local session with no cwd, per PositionKeyFor's own early
-            // return — and the accessors on ClaudeBuddySettings already read
+            // return — and the accessors on OrbweaverSettings already read
             // an empty key as "no override, don't bother looking." Appending
             // the agent name onto that empty string used to turn it into
             // "\n<agent>", a real, non-empty key with no cwd in it at all —
@@ -4140,7 +4140,7 @@ namespace ClaudeBuddy
                 return;
             }
 
-            var saved = ClaudeBuddySettings.OrbPositionFor(key);
+            var saved = OrbweaverSettings.OrbPositionFor(key);
 
             // Nothing under the name, so try the directory on its own. That
             // covers a position saved before names were part of the key, and a
@@ -4158,7 +4158,7 @@ namespace ClaudeBuddy
                 var directory = DirectoryKeyFor(status);
                 if (directory.Length > 0 && directory != key)
                 {
-                    saved = ClaudeBuddySettings.OrbPositionFor(directory);
+                    saved = OrbweaverSettings.OrbPositionFor(directory);
                 }
             }
 
@@ -4194,7 +4194,7 @@ namespace ClaudeBuddy
             if (string.IsNullOrEmpty(key)) return;
             if (ChatPanel.IsPinnedFor(key)) return;
 
-            var saved = ClaudeBuddySettings.PinnedChatPanelPositionFor(key);
+            var saved = OrbweaverSettings.PinnedChatPanelPositionFor(key);
             if (saved is null) return;
 
             var point = new PixelPoint(saved.X, saved.Y);
@@ -4278,7 +4278,7 @@ namespace ClaudeBuddy
             if (string.IsNullOrEmpty(window.PositionKey)) return;
 
             var position = window.Position;
-            ClaudeBuddySettings.SetOrbPosition(window.PositionKey, position.X, position.Y, window.OrbSize);
+            OrbweaverSettings.SetOrbPosition(window.PositionKey, position.X, position.Y, window.OrbSize);
         }
 
         // CB-198: a saved spot is a top-left corner, and the same *centre* at a
@@ -4287,7 +4287,7 @@ namespace ClaudeBuddy
         // orb comes back centred where it was left. No saved size means it was
         // saved before orbs had one, which is 1.0.
         internal static PixelPoint RestoredTopLeft(
-            ClaudeBuddySettings.OrbPlacement saved, double currentSize, double scaling)
+            OrbweaverSettings.OrbPlacement saved, double currentSize, double scaling)
         {
             var shift = (OrbSizing.WindowDip(saved.Size ?? OrbSizing.Default) - OrbSizing.WindowDip(currentSize))
                         / 2 * scaling;
@@ -4302,7 +4302,7 @@ namespace ClaudeBuddy
             window.Unpin();
             if (!string.IsNullOrEmpty(window.PositionKey))
             {
-                ClaudeBuddySettings.ClearOrbPosition(window.PositionKey);
+                OrbweaverSettings.ClearOrbPosition(window.PositionKey);
             }
 
             ReflowPositions();
@@ -4706,12 +4706,12 @@ namespace ClaudeBuddy
             var layout = new OrbArrangement.Layout(
                 work,
                 screen?.Scaling ?? 1.0,
-                ClaudeBuddySettings.ArrangeShape,
-                ClaudeBuddySettings.ArrangeSpacing,
+                OrbweaverSettings.ArrangeShape,
+                OrbweaverSettings.ArrangeSpacing,
                 anchor);
 
-            var heartbeats = ClaudeBuddySettings.OpenClawHeartbeatMode;
-            var crons = ClaudeBuddySettings.OpenClawCronMode;
+            var heartbeats = OrbweaverSettings.OpenClawHeartbeatMode;
+            var crons = OrbweaverSettings.OpenClawCronMode;
 
             var groupOf = new int[allOrbs.Count];
             for (var i = 0; i < allOrbs.Count; i++)
@@ -4748,7 +4748,7 @@ namespace ClaudeBuddy
             // anchor exists to do.
             var landed = OrbArrangement.LandedCenter(placed, allOrbs.Count, leadOf, groupOf, shapes, layout, sizeOf);
             if (landed != anchor)
-                ClaudeBuddySettings.ArrangeAnchor = new ClaudeBuddySettings.OrbPlacement(landed.X, landed.Y);
+                OrbweaverSettings.ArrangeAnchor = new OrbweaverSettings.OrbPlacement(landed.X, landed.Y);
 
             return allOrbs.Select((orb, i) => (orb, placed[i])).ToList();
         }
@@ -4760,9 +4760,9 @@ namespace ClaudeBuddy
         // back in with the chats, which is a setting that silently does nothing.
         private static string[] Shapes() => new[]
         {
-            ClaudeBuddySettings.ArrangeShape,
-            ClaudeBuddySettings.OpenClawHeartbeatShape,
-            ClaudeBuddySettings.OpenClawCronShape
+            OrbweaverSettings.ArrangeShape,
+            OrbweaverSettings.OpenClawHeartbeatShape,
+            OrbweaverSettings.OpenClawCronShape
         };
 
         // Where the shape gets drawn. The first time ever, that's the middle
@@ -4773,10 +4773,10 @@ namespace ClaudeBuddy
         // the user dragging the whole shape somewhere else.
         internal static PixelPoint ArrangementAnchor(PixelRect work)
         {
-            if (ClaudeBuddySettings.ArrangeAnchor is { } saved) return new PixelPoint(saved.X, saved.Y);
+            if (OrbweaverSettings.ArrangeAnchor is { } saved) return new PixelPoint(saved.X, saved.Y);
 
             var center = new PixelPoint(work.X + work.Width / 2, work.Y + work.Height / 2);
-            ClaudeBuddySettings.ArrangeAnchor = new ClaudeBuddySettings.OrbPlacement(center.X, center.Y);
+            OrbweaverSettings.ArrangeAnchor = new OrbweaverSettings.OrbPlacement(center.X, center.Y);
             return center;
         }
 
@@ -4793,9 +4793,9 @@ namespace ClaudeBuddy
         public void ShiftArrangementAnchor(int dx, int dy)
         {
             if (dx == 0 && dy == 0) return;
-            if (ClaudeBuddySettings.ArrangeAnchor is not { } anchor) return;
+            if (OrbweaverSettings.ArrangeAnchor is not { } anchor) return;
 
-            ClaudeBuddySettings.ArrangeAnchor = new ClaudeBuddySettings.OrbPlacement(anchor.X + dx, anchor.Y + dy);
+            OrbweaverSettings.ArrangeAnchor = new OrbweaverSettings.OrbPlacement(anchor.X + dx, anchor.Y + dy);
         }
 
         private void RestoreFromPattern()

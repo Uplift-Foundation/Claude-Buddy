@@ -3,7 +3,7 @@ using Avalonia.Media;
 using SkiaSharp;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Tinting a profile's dock icon.
 //

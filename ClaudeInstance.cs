@@ -1,4 +1,4 @@
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Shared shape between MacOSProcessScan and WindowsProcessScan, so
     // ClaudeDesktopManager.MapInstances works from either without caring which

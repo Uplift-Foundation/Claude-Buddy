@@ -1,4 +1,4 @@
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // The letters an orb wears, and the letters the chat panel's header wears
     // beside it. Pure: no window, no settings, no colours — which is the whole

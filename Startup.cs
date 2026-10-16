@@ -1,7 +1,7 @@
 using System;
 using Avalonia.Threading;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // The order the process starts in, as something other than the inside of
     // Main.
@@ -136,6 +136,16 @@ namespace ClaudeBuddy
         // tray notice) can be the first thing to touch the dispatcher. It is
         // still ahead of `serveOnLaunch` and well ahead of `startUi`.
         //
+        // `repairKeepAlive` (CB-256) comes straight after `retireLegacy`, and
+        // the order between the two is the point: the keep-alive plist can
+        // name the legacy Claude Buddy.app, which is stale the moment that
+        // step trashes it, and running second lets one launch catch both.
+        // After the single-instance claim, because the script it runs loads
+        // the LaunchAgent and launchd starts a copy at once — which must find
+        // this one holding the mutex and exit 0, not race it for the data
+        // folder. Before `serveOnLaunch`, like the other retirement steps:
+        // nothing it does needs the network or a screen.
+        //
         // Passed as delegates rather than called directly because every one of
         // them is unrunnable in a test — a real relay, a real screen-lock query,
         // a real named mutex, and a lifetime that owns the process until it
@@ -147,6 +157,7 @@ namespace ClaudeBuddy
             Action migrateUserData,
             Action claimUiThread,
             Action retireLegacy,
+            Action repairKeepAlive,
             Action serveOnLaunch,
             Action waitForUnlock,
             Action startUi)
@@ -163,6 +174,7 @@ namespace ClaudeBuddy
             migrateUserData();
             claimUiThread();
             retireLegacy();
+            repairKeepAlive();
             serveOnLaunch();
             waitForUnlock();
             startUi();

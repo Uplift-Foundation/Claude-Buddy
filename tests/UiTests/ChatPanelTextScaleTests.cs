@@ -6,7 +6,7 @@ using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Cmd+ / Cmd- / Cmd+0 in the chat panel, driven as real key events and
 // asserted on the font sizes a user would actually be looking at.
@@ -29,7 +29,7 @@ public class ChatPanelTextScaleTests : IDisposable
         // The scale is a process-wide setting and this suite is the only one
         // that moves it. Left at 1.5, every font-size assertion in every other
         // ChatPanel class would be measuring this class's leftovers.
-        ClaudeBuddySettings.ChatTextScale = ChatZoom.Default;
+        OrbweaverSettings.ChatTextScale = ChatZoom.Default;
         ChatPanel.ReapplyTextScale();
 
         // Then let the panel actually re-measure at the restored size before
@@ -111,7 +111,7 @@ public class ChatPanelTextScaleTests : IDisposable
     [AvaloniaFact]
     public void CmdPlusGrowsTheConversationAndCmdMinusShrinksItBack()
     {
-        ClaudeBuddySettings.ChatTextScale = ChatZoom.Default;
+        OrbweaverSettings.ChatTextScale = ChatZoom.Default;
 
         var fake = NewFake(Reply("a reply worth reading"));
         ChatPanel.OpenFor(NewOrb(), fake);
@@ -125,17 +125,17 @@ public class ChatPanelTextScaleTests : IDisposable
 
         Assert.True(Press(panel, Key.OemPlus));
         Assert.Equal(11.5 * 1.15, SizeOf(panel, 0, "a reply worth reading"), 3);
-        Assert.Equal(1.15, ClaudeBuddySettings.ChatTextScale, 3);
+        Assert.Equal(1.15, OrbweaverSettings.ChatTextScale, 3);
 
         Assert.True(Press(panel, Key.OemMinus));
         Assert.Equal(11.5, SizeOf(panel, 0, "a reply worth reading"), 3);
-        Assert.Equal(ChatZoom.Default, ClaudeBuddySettings.ChatTextScale, 3);
+        Assert.Equal(ChatZoom.Default, OrbweaverSettings.ChatTextScale, 3);
     }
 
     [AvaloniaFact]
     public void CmdZeroPutsAnEnlargedPanelBackToTheShippedSize()
     {
-        ClaudeBuddySettings.ChatTextScale = 2.0;
+        OrbweaverSettings.ChatTextScale = 2.0;
 
         var fake = NewFake(Reply("back to normal"));
         ChatPanel.OpenFor(NewOrb(), fake);
@@ -154,7 +154,7 @@ public class ChatPanelTextScaleTests : IDisposable
     [AvaloniaFact]
     public void TheGestureStopsAtTheEndsOfTheLadderAndStaysHandled()
     {
-        ClaudeBuddySettings.ChatTextScale = ChatZoom.Default;
+        OrbweaverSettings.ChatTextScale = ChatZoom.Default;
 
         var fake = NewFake(Reply("as far as it goes"));
         ChatPanel.OpenFor(NewOrb(), fake);
@@ -163,7 +163,7 @@ public class ChatPanelTextScaleTests : IDisposable
         var panel = ChatPanelTestAccess.Instance!;
 
         for (var i = 0; i < 20; i++) Assert.True(Press(panel, Key.OemPlus));
-        Assert.Equal(ChatZoom.Max, ClaudeBuddySettings.ChatTextScale, 3);
+        Assert.Equal(ChatZoom.Max, OrbweaverSettings.ChatTextScale, 3);
         Assert.Equal(11.5 * ChatZoom.Max, SizeOf(panel, 0, "as far as it goes"), 3);
 
         // Still handled at the top of the ladder. If it weren't, the keystroke
@@ -172,13 +172,13 @@ public class ChatPanelTextScaleTests : IDisposable
         Assert.True(Press(panel, Key.OemPlus));
 
         for (var i = 0; i < 20; i++) Assert.True(Press(panel, Key.OemMinus));
-        Assert.Equal(ChatZoom.Min, ClaudeBuddySettings.ChatTextScale, 3);
+        Assert.Equal(ChatZoom.Min, OrbweaverSettings.ChatTextScale, 3);
     }
 
     [AvaloniaFact]
     public void AKeystrokeThatIsNotTheGestureIsLeftForWhateverWantedIt()
     {
-        ClaudeBuddySettings.ChatTextScale = ChatZoom.Default;
+        OrbweaverSettings.ChatTextScale = ChatZoom.Default;
 
         var fake = NewFake(Reply("untouched"));
         ChatPanel.OpenFor(NewOrb(), fake);
@@ -190,7 +190,7 @@ public class ChatPanelTextScaleTests : IDisposable
 
         // A bare "=" is a character someone is typing, not a zoom.
         Assert.False(Press(panel, Key.OemPlus, KeyModifiers.None));
-        Assert.Equal(ChatZoom.Default, ClaudeBuddySettings.ChatTextScale, 3);
+        Assert.Equal(ChatZoom.Default, OrbweaverSettings.ChatTextScale, 3);
         Assert.Equal(11.5, SizeOf(panel, 0, "untouched"), 3);
     }
 
@@ -199,7 +199,7 @@ public class ChatPanelTextScaleTests : IDisposable
     [AvaloniaFact]
     public void EveryPartOfAConversationGrowsTogether()
     {
-        ClaudeBuddySettings.ChatTextScale = ChatZoom.Default;
+        OrbweaverSettings.ChatTextScale = ChatZoom.Default;
 
         var fake = NewFake(
             Reply("# a heading\n\nsome prose\n\n```\nfenced code\n```"),
@@ -240,7 +240,7 @@ public class ChatPanelTextScaleTests : IDisposable
     [AvaloniaFact]
     public void TheComposerGrowsWithTheConversationAndSoDoesItsBox()
     {
-        ClaudeBuddySettings.ChatTextScale = ChatZoom.Default;
+        OrbweaverSettings.ChatTextScale = ChatZoom.Default;
 
         var fake = NewFake(Reply("typing room"));
         ChatPanel.OpenFor(NewOrb(), fake);
@@ -266,7 +266,7 @@ public class ChatPanelTextScaleTests : IDisposable
     [AvaloniaFact]
     public void TheWindowsOwnChromeKeepsItsSize()
     {
-        ClaudeBuddySettings.ChatTextScale = ChatZoom.Default;
+        OrbweaverSettings.ChatTextScale = ChatZoom.Default;
 
         var fake = NewFake(Reply("chrome stays put"));
         ChatPanel.OpenFor(NewOrb(), fake);
@@ -290,7 +290,7 @@ public class ChatPanelTextScaleTests : IDisposable
     [AvaloniaFact]
     public void APermissionPromptGrowsToo()
     {
-        ClaudeBuddySettings.ChatTextScale = ChatZoom.Default;
+        OrbweaverSettings.ChatTextScale = ChatZoom.Default;
 
         var session = new PromptingSession();
         _toClean.Add(session.SessionId);
@@ -339,7 +339,7 @@ public class ChatPanelTextScaleTests : IDisposable
         // The reason the scale is a shared box rather than a value copied into
         // each row: copied, a transcript would fan out into as many sizes as
         // the user had pressed the key.
-        ClaudeBuddySettings.ChatTextScale = ChatZoom.Default;
+        OrbweaverSettings.ChatTextScale = ChatZoom.Default;
 
         var fake = NewFake(Reply("said before"));
         ChatPanel.OpenFor(NewOrb(), fake);
@@ -365,7 +365,7 @@ public class ChatPanelTextScaleTests : IDisposable
         // The setting's whole promise. Bind a second session over the first —
         // the panel is a singleton, so this is exactly what opening another
         // orb's chat does.
-        ClaudeBuddySettings.ChatTextScale = 1.5;
+        OrbweaverSettings.ChatTextScale = 1.5;
 
         var fake = NewFake(Reply("still large"));
         ChatPanel.OpenFor(NewOrb(), fake);
@@ -387,7 +387,7 @@ public class ChatPanelTextScaleTests : IDisposable
     [AvaloniaFact]
     public void ChangingTheSettingResizesAPanelThatIsAlreadyOpen()
     {
-        ClaudeBuddySettings.ChatTextScale = ChatZoom.Default;
+        OrbweaverSettings.ChatTextScale = ChatZoom.Default;
 
         var fake = NewFake(Reply("resized from settings"));
         ChatPanel.OpenFor(NewOrb(), fake);
@@ -397,7 +397,7 @@ public class ChatPanelTextScaleTests : IDisposable
         ChatPanel.ReapplyTextScale();
         Flush();
 
-        ClaudeBuddySettings.ChatTextScale = 1.75;
+        OrbweaverSettings.ChatTextScale = 1.75;
         ChatPanel.ReapplyTextScale();
         Flush();
 
@@ -412,7 +412,7 @@ public class ChatPanelTextScaleTests : IDisposable
         // way out of a slider drag.
         using var _ = ChatPanelTestAccess.WithNoPanel();
 
-        ClaudeBuddySettings.ChatTextScale = 1.3;
+        OrbweaverSettings.ChatTextScale = 1.3;
         ChatPanel.ReapplyTextScale();
     }
 

@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // What a session calls itself, read out of its own transcript, plus the two
 // rules in SessionManager that decide who gets asked and what is done with the

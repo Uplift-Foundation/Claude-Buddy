@@ -3,7 +3,7 @@ using System.Net.WebSockets;
 using System.Text.Json;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-170: what an OpenClaw orb's Interrupt and End rows actually put on the
 // wire, and what comes back to the row, over an in-memory socket.

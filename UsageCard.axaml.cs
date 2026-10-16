@@ -6,7 +6,7 @@ using Avalonia.Input;
 using Avalonia.Markup.Xaml;
 using Avalonia.Media;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // The detail behind one account's rings: two bars, sometimes a third, and
     // the reset times the rings cannot show.

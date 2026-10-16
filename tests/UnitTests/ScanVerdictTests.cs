@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The three rules that decide whether a status file becomes an orb:
 // SessionManager.JudgeLiveness, WantsAgentViewer and JudgeReachability.

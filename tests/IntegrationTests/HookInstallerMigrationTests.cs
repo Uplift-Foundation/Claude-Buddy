@@ -2,7 +2,7 @@ using System.Diagnostics;
 using System.Text.Json.Nodes;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-255 phase 2: every hook installer re-wires a machine from the pre-rename
 // ClaudeBuddyHook.{sh,ps1} to OrbweaverHook.{sh,ps1} in one pass -- strip every
@@ -287,8 +287,10 @@ public class HookInstallerMigrationTests
         // TestBootstrap points this at a scratch directory for the whole suite,
         // and an installer that sees it reads that directory and nothing else
         // (CB-258). These cases are about the *fallback* from the Orbweaver data
-        // dir to the pre-rename one, which only runs with the variable unset.
-        ["CLAUDE_BUDDY_SETTINGS_DIR"] = null,
+        // dir to the pre-rename one, which only runs with the variable unset —
+        // in both spellings, since the installer honours the old one too.
+        [BrandEnv.Name(BrandEnv.SettingsDir)] = null,
+        [BrandEnv.LegacyPrefix + BrandEnv.SettingsDir] = null,
     };
 
     private static Result RunPs(string shell, string script, Scratch s, params string[] args)
@@ -603,7 +605,8 @@ public class HookInstallerMigrationTests
             ["CLAUDE_CONFIG_DIR"] = null,
             // Unset for the reason WindowsEnv gives: with it set, the installer
             // never reaches the Orbweaver-then-ClaudeBuddy fallback under test.
-            ["CLAUDE_BUDDY_SETTINGS_DIR"] = null,
+            [BrandEnv.Name(BrandEnv.SettingsDir)] = null,
+            [BrandEnv.LegacyPrefix + BrandEnv.SettingsDir] = null,
         });
     }
 

@@ -1,4 +1,4 @@
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Which profile a `claude://` link belongs to.
     //
@@ -20,7 +20,7 @@ namespace ClaudeBuddy
     // and they try again. It reads as intermittent only because signing in to
     // Default itself works correctly.
     //
-    // The fix is to stop letting a bundle id decide. Claude Buddy claims both
+    // The fix is to stop letting a bundle id decide. Orbweaver claims both
     // schemes itself and forwards each URL to one specific instance, addressed
     // by its clone's *path* — which is unique per profile even though the id
     // is not. This file is the part of that with no AppKit in it: given what is

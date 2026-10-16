@@ -1,7 +1,7 @@
 using System;
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 // OpenClawSessions.Describe: the sentence a user reads when the gateway will not
 // connect.

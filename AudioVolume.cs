@@ -7,7 +7,7 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // CB-200: the two volume levels Buddy applies to the audio it makes — the
     // Speech level for spoken replies (TextToSpeech) and the Alert level for

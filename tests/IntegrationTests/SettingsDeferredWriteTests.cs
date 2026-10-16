@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The deferred write, and what happens when a write cannot happen at all.
 //
@@ -25,8 +25,8 @@ public class SettingsDeferredWriteTests
     {
         var dir = Path.Combine(Path.GetTempPath(), "cb-deferred-" + Guid.NewGuid());
         Directory.CreateDirectory(dir);
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
-        ClaudeBuddySettings.ReloadForTests();
+        Environment.SetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR", dir);
+        OrbweaverSettings.ReloadForTests();
         return dir;
     }
 
@@ -40,14 +40,14 @@ public class SettingsDeferredWriteTests
     {
         var dir = Stage();
 
-        ClaudeBuddySettings.IdleColor = "#123456";
+        OrbweaverSettings.IdleColor = "#123456";
 
         // Not on disk yet — see the note above. This is the assertion that says
         // the deferral really is a deferral rather than the immediate write the
         // catch's comment promises.
         Assert.Equal("", OnDisk(dir));
 
-        ClaudeBuddySettings.FlushPendingSave();
+        OrbweaverSettings.FlushPendingSave();
 
         Assert.Contains("123456", OnDisk(dir));
     }
@@ -60,13 +60,13 @@ public class SettingsDeferredWriteTests
     {
         var dir = Stage();
 
-        ClaudeBuddySettings.IdleColor = "#111111";
-        ClaudeBuddySettings.GeneratingColor = "#222222";
-        ClaudeBuddySettings.WaitingColor = "#333333";
+        OrbweaverSettings.IdleColor = "#111111";
+        OrbweaverSettings.GeneratingColor = "#222222";
+        OrbweaverSettings.WaitingColor = "#333333";
 
         Assert.Equal("", OnDisk(dir));
 
-        ClaudeBuddySettings.FlushPendingSave();
+        OrbweaverSettings.FlushPendingSave();
 
         var json = OnDisk(dir);
         Assert.Contains("111111", json);
@@ -82,12 +82,12 @@ public class SettingsDeferredWriteTests
     public void FlushingTwiceIsHarmless()
     {
         var dir = Stage();
-        ClaudeBuddySettings.IdleColor = "#123456";
+        OrbweaverSettings.IdleColor = "#123456";
 
-        ClaudeBuddySettings.FlushPendingSave();
+        OrbweaverSettings.FlushPendingSave();
         var after = OnDisk(dir);
 
-        ClaudeBuddySettings.FlushPendingSave();
+        OrbweaverSettings.FlushPendingSave();
 
         Assert.Equal(after, OnDisk(dir));
     }
@@ -97,7 +97,7 @@ public class SettingsDeferredWriteTests
     {
         Stage();
 
-        ClaudeBuddySettings.FlushPendingSave();
+        OrbweaverSettings.FlushPendingSave();
     }
 
     // A setting that does NOT defer is on disk the moment its setter returns.
@@ -108,7 +108,7 @@ public class SettingsDeferredWriteTests
     {
         var dir = Stage();
 
-        ClaudeBuddySettings.TwoLetterGlyphs = !ClaudeBuddySettings.TwoLetterGlyphs;
+        OrbweaverSettings.TwoLetterGlyphs = !OrbweaverSettings.TwoLetterGlyphs;
 
         Assert.NotEqual("", OnDisk(dir));
     }
@@ -131,10 +131,10 @@ public class SettingsDeferredWriteTests
         if (OperatingSystem.IsWindows())
         {
             Environment.SetEnvironmentVariable(
-                "CLAUDE_BUDDY_SETTINGS_DIR", @"C:\cb-tests\no:such|dir");
-            ClaudeBuddySettings.ReloadForTests();
+                "ORBWEAVER_SETTINGS_DIR", @"C:\cb-tests\no:such|dir");
+            OrbweaverSettings.ReloadForTests();
 
-            ClaudeBuddySettings.TwoLetterGlyphs = !ClaudeBuddySettings.TwoLetterGlyphs;
+            OrbweaverSettings.TwoLetterGlyphs = !OrbweaverSettings.TwoLetterGlyphs;
         }
         else
         {
@@ -142,7 +142,7 @@ public class SettingsDeferredWriteTests
             File.SetUnixFileMode(dir, UnixFileMode.None);
             try
             {
-                ClaudeBuddySettings.TwoLetterGlyphs = !ClaudeBuddySettings.TwoLetterGlyphs;
+                OrbweaverSettings.TwoLetterGlyphs = !OrbweaverSettings.TwoLetterGlyphs;
             }
             finally
             {

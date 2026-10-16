@@ -4,7 +4,7 @@ using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using SkiaSharp;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Agent pictures, decoded once and kept at the size an orb actually draws
     // them.

@@ -1,8 +1,8 @@
 using System.IO;
-using ClaudeBuddy;
+using Orbweaver;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // What the summariser is *run as*, rather than what it is asked.
 //

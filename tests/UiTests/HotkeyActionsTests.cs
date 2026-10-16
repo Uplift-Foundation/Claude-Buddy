@@ -3,7 +3,7 @@ using Avalonia.Headless.XUnit;
 using Avalonia.Threading;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // What a global hotkey does once the OS has delivered it — everything after
 // the native hook calls back, which is the whole feature except the key
@@ -18,7 +18,7 @@ namespace ClaudeBuddy.Tests;
 // for the font-cache reason NewChatWindowTests' header gives. Every test
 // clears the singleton instead, through OpenForTests.
 //
-// [Collection("Settings")]: the window reads ClaudeBuddySettings while being
+// [Collection("Settings")]: the window reads OrbweaverSettings while being
 // built, and OverrideFor reads the two hotkey settings directly.
 [Collection("Settings")]
 public class HotkeyActionsTests : IDisposable
@@ -31,8 +31,8 @@ public class HotkeyActionsTests : IDisposable
     {
         var dir = Path.Combine(Path.GetTempPath(), "cb-hotkey-actions-" + Guid.NewGuid());
         Directory.CreateDirectory(dir);
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
-        ClaudeBuddySettings.ReloadForTests();
+        Environment.SetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR", dir);
+        OrbweaverSettings.ReloadForTests();
 
         // No real CLI probe and no real session scan behind the window.
         NewChatAvailability.CurrentForTests = () => new[]
@@ -234,9 +234,9 @@ public class HotkeyActionsTests : IDisposable
         Assert.Null(HotkeyActions.OverrideFor(HotkeyAction.OpenNewChat));
         Assert.Null(HotkeyActions.OverrideFor(HotkeyAction.ToggleUsageOrbsVisible));
 
-        ClaudeBuddySettings.ToggleOrbsHotkey = "Ctrl+Shift+H";
-        ClaudeBuddySettings.NewChatHotkey = "Ctrl+Shift+N";
-        ClaudeBuddySettings.ToggleUsageOrbsHotkey = "Ctrl+Shift+U";
+        OrbweaverSettings.ToggleOrbsHotkey = "Ctrl+Shift+H";
+        OrbweaverSettings.NewChatHotkey = "Ctrl+Shift+N";
+        OrbweaverSettings.ToggleUsageOrbsHotkey = "Ctrl+Shift+U";
 
         Assert.Equal("Ctrl+Shift+H", HotkeyActions.OverrideFor(HotkeyAction.ToggleOrbsVisible));
         Assert.Equal("Ctrl+Shift+N", HotkeyActions.OverrideFor(HotkeyAction.OpenNewChat));
@@ -264,7 +264,7 @@ public class HotkeyActionsTests : IDisposable
         HotkeyLog.ResetForTests();
         try
         {
-            ClaudeBuddySettings.NewChatHotkey = "Alt+Ctrl+H";
+            OrbweaverSettings.NewChatHotkey = "Alt+Ctrl+H";
 
             // Twice, as a relaunch-free re-plan would: still one line.
             HotkeyActions.Plan();
@@ -404,7 +404,7 @@ public class HotkeyActionsTests : IDisposable
     public void RegisterAll_ACollisionNoteAndTwoRefusals_WriteOneLineEach_AndTheUnplannedActionIsNeverRegistered()
     {
         using var log = FreshLog();
-        ClaudeBuddySettings.ToggleOrbsHotkey = "Ctrl+Alt+N";
+        OrbweaverSettings.ToggleOrbsHotkey = "Ctrl+Alt+N";
         var hook = new FakeHook(accepts: _ => false);
 
         HotkeyActions.RegisterAll(hook);

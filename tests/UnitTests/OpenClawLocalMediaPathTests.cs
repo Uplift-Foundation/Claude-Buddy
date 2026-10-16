@@ -1,7 +1,7 @@
 using System.Collections.Generic;
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 // CB-88: an agent's own generated picture, named by its own path on the
 // gateway host rather than a fetchable URL. Two real shapes, both taken from

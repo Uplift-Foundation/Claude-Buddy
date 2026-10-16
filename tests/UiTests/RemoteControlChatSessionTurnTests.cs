@@ -5,7 +5,7 @@ using Avalonia.Headless.XUnit;
 using Avalonia.Threading;
 using Xunit;
 
-namespace ClaudeBuddy.UiTests;
+namespace Orbweaver.UiTests;
 
 // RemoteControlChatSession's transcript: what goes into it, how much of it is
 // kept, and which thread the panel finds out on.
@@ -55,13 +55,13 @@ public class RemoteControlChatSessionTurnTests
     [AvaloniaFact]
     public async Task WithRemoteControlOffTheMessageIsRefusedButKept()
     {
-        ClaudeBuddySettings.ReloadForTests();
-        ClaudeBuddySettings.RemoteControlEnabled = false;
+        OrbweaverSettings.ReloadForTests();
+        OrbweaverSettings.RemoteControlEnabled = false;
         // Both transports, because "off" is now two switches. A test that
         // turns one off and leaves the other to whatever the last test set
         // is asserting about a state it did not arrange — and settings here
         // persist through ReloadForTests, since the setter writes the file.
-        ClaudeBuddySettings.PeerLinkEnabled = false;
+        OrbweaverSettings.PeerLinkEnabled = false;
 
         var session = Session();
         var before = session.History.Count;
@@ -94,13 +94,13 @@ public class RemoteControlChatSessionTurnTests
     [AvaloniaFact]
     public async Task ATurnAddedOnTheUiThreadIsRaisedWithoutAHop()
     {
-        ClaudeBuddySettings.ReloadForTests();
-        ClaudeBuddySettings.RemoteControlEnabled = false;
+        OrbweaverSettings.ReloadForTests();
+        OrbweaverSettings.RemoteControlEnabled = false;
         // Both transports, because "off" is now two switches. A test that
         // turns one off and leaves the other to whatever the last test set
         // is asserting about a state it did not arrange — and settings here
         // persist through ReloadForTests, since the setter writes the file.
-        ClaudeBuddySettings.PeerLinkEnabled = false;
+        OrbweaverSettings.PeerLinkEnabled = false;
 
         var session = Session();
         ChatTurn? seen = null;
@@ -183,13 +183,13 @@ public class RemoteControlChatSessionTurnTests
     [AvaloniaFact]
     public async Task ATurnAddedFromAnotherThreadStillReachesTheSubscriber()
     {
-        ClaudeBuddySettings.ReloadForTests();
-        ClaudeBuddySettings.RemoteControlEnabled = false;
+        OrbweaverSettings.ReloadForTests();
+        OrbweaverSettings.RemoteControlEnabled = false;
         // Both transports, because "off" is now two switches. A test that
         // turns one off and leaves the other to whatever the last test set
         // is asserting about a state it did not arrange — and settings here
         // persist through ReloadForTests, since the setter writes the file.
-        ClaudeBuddySettings.PeerLinkEnabled = false;
+        OrbweaverSettings.PeerLinkEnabled = false;
 
         var session = Session();
         var seen = new List<ChatTurn>();

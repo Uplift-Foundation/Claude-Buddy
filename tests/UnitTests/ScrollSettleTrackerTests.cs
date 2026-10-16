@@ -1,7 +1,7 @@
-using ClaudeBuddy;
+using Orbweaver;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The pure rule CB-160 replaced ChatPanel.ScrollToEndAfterLayout's fixed
 // two-tick settle with: keep watching an extent until it stops moving,

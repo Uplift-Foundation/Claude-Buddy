@@ -1,7 +1,7 @@
 using System.Text.Json.Nodes;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-200's two volume keys — speechVolume and alertVolume — through a real
 // settings file.
@@ -22,8 +22,8 @@ public class VolumeSettingTests
 
     private static void PointSettingsAt(string dir)
     {
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
-        ClaudeBuddySettings.ReloadForTests();
+        Environment.SetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR", dir);
+        OrbweaverSettings.ReloadForTests();
     }
 
     private static JsonObject ReadBack(string dir) =>
@@ -35,11 +35,11 @@ public class VolumeSettingTests
         var dir = NewSettingsDir();
         PointSettingsAt(dir);
 
-        Assert.Equal(AudioVolume.Default, ClaudeBuddySettings.SpeechVolume);
-        Assert.Equal(AudioVolume.Default, ClaudeBuddySettings.AlertVolume);
+        Assert.Equal(AudioVolume.Default, OrbweaverSettings.SpeechVolume);
+        Assert.Equal(AudioVolume.Default, OrbweaverSettings.AlertVolume);
 
-        ClaudeBuddySettings.SpeechVolume = 0.4;
-        ClaudeBuddySettings.AlertVolume = 0.7;
+        OrbweaverSettings.SpeechVolume = 0.4;
+        OrbweaverSettings.AlertVolume = 0.7;
 
         var root = ReadBack(dir);
         Assert.Equal(0.4, root["speechVolume"]!.GetValue<double>(), 3);
@@ -52,12 +52,12 @@ public class VolumeSettingTests
         var dir = NewSettingsDir();
         PointSettingsAt(dir);
 
-        ClaudeBuddySettings.SpeechVolume = 0.25;
-        ClaudeBuddySettings.AlertVolume = 0.85;
+        OrbweaverSettings.SpeechVolume = 0.25;
+        OrbweaverSettings.AlertVolume = 0.85;
 
         PointSettingsAt(dir);   // a fresh Load from disk, as a relaunch does
-        Assert.Equal(0.25, ClaudeBuddySettings.SpeechVolume, 3);
-        Assert.Equal(0.85, ClaudeBuddySettings.AlertVolume, 3);
+        Assert.Equal(0.25, OrbweaverSettings.SpeechVolume, 3);
+        Assert.Equal(0.85, OrbweaverSettings.AlertVolume, 3);
     }
 
     [Theory]
@@ -77,9 +77,9 @@ public class VolumeSettingTests
 
         PointSettingsAt(dir);
 
-        Assert.Equal(expected, ClaudeBuddySettings.SpeechVolume);
-        Assert.Equal(expected, ClaudeBuddySettings.AlertVolume);
-        Assert.Equal(1.3, ClaudeBuddySettings.ChatTextScale, 3);
+        Assert.Equal(expected, OrbweaverSettings.SpeechVolume);
+        Assert.Equal(expected, OrbweaverSettings.AlertVolume);
+        Assert.Equal(1.3, OrbweaverSettings.ChatTextScale, 3);
     }
 
     [Fact]
@@ -88,8 +88,8 @@ public class VolumeSettingTests
         var dir = NewSettingsDir();
         PointSettingsAt(dir);
 
-        ClaudeBuddySettings.SpeechVolume = 3;
-        ClaudeBuddySettings.AlertVolume = -1;
+        OrbweaverSettings.SpeechVolume = 3;
+        OrbweaverSettings.AlertVolume = -1;
 
         var root = ReadBack(dir);
         Assert.Equal(1.0, root["speechVolume"]!.GetValue<double>(), 3);
@@ -110,10 +110,10 @@ public class VolumeSettingTests
             "{ \"version\": 1, \"speechVolume\": 0.3, \"alertVolume\": 0.6, \"somethingFromANewerBuild\": \"keep me\" }");
 
         PointSettingsAt(dir);
-        Assert.Equal(0.3, ClaudeBuddySettings.SpeechVolume, 3);
-        Assert.Equal(0.6, ClaudeBuddySettings.AlertVolume, 3);
+        Assert.Equal(0.3, OrbweaverSettings.SpeechVolume, 3);
+        Assert.Equal(0.6, OrbweaverSettings.AlertVolume, 3);
 
-        ClaudeBuddySettings.SpeechVolume = 0.5;   // any write makes Save run
+        OrbweaverSettings.SpeechVolume = 0.5;   // any write makes Save run
 
         var root = ReadBack(dir);
         Assert.Equal(0.5, root["speechVolume"]!.GetValue<double>(), 3);
@@ -135,7 +135,7 @@ public class VolumeSettingTests
             "{ \"version\": 1, \"speechVolumeFromTheFuture\": 0.3, \"alertVolumeFromTheFuture\": { \"nested\": 0.6 } }");
 
         PointSettingsAt(dir);
-        ClaudeBuddySettings.OrbSize = 1.25;   // an unrelated save
+        OrbweaverSettings.OrbSize = 1.25;   // an unrelated save
 
         var root = ReadBack(dir);
         Assert.Equal(0.3, root["speechVolumeFromTheFuture"]!.GetValue<double>(), 3);
@@ -150,7 +150,7 @@ public class VolumeSettingTests
 
         PointSettingsAt(dir);
 
-        Assert.Equal(AudioVolume.Default, ClaudeBuddySettings.SpeechVolume);
-        Assert.Equal(AudioVolume.Default, ClaudeBuddySettings.AlertVolume);
+        Assert.Equal(AudioVolume.Default, OrbweaverSettings.SpeechVolume);
+        Assert.Equal(AudioVolume.Default, OrbweaverSettings.AlertVolume);
     }
 }

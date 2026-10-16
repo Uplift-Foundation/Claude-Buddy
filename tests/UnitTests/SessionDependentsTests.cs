@@ -1,7 +1,7 @@
 using System.Collections.Generic;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Covers SessionDependents: what is running underneath a session's pid, asked
 // before the one irreversible action in the app signals it.

@@ -1,6 +1,6 @@
 using System.Text.Json;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // CB-115: recovers a delivered picture's real path when OpenClaw's cron
     // delivery route has already stripped both the "MEDIA:" prefix and the

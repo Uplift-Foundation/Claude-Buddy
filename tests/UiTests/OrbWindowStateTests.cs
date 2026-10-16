@@ -2,7 +2,7 @@ using System.Reflection;
 using Avalonia.Headless.XUnit;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // What an orb does when its session changes state, and what its letters do when
 // the setting behind them changes.
@@ -134,11 +134,11 @@ public class OrbWindowStateTests
         var orb = NewOrb();
         orb.UpdateFrom(Status("idle", title: "claude-buddy"));
 
-        ClaudeBuddySettings.TwoLetterGlyphs = true;
+        OrbweaverSettings.TwoLetterGlyphs = true;
         orb.ReapplyGlyph();
         var two = orb.Glyph.Text;
 
-        ClaudeBuddySettings.TwoLetterGlyphs = false;
+        OrbweaverSettings.TwoLetterGlyphs = false;
         orb.ReapplyGlyph();
         var one = orb.Glyph.Text;
 
@@ -155,13 +155,13 @@ public class OrbWindowStateTests
     [AvaloniaFact]
     public void ReapplyingPicksUpASettingChangedAfterTheOrbWasBuilt()
     {
-        ClaudeBuddySettings.TwoLetterGlyphs = false;
+        OrbweaverSettings.TwoLetterGlyphs = false;
 
         var orb = NewOrb();
         orb.UpdateFrom(Status("idle", title: "my_cool_project"));
         Assert.Equal("M", orb.Glyph.Text);
 
-        ClaudeBuddySettings.TwoLetterGlyphs = true;
+        OrbweaverSettings.TwoLetterGlyphs = true;
         orb.ReapplyGlyph();
 
         Assert.Equal("Mc", orb.Glyph.Text);
@@ -172,7 +172,7 @@ public class OrbWindowStateTests
     [AvaloniaFact]
     public void ReapplyingKeepsATeamMembersSmallerLettering()
     {
-        ClaudeBuddySettings.TwoLetterGlyphs = true;
+        OrbweaverSettings.TwoLetterGlyphs = true;
 
         var lead = NewOrb();
         var member = NewOrb();

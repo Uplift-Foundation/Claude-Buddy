@@ -9,13 +9,13 @@ can leak.
 
 ## Cutting a release
 
-`ClaudeBuddy.csproj`'s `<Version>` is the single source of truth. The packaging
+`Orbweaver.csproj`'s `<Version>` is the single source of truth. The packaging
 scripts, the installer filenames, the `.app`'s `Info.plist` and the Add/Remove
 Programs entry all read it, and `release.yml` refuses to publish when the tag
 disagrees with it.
 
 ```bash
-# 1. bump <Version> in ClaudeBuddy.csproj
+# 1. bump <Version> in Orbweaver.csproj
 # 2. write .github/release-notes/v<version>.md
 # 3. commit, then:
 git tag v0.2.0-beta && git push origin v0.2.0-beta
@@ -131,7 +131,7 @@ prompt the user can click through — macOS reports the app as **damaged**, whic
 reads as a corrupt download and generates bug reports rather than questions.
 
 Notarizing requires the hardened runtime, and the hardened runtime disables
-several things a self-contained .NET app depends on. `tools/ClaudeBuddy.entitlements`
+several things a self-contained .NET app depends on. `tools/Orbweaver.entitlements`
 re-enables exactly what's needed: JIT and unsigned executable memory for
 CoreCLR, library validation off for the ~16 bundled native libraries, and Apple
 Events for click-to-focus and Claude Desktop quit. Removing any of them still
@@ -145,5 +145,5 @@ Related: `build-macos-app.sh` signs inside-out, every file under
 entitlements to nested binaries and seals in an order the notary service
 rejects. Contents/MacOS is the bundle's executable directory, so *every* file in
 it counts as nested code — including the managed `.dll` assemblies and even
-`ClaudeBuddy.runtimeconfig.json`, which .NET's apphost requires sit next to the
+`Orbweaver.runtimeconfig.json`, which .NET's apphost requires sit next to the
 executable and so cannot be moved out of the way.

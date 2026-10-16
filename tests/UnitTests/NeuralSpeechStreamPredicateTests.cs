@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 // The two decisions NeuralSpeech makes about the engine's own output while it is
 // speaking. Both were lambdas inside the method that starts the engine process,

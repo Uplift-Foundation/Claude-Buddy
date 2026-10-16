@@ -1,7 +1,7 @@
 using System.Linq;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // What AgentPalette does when the circle genuinely runs out.
 //

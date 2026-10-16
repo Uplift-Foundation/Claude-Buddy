@@ -1,7 +1,7 @@
 using Avalonia;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-198: a saved orb spot is a top-left corner, so restoring it at a different
 // size has to move the corner by half the size difference or the orb comes back
@@ -9,7 +9,7 @@ namespace ClaudeBuddy.Tests;
 // be checked here per outcome.
 public class OrbRestoreTests
 {
-    private static ClaudeBuddySettings.OrbPlacement At(double? size) => new(300, 200, size);
+    private static OrbweaverSettings.OrbPlacement At(double? size) => new(300, 200, size);
 
     [Theory]
     [InlineData(2.0, 1.0, 1.0, 328, 228)]   // saved big, restored small: corner moves in by 28

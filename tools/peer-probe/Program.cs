@@ -1,4 +1,4 @@
-using ClaudeBuddy;
+using Orbweaver;
 
 // Drives the peer link from a terminal: connect to a paired machine, ask what
 // it has, and fetch one session's transcript.
@@ -62,7 +62,7 @@ internal static class Program
         }
 
         using var host = new PeerMirrorHost();
-        host.Serve(ClaudeBuddySettings.RemoteControlProfileDirs, RemoteControlSessions.LocalSessions);
+        host.Serve(OrbweaverSettings.RemoteControlProfileDirs, RemoteControlSessions.LocalSessions);
 
         var client = host.Client!;
 

@@ -1,6 +1,6 @@
 using Avalonia.Headless.XUnit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // What a remote session's panel actually looks like in each of its two modes.
 //
@@ -36,15 +36,15 @@ public class RemoteMirrorPanelScreenshots : IDisposable
         _dir = Path.Combine(Path.GetTempPath(), "cb-shot-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_dir);
 
-        _remoteWasEnabled = ClaudeBuddySettings.RemoteControlEnabled;
-        ClaudeBuddySettings.RemoteControlEnabled = true;
+        _remoteWasEnabled = OrbweaverSettings.RemoteControlEnabled;
+        OrbweaverSettings.RemoteControlEnabled = true;
     }
 
     public void Dispose()
     {
         foreach (var id in _sessionIdsToClean) ChatPanel.HideFor(id);
 
-        ClaudeBuddySettings.RemoteControlEnabled = _remoteWasEnabled;
+        OrbweaverSettings.RemoteControlEnabled = _remoteWasEnabled;
         RemoteControlSessions.ResetForTests();
 
         try { Directory.Delete(_dir, recursive: true); } catch { }

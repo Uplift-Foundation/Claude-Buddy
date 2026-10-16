@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests
+namespace Orbweaver.Tests
 {
     // Serialises every test class in this assembly whose assertions depend on
     // CLAUDE_CONFIG_DIR holding still — not just the ones that call
@@ -8,7 +8,7 @@ namespace ClaudeBuddy.Tests
     // it again through a launched child process, expecting the two readings
     // to agree.
     //
-    // Same hazard SettingsCollection documents for ClaudeBuddySettings, one
+    // Same hazard SettingsCollection documents for OrbweaverSettings, one
     // level down: the environment block is process-wide, not per-test, so a
     // class that sets CLAUDE_CONFIG_DIR to a sentinel while another class is
     // mid-assertion about "what this process has" would not fail loudly — it

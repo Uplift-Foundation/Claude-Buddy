@@ -6,7 +6,7 @@ using Avalonia.Input;
 using Avalonia.Threading;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The card, including a real synthesized click on its pin.
 //

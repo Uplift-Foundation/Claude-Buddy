@@ -6,7 +6,7 @@ using Avalonia.Headless.XUnit;
 using Avalonia.LogicalTree;
 using Xunit;
 
-namespace ClaudeBuddy.UiTests;
+namespace Orbweaver.UiTests;
 
 // The two pieces of the settings window that only one platform ever shows, tested
 // from both.
@@ -59,7 +59,7 @@ public class SettingsPlatformRowTests
     [AvaloniaFact]
     public void TheWindowShowsTheDoneButtonOnlyWhereItBelongs()
     {
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
         var window = NewWindow();
 
         var hasDone = window.GetLogicalDescendants()

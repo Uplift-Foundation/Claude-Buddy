@@ -6,7 +6,7 @@ using Avalonia.Input;
 using Avalonia.Threading;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-168's "New chat…" dialog.
 //
@@ -16,7 +16,7 @@ namespace ClaudeBuddy.Tests;
 // reflection instead, and never Close()s the windows it builds (the same
 // font-cache corruption SettingsWindowSmokeTest documents).
 //
-// [Collection("Settings")]: this window reads ClaudeBuddySettings
+// [Collection("Settings")]: this window reads OrbweaverSettings
 // (NewChatRecentFolders, NewChatLastCli), which is process-wide.
 [Collection("Settings")]
 public class NewChatWindowTests : IDisposable
@@ -46,8 +46,8 @@ public class NewChatWindowTests : IDisposable
     {
         var dir = Path.Combine(Path.GetTempPath(), "cb-newchat-window-" + Guid.NewGuid());
         Directory.CreateDirectory(dir);
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
-        ClaudeBuddySettings.ReloadForTests();
+        Environment.SetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR", dir);
+        OrbweaverSettings.ReloadForTests();
     }
 
     private static NewChatOption Enabled(NewChatCli cli, string? warning = null) =>
@@ -241,7 +241,7 @@ public class NewChatWindowTests : IDisposable
     public void ThePrefilledCliIsSelectedOverTheLastChoiceAndTheFirstEnabledRow()
     {
         FreshSettings();
-        ClaudeBuddySettings.SetNewChatLastCli("Codex");
+        OrbweaverSettings.SetNewChatLastCli("Codex");
         NewChatAvailability.CurrentForTests = () => new[]
         {
             Enabled(NewChatCli.ClaudeCode),
@@ -258,7 +258,7 @@ public class NewChatWindowTests : IDisposable
     public void WithNoPrefillTheLastChoiceIsSelected()
     {
         FreshSettings();
-        ClaudeBuddySettings.SetNewChatLastCli("Codex");
+        OrbweaverSettings.SetNewChatLastCli("Codex");
         NewChatAvailability.CurrentForTests = () => new[]
         {
             Enabled(NewChatCli.ClaudeCode),
@@ -353,8 +353,8 @@ public class NewChatWindowTests : IDisposable
         var window = NewWindow(prefillCli: NewChatCli.Codex, prefillCwd: "/repo/one");
         Click(window.StartButton);
 
-        Assert.Equal("Codex", ClaudeBuddySettings.NewChatLastCli);
-        Assert.Contains("/repo/one", ClaudeBuddySettings.NewChatRecentFolders);
+        Assert.Equal("Codex", OrbweaverSettings.NewChatLastCli);
+        Assert.Contains("/repo/one", OrbweaverSettings.NewChatRecentFolders);
     }
 
     // --- CB-201's Account picker ---
@@ -374,7 +374,7 @@ public class NewChatWindowTests : IDisposable
     public void TheAccountPickerListsTheConfiguredProfilesAlongsideDefault()
     {
         FreshSettings();
-        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-board");
+        OrbweaverSettings.AddClaudeCodeProfileDir(".claude-board");
         NewChatAvailability.CurrentForTests = () => new[] { Enabled(NewChatCli.ClaudeCode) };
 
         var window = NewWindow();
@@ -388,7 +388,7 @@ public class NewChatWindowTests : IDisposable
     public void TheAccountPickerIsHiddenForCodexWhenOnlyClaudeCodeHasExtras()
     {
         FreshSettings();
-        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-board");
+        OrbweaverSettings.AddClaudeCodeProfileDir(".claude-board");
         NewChatAvailability.CurrentForTests = () => new[] { Enabled(NewChatCli.Codex) };
 
         var window = NewWindow(prefillCli: NewChatCli.Codex);
@@ -400,7 +400,7 @@ public class NewChatWindowTests : IDisposable
     public void TheAccountPickerIsHiddenForGrokWhenOnlyClaudeCodeHasExtras()
     {
         FreshSettings();
-        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-board");
+        OrbweaverSettings.AddClaudeCodeProfileDir(".claude-board");
         NewChatAvailability.CurrentForTests = () => new[] { Enabled(NewChatCli.Grok) };
 
         var window = NewWindow(prefillCli: NewChatCli.Grok);
@@ -412,7 +412,7 @@ public class NewChatWindowTests : IDisposable
     public void TheAccountPickerIsHiddenWhenOpenClawIsSelected()
     {
         FreshSettings();
-        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-board");
+        OrbweaverSettings.AddClaudeCodeProfileDir(".claude-board");
         NewChatAvailability.CurrentForTests = () => new[] { Enabled(NewChatCli.ClaudeCode) };
         NewChatWindow.OpenClawAvailabilityForTests = () => OpenClawNewChatAvailability.Ready;
         NewChatWindow.KnownAgentsForTests = () => new[] { ("id-1", "Alexis") };
@@ -428,7 +428,7 @@ public class NewChatWindowTests : IDisposable
     public void StartWithDefaultAccountPassesNullProfileDirToTheLauncher()
     {
         FreshSettings();
-        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-board");
+        OrbweaverSettings.AddClaudeCodeProfileDir(".claude-board");
         NewChatWindow.CurrentStatusesForTests = () => new Dictionary<string, SessionStatus>();
         NewChatAvailability.CurrentForTests = () => new[] { Enabled(NewChatCli.ClaudeCode) };
         string? seenProfileDir = "not set yet";
@@ -442,14 +442,14 @@ public class NewChatWindowTests : IDisposable
         Click(window.StartButton);
 
         Assert.Null(seenProfileDir);
-        Assert.Null(ClaudeBuddySettings.NewChatLastProfileFor(NewChatCli.ClaudeCode));
+        Assert.Null(OrbweaverSettings.NewChatLastProfileFor(NewChatCli.ClaudeCode));
     }
 
     [AvaloniaFact]
     public void StartWithAChosenAccountPassesItsProfileDirToTheLauncher()
     {
         FreshSettings();
-        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-board");
+        OrbweaverSettings.AddClaudeCodeProfileDir(".claude-board");
         NewChatWindow.CurrentStatusesForTests = () => new Dictionary<string, SessionStatus>();
         NewChatAvailability.CurrentForTests = () => new[] { Enabled(NewChatCli.ClaudeCode) };
         string? seenProfileDir = "not set yet";
@@ -465,15 +465,15 @@ public class NewChatWindowTests : IDisposable
         Click(window.StartButton);
 
         Assert.Equal(".claude-board", seenProfileDir);
-        Assert.Equal(".claude-board", ClaudeBuddySettings.NewChatLastProfileFor(NewChatCli.ClaudeCode));
+        Assert.Equal(".claude-board", OrbweaverSettings.NewChatLastProfileFor(NewChatCli.ClaudeCode));
     }
 
     [AvaloniaFact]
     public void TheLastChosenAccountIsRestoredOnReopen()
     {
         FreshSettings();
-        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-board");
-        ClaudeBuddySettings.SetNewChatLastProfile(NewChatCli.ClaudeCode, ".claude-board");
+        OrbweaverSettings.AddClaudeCodeProfileDir(".claude-board");
+        OrbweaverSettings.SetNewChatLastProfile(NewChatCli.ClaudeCode, ".claude-board");
         NewChatAvailability.CurrentForTests = () => new[] { Enabled(NewChatCli.ClaudeCode) };
 
         var window = NewWindow(prefillCli: NewChatCli.ClaudeCode);
@@ -486,7 +486,7 @@ public class NewChatWindowTests : IDisposable
     public void ARemovedSavedAccountFallsBackToDefault()
     {
         FreshSettings();
-        ClaudeBuddySettings.SetNewChatLastProfile(NewChatCli.ClaudeCode, ".claude-gone");
+        OrbweaverSettings.SetNewChatLastProfile(NewChatCli.ClaudeCode, ".claude-gone");
         NewChatAvailability.CurrentForTests = () => new[] { Enabled(NewChatCli.ClaudeCode) };
 
         var window = NewWindow(prefillCli: NewChatCli.ClaudeCode);
@@ -510,8 +510,8 @@ public class NewChatWindowTests : IDisposable
     public void TheAccountPickerListsCodexHomesForCodexAndNeverClaudeProfiles()
     {
         FreshSettings();
-        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-board");
-        ClaudeBuddySettings.AddCodexHome(".codex-work");
+        OrbweaverSettings.AddClaudeCodeProfileDir(".claude-board");
+        OrbweaverSettings.AddCodexHome(".codex-work");
         NewChatAvailability.CurrentForTests = () => new[] { Enabled(NewChatCli.Codex) };
 
         var window = NewWindow(prefillCli: NewChatCli.Codex);
@@ -526,9 +526,9 @@ public class NewChatWindowTests : IDisposable
     public void TheAccountPickerListsGrokHomesForGrokAndNeverClaudeProfiles()
     {
         FreshSettings();
-        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-board");
-        ClaudeBuddySettings.AddCodexHome(".codex-work");
-        ClaudeBuddySettings.AddGrokHome(".grok-work");
+        OrbweaverSettings.AddClaudeCodeProfileDir(".claude-board");
+        OrbweaverSettings.AddCodexHome(".codex-work");
+        OrbweaverSettings.AddGrokHome(".grok-work");
         NewChatAvailability.CurrentForTests = () => new[] { Enabled(NewChatCli.Grok) };
 
         var window = NewWindow(prefillCli: NewChatCli.Grok);
@@ -545,8 +545,8 @@ public class NewChatWindowTests : IDisposable
     public void SwitchingCliRebuildsTheAccountListForThatCli()
     {
         FreshSettings();
-        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-board");
-        ClaudeBuddySettings.AddCodexHome(".codex-work");
+        OrbweaverSettings.AddClaudeCodeProfileDir(".claude-board");
+        OrbweaverSettings.AddCodexHome(".codex-work");
         NewChatAvailability.CurrentForTests = () => new[]
         {
             Enabled(NewChatCli.ClaudeCode), Enabled(NewChatCli.Codex), Enabled(NewChatCli.Grok)
@@ -573,7 +573,7 @@ public class NewChatWindowTests : IDisposable
     public void TheAccountSlotIsReservedWhenOnlyCodexHasExtras()
     {
         FreshSettings();
-        ClaudeBuddySettings.AddCodexHome(".codex-work");
+        OrbweaverSettings.AddCodexHome(".codex-work");
         NewChatAvailability.CurrentForTests = () => new[] { Enabled(NewChatCli.ClaudeCode), Enabled(NewChatCli.Codex) };
 
         var window = NewWindow(prefillCli: NewChatCli.ClaudeCode);
@@ -591,7 +591,7 @@ public class NewChatWindowTests : IDisposable
     public void ADisabledCliExtrasReserveNoSlot()
     {
         FreshSettings();
-        ClaudeBuddySettings.AddGrokHome(".grok-work");
+        OrbweaverSettings.AddGrokHome(".grok-work");
         NewChatAvailability.CurrentForTests = () => new[]
         {
             Enabled(NewChatCli.ClaudeCode), Disabled(NewChatCli.Grok, "Grok isn't installed.")
@@ -609,8 +609,8 @@ public class NewChatWindowTests : IDisposable
     {
         var cli = Enum.Parse<NewChatCli>(cliName);
         FreshSettings();
-        if (cli == NewChatCli.Codex) ClaudeBuddySettings.AddCodexHome(home); else ClaudeBuddySettings.AddGrokHome(home);
-        ClaudeBuddySettings.SetNewChatLastProfile(NewChatCli.ClaudeCode, ".claude-board");
+        if (cli == NewChatCli.Codex) OrbweaverSettings.AddCodexHome(home); else OrbweaverSettings.AddGrokHome(home);
+        OrbweaverSettings.SetNewChatLastProfile(NewChatCli.ClaudeCode, ".claude-board");
         NewChatWindow.CurrentStatusesForTests = () => new Dictionary<string, SessionStatus>();
         NewChatAvailability.CurrentForTests = () => new[] { Enabled(cli) };
         (NewChatCli Cli, string? Dir)? seen = null;
@@ -625,15 +625,15 @@ public class NewChatWindowTests : IDisposable
         Click(window.StartButton);
 
         Assert.Equal((cli, (string?)home), seen);
-        Assert.Equal(home, ClaudeBuddySettings.NewChatLastProfileFor(cli));
-        Assert.Equal(".claude-board", ClaudeBuddySettings.NewChatLastProfileFor(NewChatCli.ClaudeCode));
+        Assert.Equal(home, OrbweaverSettings.NewChatLastProfileFor(cli));
+        Assert.Equal(".claude-board", OrbweaverSettings.NewChatLastProfileFor(NewChatCli.ClaudeCode));
     }
 
     [AvaloniaFact]
     public void StartWithCodexDefaultAccountPassesNull()
     {
         FreshSettings();
-        ClaudeBuddySettings.AddCodexHome(".codex-work");
+        OrbweaverSettings.AddCodexHome(".codex-work");
         NewChatWindow.CurrentStatusesForTests = () => new Dictionary<string, SessionStatus>();
         NewChatAvailability.CurrentForTests = () => new[] { Enabled(NewChatCli.Codex) };
         string? seenProfileDir = "not set yet";
@@ -647,7 +647,7 @@ public class NewChatWindowTests : IDisposable
         Click(window.StartButton);
 
         Assert.Null(seenProfileDir);
-        Assert.Null(ClaudeBuddySettings.NewChatLastProfileFor(NewChatCli.Codex));
+        Assert.Null(OrbweaverSettings.NewChatLastProfileFor(NewChatCli.Codex));
     }
 
     // Each CLI restores its own remembered account — a Claude Code pick is
@@ -656,11 +656,11 @@ public class NewChatWindowTests : IDisposable
     public void EachCliRestoresItsOwnLastAccount()
     {
         FreshSettings();
-        ClaudeBuddySettings.AddClaudeCodeProfileDir(".shared-work");
-        ClaudeBuddySettings.AddCodexHome(".shared-work");
-        ClaudeBuddySettings.AddGrokHome(".grok-work");
-        ClaudeBuddySettings.SetNewChatLastProfile(NewChatCli.ClaudeCode, ".shared-work");
-        ClaudeBuddySettings.SetNewChatLastProfile(NewChatCli.Grok, ".grok-work");
+        OrbweaverSettings.AddClaudeCodeProfileDir(".shared-work");
+        OrbweaverSettings.AddCodexHome(".shared-work");
+        OrbweaverSettings.AddGrokHome(".grok-work");
+        OrbweaverSettings.SetNewChatLastProfile(NewChatCli.ClaudeCode, ".shared-work");
+        OrbweaverSettings.SetNewChatLastProfile(NewChatCli.Grok, ".grok-work");
         NewChatAvailability.CurrentForTests = () => new[]
         {
             Enabled(NewChatCli.ClaudeCode), Enabled(NewChatCli.Codex), Enabled(NewChatCli.Grok)
@@ -693,8 +693,8 @@ public class NewChatWindowTests : IDisposable
         };
 
         var window = NewWindow(prefillCli: NewChatCli.Codex, prefillCwd: "/repo/one");
-        ClaudeBuddySettings.AddCodexHome(".codex-work");
-        ClaudeBuddySettings.SetNewChatLastProfile(NewChatCli.Codex, ".codex-work");
+        OrbweaverSettings.AddCodexHome(".codex-work");
+        OrbweaverSettings.SetNewChatLastProfile(NewChatCli.Codex, ".codex-work");
         Select(window, NewChatCli.Grok);
         Select(window, NewChatCli.Codex);
 
@@ -719,9 +719,9 @@ public class NewChatWindowTests : IDisposable
         FreshSettings();
         switch (cli)
         {
-            case NewChatCli.Codex: ClaudeBuddySettings.AddCodexHome(home); break;
-            case NewChatCli.Grok: ClaudeBuddySettings.AddGrokHome(home); break;
-            default: ClaudeBuddySettings.AddClaudeCodeProfileDir(home); break;
+            case NewChatCli.Codex: OrbweaverSettings.AddCodexHome(home); break;
+            case NewChatCli.Grok: OrbweaverSettings.AddGrokHome(home); break;
+            default: OrbweaverSettings.AddClaudeCodeProfileDir(home); break;
         }
         NewChatWindow.AccountDirectoryExistsForTests = _ => false;
         NewChatAvailability.CurrentForTests = () => new[] { Enabled(cli) };
@@ -753,8 +753,8 @@ public class NewChatWindowTests : IDisposable
         var existing = Path.Combine(Path.GetTempPath(), "cb203-home-" + Guid.NewGuid());
         Directory.CreateDirectory(existing);
         var missing = Path.Combine(Path.GetTempPath(), "cb203-missing-" + Guid.NewGuid());
-        ClaudeBuddySettings.AddCodexHome(existing);
-        ClaudeBuddySettings.AddCodexHome(missing);
+        OrbweaverSettings.AddCodexHome(existing);
+        OrbweaverSettings.AddCodexHome(missing);
         NewChatAvailability.CurrentForTests = () => new[] { Enabled(NewChatCli.Codex) };
 
         var window = NewWindow(prefillCli: NewChatCli.Codex);
@@ -774,8 +774,8 @@ public class NewChatWindowTests : IDisposable
     public void ADisabledCliMissingHomeReservesNoWarningLine()
     {
         FreshSettings();
-        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-work");
-        ClaudeBuddySettings.AddGrokHome(".grok-gone");
+        OrbweaverSettings.AddClaudeCodeProfileDir(".claude-work");
+        OrbweaverSettings.AddGrokHome(".grok-gone");
         NewChatWindow.AccountDirectoryExistsForTests = dir => !dir.EndsWith(".grok-gone", StringComparison.Ordinal);
         NewChatAvailability.CurrentForTests = () => new[]
         {
@@ -1112,7 +1112,7 @@ public class NewChatWindowTests : IDisposable
     public void ThePrefilledAgentWinsOverTheLastUsedCliAndTheDefault()
     {
         FreshSettings();
-        ClaudeBuddySettings.SetNewChatLastCli("Codex");
+        OrbweaverSettings.SetNewChatLastCli("Codex");
         NewChatAvailability.CurrentForTests = () => new[]
         {
             Enabled(NewChatCli.ClaudeCode), Enabled(NewChatCli.Codex)

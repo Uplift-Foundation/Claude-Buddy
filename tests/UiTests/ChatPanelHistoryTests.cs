@@ -8,7 +8,7 @@ using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Everything that changes the transcript out from under the panel rather than
 // through a click in it: a successful page of backlog actually landing (the

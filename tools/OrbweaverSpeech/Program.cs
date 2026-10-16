@@ -6,7 +6,7 @@ using KokoroSharp.Core;
 using KokoroSharp.Processing;
 using Microsoft.ML.OnnxRuntime;
 
-namespace ClaudeBuddySpeech
+namespace OrbweaverSpeech
 {
     // Speaks text aloud with Kokoro, a local neural TTS model, and exits.
     //
@@ -16,8 +16,8 @@ namespace ClaudeBuddySpeech
     // nothing about the app's speaking/stopping model has to change to accept a
     // completely different engine.
     //
-    //   ClaudeBuddySpeech.exe --model <path> --voice <name> [--rate <float>]   < text on stdin
-    //   ClaudeBuddySpeech.exe --list-voices
+    //   OrbweaverSpeech.exe --model <path> --voice <name> [--rate <float>]   < text on stdin
+    //   OrbweaverSpeech.exe --list-voices
     //
     // Text arrives on stdin rather than as an argument. That is not a style
     // choice: an assistant turn runs to TranscriptReader.MaxSpokenChars (1500)
@@ -59,7 +59,7 @@ namespace ClaudeBuddySpeech
                 // Everything the caller needs to diagnose goes to stderr, which
                 // it captures. Never a dialog: this process has no UI and may be
                 // running while the user is looking at something else.
-                Console.Error.WriteLine($"ClaudeBuddySpeech: {ex.GetType().Name}: {ex.Message}");
+                Console.Error.WriteLine($"OrbweaverSpeech: {ex.GetType().Name}: {ex.Message}");
                 return ExitFailed;
             }
         }
@@ -100,7 +100,7 @@ namespace ClaudeBuddySpeech
                             && parsed is >= MinRate and <= MaxRate ? parsed : null;
                         break;
                     default:
-                        Console.Error.WriteLine($"ClaudeBuddySpeech: unexpected argument '{args[i]}'");
+                        Console.Error.WriteLine($"OrbweaverSpeech: unexpected argument '{args[i]}'");
                         return ExitUsage;
                 }
             }
@@ -115,7 +115,7 @@ namespace ClaudeBuddySpeech
             var voicesPath = Path.Combine(AppContext.BaseDirectory, "voices");
             if (!Directory.Exists(voicesPath))
             {
-                Console.Error.WriteLine($"ClaudeBuddySpeech: no voices directory at {voicesPath}");
+                Console.Error.WriteLine($"OrbweaverSpeech: no voices directory at {voicesPath}");
                 return ExitNoModel;
             }
 
@@ -130,7 +130,7 @@ namespace ClaudeBuddySpeech
 
             if (string.IsNullOrEmpty(modelPath) || !File.Exists(modelPath))
             {
-                Console.Error.WriteLine($"ClaudeBuddySpeech: no model at '{modelPath}'");
+                Console.Error.WriteLine($"OrbweaverSpeech: no model at '{modelPath}'");
                 return ExitNoModel;
             }
 
@@ -140,7 +140,7 @@ namespace ClaudeBuddySpeech
             var chosen = ResolveVoice(voiceName);
             if (chosen is null)
             {
-                Console.Error.WriteLine("ClaudeBuddySpeech: no English voice available");
+                Console.Error.WriteLine("OrbweaverSpeech: no English voice available");
                 return ExitNoModel;
             }
 
@@ -164,7 +164,7 @@ namespace ClaudeBuddySpeech
         //
         // The name comes from SpeechEngineContract.cs, the one file this
         // project shares with the app, so the two cannot spell it differently.
-        private const string VolumeEnvVar = ClaudeBuddy.SpeechEngineContract.VolumeEnvVar;
+        private const string VolumeEnvVar = Orbweaver.SpeechEngineContract.VolumeEnvVar;
 
         // Unset, unparsable or out of range all mean "full volume" — the
         // --rate rule: the caller already clamped it, so a value that still
@@ -217,7 +217,7 @@ namespace ClaudeBuddySpeech
                     // One unreadable file must not cost the whole feature: report
                     // it and carry on with the voices that did load.
                     Console.Error.WriteLine(
-                        $"ClaudeBuddySpeech: ignoring {Path.GetFileName(file)}: {ex.Message}");
+                        $"OrbweaverSpeech: ignoring {Path.GetFileName(file)}: {ex.Message}");
                 }
             }
         }
@@ -255,7 +255,7 @@ namespace ClaudeBuddySpeech
                 {
                     if (string.Equals(voice.Name, name, StringComparison.OrdinalIgnoreCase)) return voice;
                 }
-                Console.Error.WriteLine($"ClaudeBuddySpeech: voice '{name}' not found, using default");
+                Console.Error.WriteLine($"OrbweaverSpeech: voice '{name}' not found, using default");
             }
 
             return voices.Count > 0 ? voices[0] : null;
@@ -325,7 +325,7 @@ namespace ClaudeBuddySpeech
                     // know yet.
                     var path = Path.Combine(
                         Path.GetTempPath(),
-                        $"claudebuddy-speech-{Environment.ProcessId}-{index++}.wav");
+                        $"orbweaver-speech-{Environment.ProcessId}-{index++}.wav");
 
                     try
                     {
@@ -354,7 +354,7 @@ namespace ClaudeBuddySpeech
 
                         if (afplay is null)
                         {
-                            Console.Error.WriteLine("ClaudeBuddySpeech: could not start afplay");
+                            Console.Error.WriteLine("OrbweaverSpeech: could not start afplay");
                             failed = true;
                             return;
                         }
@@ -375,14 +375,14 @@ namespace ClaudeBuddySpeech
                         if (afplay.ExitCode != 0)
                         {
                             Console.Error.WriteLine(
-                                $"ClaudeBuddySpeech: afplay exited {afplay.ExitCode}");
+                                $"OrbweaverSpeech: afplay exited {afplay.ExitCode}");
                             failed = true;
                             return;
                         }
                     }
                     catch (Exception ex)
                     {
-                        Console.Error.WriteLine($"ClaudeBuddySpeech: playback failed: {ex.Message}");
+                        Console.Error.WriteLine($"OrbweaverSpeech: playback failed: {ex.Message}");
                         failed = true;
                         return;
                     }

@@ -6,7 +6,7 @@ using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Per-profile Dock icons, by giving each profile its own copy of Claude.app
     // with a tinted icon.
@@ -43,16 +43,16 @@ namespace ClaudeBuddy
         // /Applications/Claude.app and the profile list, and deleting it only
         // costs the coloured icons.
         //
-        // CLAUDE_BUDDY_BUNDLE_ROOT redirects it, the same scratch-override
-        // pattern as CLAUDE_BUDDY_PROFILE_ROOT in ClaudeDesktopManager and
-        // CLAUDE_BUDDY_SETTINGS_DIR in ClaudeBuddySettings. Without it the only
+        // ORBWEAVER_BUNDLE_ROOT redirects it, the same scratch-override
+        // pattern as ORBWEAVER_PROFILE_ROOT in ClaudeDesktopManager and
+        // ORBWEAVER_SETTINGS_DIR in OrbweaverSettings. Without it the only
         // way to test what is in this file is to write into the real
-        // ~/Library/Application Support/ClaudeBuddy/bundles — the actual cache,
+        // ~/Library/Application Support/Orbweaver/bundles — the actual cache,
         // on the machine running the tests, holding real cloned .app bundles
         // whose icons a user is looking at. That the override did not exist is
         // why nothing here was covered.
         public static string Root =>
-            Environment.GetEnvironmentVariable("CLAUDE_BUDDY_BUNDLE_ROOT") is { Length: > 0 } scratch
+            BrandEnv.Get(BrandEnv.BundleRoot) is { } scratch
                 ? scratch
                 : Path.Combine(
                     Home, "Library", "Application Support", Brand.DataDirName, "bundles");

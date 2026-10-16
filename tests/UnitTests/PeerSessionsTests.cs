@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 // Covers the two decisions PeerSessions makes — which machines are worth
 // dialling, and what the user is told about the link.

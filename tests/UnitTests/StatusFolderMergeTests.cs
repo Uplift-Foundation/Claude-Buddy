@@ -4,9 +4,9 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using Xunit;
-using StatusFileRead = ClaudeBuddy.SessionManager.StatusFileRead;
+using StatusFileRead = Orbweaver.SessionManager.StatusFileRead;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-255 §1: the app reads two status folders while the legacy one is
 // watched — the Orbweaver hooks' and the pre-Orbweaver ones' — because a
@@ -37,7 +37,7 @@ public class StatusFolderMergeTests : IDisposable
 
     public StatusFolderMergeTests()
     {
-        ClaudeBuddySettings.ClaudeCodeEnabled = true;
+        OrbweaverSettings.ClaudeCodeEnabled = true;
     }
 
     public void Dispose()
@@ -263,7 +263,7 @@ public class StatusFolderMergeTests : IDisposable
     // The production call — no statusDir at all — reads the real legacy
     // folder too, so a headless machine serving a session that predates the
     // upgrade does not report it missing. Safe to ask here: every suite's
-    // TestBootstrap points CLAUDE_BUDDY_STATUS_ROOT at a sandbox, so "the
+    // TestBootstrap points ORBWEAVER_STATUS_ROOT at a sandbox, so "the
     // real legacy folder" is a scratch directory of this run's own. The id is
     // unique, and the file is removed afterwards for whoever reads it next.
     [Fact]

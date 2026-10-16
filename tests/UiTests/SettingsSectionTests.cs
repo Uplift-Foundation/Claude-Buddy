@@ -4,7 +4,7 @@ using Avalonia.Headless.XUnit;
 using Avalonia.LogicalTree;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The seam the rest of CB-166 is built on: Group() now returns a
 // SettingsSection registered under a stable id, and SettingsWindow.Sections

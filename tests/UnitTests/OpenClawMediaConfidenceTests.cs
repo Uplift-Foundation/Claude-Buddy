@@ -1,7 +1,7 @@
 using System.Text.Json;
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 // CB-116: LocalMediaPathFrom's caption-plus-trailing-token arm (CB-107) is
 // right for *finding* a picture and wrong for deciding whether a *failed*

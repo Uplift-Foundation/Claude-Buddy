@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests
+namespace Orbweaver.Tests
 {
     // OrbClusters: which shape an orb joins, and whether it exists at all.
     //
@@ -179,7 +179,7 @@ namespace ClaudeBuddy.Tests
             Assert.Equal(ClusterMode.WithChats, OrbClusters.Parse(text));
 
             // And the caller can still say what "default" means, which is what
-            // ClaudeBuddySettings' migration off the old boolean needs.
+            // OrbweaverSettings' migration off the old boolean needs.
             Assert.Equal(ClusterMode.OwnShape, OrbClusters.Parse(text, ClusterMode.OwnShape));
         }
     }

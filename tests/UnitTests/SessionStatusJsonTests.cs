@@ -1,7 +1,7 @@
 using System.Text.Json;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Covers the JSON shape of SessionStatus (SessionManager.cs ~11-145) against
 // the exact literal OrbweaverHook.sh writes. Per this repo's fixture rule
@@ -95,7 +95,7 @@ public class SessionStatusJsonTests
     [Fact]
     public void Deserialize_ToleratesAnUnknownExtraKeyWithoutThrowing()
     {
-        // Independent of ClaudeBuddySettings' own _unknownKeys mechanism —
+        // Independent of OrbweaverSettings' own _unknownKeys mechanism —
         // this is System.Text.Json's default tolerance for a future hook
         // writing a key this build has never heard of.
         const string withExtraKey =

@@ -7,7 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The live half of the fix: an agent's streamed reply that mentions
 // "[media attached: ...]" gets a thumbnail by asking the gateway's own

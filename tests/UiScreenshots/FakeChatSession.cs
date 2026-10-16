@@ -1,4 +1,4 @@
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Same fake as tests/UiTests/FakeChatSession.cs, copied rather than shared
 // across projects — this project deliberately doesn't reference that one

@@ -1,4 +1,4 @@
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // An in-memory IRemoteChatSession, exactly the shape RemoteChat.cs's own
 // header comment says the interface was designed to be driven by "before any

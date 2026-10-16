@@ -5,7 +5,7 @@ using Avalonia;
 using Avalonia.Headless.XUnit;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The glide from the stack into a shape, and back, once it actually lands.
 //
@@ -105,10 +105,10 @@ public class OrbArrangementAnimationTests
     [AvaloniaFact]
     public void ArrangingAndCompletingTheGlidePinsEveryOrbAtItsTarget()
     {
-        var anchorBefore = ClaudeBuddySettings.ArrangeAnchor;
+        var anchorBefore = OrbweaverSettings.ArrangeAnchor;
         try
         {
-            ClaudeBuddySettings.ArrangeAnchor = null;
+            OrbweaverSettings.ArrangeAnchor = null;
 
             using var scratch = new Scratch();
             scratch.Write("a");
@@ -147,7 +147,7 @@ public class OrbArrangementAnimationTests
         }
         finally
         {
-            ClaudeBuddySettings.ArrangeAnchor = anchorBefore;
+            OrbweaverSettings.ArrangeAnchor = anchorBefore;
         }
     }
 
@@ -158,10 +158,10 @@ public class OrbArrangementAnimationTests
     [AvaloniaFact]
     public void ReFittingAnAlreadySettledShapeStartsNoNewGlide()
     {
-        var anchorBefore = ClaudeBuddySettings.ArrangeAnchor;
+        var anchorBefore = OrbweaverSettings.ArrangeAnchor;
         try
         {
-            ClaudeBuddySettings.ArrangeAnchor = null;
+            OrbweaverSettings.ArrangeAnchor = null;
 
             using var scratch = new Scratch();
             scratch.Write("a");
@@ -177,7 +177,7 @@ public class OrbArrangementAnimationTests
         }
         finally
         {
-            ClaudeBuddySettings.ArrangeAnchor = anchorBefore;
+            OrbweaverSettings.ArrangeAnchor = anchorBefore;
         }
     }
 
@@ -188,10 +188,10 @@ public class OrbArrangementAnimationTests
     [AvaloniaFact]
     public void AnArrivalMidGlideIsDeferredAndPickedUpOnceTheCurrentGlideLands()
     {
-        var anchorBefore = ClaudeBuddySettings.ArrangeAnchor;
+        var anchorBefore = OrbweaverSettings.ArrangeAnchor;
         try
         {
-            ClaudeBuddySettings.ArrangeAnchor = null;
+            OrbweaverSettings.ArrangeAnchor = null;
 
             using var scratch = new Scratch();
             scratch.Write("a");
@@ -212,7 +212,7 @@ public class OrbArrangementAnimationTests
             // local file sharing either would collide with Superseded's
             // pid-and-source grouping rather than testing the arrival this
             // case is about.
-            ClaudeBuddySettings.OpenClawEnabled = true;
+            OrbweaverSettings.OpenClawEnabled = true;
             var (sessions, _) = OpenClawSessions.Parse(
                 JsonDocument.Parse($$"""
                     {"sessions":[{"key":"agent:main:discord:direct:1","chatType":"direct",
@@ -242,7 +242,7 @@ public class OrbArrangementAnimationTests
         }
         finally
         {
-            ClaudeBuddySettings.ArrangeAnchor = anchorBefore;
+            OrbweaverSettings.ArrangeAnchor = anchorBefore;
             OpenClawSessions.SetSnapshotForTests(Array.Empty<OpenClawSessions.Session>());
         }
     }
@@ -254,10 +254,10 @@ public class OrbArrangementAnimationTests
     [AvaloniaFact]
     public void TogglingBackRestoresEveryOrbToWhereItWasBeforeArranging()
     {
-        var anchorBefore = ClaudeBuddySettings.ArrangeAnchor;
+        var anchorBefore = OrbweaverSettings.ArrangeAnchor;
         try
         {
-            ClaudeBuddySettings.ArrangeAnchor = null;
+            OrbweaverSettings.ArrangeAnchor = null;
 
             using var scratch = new Scratch();
             scratch.Write("a");
@@ -286,7 +286,7 @@ public class OrbArrangementAnimationTests
         }
         finally
         {
-            ClaudeBuddySettings.ArrangeAnchor = anchorBefore;
+            OrbweaverSettings.ArrangeAnchor = anchorBefore;
         }
     }
 
@@ -298,10 +298,10 @@ public class OrbArrangementAnimationTests
     [AvaloniaFact]
     public void TogglingBackReturnsADraggedOrbToItsExactPinnedSpot()
     {
-        var anchorBefore = ClaudeBuddySettings.ArrangeAnchor;
+        var anchorBefore = OrbweaverSettings.ArrangeAnchor;
         try
         {
-            ClaudeBuddySettings.ArrangeAnchor = null;
+            OrbweaverSettings.ArrangeAnchor = null;
 
             using var scratch = new Scratch();
             scratch.Write("a");
@@ -324,7 +324,7 @@ public class OrbArrangementAnimationTests
         }
         finally
         {
-            ClaudeBuddySettings.ArrangeAnchor = anchorBefore;
+            OrbweaverSettings.ArrangeAnchor = anchorBefore;
         }
     }
 
@@ -334,10 +334,10 @@ public class OrbArrangementAnimationTests
     [AvaloniaFact]
     public void AnOrbThatEndsWhileArrangedIsDroppedFromThePreArrangeState()
     {
-        var anchorBefore = ClaudeBuddySettings.ArrangeAnchor;
+        var anchorBefore = OrbweaverSettings.ArrangeAnchor;
         try
         {
-            ClaudeBuddySettings.ArrangeAnchor = null;
+            OrbweaverSettings.ArrangeAnchor = null;
 
             using var scratch = new Scratch();
             scratch.Write("a");
@@ -358,7 +358,7 @@ public class OrbArrangementAnimationTests
         }
         finally
         {
-            ClaudeBuddySettings.ArrangeAnchor = anchorBefore;
+            OrbweaverSettings.ArrangeAnchor = anchorBefore;
         }
     }
 
@@ -373,10 +373,10 @@ public class OrbArrangementAnimationTests
     [AvaloniaFact]
     public void AnOrbEndingLeavesTheSurvivorsExactlyWhereTheyWere()
     {
-        var anchorBefore = ClaudeBuddySettings.ArrangeAnchor;
+        var anchorBefore = OrbweaverSettings.ArrangeAnchor;
         try
         {
-            ClaudeBuddySettings.ArrangeAnchor = null;
+            OrbweaverSettings.ArrangeAnchor = null;
 
             using var scratch = new Scratch();
             scratch.Write("a");
@@ -412,7 +412,7 @@ public class OrbArrangementAnimationTests
         }
         finally
         {
-            ClaudeBuddySettings.ArrangeAnchor = anchorBefore;
+            OrbweaverSettings.ArrangeAnchor = anchorBefore;
         }
     }
 
@@ -421,17 +421,17 @@ public class OrbArrangementAnimationTests
     // case OrbArrangement.CentreFor's single/multi-group split makes
     // structurally different, and the one the ticket's own diagnosis singled
     // out as least understood. Heartbeat sessions get their own shape once
-    // ClaudeBuddySettings.OpenClawHeartbeatMode is on, so ending the only
+    // OrbweaverSettings.OpenClawHeartbeatMode is on, so ending the only
     // heartbeat orb collapses two groups into one mid-arrangement.
     [AvaloniaFact]
     public void AnOrbEndingThatCollapsesAGroupStillLeavesTheSurvivorsInPlace()
     {
-        var anchorBefore = ClaudeBuddySettings.ArrangeAnchor;
-        var heartbeatBefore = ClaudeBuddySettings.OpenClawHeartbeatMode;
+        var anchorBefore = OrbweaverSettings.ArrangeAnchor;
+        var heartbeatBefore = OrbweaverSettings.OpenClawHeartbeatMode;
         try
         {
-            ClaudeBuddySettings.ArrangeAnchor = null;
-            ClaudeBuddySettings.OpenClawHeartbeatMode = ClusterMode.OwnShape;
+            OrbweaverSettings.ArrangeAnchor = null;
+            OrbweaverSettings.OpenClawHeartbeatMode = ClusterMode.OwnShape;
 
             using var scratch = new Scratch();
             scratch.Write("a");
@@ -460,8 +460,8 @@ public class OrbArrangementAnimationTests
         }
         finally
         {
-            ClaudeBuddySettings.ArrangeAnchor = anchorBefore;
-            ClaudeBuddySettings.OpenClawHeartbeatMode = heartbeatBefore;
+            OrbweaverSettings.ArrangeAnchor = anchorBefore;
+            OrbweaverSettings.OpenClawHeartbeatMode = heartbeatBefore;
         }
     }
 
@@ -472,10 +472,10 @@ public class OrbArrangementAnimationTests
     [AvaloniaFact]
     public void AStaleTickAfterTheGlideHasAlreadyLandedStopsItselfHarmlessly()
     {
-        var anchorBefore = ClaudeBuddySettings.ArrangeAnchor;
+        var anchorBefore = OrbweaverSettings.ArrangeAnchor;
         try
         {
-            ClaudeBuddySettings.ArrangeAnchor = null;
+            OrbweaverSettings.ArrangeAnchor = null;
 
             using var scratch = new Scratch();
             scratch.Write("a");
@@ -494,7 +494,7 @@ public class OrbArrangementAnimationTests
         }
         finally
         {
-            ClaudeBuddySettings.ArrangeAnchor = anchorBefore;
+            OrbweaverSettings.ArrangeAnchor = anchorBefore;
         }
     }
 
@@ -503,11 +503,11 @@ public class OrbArrangementAnimationTests
     [AvaloniaFact]
     public void ReapplyingArrangementWhileArrangedMovesEveryOrbToTheNewSpacing()
     {
-        var anchorBefore = ClaudeBuddySettings.ArrangeAnchor;
-        var spacingBefore = ClaudeBuddySettings.ArrangeSpacing;
+        var anchorBefore = OrbweaverSettings.ArrangeAnchor;
+        var spacingBefore = OrbweaverSettings.ArrangeSpacing;
         try
         {
-            ClaudeBuddySettings.ArrangeAnchor = null;
+            OrbweaverSettings.ArrangeAnchor = null;
 
             using var scratch = new Scratch();
             scratch.Write("a");
@@ -520,7 +520,7 @@ public class OrbArrangementAnimationTests
 
             var before = Windows(manager).ToDictionary(kv => kv.Key, kv => kv.Value.Position);
 
-            ClaudeBuddySettings.ArrangeSpacing = Math.Min(1.0, ClaudeBuddySettings.ArrangeSpacing + 0.4);
+            OrbweaverSettings.ArrangeSpacing = Math.Min(1.0, OrbweaverSettings.ArrangeSpacing + 0.4);
             manager.ReapplyArrangement();
 
             // At least worth asking: nothing has thrown, and the call did not
@@ -532,8 +532,8 @@ public class OrbArrangementAnimationTests
         }
         finally
         {
-            ClaudeBuddySettings.ArrangeAnchor = anchorBefore;
-            ClaudeBuddySettings.ArrangeSpacing = spacingBefore;
+            OrbweaverSettings.ArrangeAnchor = anchorBefore;
+            OrbweaverSettings.ArrangeSpacing = spacingBefore;
         }
     }
 
@@ -557,7 +557,7 @@ public class OrbArrangementAnimationTests
     [AvaloniaFact]
     public void ADragBackFromAStaleAnchorPastTheEdgeMovesEveryOrbByTheWholeDrag()
     {
-        var anchorBefore = ClaudeBuddySettings.ArrangeAnchor;
+        var anchorBefore = OrbweaverSettings.ArrangeAnchor;
         try
         {
             using var scratch = new Scratch();
@@ -569,13 +569,13 @@ public class OrbArrangementAnimationTests
             manager.ScanAndUpdate();
 
             var work = WorkOf(manager);
-            var stale = new ClaudeBuddySettings.OrbPlacement(work.Right + 480, work.Y + work.Height / 2);
-            ClaudeBuddySettings.ArrangeAnchor = stale;
+            var stale = new OrbweaverSettings.OrbPlacement(work.Right + 480, work.Y + work.Height / 2);
+            OrbweaverSettings.ArrangeAnchor = stale;
 
             manager.ArrangeOrbsInPattern();
             CompleteTheGlide(manager);
 
-            var repaired = ClaudeBuddySettings.ArrangeAnchor!;
+            var repaired = OrbweaverSettings.ArrangeAnchor!;
             Assert.True(repaired.X < work.Right, $"anchor still at {repaired.X}, past {work.Right}");
             Assert.Equal(stale.Y, repaired.Y);
 
@@ -589,7 +589,7 @@ public class OrbArrangementAnimationTests
         }
         finally
         {
-            ClaudeBuddySettings.ArrangeAnchor = anchorBefore;
+            OrbweaverSettings.ArrangeAnchor = anchorBefore;
         }
     }
 
@@ -600,7 +600,7 @@ public class OrbArrangementAnimationTests
     [AvaloniaFact]
     public void AnInRangeAnchorIsLeftExactlyAsSavedAndStillHonoursADrag()
     {
-        var anchorBefore = ClaudeBuddySettings.ArrangeAnchor;
+        var anchorBefore = OrbweaverSettings.ArrangeAnchor;
         try
         {
             using var scratch = new Scratch();
@@ -611,28 +611,28 @@ public class OrbArrangementAnimationTests
             manager.ScanAndUpdate();
 
             var work = WorkOf(manager);
-            var honoured = new ClaudeBuddySettings.OrbPlacement(
+            var honoured = new OrbweaverSettings.OrbPlacement(
                 work.X + work.Width / 2 - 101, work.Y + work.Height / 2 + 37);
-            ClaudeBuddySettings.ArrangeAnchor = honoured;
+            OrbweaverSettings.ArrangeAnchor = honoured;
 
             manager.ArrangeOrbsInPattern();
             CompleteTheGlide(manager);
 
-            Assert.Equal(honoured, ClaudeBuddySettings.ArrangeAnchor);
+            Assert.Equal(honoured, OrbweaverSettings.ArrangeAnchor);
 
             var before = Windows(manager).ToDictionary(kv => kv.Key, kv => kv.Value.Position);
 
             manager.ShiftArrangementAnchor(40, -24);
             manager.ReapplyArrangement();
 
-            Assert.Equal(new ClaudeBuddySettings.OrbPlacement(honoured.X + 40, honoured.Y - 24),
-                ClaudeBuddySettings.ArrangeAnchor);
+            Assert.Equal(new OrbweaverSettings.OrbPlacement(honoured.X + 40, honoured.Y - 24),
+                OrbweaverSettings.ArrangeAnchor);
             Assert.All(Windows(manager), kv =>
                 Assert.Equal(new PixelPoint(before[kv.Key].X + 40, before[kv.Key].Y - 24), kv.Value.Position));
         }
         finally
         {
-            ClaudeBuddySettings.ArrangeAnchor = anchorBefore;
+            OrbweaverSettings.ArrangeAnchor = anchorBefore;
         }
     }
 
@@ -647,13 +647,13 @@ public class OrbArrangementAnimationTests
     [AvaloniaFact]
     public void AShapeThatGrowsIntoTheEdgeKeepsItsLandedAnchorWhenItShrinksAgain()
     {
-        var anchorBefore = ClaudeBuddySettings.ArrangeAnchor;
-        var spacingBefore = ClaudeBuddySettings.ArrangeSpacing;
-        var shapeBefore = ClaudeBuddySettings.ArrangeShape;
+        var anchorBefore = OrbweaverSettings.ArrangeAnchor;
+        var spacingBefore = OrbweaverSettings.ArrangeSpacing;
+        var shapeBefore = OrbweaverSettings.ArrangeShape;
         try
         {
-            ClaudeBuddySettings.ArrangeSpacing = 0.1;
-            ClaudeBuddySettings.ArrangeShape = "heart";
+            OrbweaverSettings.ArrangeSpacing = 0.1;
+            OrbweaverSettings.ArrangeShape = "heart";
 
             using var scratch = new Scratch();
             scratch.Write("a");
@@ -667,26 +667,26 @@ public class OrbArrangementAnimationTests
             // 55px in: three orbs in a heart reach 44px right of their anchor at
             // the tightest spacing and 65px at the widest (measured at Scale
             // 1), so the tight shape clears the edge and the wide one cannot.
-            var nearEdge = new ClaudeBuddySettings.OrbPlacement(work.Right - 55, work.Y + work.Height / 2);
-            ClaudeBuddySettings.ArrangeAnchor = nearEdge;
+            var nearEdge = new OrbweaverSettings.OrbPlacement(work.Right - 55, work.Y + work.Height / 2);
+            OrbweaverSettings.ArrangeAnchor = nearEdge;
 
             manager.ArrangeOrbsInPattern();
             CompleteTheGlide(manager);
 
             // Fixture: tight, the shape fits where it was put, so nothing moved.
-            Assert.Equal(nearEdge, ClaudeBuddySettings.ArrangeAnchor);
+            Assert.Equal(nearEdge, OrbweaverSettings.ArrangeAnchor);
 
-            ClaudeBuddySettings.ArrangeSpacing = 1.0;
+            OrbweaverSettings.ArrangeSpacing = 1.0;
             manager.ReapplyArrangement();
 
-            var landed = ClaudeBuddySettings.ArrangeAnchor!;
+            var landed = OrbweaverSettings.ArrangeAnchor!;
             Assert.True(landed.X < nearEdge.X, $"growing into the edge left the anchor at {landed.X}");
             Assert.Equal(nearEdge.Y, landed.Y);
 
-            ClaudeBuddySettings.ArrangeSpacing = 0.1;
+            OrbweaverSettings.ArrangeSpacing = 0.1;
             manager.ReapplyArrangement();
 
-            Assert.Equal(landed, ClaudeBuddySettings.ArrangeAnchor);
+            Assert.Equal(landed, OrbweaverSettings.ArrangeAnchor);
 
             // And the shrunk shape is drawn around that landed centre, clear of
             // the edge it was pushed off, rather than back where it started.
@@ -695,9 +695,9 @@ public class OrbArrangementAnimationTests
         }
         finally
         {
-            ClaudeBuddySettings.ArrangeAnchor = anchorBefore;
-            ClaudeBuddySettings.ArrangeSpacing = spacingBefore;
-            ClaudeBuddySettings.ArrangeShape = shapeBefore;
+            OrbweaverSettings.ArrangeAnchor = anchorBefore;
+            OrbweaverSettings.ArrangeSpacing = spacingBefore;
+            OrbweaverSettings.ArrangeShape = shapeBefore;
         }
     }
 }

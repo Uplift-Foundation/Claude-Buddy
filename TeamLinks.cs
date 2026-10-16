@@ -6,7 +6,7 @@ using ArrowPath = Avalonia.Controls.Shapes.Path;
 using Avalonia.Media;
 using Avalonia.Platform;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Draws the arrow from an agent-team member's orb to its team lead's.
     //

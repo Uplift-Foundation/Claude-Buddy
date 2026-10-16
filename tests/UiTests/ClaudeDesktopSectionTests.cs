@@ -4,7 +4,7 @@ using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
 using Xunit;
 
-namespace ClaudeBuddy.UiTests;
+namespace Orbweaver.UiTests;
 
 // The Claude Desktop submenu: one row per profile, what its label says, and what
 // its theme picker offers.

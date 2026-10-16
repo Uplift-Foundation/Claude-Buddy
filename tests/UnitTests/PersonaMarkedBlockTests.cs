@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-141: a persona whose fields sit inside a ```yaml fence, which is what
 // profile-gen's `claude-md` output mode writes on purpose.

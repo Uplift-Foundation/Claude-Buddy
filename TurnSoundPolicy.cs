@@ -1,4 +1,4 @@
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // One event this scan noticed, already reduced to what the policy needs
     // to act on it: which kind of signal, which key its override (if any) is
@@ -40,7 +40,7 @@ namespace ClaudeBuddy
 
     // Everything this decision needs to know about what the user has asked
     // for, gathered up front by the caller so this stays a function of its
-    // arguments rather than a reader of ClaudeBuddySettings. The two resolver
+    // arguments rather than a reader of OrbweaverSettings. The two resolver
     // delegates carry the filesystem lookup and the platform default name
     // together, because "null means the platform default" is a fact about
     // *which trigger* the setting belongs to (Ping for attention, Glass for
@@ -50,7 +50,7 @@ namespace ClaudeBuddy
         bool MasterEnabled,
         string? DefaultFinishedSetting,
         string? DefaultAttentionSetting,
-        Func<string, ClaudeBuddySettings.OrbTurnSound?> OverrideFor,
+        Func<string, OrbweaverSettings.OrbTurnSound?> OverrideFor,
         Func<string?, string?> ResolveFinishedSound,
         Func<string?, string?> ResolveAttentionSound);
 

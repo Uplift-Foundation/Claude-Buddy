@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using Xunit;
 
-namespace ClaudeBuddy.Tests
+namespace Orbweaver.Tests
 {
     // SessionDependents.ParsePs against the bytes `ps` actually prints, rather
     // than against a fixture of them.

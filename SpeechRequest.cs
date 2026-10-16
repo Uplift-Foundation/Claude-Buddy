@@ -1,6 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Reading a reply out loud, from whichever button was pressed.
     //
@@ -85,7 +85,7 @@ namespace ClaudeBuddy
         // would mean fetching a reply in order to discover it was not wanted.
         internal static void Speak(string? reply, string? sessionId)
         {
-            var plan = SpeechPlan.For(reply, ClaudeBuddySettings.SpeakScope);
+            var plan = SpeechPlan.For(reply, OrbweaverSettings.SpeakScope);
             if (plan.Silent) return;
 
             // Claimed before either branch, so a full-text utterance supersedes a
@@ -218,7 +218,7 @@ namespace ClaudeBuddy
         [ExcludeFromCodeCoverage]
         private static void Say(string text, TextToSpeech.VoiceOption? voice, double? rate)
         {
-            if (voice is null) TextToSpeech.Speak(text, ClaudeBuddySettings.SpeakVoice);
+            if (voice is null) TextToSpeech.Speak(text, OrbweaverSettings.SpeakVoice);
             else TextToSpeech.Speak(text, voice, rate);
         }
     }

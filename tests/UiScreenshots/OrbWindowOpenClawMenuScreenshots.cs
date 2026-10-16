@@ -1,7 +1,7 @@
 using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-170: an OpenClaw orb's right-click menu with its two gateway rows, in
 // the three states a reviewer needs to see — offered, End armed, and End

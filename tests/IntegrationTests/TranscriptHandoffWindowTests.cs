@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // TranscriptHandoff's I/O half against real files on disk: the stat, the
 // cache keyed on it, and the tail window. The decision over rows is pure and

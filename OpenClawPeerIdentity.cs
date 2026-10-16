@@ -1,7 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // The direct link carries a deliberately tiny answer from the machine which
     // can read an OpenClaw workspace to one which cannot. It is not a file API:

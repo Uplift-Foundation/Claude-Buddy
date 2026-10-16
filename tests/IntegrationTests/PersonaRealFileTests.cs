@@ -1,7 +1,7 @@
 using System.Reflection;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-135's own use case, against a real tree — and the reason this file exists
 // rather than another row in a grammar table.
@@ -38,7 +38,7 @@ public class PersonaRealFileTests : IDisposable
     {
         Directory.CreateDirectory(_root);
 
-        // AsyncLocal rather than CLAUDE_BUDDY_LOG_DIR: _logDir is asserted
+        // AsyncLocal rather than ORBWEAVER_LOG_DIR: _logDir is asserted
         // about below, so it must not be a name any parallel test can see.
         // See CrashLog.ScopeForTests for the whole argument.
         _logScope = CrashLog.ScopeForTests(_logDir);
@@ -129,7 +129,7 @@ public class PersonaRealFileTests : IDisposable
 
     // The lines about one picture, rather than the whole file.
     //
-    // CLAUDE_BUDDY_LOG_DIR is one process-wide variable and the classes that
+    // ORBWEAVER_LOG_DIR is one process-wide variable and the classes that
     // are *not* in this collection go on resolving personas of their own while
     // these run — LocalPersonaFilesTests refuses a picture on purpose a dozen
     // times over. Their lines land in this scratch directory too, so "the log

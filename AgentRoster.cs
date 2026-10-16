@@ -2,7 +2,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Diagnostics;
 using System.Text.Json;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Which of this machine's Claude Code sessions is the one another machine
     // knows by a given name.

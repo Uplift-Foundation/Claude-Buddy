@@ -3,8 +3,8 @@
 #   .\tools\build-windows-installer.ps1
 #   .\tools\build-windows-installer.ps1 -SkipPublish   # reuse an existing publish
 #
-# Produces dist\Orbweaver-<version>-win-x64-setup.exe. The exe inside it is still
-# ClaudeBuddy.exe; that name moves with the assembly, not with the installer.
+# Produces dist\Orbweaver-<version>-win-x64-setup.exe, which installs
+# Orbweaver.exe -- the publish output, named after the csproj's <AssemblyName>.
 #
 # Requires the .NET SDK and Inno Setup 6 (iscc.exe). Install Inno with either:
 #   winget install -e --id JRSoftware.InnoSetup
@@ -63,7 +63,7 @@ Push-Location $repoRoot
 try {
     # The csproj owns the version; parsing it here keeps the installer filename,
     # the Add/Remove Programs entry and the compiled assembly from drifting apart.
-    $csproj = Join-Path $repoRoot 'ClaudeBuddy.csproj'
+    $csproj = Join-Path $repoRoot 'Orbweaver.csproj'
     # -Raw so the XML cast gets one string rather than an array of lines.
     # PropertyGroup may be a collection, hence filtering for the one that
     # actually carries a Version.
@@ -83,7 +83,7 @@ try {
     if (-not $SkipPublish) {
         Write-Host "==> Publishing ($Rid)"
         # Single-file here, unlike the macOS bundle: the installer lays down one
-        # ClaudeBuddy.exe, and self-extraction on launch is an acceptable trade
+        # Orbweaver.exe, and self-extraction on launch is an acceptable trade
         # for not scattering 200 runtime files through the install directory.
         & dotnet publish $csproj -c Release -r $Rid `
             -p:DebugType=none `
@@ -91,7 +91,7 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed ($LASTEXITCODE)" }
     }
 
-    $exe = Join-Path $repoRoot "bin\Release\net10.0\$Rid\publish\ClaudeBuddy.exe"
+    $exe = Join-Path $repoRoot "bin\Release\net10.0\$Rid\publish\Orbweaver.exe"
     if (-not (Test-Path -LiteralPath $exe)) {
         throw "Published executable not found at $exe"
     }
@@ -100,7 +100,7 @@ try {
     # rather than only on it.
     $thumbprint = $env:WINDOWS_CERT_THUMBPRINT
     if ($thumbprint) {
-        Write-Host "==> Signing ClaudeBuddy.exe"
+        Write-Host "==> Signing Orbweaver.exe"
         Invoke-SignTool -Path $exe -Thumbprint $thumbprint
     }
 
@@ -123,7 +123,7 @@ try {
 
     Write-Host "==> Compiling installer"
     # ISCC wants its options ahead of the script filename.
-    & $iscc "/DVersion=$version" (Join-Path $PSScriptRoot 'ClaudeBuddy.iss') | Out-Null
+    & $iscc "/DVersion=$version" (Join-Path $PSScriptRoot 'Orbweaver.iss') | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed ($LASTEXITCODE)" }
 
     $setup = Join-Path $repoRoot "dist\Orbweaver-$version-win-x64-setup.exe"

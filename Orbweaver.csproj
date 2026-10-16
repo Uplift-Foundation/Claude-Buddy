@@ -5,8 +5,8 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <AssemblyName>ClaudeBuddy</AssemblyName>
-    <RootNamespace>ClaudeBuddy</RootNamespace>
+    <AssemblyName>Orbweaver</AssemblyName>
+    <RootNamespace>Orbweaver</RootNamespace>
     <!-- The single source of truth for the shipped version. The packaging
          scripts and the release workflow all parse this element out of this
          file rather than carrying their own copy, so a release is a one-line
@@ -20,14 +20,14 @@
          exe's Details tab disagreed with its own ProductVersion (CB-205);
          tests/UnitTests/AssemblyVersionTests.cs fails if that comes back.
          It is the same cut tools/build-macos-app.sh makes for
-         CFBundleVersion and tools/ClaudeBuddy.iss for VersionInfoVersion.
+         CFBundleVersion and tools/Orbweaver.iss for VersionInfoVersion.
          Version flows into AssemblyInformationalVersion, which is what
          actually shows the prerelease label. Version must stay a literal
          element here: the packaging scripts and release.yml parse it. -->
     <Version>0.5.10-beta</Version>
     <AssemblyVersion>$(Version.Split('-')[0]).0</AssemblyVersion>
     <FileVersion>$(Version.Split('-')[0]).0</FileVersion>
-    <Product>Claude Buddy</Product>
+    <Product>Orbweaver</Product>
     <Authors>Kawika Miller, Repo Owner</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/Uplift-Foundation/Claude-Buddy</PackageProjectUrl>
@@ -36,11 +36,11 @@
     <RollForward>LatestMajor</RollForward>
     <!-- Single-file, self-contained output when publishing; pick the RID on
          the command line: dotnet publish -c Release -r win-x64|osx-arm64|osx-x64 -->
-    <!-- Embedded as the Win32 icon resource, so ClaudeBuddy.exe has a real icon
+    <!-- Embedded as the Win32 icon resource, so Orbweaver.exe has a real icon
          in Explorer, the Start menu and the notification area's overflow. The
          SDK does this cross-platform, so a Mac can still produce the win-x64
          build. Ignored when targeting macOS, which uses Resources/*.icns. -->
-    <ApplicationIcon>Assets/ClaudeBuddy.ico</ApplicationIcon>
+    <ApplicationIcon>Assets/Orbweaver.ico</ApplicationIcon>
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
@@ -53,7 +53,7 @@
 
   <ItemGroup>
     <!-- tools/ is scripts, plus the side-car speech engine's own project (see
-         tools/ClaudeBuddySpeech). The SDK's default glob is **/*.cs rooted at
+         tools/OrbweaverSpeech). The SDK's default glob is **/*.cs rooted at
          this file, so without this the side-car's source would be compiled into
          the app — dragging in the very 82MB of dependencies that keeping it a
          separate downloadable process exists to avoid. Harmless until tools/
@@ -62,7 +62,7 @@
     <!-- ...except the one file the app shares with the side-car engine: the
          names of their contract, compiled into both so they cannot drift
          (CB-200). -->
-    <Compile Include="tools\ClaudeBuddySpeech\SpeechEngineContract.cs" Link="SpeechEngineContract.cs" />
+    <Compile Include="tools\OrbweaverSpeech\SpeechEngineContract.cs" Link="SpeechEngineContract.cs" />
 
     <!-- Same trap, second door: tests/ has its own project with its own entry
          point, and the SDK's default glob would compile it into the app. It is
@@ -75,15 +75,15 @@
     <!-- The new xUnit suites reference this project rather than compiling
          individual shipped files (the tests/ArrangementTests-style
          <Compile Include>), because they need SessionManager and
-         ClaudeBuddySettings, whose dependency closures are too large to pull
+         OrbweaverSettings, whose dependency closures are too large to pull
          in that way. A ProjectReference alone gives them only public types,
          so this grants the three of them the internal ones too — the same
          private-pure-logic (SessionManager's scan rules, AgentTeam's
          sanitizers) that made them worth testing in the first place. -->
-    <InternalsVisibleTo Include="ClaudeBuddy.UnitTests" />
-    <InternalsVisibleTo Include="ClaudeBuddy.IntegrationTests" />
-    <InternalsVisibleTo Include="ClaudeBuddy.UiTests" />
-    <InternalsVisibleTo Include="ClaudeBuddy.UiScreenshots" />
+    <InternalsVisibleTo Include="Orbweaver.UnitTests" />
+    <InternalsVisibleTo Include="Orbweaver.IntegrationTests" />
+    <InternalsVisibleTo Include="Orbweaver.UiTests" />
+    <InternalsVisibleTo Include="Orbweaver.UiScreenshots" />
 
     <!-- And tools/peer-probe, for the same reason and by the same rule.
          PeerLink and RemoteMirrorClient are internal, and their closure is not
@@ -113,7 +113,7 @@
          was fixed upstream but explicitly never backported to 11.3.x
          (backported-12.0.x only). Reaching that fix for real screenshot
          testing meant the whole app had to move, not just a test project:
-         ClaudeBuddy.dll's compiled XAML/markup-extension IL is bound to
+         Orbweaver.dll's compiled XAML/markup-extension IL is bound to
          whichever major version of Avalonia.Markup.Xaml.dll the CLR actually
          loads in-process, and a test host referencing a different major
          version than the app it hosts fails every XAML-backed control with

@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // What actually happens for one scan's worth of signals, with no process, no
 // settings file and no clock but the one each case hands in. TurnSounds
@@ -16,11 +16,11 @@ public class TurnSoundPolicyTests
         bool masterEnabled = true,
         string? defaultFinished = null,
         string? defaultAttention = null,
-        Dictionary<string, ClaudeBuddySettings.OrbTurnSound>? overrides = null,
+        Dictionary<string, OrbweaverSettings.OrbTurnSound>? overrides = null,
         Func<string?, string?>? resolveFinished = null,
         Func<string?, string?>? resolveAttention = null)
     {
-        var over = overrides ?? new Dictionary<string, ClaudeBuddySettings.OrbTurnSound>();
+        var over = overrides ?? new Dictionary<string, OrbweaverSettings.OrbTurnSound>();
 
         // Fake resolvers that behave like SystemSoundCatalog.Resolve would
         // for the purposes of these tests: null substitutes a platform
@@ -143,7 +143,7 @@ public class TurnSoundPolicyTests
     [Fact]
     public void AnOrbMutedForAttentionDoesNotSilenceAnotherOrbsFinishedChimeInTheSameScan()
     {
-        var overrides = new Dictionary<string, ClaudeBuddySettings.OrbTurnSound>
+        var overrides = new Dictionary<string, OrbweaverSettings.OrbTurnSound>
         {
             ["key-a"] = new(Finished: null, Attention: "off"),
         };
@@ -164,7 +164,7 @@ public class TurnSoundPolicyTests
     [Fact]
     public void AMutedFirstFinishedOrbDoesNotSilenceASecondAudibleOne()
     {
-        var overrides = new Dictionary<string, ClaudeBuddySettings.OrbTurnSound>
+        var overrides = new Dictionary<string, OrbweaverSettings.OrbTurnSound>
         {
             ["key-a"] = new(Finished: "off", Attention: null),
         };
@@ -308,9 +308,9 @@ public class TurnSoundPolicyTests
     public void AnOverrideBeatsTheGlobalDefault()
     {
         var events = new[] { Finished("key-a", "session-a") };
-        var overrides = new Dictionary<string, ClaudeBuddySettings.OrbTurnSound>
+        var overrides = new Dictionary<string, OrbweaverSettings.OrbTurnSound>
         {
-            ["key-a"] = new ClaudeBuddySettings.OrbTurnSound(Finished: "custom", Attention: null),
+            ["key-a"] = new OrbweaverSettings.OrbTurnSound(Finished: "custom", Attention: null),
         };
 
         string? seenSetting = null;
@@ -336,9 +336,9 @@ public class TurnSoundPolicyTests
     public void AnOverrideOfOnlyAttentionLeavesFinishedOnTheGlobalDefault()
     {
         var events = new[] { Finished("key-a", "session-a") };
-        var overrides = new Dictionary<string, ClaudeBuddySettings.OrbTurnSound>
+        var overrides = new Dictionary<string, OrbweaverSettings.OrbTurnSound>
         {
-            ["key-a"] = new ClaudeBuddySettings.OrbTurnSound(Finished: null, Attention: "custom-ping"),
+            ["key-a"] = new OrbweaverSettings.OrbTurnSound(Finished: null, Attention: "custom-ping"),
         };
 
         string? seenSetting = null;
@@ -359,9 +359,9 @@ public class TurnSoundPolicyTests
     public void AnOverrideBeatsTheGlobalDefaultForAttentionToo()
     {
         var events = new[] { Attention("key-a", "session-a") };
-        var overrides = new Dictionary<string, ClaudeBuddySettings.OrbTurnSound>
+        var overrides = new Dictionary<string, OrbweaverSettings.OrbTurnSound>
         {
-            ["key-a"] = new ClaudeBuddySettings.OrbTurnSound(Finished: null, Attention: "custom-ping"),
+            ["key-a"] = new OrbweaverSettings.OrbTurnSound(Finished: null, Attention: "custom-ping"),
         };
 
         string? seenSetting = null;
@@ -386,9 +386,9 @@ public class TurnSoundPolicyTests
     public void AnOverrideOfOnlyFinishedLeavesAttentionOnTheGlobalDefault()
     {
         var events = new[] { Attention("key-a", "session-a") };
-        var overrides = new Dictionary<string, ClaudeBuddySettings.OrbTurnSound>
+        var overrides = new Dictionary<string, OrbweaverSettings.OrbTurnSound>
         {
-            ["key-a"] = new ClaudeBuddySettings.OrbTurnSound(Finished: "custom-glass", Attention: null),
+            ["key-a"] = new OrbweaverSettings.OrbTurnSound(Finished: "custom-glass", Attention: null),
         };
 
         string? seenSetting = null;
@@ -406,9 +406,9 @@ public class TurnSoundPolicyTests
     public void AnOffOverrideSilencesAnOtherwiseLoudDefault()
     {
         var events = new[] { Finished("key-a", "session-a") };
-        var overrides = new Dictionary<string, ClaudeBuddySettings.OrbTurnSound>
+        var overrides = new Dictionary<string, OrbweaverSettings.OrbTurnSound>
         {
-            ["key-a"] = new ClaudeBuddySettings.OrbTurnSound(Finished: "off", Attention: null),
+            ["key-a"] = new OrbweaverSettings.OrbTurnSound(Finished: "off", Attention: null),
         };
 
         // The resolver would happily hand back a real path if it were ever
@@ -431,9 +431,9 @@ public class TurnSoundPolicyTests
     public void OffIsRecognisedRegardlessOfCase(string setting)
     {
         var events = new[] { Finished("key-a", "session-a") };
-        var overrides = new Dictionary<string, ClaudeBuddySettings.OrbTurnSound>
+        var overrides = new Dictionary<string, OrbweaverSettings.OrbTurnSound>
         {
-            ["key-a"] = new ClaudeBuddySettings.OrbTurnSound(Finished: setting, Attention: null),
+            ["key-a"] = new OrbweaverSettings.OrbTurnSound(Finished: setting, Attention: null),
         };
         var settings = Snapshot(overrides: overrides, resolveFinished: _ => "/would-play.aiff");
 

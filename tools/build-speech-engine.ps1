@@ -4,9 +4,9 @@
 #   .\tools\build-speech-engine.ps1 -Install   # ...and drop it straight into
 #                                              #    %APPDATA% for local testing
 #
-# Produces dist\ClaudeBuddySpeech-<version>-win-x64.zip, which NeuralSpeech
+# Produces dist\OrbweaverSpeech-<version>-win-x64.zip, which NeuralSpeech
 # downloads from the matching GitHub release. The app never contains this: see
-# tools/ClaudeBuddySpeech/ClaudeBuddySpeech.csproj for why it is a separate
+# tools/OrbweaverSpeech/OrbweaverSpeech.csproj for why it is a separate
 # downloaded process rather than a dependency.
 #
 # Windows-only, with tools/build-speech-engine.sh as its macOS twin. That split
@@ -24,17 +24,17 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$project = Join-Path $PSScriptRoot 'ClaudeBuddySpeech\ClaudeBuddySpeech.csproj'
+$project = Join-Path $PSScriptRoot 'OrbweaverSpeech\OrbweaverSpeech.csproj'
 
 Push-Location $repoRoot
 try {
-    # Read from the *app's* csproj, not the engine's. ClaudeBuddy.csproj's
+    # Read from the *app's* csproj, not the engine's. Orbweaver.csproj's
     # <Version> is the single source of truth for the shipped version -- the
     # installer script and the release workflow both parse that same element -- and
     # the engine ships in the app's own release under the same tag. NeuralSpeech
     # derives the version it asks for from the app assembly, so taking it from
     # anywhere else here is how the filename and the URL drift apart.
-    $appProject = Join-Path $repoRoot 'ClaudeBuddy.csproj'
+    $appProject = Join-Path $repoRoot 'Orbweaver.csproj'
     $version = ([xml](Get-Content -LiteralPath $appProject -Raw)).Project.PropertyGroup.Version |
         Where-Object { $_ } | Select-Object -First 1
     if (-not $version) { throw "Could not read <Version> from $appProject" }
@@ -44,7 +44,7 @@ try {
     & dotnet publish $project -c Release -r $Rid -p:DebugType=none --nologo -v quiet
     if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed ($LASTEXITCODE)" }
 
-    $publish = Join-Path $PSScriptRoot "ClaudeBuddySpeech\bin\Release\net10.0\$Rid\publish"
+    $publish = Join-Path $PSScriptRoot "OrbweaverSpeech\bin\Release\net10.0\$Rid\publish"
     if (-not (Test-Path -LiteralPath $publish)) { throw "Publish output not found at $publish" }
 
     # The voices are the whole reason this script exists rather than a bare
@@ -54,7 +54,7 @@ try {
     # engine has no voices\ directory at all, and would exit "no voices directory"
     # forever while every `dotnet run` looked perfect. Copied explicitly here so
     # what ships is what was tested.
-    $voicesSource = Join-Path $PSScriptRoot "ClaudeBuddySpeech\bin\Release\net10.0\$Rid\voices"
+    $voicesSource = Join-Path $PSScriptRoot "OrbweaverSpeech\bin\Release\net10.0\$Rid\voices"
     if (-not (Test-Path -LiteralPath $voicesSource)) {
         throw "No voices at $voicesSource -- the KokoroSharp copy target did not run"
     }
@@ -76,7 +76,7 @@ try {
 
     $dist = Join-Path $repoRoot 'dist'
     New-Item -ItemType Directory -Path $dist -Force | Out-Null
-    $zip = Join-Path $dist "ClaudeBuddySpeech-$version-$Rid.zip"
+    $zip = Join-Path $dist "OrbweaverSpeech-$version-$Rid.zip"
 
     Write-Host "==> Packing"
     if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
@@ -88,7 +88,7 @@ try {
     if ($Install) {
         # Straight into the layout NeuralSpeech expects, so the feature can be
         # tested end to end before any release exists to download from.
-        $target = Join-Path $env:APPDATA "ClaudeBuddy\speech-engine\$version"
+        $target = Join-Path $env:APPDATA "Orbweaver\speech-engine\$version"
         Write-Host "==> Installing to $target"
         if (Test-Path -LiteralPath $target) { Remove-Item -LiteralPath $target -Recurse -Force }
         New-Item -ItemType Directory -Path $target -Force | Out-Null

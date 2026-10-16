@@ -7,9 +7,13 @@
 # More than one path since the rename (CB-255): `build-macos-app.sh --install`
 # replaces /Applications/Orbweaver.app and removes the legacy
 # /Applications/Claude Buddy.app in the same run, and a copy left running out
-# of either would hold the single-instance mutex against the new one. All the
-# paths are matched in one pass and stopped together, so the grace period is
-# paid once rather than once per path.
+# of either would hold the single-instance mutex against the new one. Three
+# since the executable rename (CB-256), because the phase-2 Orbweaver.app ran
+# Contents/MacOS/ClaudeBuddy and this one runs Contents/MacOS/Orbweaver — two
+# paths inside the one bundle, as well as the legacy bundle's. Nothing here
+# knows which is which: the caller names them all, and all the paths are
+# matched in one pass and stopped together, so the grace period is paid once
+# rather than once per path.
 #
 # Prints each pid it stopped, one per line. Exits 0 once none is left, 1 if
 # one survived SIGKILL.
@@ -33,9 +37,13 @@
 # must flush on the way out, but a clean exit is still the better one to give
 # it, and the grace is short because an install is waiting.
 #
-# Test seam: CLAUDE_BUDDY_STOP_GRACE_SECONDS shortens the wait, so the suite
-# can drive the SIGKILL arm with a process that ignores SIGTERM.
+# Test seam: ORBWEAVER_STOP_GRACE_SECONDS (or the pre-rename
+# CLAUDE_BUDDY_STOP_GRACE_SECONDS) shortens the wait, so the suite can drive
+# the SIGKILL arm with a process that ignores SIGTERM.
 set -uo pipefail
+
+# CB-256: ORBWEAVER_<name>, falling back to the pre-rename CLAUDE_BUDDY_<name>.
+brand_env() { local n="ORBWEAVER_$1" l="CLAUDE_BUDDY_$1"; printf '%s' "${!n:-${!l:-}}"; }
 
 # At least one path, and no empty ones: an empty path matches nothing, which
 # would make a mistake in the caller read as "nothing was running".
@@ -45,7 +53,8 @@ for exe in "$@"; do
   [[ -n "$exe" ]] || usage
 done
 
-GRACE="${CLAUDE_BUDDY_STOP_GRACE_SECONDS:-10}"
+GRACE="$(brand_env STOP_GRACE_SECONDS)"
+GRACE="${GRACE:-10}"
 UID_NOW="$(id -u)"
 
 # The paths reach awk through the environment, one per line, rather than as

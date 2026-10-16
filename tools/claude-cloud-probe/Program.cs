@@ -1,6 +1,6 @@
 using System.Text;
 using System.Text.Json;
-using ClaudeBuddy;
+using Orbweaver;
 
 // Settles CB-164's last open question from a terminal, with a human present.
 //
@@ -33,7 +33,7 @@ using ClaudeBuddy;
 // before the feature is opted into, and nothing built on top of this file may
 // ship reading a credential by default.
 //
-// The prompt this raises names *this binary*, not Claude Buddy — it is a
+// The prompt this raises names *this binary*, not Orbweaver — it is a
 // separate unsigned executable. That is expected and is not the rule the app
 // follows being bent: the P/Invoke-rather-than-`security` argument in
 // MacOSKeychain is about what the shipped, signed app puts on that screen. A

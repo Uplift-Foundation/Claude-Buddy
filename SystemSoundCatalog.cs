@@ -1,4 +1,4 @@
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // What sounds this machine already has, and turning a setting string back
     // into a file ChimePlayer can open.

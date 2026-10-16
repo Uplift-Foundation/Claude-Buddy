@@ -7,7 +7,7 @@ using Avalonia.Media;
 using Avalonia.Threading;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-198's orb half: drawing an orb at a size, the right-click Size submenu, the
 // size following an orb across the title migration, and the anchors outside
@@ -24,13 +24,13 @@ public class OrbSizeTests : IDisposable
 {
     private readonly List<string> _keys = new();
     private readonly List<string> _chats = new();
-    private readonly double _globalBefore = ClaudeBuddySettings.OrbSize;
+    private readonly double _globalBefore = OrbweaverSettings.OrbSize;
 
     public void Dispose()
     {
-        foreach (var key in _keys) ClaudeBuddySettings.SetOrbSize(key, null);
+        foreach (var key in _keys) OrbweaverSettings.SetOrbSize(key, null);
         foreach (var id in _chats) ChatPanel.CloseFor(id);
-        ClaudeBuddySettings.OrbSize = _globalBefore;
+        OrbweaverSettings.OrbSize = _globalBefore;
         Flush();
     }
 
@@ -155,11 +155,11 @@ public class OrbSizeTests : IDisposable
     {
         var orb = NewOrb();
 
-        ClaudeBuddySettings.OrbSize = 1.5;
+        OrbweaverSettings.OrbSize = 1.5;
         orb.ApplyEffectiveOrbSize();
         Assert.Equal(1.5, orb.OrbSize);
 
-        ClaudeBuddySettings.SetOrbSize(orb.SoundKey, 0.75);
+        OrbweaverSettings.SetOrbSize(orb.SoundKey, 0.75);
         orb.ApplyEffectiveOrbSize();
         Assert.Equal(0.75, orb.OrbSize);
     }
@@ -170,7 +170,7 @@ public class OrbSizeTests : IDisposable
     public void TheMenuOffersDefaultNamingTheSliderThenEveryPresetWithDefaultChecked()
     {
         var orb = NewOrb();
-        ClaudeBuddySettings.OrbSize = 1.25;
+        OrbweaverSettings.OrbSize = 1.25;
 
         orb.RebuildSizeSubmenu();
 
@@ -194,7 +194,7 @@ public class OrbSizeTests : IDisposable
 
         Click(SizeItems(orb).Single(i => Equals(i.Header, "150%")));
 
-        Assert.Equal(1.5, ClaudeBuddySettings.OrbSizeFor(orb.SoundKey));
+        Assert.Equal(1.5, OrbweaverSettings.OrbSizeFor(orb.SoundKey));
         Assert.Equal(1.5, orb.OrbSize);
 
         orb.RebuildSizeSubmenu();
@@ -206,14 +206,14 @@ public class OrbSizeTests : IDisposable
     public void DefaultClearsTheOverrideAndTheOrbFollowsTheSliderAgain()
     {
         var orb = NewOrb();
-        ClaudeBuddySettings.OrbSize = 0.75;
-        ClaudeBuddySettings.SetOrbSize(orb.SoundKey, 2.0);
+        OrbweaverSettings.OrbSize = 0.75;
+        OrbweaverSettings.SetOrbSize(orb.SoundKey, 2.0);
         orb.ApplyEffectiveOrbSize();
 
         orb.RebuildSizeSubmenu();
         Click(SizeItems(orb)[0]);
 
-        Assert.Null(ClaudeBuddySettings.OrbSizeFor(orb.SoundKey));
+        Assert.Null(OrbweaverSettings.OrbSizeFor(orb.SoundKey));
         Assert.Equal(0.75, orb.OrbSize);
     }
 
@@ -223,8 +223,8 @@ public class OrbSizeTests : IDisposable
         // It will stop following the slider the moment the slider moves, so the
         // menu has to say which of the two it is.
         var orb = NewOrb();
-        ClaudeBuddySettings.OrbSize = 1.0;
-        ClaudeBuddySettings.SetOrbSize(orb.SoundKey, 1.0);
+        OrbweaverSettings.OrbSize = 1.0;
+        OrbweaverSettings.SetOrbSize(orb.SoundKey, 1.0);
 
         orb.RebuildSizeSubmenu();
 
@@ -286,8 +286,8 @@ public class OrbSizeTests : IDisposable
 
         Assert.NotEqual(oldKey, newKey);
         // Copied, not moved — CB-167's QA round 3 rule for a shared key.
-        Assert.Equal(2.0, ClaudeBuddySettings.OrbSizeFor(oldKey));
-        Assert.Equal(2.0, ClaudeBuddySettings.OrbSizeFor(newKey));
+        Assert.Equal(2.0, OrbweaverSettings.OrbSizeFor(oldKey));
+        Assert.Equal(2.0, OrbweaverSettings.OrbSizeFor(newKey));
         Assert.Equal(2.0, orb.OrbSize);
     }
 
@@ -304,26 +304,26 @@ public class OrbSizeTests : IDisposable
         var newKey = SessionManager.SoundKeyFor(titled, orb.SessionId);
         _keys.Add(newKey);
 
-        ClaudeBuddySettings.SetOrbSize(oldKey, 2.0);
-        ClaudeBuddySettings.SetOrbSize(newKey, 0.75);
+        OrbweaverSettings.SetOrbSize(oldKey, 2.0);
+        OrbweaverSettings.SetOrbSize(newKey, 0.75);
 
         orb.UpdateFrom(titled);
 
-        Assert.Equal(0.75, ClaudeBuddySettings.OrbSizeFor(newKey));
+        Assert.Equal(0.75, OrbweaverSettings.OrbSizeFor(newKey));
         Assert.Equal(0.75, orb.OrbSize);
     }
 
     [AvaloniaFact]
     public void AnOrbWithNoOverrideFollowsTheSliderFromItsFirstUpdate()
     {
-        ClaudeBuddySettings.OrbSize = 1.5;
+        OrbweaverSettings.OrbSize = 1.5;
         var orb = new OrbWindow(Guid.NewGuid().ToString());
 
         orb.UpdateFrom(new SessionStatus { State = "idle", Cwd = "/Users/user/p-" + Guid.NewGuid(), Title = "" });
         _keys.Add(orb.SoundKey);
 
         Assert.Equal(1.5, orb.OrbSize);
-        Assert.Null(ClaudeBuddySettings.OrbSizeFor(orb.SoundKey));
+        Assert.Null(OrbweaverSettings.OrbSizeFor(orb.SoundKey));
     }
 
     // --- anchors outside Root ------------------------------------------------
@@ -404,7 +404,7 @@ public class OrbSizeTests : IDisposable
     [AvaloniaFact]
     public void TheSliderSpansExactlyOrbSizingsRangeAndOpensOnTheSavedValue()
     {
-        ClaudeBuddySettings.OrbSize = 1.25;
+        OrbweaverSettings.OrbSize = 1.25;
 
         var slider = NewSettings().OrbSizeSlider();
 
@@ -419,19 +419,19 @@ public class OrbSizeTests : IDisposable
     [AvaloniaFact]
     public void MovingTheSliderWritesTheGlobalSize()
     {
-        ClaudeBuddySettings.OrbSize = 1.0;
+        OrbweaverSettings.OrbSize = 1.0;
         var slider = NewSettings().OrbSizeSlider();
 
         slider.Value = 1.5;
 
-        Assert.Equal(1.5, ClaudeBuddySettings.OrbSize);
+        Assert.Equal(1.5, OrbweaverSettings.OrbSize);
 
         // Stored snapped to the step, whatever the thumb landed on.
         slider.Value = 1.23;
-        Assert.Equal(1.25, ClaudeBuddySettings.OrbSize);
+        Assert.Equal(1.25, OrbweaverSettings.OrbSize);
 
         // An unrelated property changing is not a size change.
         slider.MinWidth = 200;
-        Assert.Equal(1.25, ClaudeBuddySettings.OrbSize);
+        Assert.Equal(1.25, OrbweaverSettings.OrbSize);
     }
 }

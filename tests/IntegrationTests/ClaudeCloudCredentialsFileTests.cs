@@ -4,7 +4,7 @@ using System.Linq;
 using System.Threading;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Drives FileCredentialSource over real files in a scratch directory — the
 // Windows and Linux credential store, which is a file and therefore is the half

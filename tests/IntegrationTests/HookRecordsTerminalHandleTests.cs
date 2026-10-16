@@ -1,8 +1,8 @@
 using System.Diagnostics;
-using ClaudeBuddy;
+using Orbweaver;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // What the hook writes into `term_id`, driving the real script as a
 // subprocess.

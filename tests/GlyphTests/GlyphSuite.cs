@@ -1,6 +1,6 @@
-using ClaudeBuddy;
+using Orbweaver;
 
-namespace ClaudeBuddy.Tests
+namespace Orbweaver.Tests
 {
     // The orb-initials cases, as a class rather than as a script.
     //

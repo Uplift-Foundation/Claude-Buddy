@@ -1,7 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Text.RegularExpressions;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // What slash commands a local CLI session understands, so the chat panel's
     // Input box can offer the same "/" autocomplete the terminal itself would

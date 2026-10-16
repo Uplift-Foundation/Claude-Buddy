@@ -1,4 +1,4 @@
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Where a click goes when the terminal the hook recorded could not be
     // brought forward — the last thing tried before a click does nothing at all.

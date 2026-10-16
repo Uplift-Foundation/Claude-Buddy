@@ -5,7 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Covers reading every Claude Code account at once: one source per account, one
 // merged and deduplicated list, one owner per session, and the login that owns a
@@ -613,7 +613,7 @@ public class CloudAccountBoardTests : IDisposable
         Assert.Equal("me", accounts[1].Label);
         Assert.Equal("me", more[1].Label);
 
-        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-me@y.com");
+        OrbweaverSettings.AddClaudeCodeProfileDir(".claude-me@y.com");
         try
         {
             var both = ClaudeCliCredentials.SourcesFor(isMacOS: false, "/Users/x", "/Users/x/.claude-me@x.com");
@@ -621,7 +621,7 @@ public class CloudAccountBoardTests : IDisposable
         }
         finally
         {
-            ClaudeBuddySettings.RemoveClaudeCodeProfileDir(".claude-me@y.com");
+            OrbweaverSettings.RemoveClaudeCodeProfileDir(".claude-me@y.com");
         }
     }
 

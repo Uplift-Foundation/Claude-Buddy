@@ -1,7 +1,7 @@
 using System.Collections.Generic;
 using System.Text.Json;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // CB-93: when the gateway refuses to serve a picture named by
     // `MEDIA:<path>`, it will say why if asked — `&meta=1` on the same

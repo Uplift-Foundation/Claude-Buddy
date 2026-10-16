@@ -1,9 +1,9 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
-using ClaudeBuddy;
+using Orbweaver;
 using Xunit;
 
-namespace ClaudeBuddy.IntegrationTests;
+namespace Orbweaver.IntegrationTests;
 
 // SingleInstance.Claim against a real named mutex — the seam
 // tests/UnitTests' SingleInstanceTests cannot reach, because that suite only

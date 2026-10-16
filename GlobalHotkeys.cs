@@ -1,7 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using Avalonia.Threading;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Wires HotkeyRegistry's pure bindings to a real platform hook: the one
     // class that picks which native implementation to start and registers
@@ -63,9 +63,9 @@ namespace ClaudeBuddy
 
         internal static string? OverrideFor(HotkeyAction action) => action switch
         {
-            HotkeyAction.ToggleOrbsVisible => ClaudeBuddySettings.ToggleOrbsHotkey,
-            HotkeyAction.OpenNewChat => ClaudeBuddySettings.NewChatHotkey,
-            HotkeyAction.ToggleUsageOrbsVisible => ClaudeBuddySettings.ToggleUsageOrbsHotkey,
+            HotkeyAction.ToggleOrbsVisible => OrbweaverSettings.ToggleOrbsHotkey,
+            HotkeyAction.OpenNewChat => OrbweaverSettings.NewChatHotkey,
+            HotkeyAction.ToggleUsageOrbsVisible => OrbweaverSettings.ToggleUsageOrbsHotkey,
             _ => throw new ArgumentOutOfRangeException(nameof(action), action, null)
         };
 

@@ -1,7 +1,7 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Turning what Claude Code writes down into what the chat panel shows.
     //

@@ -6,7 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-88/CB-90: an agent's own generated picture, named by path in its reply
 // and fetched through the gateway's read-scoped media route.

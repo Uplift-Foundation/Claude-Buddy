@@ -2,7 +2,7 @@ using System;
 using Avalonia;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Covers the first arc arithmetic in this app.
 //

@@ -1,12 +1,12 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The two new "New chat…" settings — the recent-folders list and the last
 // CLI chosen — round-tripped through a real settings.json.
 //
 // Same collection and repointing dance as SettingsListsAndProfilesTests, for
-// the reason its own header gives: ClaudeBuddySettings is one static model
+// the reason its own header gives: OrbweaverSettings is one static model
 // for the whole process.
 [Collection("Settings")]
 public class NewChatSettingsTests
@@ -15,8 +15,8 @@ public class NewChatSettingsTests
     {
         var dir = Path.Combine(Path.GetTempPath(), "cb-settings-newchat-" + Guid.NewGuid());
         Directory.CreateDirectory(dir);
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
-        ClaudeBuddySettings.ReloadForTests();
+        Environment.SetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR", dir);
+        OrbweaverSettings.ReloadForTests();
     }
 
     [Fact]
@@ -24,21 +24,21 @@ public class NewChatSettingsTests
     {
         FreshSettings();
 
-        Assert.Empty(ClaudeBuddySettings.NewChatRecentFolders);
+        Assert.Empty(OrbweaverSettings.NewChatRecentFolders);
     }
 
     [Fact]
     public void TheRecentFolderListSurvivesARestart()
     {
         FreshSettings();
-        var dir = Environment.GetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR")!;
+        var dir = Environment.GetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR")!;
 
-        ClaudeBuddySettings.SetNewChatRecentFolders(new[] { "/repo/one", "/repo/two" });
+        OrbweaverSettings.SetNewChatRecentFolders(new[] { "/repo/one", "/repo/two" });
 
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
-        ClaudeBuddySettings.ReloadForTests();
+        Environment.SetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR", dir);
+        OrbweaverSettings.ReloadForTests();
 
-        Assert.Equal(new[] { "/repo/one", "/repo/two" }, ClaudeBuddySettings.NewChatRecentFolders);
+        Assert.Equal(new[] { "/repo/one", "/repo/two" }, OrbweaverSettings.NewChatRecentFolders);
     }
 
     // Blank entries are skipped rather than stored — the same rule the other
@@ -51,9 +51,9 @@ public class NewChatSettingsTests
     {
         FreshSettings();
 
-        ClaudeBuddySettings.SetNewChatRecentFolders(new[] { "/repo/one", blank });
+        OrbweaverSettings.SetNewChatRecentFolders(new[] { "/repo/one", blank });
 
-        Assert.Equal(new[] { "/repo/one" }, ClaudeBuddySettings.NewChatRecentFolders);
+        Assert.Equal(new[] { "/repo/one" }, OrbweaverSettings.NewChatRecentFolders);
     }
 
     // Setting the list replaces it outright rather than merging — the caller
@@ -64,10 +64,10 @@ public class NewChatSettingsTests
     {
         FreshSettings();
 
-        ClaudeBuddySettings.SetNewChatRecentFolders(new[] { "/repo/one" });
-        ClaudeBuddySettings.SetNewChatRecentFolders(new[] { "/repo/two", "/repo/three" });
+        OrbweaverSettings.SetNewChatRecentFolders(new[] { "/repo/one" });
+        OrbweaverSettings.SetNewChatRecentFolders(new[] { "/repo/two", "/repo/three" });
 
-        Assert.Equal(new[] { "/repo/two", "/repo/three" }, ClaudeBuddySettings.NewChatRecentFolders);
+        Assert.Equal(new[] { "/repo/two", "/repo/three" }, OrbweaverSettings.NewChatRecentFolders);
     }
 
     [Fact]
@@ -75,21 +75,21 @@ public class NewChatSettingsTests
     {
         FreshSettings();
 
-        Assert.Null(ClaudeBuddySettings.NewChatLastCli);
+        Assert.Null(OrbweaverSettings.NewChatLastCli);
     }
 
     [Fact]
     public void TheLastCliSurvivesARestart()
     {
         FreshSettings();
-        var dir = Environment.GetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR")!;
+        var dir = Environment.GetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR")!;
 
-        ClaudeBuddySettings.SetNewChatLastCli("codex");
+        OrbweaverSettings.SetNewChatLastCli("codex");
 
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
-        ClaudeBuddySettings.ReloadForTests();
+        Environment.SetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR", dir);
+        OrbweaverSettings.ReloadForTests();
 
-        Assert.Equal("codex", ClaudeBuddySettings.NewChatLastCli);
+        Assert.Equal("codex", OrbweaverSettings.NewChatLastCli);
     }
 
     // A blank value is not a choice — same rule NewChatRecentFolders applies,
@@ -103,10 +103,10 @@ public class NewChatSettingsTests
     {
         FreshSettings();
 
-        ClaudeBuddySettings.SetNewChatLastCli("codex");
-        ClaudeBuddySettings.SetNewChatLastCli(blank);
+        OrbweaverSettings.SetNewChatLastCli("codex");
+        OrbweaverSettings.SetNewChatLastCli(blank);
 
-        Assert.Null(ClaudeBuddySettings.NewChatLastCli);
+        Assert.Null(OrbweaverSettings.NewChatLastCli);
     }
 
     // --- NewChatLastProfile (CB-201's Account picker) --------------------
@@ -116,21 +116,21 @@ public class NewChatSettingsTests
     {
         FreshSettings();
 
-        Assert.Null(ClaudeBuddySettings.NewChatLastProfileFor(NewChatCli.ClaudeCode));
+        Assert.Null(OrbweaverSettings.NewChatLastProfileFor(NewChatCli.ClaudeCode));
     }
 
     [Fact]
     public void TheLastProfileSurvivesARestart()
     {
         FreshSettings();
-        var dir = Environment.GetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR")!;
+        var dir = Environment.GetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR")!;
 
-        ClaudeBuddySettings.SetNewChatLastProfile(NewChatCli.ClaudeCode, ".claude-work");
+        OrbweaverSettings.SetNewChatLastProfile(NewChatCli.ClaudeCode, ".claude-work");
 
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
-        ClaudeBuddySettings.ReloadForTests();
+        Environment.SetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR", dir);
+        OrbweaverSettings.ReloadForTests();
 
-        Assert.Equal(".claude-work", ClaudeBuddySettings.NewChatLastProfileFor(NewChatCli.ClaudeCode));
+        Assert.Equal(".claude-work", OrbweaverSettings.NewChatLastProfileFor(NewChatCli.ClaudeCode));
     }
 
     // A blank value is not a choice — same rule ABlankLastCliIsStoredAsNull
@@ -143,10 +143,10 @@ public class NewChatSettingsTests
     {
         FreshSettings();
 
-        ClaudeBuddySettings.SetNewChatLastProfile(NewChatCli.ClaudeCode, ".claude-work");
-        ClaudeBuddySettings.SetNewChatLastProfile(NewChatCli.ClaudeCode, blank);
+        OrbweaverSettings.SetNewChatLastProfile(NewChatCli.ClaudeCode, ".claude-work");
+        OrbweaverSettings.SetNewChatLastProfile(NewChatCli.ClaudeCode, blank);
 
-        Assert.Null(ClaudeBuddySettings.NewChatLastProfileFor(NewChatCli.ClaudeCode));
+        Assert.Null(OrbweaverSettings.NewChatLastProfileFor(NewChatCli.ClaudeCode));
     }
 
     // Null means Default was chosen just as much as it means never chosen —
@@ -157,15 +157,15 @@ public class NewChatSettingsTests
     public void SettingTheLastProfileBackToNullReplacesTheSavedOne()
     {
         FreshSettings();
-        var dir = Environment.GetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR")!;
+        var dir = Environment.GetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR")!;
 
-        ClaudeBuddySettings.SetNewChatLastProfile(NewChatCli.ClaudeCode, ".claude-work");
-        ClaudeBuddySettings.SetNewChatLastProfile(NewChatCli.ClaudeCode, null);
+        OrbweaverSettings.SetNewChatLastProfile(NewChatCli.ClaudeCode, ".claude-work");
+        OrbweaverSettings.SetNewChatLastProfile(NewChatCli.ClaudeCode, null);
 
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
-        ClaudeBuddySettings.ReloadForTests();
+        Environment.SetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR", dir);
+        OrbweaverSettings.ReloadForTests();
 
-        Assert.Null(ClaudeBuddySettings.NewChatLastProfileFor(NewChatCli.ClaudeCode));
+        Assert.Null(OrbweaverSettings.NewChatLastProfileFor(NewChatCli.ClaudeCode));
     }
 
     // --- CB-203: one remembered account per CLI -------------------------
@@ -177,18 +177,18 @@ public class NewChatSettingsTests
     public void EachCliRemembersItsOwnLastAccountAcrossAReload()
     {
         FreshSettings();
-        var dir = Environment.GetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR")!;
+        var dir = Environment.GetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR")!;
 
-        ClaudeBuddySettings.SetNewChatLastProfile(NewChatCli.ClaudeCode, ".claude-work");
-        ClaudeBuddySettings.SetNewChatLastProfile(NewChatCli.Codex, ".codex-work");
-        ClaudeBuddySettings.SetNewChatLastProfile(NewChatCli.Grok, ".grok-work");
+        OrbweaverSettings.SetNewChatLastProfile(NewChatCli.ClaudeCode, ".claude-work");
+        OrbweaverSettings.SetNewChatLastProfile(NewChatCli.Codex, ".codex-work");
+        OrbweaverSettings.SetNewChatLastProfile(NewChatCli.Grok, ".grok-work");
 
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
-        ClaudeBuddySettings.ReloadForTests();
+        Environment.SetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR", dir);
+        OrbweaverSettings.ReloadForTests();
 
-        Assert.Equal(".claude-work", ClaudeBuddySettings.NewChatLastProfileFor(NewChatCli.ClaudeCode));
-        Assert.Equal(".codex-work", ClaudeBuddySettings.NewChatLastProfileFor(NewChatCli.Codex));
-        Assert.Equal(".grok-work", ClaudeBuddySettings.NewChatLastProfileFor(NewChatCli.Grok));
+        Assert.Equal(".claude-work", OrbweaverSettings.NewChatLastProfileFor(NewChatCli.ClaudeCode));
+        Assert.Equal(".codex-work", OrbweaverSettings.NewChatLastProfileFor(NewChatCli.Codex));
+        Assert.Equal(".grok-work", OrbweaverSettings.NewChatLastProfileFor(NewChatCli.Grok));
 
         var root = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(Path.Combine(dir, "settings.json")))!;
         var map = root["newChatLastProfiles"]!.AsObject();
@@ -208,12 +208,12 @@ public class NewChatSettingsTests
         var cli = Enum.Parse<NewChatCli>(cliName);
         FreshSettings();
 
-        ClaudeBuddySettings.SetNewChatLastProfile(NewChatCli.ClaudeCode, ".claude-work");
-        ClaudeBuddySettings.SetNewChatLastProfile(cli, ".other-work");
-        ClaudeBuddySettings.SetNewChatLastProfile(cli, "  ");
+        OrbweaverSettings.SetNewChatLastProfile(NewChatCli.ClaudeCode, ".claude-work");
+        OrbweaverSettings.SetNewChatLastProfile(cli, ".other-work");
+        OrbweaverSettings.SetNewChatLastProfile(cli, "  ");
 
-        Assert.Null(ClaudeBuddySettings.NewChatLastProfileFor(cli));
-        Assert.Equal(".claude-work", ClaudeBuddySettings.NewChatLastProfileFor(NewChatCli.ClaudeCode));
+        Assert.Null(OrbweaverSettings.NewChatLastProfileFor(cli));
+        Assert.Equal(".claude-work", OrbweaverSettings.NewChatLastProfileFor(NewChatCli.ClaudeCode));
     }
 
     // A settings file written before CB-203 has only newChatLastProfile. It
@@ -223,14 +223,14 @@ public class NewChatSettingsTests
     public void APreCb203FileKeepsItsAccountForClaudeCodeOnly()
     {
         FreshSettings();
-        var dir = Environment.GetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR")!;
+        var dir = Environment.GetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR")!;
         File.WriteAllText(Path.Combine(dir, "settings.json"), "{ \"newChatLastProfile\": \".claude-board\" }");
 
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
 
-        Assert.Equal(".claude-board", ClaudeBuddySettings.NewChatLastProfileFor(NewChatCli.ClaudeCode));
-        Assert.Null(ClaudeBuddySettings.NewChatLastProfileFor(NewChatCli.Codex));
-        Assert.Null(ClaudeBuddySettings.NewChatLastProfileFor(NewChatCli.Grok));
+        Assert.Equal(".claude-board", OrbweaverSettings.NewChatLastProfileFor(NewChatCli.ClaudeCode));
+        Assert.Null(OrbweaverSettings.NewChatLastProfileFor(NewChatCli.Codex));
+        Assert.Null(OrbweaverSettings.NewChatLastProfileFor(NewChatCli.Grok));
     }
 
     // The map wins over the legacy key when both name Claude Code's account,
@@ -239,18 +239,18 @@ public class NewChatSettingsTests
     public void TheMapWinsOverTheLegacyKeyAndUnknownCliNamesAreDropped()
     {
         FreshSettings();
-        var dir = Environment.GetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR")!;
+        var dir = Environment.GetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR")!;
         File.WriteAllText(Path.Combine(dir, "settings.json"),
             "{ \"newChatLastProfile\": \".claude-old\", "
             + "\"newChatLastProfiles\": { \"ClaudeCode\": \".claude-new\", \"codex\": \".lowercase\", "
             + "\"0\": \".numeric\", \"OpenClaw\": \".nope\", \"Grok\": \" \" } }");
 
-        ClaudeBuddySettings.ReloadForTests();
-        ClaudeBuddySettings.SetNewChatLastCli("Codex");
+        OrbweaverSettings.ReloadForTests();
+        OrbweaverSettings.SetNewChatLastCli("Codex");
 
-        Assert.Equal(".claude-new", ClaudeBuddySettings.NewChatLastProfileFor(NewChatCli.ClaudeCode));
-        Assert.Null(ClaudeBuddySettings.NewChatLastProfileFor(NewChatCli.Codex));
-        Assert.Null(ClaudeBuddySettings.NewChatLastProfileFor(NewChatCli.Grok));
+        Assert.Equal(".claude-new", OrbweaverSettings.NewChatLastProfileFor(NewChatCli.ClaudeCode));
+        Assert.Null(OrbweaverSettings.NewChatLastProfileFor(NewChatCli.Codex));
+        Assert.Null(OrbweaverSettings.NewChatLastProfileFor(NewChatCli.Grok));
 
         var map = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(Path.Combine(dir, "settings.json")))!
             ["newChatLastProfiles"]!.AsObject();
@@ -263,13 +263,13 @@ public class NewChatSettingsTests
     public void ClearingClaudeCodeClearsTheLegacyKeyToo()
     {
         FreshSettings();
-        var dir = Environment.GetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR")!;
+        var dir = Environment.GetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR")!;
 
-        ClaudeBuddySettings.SetNewChatLastProfile(NewChatCli.ClaudeCode, ".claude-work");
-        ClaudeBuddySettings.SetNewChatLastProfile(NewChatCli.ClaudeCode, null);
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.SetNewChatLastProfile(NewChatCli.ClaudeCode, ".claude-work");
+        OrbweaverSettings.SetNewChatLastProfile(NewChatCli.ClaudeCode, null);
+        OrbweaverSettings.ReloadForTests();
 
-        Assert.Null(ClaudeBuddySettings.NewChatLastProfileFor(NewChatCli.ClaudeCode));
+        Assert.Null(OrbweaverSettings.NewChatLastProfileFor(NewChatCli.ClaudeCode));
         var root = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(Path.Combine(dir, "settings.json")))!;
         Assert.Null(root["newChatLastProfile"]);
     }

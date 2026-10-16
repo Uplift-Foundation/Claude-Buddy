@@ -4,8 +4,8 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <RollForward>LatestMajor</RollForward>
-    <AssemblyName>ClaudeBuddy.UiScreenshots</AssemblyName>
-    <RootNamespace>ClaudeBuddy.Tests</RootNamespace>
+    <AssemblyName>Orbweaver.UiScreenshots</AssemblyName>
+    <RootNamespace>Orbweaver.Tests</RootNamespace>
     <IsPackable>false</IsPackable>
     <!-- xunit.v3's own build targets hard-error unless OutputType=Exe and
          UseAppHost=true (see xunit.v3.core.mtp-v2.targets' _XunitValidateBuild
@@ -34,9 +34,9 @@
          keeps using classic VSTest, which .NET 10 still supports for v2.
          Being a real executable now puts this project through MSBuild's
          NETSDK1151 self-contained cross-check against the ProjectReference
-         below: ClaudeBuddy.csproj is unconditionally SelfContained (for
+         below: Orbweaver.csproj is unconditionally SelfContained (for
          publishing), and two referenced executables must agree on that, so
-         this one matches it rather than trying to make ClaudeBuddy.csproj
+         this one matches it rather than trying to make Orbweaver.csproj
          conditional just for a test project's sake. -->
     <OutputType>Exe</OutputType>
     <UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>
@@ -93,7 +93,7 @@
     <PackageReference Include="Avalonia.Headless" Version="12.1.1" />
     <PackageReference Include="Avalonia.Headless.XUnit" Version="12.1.1" />
     <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.1" />
-    <!-- Explicit, not just transitive: ClaudeBuddy.csproj's Avalonia.Desktop
+    <!-- Explicit, not just transitive: Orbweaver.csproj's Avalonia.Desktop
          11.3.7 pulls in Avalonia.Skia 11.3.7 too, and that older Skia
          backend's FontManagerImpl doesn't implement members the newer core
          interface declares — the same kind of cross-version mismatch the
@@ -101,6 +101,6 @@
     <PackageReference Include="Avalonia.Skia" Version="12.1.1" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\..\ClaudeBuddy.csproj" />
+    <ProjectReference Include="..\..\Orbweaver.csproj" />
   </ItemGroup>
 </Project>

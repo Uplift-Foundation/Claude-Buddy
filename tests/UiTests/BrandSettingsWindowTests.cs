@@ -2,7 +2,7 @@ using System.Reflection;
 using Avalonia.Headless.XUnit;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-250 QA: the settings window's title is built from Brand.DisplayName in
 // its constructor, and nothing else pinned the whole string. Constructed the

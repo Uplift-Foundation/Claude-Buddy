@@ -7,8 +7,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RollForward>LatestMajor</RollForward>
     <AssemblyName>ClaudeCloudProbe</AssemblyName>
-    <RootNamespace>ClaudeBuddy</RootNamespace>
-    <!-- Matches ClaudeBuddy.csproj, which publishes self-contained: the SDK
+    <RootNamespace>Orbweaver</RootNamespace>
+    <!-- Matches Orbweaver.csproj, which publishes self-contained: the SDK
          refuses to let a framework-dependent executable reference a
          self-contained one. Same note as tools/peer-probe. -->
     <SelfContained>true</SelfContained>
@@ -23,9 +23,9 @@
          difference between a 200 and a 400, and there must be exactly one copy
          of it.
 
-         Both are internal, so ClaudeBuddy.csproj grants this assembly
+         Both are internal, so Orbweaver.csproj grants this assembly
          InternalsVisibleTo alongside tools/peer-probe. -->
-    <ProjectReference Include="../../ClaudeBuddy.csproj" />
+    <ProjectReference Include="../../Orbweaver.csproj" />
   </ItemGroup>
 
 </Project>

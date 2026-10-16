@@ -4,8 +4,8 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <RollForward>LatestMajor</RollForward>
-    <AssemblyName>ClaudeBuddy.IntegrationTests</AssemblyName>
-    <RootNamespace>ClaudeBuddy.Tests</RootNamespace>
+    <AssemblyName>Orbweaver.IntegrationTests</AssemblyName>
+    <RootNamespace>Orbweaver.Tests</RootNamespace>
     <IsPackable>false</IsPackable>
   </PropertyGroup>
   <ItemGroup>
@@ -18,7 +18,7 @@
     <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\..\ClaudeBuddy.csproj" />
+    <ProjectReference Include="..\..\Orbweaver.csproj" />
     <!-- CB-206: a second process to claim the single-instance mutex from. -->
     <ProjectReference Include="..\SingleInstanceProbe\SingleInstanceProbe.csproj" />
   </ItemGroup>

@@ -3,7 +3,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 using System.Text;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Reading the Claude Code CLI's stored login out of the macOS login Keychain.
     //
@@ -12,7 +12,7 @@ namespace ClaudeBuddy
     // grant.** The consent dialog macOS raises names the *calling binary*. Going
     // through the command-line tool would put "security" on that screen, and an
     // "Always Allow" answered there would grant `/usr/bin/security` — every
-    // script on the machine — rather than Claude Buddy. CB-164 rejected minting
+    // script on the machine — rather than Orbweaver. CB-164 rejected minting
     // our own OAuth token precisely because the consent screen would have named
     // the wrong application; reaching the Keychain through a helper binary is the
     // same mistake wearing different clothes, and it would be worse, because the

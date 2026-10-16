@@ -2,7 +2,7 @@ using System.Reflection;
 using Avalonia.Headless.XUnit;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Stretch item. SettingsWindow is `internal sealed class` reached in
 // production only through the static Toggle() (SettingsWindow.cs, ~line 32),

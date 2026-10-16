@@ -1,8 +1,8 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
-// This collection used to exist for the log *directory*: CLAUDE_BUDDY_LOG_DIR
+// This collection used to exist for the log *directory*: ORBWEAVER_LOG_DIR
 // is one process-wide environment variable, and several classes here pointed it
 // at a scratch directory of their own, so running them in parallel meant each
 // writing into the other's half the time. That is no longer why. Those classes

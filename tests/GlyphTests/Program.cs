@@ -1,4 +1,4 @@
-using ClaudeBuddy.Tests;
+using Orbweaver.Tests;
 
 // The two or three letters an orb wears, and the ones the chat panel's header
 // wears beside it, run by hand.

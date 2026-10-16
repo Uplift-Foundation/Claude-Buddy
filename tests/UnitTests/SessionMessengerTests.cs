@@ -2,7 +2,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // SessionMessenger.DeliverAsync — every DeliveryResult arm, driven against a
 // fake Seams. No real socket anywhere here; that seam is proved wire-compatible

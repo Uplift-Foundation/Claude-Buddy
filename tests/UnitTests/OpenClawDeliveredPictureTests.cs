@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 // CB-94: when the gateway delivers a picture, the only trace a client sees is
 // the gateway's own delivery-mirror record, whose content is the bare

@@ -1,7 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using Avalonia;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Where every orb goes when you arrange them into a shape.
     //

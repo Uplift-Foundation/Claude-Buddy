@@ -2,7 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Exercises OrbweaverHook.sh — the bash half of the hook that Claude Code,
 // Codex and Grok Build invoke on every tool call — as a real subprocess, the
