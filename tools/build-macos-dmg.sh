@@ -156,6 +156,15 @@ see "Upgrading from Claude Buddy" at the end.
 4. The first time you click an orb, macOS asks for Automation permission.
    Click-to-focus needs it to bring the session's terminal window forward.
 
+5. Optional: if you message sessions that run without permission prompts
+   (--permission-mode bypassPermissions, or --dangerously-skip-permissions)
+   from an orb, Claude Code holds those messages until someone approves them
+   in that session. $APP_NAME explains this the first time you open its
+   Settings, and offers a switch -- "Let orbs message sessions directly" --
+   that adds "crossSessionInbound": "accept" to ~/.claude/settings.json after
+   you confirm. Nothing is written until you do, the old file is kept as
+   settings.json.orbweaver-backup, and this installer never touches it.
+
 To start it automatically, add it in System Settings > General >
 Login Items & Extensions.
 

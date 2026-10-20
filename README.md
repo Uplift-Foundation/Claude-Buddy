@@ -967,6 +967,8 @@ this machine and, over the mirror link, for one on a peer machine — the same
 mechanism either way, just addressed through the far Buddy instead of straight
 to the socket. See `docs/headless-delivery-findings.md` for what was measured.
 
+**A message can be held.** If that session runs without permission prompts, Claude Code keeps a message from another session in a held queue until someone approves it in the session itself, and Orbweaver's "sent" only means the bytes were not refused. Settings → Claude Code sessions has a switch, **Let orbs message sessions directly**, that adds `crossSessionInbound: "accept"` to the account's `settings.json` once you confirm it; see "Letting orbs message sessions that skip permission prompts" under "Wire up your agent CLIs" for exactly what it writes and how to undo it.
+
 ## Chatting with a session from its orb
 
 Hover an orb and the flyout has a keyboard button (⌨). It opens a small panel
@@ -2277,6 +2279,16 @@ status file:
 Run `/hooks` inside Claude Code afterward to confirm all six events are
 registered — do this separately for each install, since `/hooks` only
 shows the config for the session you run it in.
+
+### Letting orbs message sessions that skip permission prompts
+
+A session started with `--permission-mode bypassPermissions` or `--dangerously-skip-permissions` makes Claude Code hold a message from another session until someone approves it in that session, unless that account's `settings.json` says `"crossSessionInbound": "accept"`. Orbweaver's message still reaches Claude Code — the chat panel reports it as sent — but the session does not read it until a person approves it there.
+
+Orbweaver can add that one key for you. The first time you open Settings → Claude Code sessions a card explains this, and the same switch lives under **Allow replying to sessions** as **Let orbs message sessions directly** (one switch per Claude Code config directory when you have more than one). Turning it on does not write anything by itself: it asks first, and says what it costs. **Any Claude session on this computer will then be able to message sessions that run without permission prompts, and those messages go straight in without your approval.** Press **Turn it on** to write it, or **Cancel**.
+
+What it writes: only `crossSessionInbound` in that account's `settings.json` (for example `~/.claude/settings.json`); every other key is left as it was. The previous file is copied to `settings.json.orbweaver-backup` beside it first. A `settings.json` Orbweaver cannot parse (comments, a trailing comma, anything that is not one JSON object) is refused rather than rewritten, and the switch says so. Turning the switch off removes the key again.
+
+To undo it by hand, delete the `"crossSessionInbound"` line from that `settings.json`, or copy `settings.json.orbweaver-backup` back over it. The app does not install this for you and the installers never write it.
 
 ### Platform notes
 
