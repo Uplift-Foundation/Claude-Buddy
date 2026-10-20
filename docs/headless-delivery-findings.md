@@ -131,6 +131,20 @@ shipping; it is not blocking because the socket-level contract
 (`Accepted` = "the bytes were not refused") is still true, and no test in this
 branch claims otherwise.
 
+## The held-message gap is being handled by CB-267
+
+The gap described above — `Accepted` reported, message sitting in Claude Code's held queue — is the subject of CB-267. Orbweaver will offer a one-click way to turn on `crossSessionInbound: "accept"` for the account a session belongs to: a switch under Settings → Claude Code sessions (with a one-time card the first time someone opens that section), and an offer in the chat panel when a session that would hold the message is open. Nothing is written until the person confirms an inline trade-off sentence, and the existing `settings.json` is copied to `settings.json.orbweaver-backup` first.
+
+**Step 0 measurements: pending.** The plan calls for real-machine measurements before the copy and the rule are finalised, and none have been taken yet. This section will be filled in with what was actually observed, and until then nothing below is a result:
+
+1. Whether a running session picks up an edited `settings.json` without a restart, and whether an already-held message is released by it (decides the wording of the "done" text).
+2. Which permission modes hold a message besides `bypassPermissions` (`auto`, `dontAsk`, `acceptEdits`).
+3. Whether a held message writes anything to the transcript.
+4. Whether Claude Code on Windows puts a named pipe or a Unix socket in `messagingSocketPath`.
+5. Whether a project's `.claude/settings.json` or `settings.local.json` setting of `crossSessionInbound` counts.
+
+Until then the rule assumes only `bypassPermissions` holds and that a restart may be needed; both are labelled as assumed in the plan.
+
 ## Still assumed
 
 - **Whether `Accepted`-but-`working` truly settles once the running turn ends**

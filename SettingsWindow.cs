@@ -1135,9 +1135,17 @@ namespace Orbweaver
         // again for Codex, with the Desktop app's profiles in between. Nothing
         // was wrong with any of them alone; the order was the order they were
         // added in, which is how a settings window gets that way.
-        private Control[] ClaudeCodeSection()
+        internal Control[] ClaudeCodeSection()
         {
-            var cards = new List<Control> { Card(ClaudeCodeChatRows()) };
+            var cards = new List<Control>();
+
+            // CB-267: the one-time card goes first, above everything, because
+            // it explains why a message sent from an orb can sit unread — which
+            // is the thing someone is most likely to hit on their first try.
+            if (OrbweaverSettings.ClaudeCodeEnabled && InboundNoticeVisible())
+                cards.Add(Card(InboundNoticeRows()));
+
+            cards.Add(Card(ClaudeCodeChatRows()));
 
             if (!OrbweaverSettings.ClaudeCodeEnabled) return cards.ToArray();
 
@@ -1200,7 +1208,7 @@ namespace Orbweaver
         // it out. A column of dead switches is a worse answer to "I only use
         // Claude Code" than a two-line section is: what remains is what still
         // does something.
-        private Control[] ClaudeCodeChatRows()
+        internal Control[] ClaudeCodeChatRows()
         {
             var rows = new List<Control>
             {
@@ -1231,6 +1239,11 @@ namespace Orbweaver
                 + "too. Sessions not running under tmux stay read-only either way, because "
                 + "the only way to type into those is to bring their window to the front."));
 
+            // While the first-run card is showing it carries these same rows,
+            // so they are not drawn twice on one page.
+            if (OrbweaverSettings.ClaudeCodeReplyEnabled && !InboundNoticeVisible())
+                rows.AddRange(InboundRows());
+
             rows.Add(Row("Usage orbs for each account",
                 Switch(OrbweaverSettings.AccountUsageEnabled, OnAccountUsageToggled),
                 "An orb per Claude Code account wearing three rings — this week, this "
@@ -1240,6 +1253,196 @@ namespace Orbweaver
                 + "details, and asking costs no tokens."));
 
             return rows.ToArray();
+        }
+
+        // ---- CB-267: let orbs message sessions that run without permission prompts ----
+        //
+        // Claude Code holds a message from another session until someone approves
+        // it in the receiving session, unless that account's settings.json carries
+        // crossSessionInbound: "accept". These rows are the one place the app
+        // offers to write that key, and they never do it on the first click: the
+        // switch only asks, the inline confirmation says what it costs, and the
+        // file is touched when the person presses "Turn it on".
+        //
+        // Every file access goes through one of the three seams below so the
+        // tests never read or write a real ~/.claude.
+        internal static Func<IReadOnlyList<string>> InboundRoots { get; set; } =
+            () => ClaudeConfigRoots.All().Where(Directory.Exists).ToList();
+
+        // Read and parsed in one seam: what the rows need is the answer, and a
+        // test that has to fake the file text *and* the parser is testing its
+        // own fakes. The composition itself is covered where those two live.
+        internal static Func<string, InboundSetting> InboundState { get; set; } =
+            root => PeerInbound.ReadSetting(PeerInboundSettingsFile.ReadText(root));
+
+        internal static Func<string, bool, PeerInboundWrite> InboundApply { get; set; } =
+            PeerInboundSettingsFile.Apply;
+
+        internal static Func<string, string> InboundDisplayPath { get; set; } =
+            path => PeerInbound.DisplayPath(
+                path, Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+
+        // Roots with a "Turn it on?" question open, and the last failure per root.
+        // Instance state on purpose: a Rebuild() must not lose either, but a new
+        // window starts clean.
+        private readonly HashSet<string> _inboundConfirming = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, string> _inboundFailures = new(StringComparer.Ordinal);
+
+        internal static bool InboundNoticeVisible() =>
+            !OrbweaverSettings.PeerInboundNoticeSeen
+            && InboundRoots().Any(root => InboundState(root) != InboundSetting.Accepting);
+
+        internal Control[] InboundNoticeRows()
+        {
+            var rows = new List<Control>
+            {
+                NoteRow(new TextBlock
+                {
+                    Text = $"Claude Code holds a message from {Brand.DisplayName} until someone "
+                           + "approves it in the receiving session, when that session runs without "
+                           + "permission prompts. You can let orbs message those sessions directly.",
+                    FontSize = 13,
+                    TextWrapping = TextWrapping.Wrap
+                })
+            };
+
+            rows.AddRange(InboundRows());
+
+            var gotIt = new Button { Content = "Got it", HorizontalAlignment = HorizontalAlignment.Right };
+            gotIt.Click += (_, _) => OnInboundNoticeDismissed();
+            rows.Add(NoteRow(gotIt));
+
+            return rows.ToArray();
+        }
+
+        // One switch per existing config root. The path is only added to the
+        // label when there is more than one root, because "~/.claude" beside a
+        // single switch is noise and beside two is the only way to tell them apart.
+        internal Control[] InboundRows()
+        {
+            var roots = InboundRoots();
+            var rows = new List<Control>();
+
+            foreach (var root in roots)
+            {
+                var state = InboundState(root);
+                var confirming = _inboundConfirming.Contains(root);
+                var path = InboundDisplayPath(PeerInboundSettingsFile.PathFor(root));
+                var label = roots.Count > 1
+                    ? $"{PeerInbound.ButtonLabel} ({Path.GetFileName(root)})"
+                    : PeerInbound.ButtonLabel;
+
+                var toggle = Switch(
+                    state == InboundSetting.Accepting || confirming,
+                    on => OnInboundToggled(root, on));
+                toggle.IsEnabled = state != InboundSetting.Unreadable;
+
+                rows.Add(Row(label, toggle,
+                    state == InboundSetting.Unreadable
+                        ? $"{path} could not be read, so it was left alone."
+                        : $"Writes {PeerInbound.SettingKey}: {PeerInbound.AcceptValue} to {path}, "
+                          + $"keeping the old file beside it as settings.json{PeerInboundSettingsFile.BackupSuffix}."));
+
+                if (confirming) rows.Add(InboundConfirmRow(root, path));
+
+                if (_inboundFailures.TryGetValue(root, out var reason))
+                    rows.Add(NoteRow(new TextBlock
+                    {
+                        Text = $"Not changed: {reason} ({path})",
+                        FontSize = 11,
+                        Opacity = 0.7,
+                        TextWrapping = TextWrapping.Wrap
+                    }));
+            }
+
+            return rows.ToArray();
+        }
+
+        private Control InboundConfirmRow(string root, string path)
+        {
+            var turnOn = new Button { Content = PeerInbound.ConfirmLabel };
+            turnOn.Click += (_, _) => OnInboundConfirmed(root);
+
+            var cancel = new Button { Content = "Cancel" };
+            cancel.Click += (_, _) => OnInboundCancelled(root);
+
+            var panel = new StackPanel { Spacing = 8 };
+            panel.Children.Add(new TextBlock
+            {
+                Text = PeerInbound.TradeOff,
+                FontSize = 12,
+                TextWrapping = TextWrapping.Wrap
+            });
+            panel.Children.Add(new TextBlock
+            {
+                Text = path,
+                FontSize = 11,
+                Opacity = 0.55,
+                TextWrapping = TextWrapping.Wrap
+            });
+            panel.Children.Add(new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Spacing = 8,
+                Children = { turnOn, cancel }
+            });
+
+            return NoteRow(panel);
+        }
+
+        // Turning it on only asks. Turning it off is the safe direction, so it
+        // writes straight away (the writer keeps a backup either way) — except
+        // when the switch is being flipped back while a question is open, which
+        // is just a cancel and must not touch the file.
+        internal void OnInboundToggled(string root, bool on)
+        {
+            _inboundFailures.Remove(root);
+
+            if (on)
+            {
+                _inboundConfirming.Add(root);
+            }
+            else if (!_inboundConfirming.Remove(root))
+            {
+                RecordInboundOutcome(root, InboundApply(root, false));
+            }
+
+            Rebuild();
+        }
+
+        internal void OnInboundConfirmed(string root)
+        {
+            _inboundConfirming.Remove(root);
+
+            var outcome = InboundApply(root, true);
+            RecordInboundOutcome(root, outcome);
+
+            if (outcome.Kind is PeerInboundWriteKind.Written or PeerInboundWriteKind.Unchanged)
+                OrbweaverSettings.PeerInboundNoticeSeen = true;
+
+            Rebuild();
+        }
+
+        // Rebuild() re-reads the file, so the switch lands back where the file
+        // says it is — off — rather than where it was dragged to.
+        internal void OnInboundCancelled(string root)
+        {
+            _inboundConfirming.Remove(root);
+            Rebuild();
+        }
+
+        internal void OnInboundNoticeDismissed()
+        {
+            OrbweaverSettings.PeerInboundNoticeSeen = true;
+            Rebuild();
+        }
+
+        private void RecordInboundOutcome(string root, PeerInboundWrite outcome)
+        {
+            if (outcome.Kind is PeerInboundWriteKind.Refused or PeerInboundWriteKind.Failed)
+                _inboundFailures[root] = outcome.Reason ?? "the file could not be written";
+            else
+                _inboundFailures.Remove(root);
         }
 
         internal void OnAccountUsageToggled(bool enabled)
