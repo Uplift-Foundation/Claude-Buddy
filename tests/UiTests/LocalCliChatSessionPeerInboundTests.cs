@@ -285,6 +285,43 @@ public class LocalCliChatSessionPeerInboundTests : IDisposable
         Assert.Equal(Path.Combine(other, "settings.json"), session.InboundOffer!.SettingsPath);
     }
 
+    // Neither the transcript nor any registry entry: no root at all.
+    [AvaloniaFact]
+    public void NoTranscriptRootAndNoRegistryEntryMeansNoRoot()
+    {
+        var elsewhere = TranscriptAt(Path.Combine(_root, "loose", "t.jsonl"), Mode("bypassPermissions"));
+        var session = Loaded(Session(elsewhere, new SettingsFake(), noRegistry: true));
+
+        Assert.Null(session.ConfigRootFor());
+    }
+
+    // The transcript moving to another config root (a respawn under a
+    // different profile) reads that root's settings.json, not the cached one.
+    [AvaloniaFact]
+    public void ATranscriptInAnotherRootReadsThatRootsSettings()
+    {
+        File.WriteAllText(SettingsPath, "{}");
+        var settings = new SettingsFake();
+        var session = Loaded(Session(Transcript(Mode("bypassPermissions")), settings));
+        Assert.Equal(SettingsPath, session.InboundOffer!.SettingsPath);
+
+        var board = Path.Combine(_root, "board");
+        var moved = TranscriptAt(Path.Combine(board, "projects", "-work-repo", "t.jsonl"), Mode("bypassPermissions"));
+        File.WriteAllText(Path.Combine(board, "settings.json"), "{}");
+
+        session.UpdateStatus(new SessionStatus
+        {
+            Source = SessionSource.ClaudeCode,
+            TranscriptPath = moved,
+            Shape = LocalSessionShape.Background,
+            Presence = OrbPresence.NeedsInput,
+            State = "idle",
+            Title = "job-hunter",
+        });
+
+        Assert.Equal(Path.Combine(board, "settings.json"), session.InboundOffer!.SettingsPath);
+    }
+
     // A file we could not parse is never written to, so it is explained with no
     // button.
     [AvaloniaFact]
