@@ -617,3 +617,21 @@ namespace Orbweaver
         void AnswerElsewhere();
     }
 }
+
+namespace Orbweaver
+{
+    // CB-267: what the panel shows when a peer message to this session would be
+    // held by Claude Code until someone approves it in that session.
+    public sealed record PeerInboundOffer(string Explanation, string SettingsPath, bool CanEdit);
+
+    public interface IRemoteChatPeerInbound
+    {
+        // Null when there is nothing to offer.
+        PeerInboundOffer? InboundOffer { get; }
+        bool HasHeldMessage { get; }
+        Task<bool> EnableInboundAsync();
+        Task<ChatSendOutcome> ResendHeldAsync();
+        // Raised on the UI thread.
+        event Action? InboundChanged;
+    }
+}
