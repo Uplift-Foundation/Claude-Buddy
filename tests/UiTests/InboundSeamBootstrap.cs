@@ -11,13 +11,23 @@ namespace Orbweaver.Tests;
 // each of them against a scratch directory.
 internal static class InboundSeamBootstrap
 {
-    internal static readonly Func<IReadOnlyList<string>> ProductionRoots = SettingsWindow.InboundRoots;
-    internal static readonly Func<string, InboundSetting> ProductionState = SettingsWindow.InboundState;
-    internal static readonly Func<string, string> ProductionDisplayPath = SettingsWindow.InboundDisplayPath;
+    // Captured inside Initialize(), not in field initializers. A class with no
+    // static constructor is beforefieldinit, so its field initializers may run at
+    // the first *field* access rather than when Initialize() is called -- which
+    // can be after a test class has installed its fakes, and then "production"
+    // is a fake. Assigning here pins the capture to module load, before anything
+    // in this assembly can have replaced a seam.
+    internal static Func<IReadOnlyList<string>> ProductionRoots { get; private set; } = null!;
+    internal static Func<string, InboundSetting> ProductionState { get; private set; } = null!;
+    internal static Func<string, string> ProductionDisplayPath { get; private set; } = null!;
 
     [ModuleInitializer]
     internal static void Initialize()
     {
+        ProductionRoots = SettingsWindow.InboundRoots;
+        ProductionState = SettingsWindow.InboundState;
+        ProductionDisplayPath = SettingsWindow.InboundDisplayPath;
+
         SettingsWindow.InboundRoots = () => Array.Empty<string>();
     }
 }
