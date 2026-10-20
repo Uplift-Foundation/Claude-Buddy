@@ -153,7 +153,7 @@ public class SettingsPeerInboundRowTests : IDisposable
         Assert.Empty(_writes);
         var rows = window.InboundRows();
         Assert.Contains(PeerInbound.TradeOff, TextOf(rows));
-        Assert.Contains("~/home/.claude/settings.json", TextOf(rows));
+        Assert.Contains("~" + PeerInboundSettingsFile.PathFor("/home/.claude"), TextOf(rows));
         Assert.True(HasButton(rows, PeerInbound.ConfirmLabel));
         Assert.True(HasButton(rows, "Cancel"));
     }
@@ -221,7 +221,7 @@ public class SettingsPeerInboundRowTests : IDisposable
         Assert.False(OrbweaverSettings.PeerInboundNoticeSeen);
         var text = TextOf(window.InboundRows());
         Assert.Contains("Not changed: " + (reason ?? "the file could not be written"), text);
-        Assert.Contains("~/home/.claude/settings.json", text);
+        Assert.Contains("~" + PeerInboundSettingsFile.PathFor("/home/.claude"), text);
 
         // A later success clears the message.
         _next = new PeerInboundWrite(PeerInboundWriteKind.Written, null);
