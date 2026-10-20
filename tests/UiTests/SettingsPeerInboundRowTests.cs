@@ -1,5 +1,6 @@
 using System.Reflection;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Headless.XUnit;
 using Avalonia.LogicalTree;
 using Xunit;
@@ -226,6 +227,38 @@ public class SettingsPeerInboundRowTests : IDisposable
         _next = new PeerInboundWrite(PeerInboundWriteKind.Written, null);
         window.OnInboundConfirmed("/home/.claude");
         Assert.DoesNotContain("Not changed", TextOf(window.InboundRows()));
+    }
+
+    // The handlers above are called directly; these two flip the real switch the
+    // row built, which is what proves it is wired to them. ToggleSwitch and the
+    // CheckBox fallback are both ToggleButtons, so this holds whichever template
+    // the theme supplied.
+    [AvaloniaFact]
+    public void FlippingTheRealSwitchOnAsksAndWritesNothing()
+    {
+        OrbweaverSettings.PeerInboundNoticeSeen = true;
+        _world["/home/.claude"] = InboundSetting.NotAccepting;
+        var window = NewWindow();
+
+        var toggle = Assert.Single(Walk(window.InboundRows()).OfType<ToggleButton>());
+        toggle.IsChecked = true;
+
+        Assert.Empty(_writes);
+        Assert.True(HasButton(window.InboundRows(), PeerInbound.ConfirmLabel));
+    }
+
+    [AvaloniaFact]
+    public void FlippingTheRealSwitchOffOnAnAcceptingRootWrites()
+    {
+        OrbweaverSettings.PeerInboundNoticeSeen = true;
+        _world["/home/.claude"] = InboundSetting.Accepting;
+        var window = NewWindow();
+
+        var toggle = Assert.Single(Walk(window.InboundRows()).OfType<ToggleButton>());
+        Assert.True(toggle.IsChecked);
+        toggle.IsChecked = false;
+
+        Assert.Equal(new[] { ("/home/.claude", false) }, _writes);
     }
 
     // ---- turning off ----
