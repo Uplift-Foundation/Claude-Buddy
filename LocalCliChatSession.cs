@@ -1472,7 +1472,13 @@ namespace Orbweaver
         // settings.json's text, kept against its write time and length so a
         // scan does not re-read a file nobody has touched. Re-read the moment
         // either moves, which is what lets a hand edit show up on the next scan.
-        private (string Path, (DateTime, long)? Stamp, SettingsRead Read)? _settingsRead;
+        private (SettingsKey Key, SettingsRead Read)? _settingsRead;
+
+        // What identifies one version of one settings.json. Compared with Equals
+        // rather than field by field: a lifted comparison of nullable tuples
+        // compiles to HasValue arms per side, which no session can drive one by
+        // one and which only obscured what the cache is keyed on.
+        private readonly record struct SettingsKey(string Path, bool Exists, DateTime Written, long Length);
 
         // Null text means two different things and only the stamp can tell them
         // apart: no settings.json at all (an empty object, which can be created)
@@ -1541,13 +1547,15 @@ namespace Orbweaver
         private SettingsRead SettingsText(string root, string path)
         {
             var info = new FileInfo(path);
-            (DateTime, long)? stamp = info.Exists ? (info.LastWriteTimeUtc, info.Length) : null;
+            var key = info.Exists
+                ? new SettingsKey(path, true, info.LastWriteTimeUtc, info.Length)
+                : new SettingsKey(path, false, default, 0);
 
-            if (_settingsRead is { } cached && cached.Path == path && cached.Stamp == stamp) return cached.Read;
+            if (_settingsRead is { } cached && cached.Key.Equals(key)) return cached.Read;
 
             var text = _readSettings(root);
-            var read = new SettingsRead(text, Unreadable: text is null && stamp is not null);
-            _settingsRead = (path, stamp, read);
+            var read = new SettingsRead(text, Unreadable: text is null && key.Exists);
+            _settingsRead = (key, read);
             return read;
         }
 
