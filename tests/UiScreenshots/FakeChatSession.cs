@@ -8,7 +8,7 @@ namespace Orbweaver.Tests;
 internal sealed class FakeChatSession :
     IRemoteChatSession, IRemoteChatComposer, IRemoteChatElsewhere, IRemoteChatRoom,
     IRemoteChatReadOnly, IRemoteChatInterrupt,
-    IRemoteChatMachine
+    IRemoteChatMachine, IRemoteChatPeerInbound
 {
     // Both default to what an ordinary typeable session answers — an ordinary
     // hint and no button — so every capture that predates them is unchanged.
@@ -103,4 +103,20 @@ internal sealed class FakeChatSession :
     {
         // No-op: nothing is ever in flight in this fake.
     }
+
+    // IRemoteChatPeerInbound (CB-267): enough to pose the box in each of its
+    // states. No offer by default, so every other capture is unchanged.
+    public PeerInboundOffer? InboundOffer { get; set; }
+
+    public bool HasHeldMessage { get; set; }
+
+    public event Action? InboundChanged
+    {
+        add { }
+        remove { }
+    }
+
+    public Task<bool> EnableInboundAsync() => Task.FromResult(true);
+
+    public Task<ChatSendOutcome> ResendHeldAsync() => Task.FromResult(ChatSendOutcome.Sent);
 }
