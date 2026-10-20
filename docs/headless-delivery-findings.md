@@ -131,8 +131,23 @@ shipping; it is not blocking because the socket-level contract
 (`Accepted` = "the bytes were not refused") is still true, and no test in this
 branch claims otherwise.
 
+## The held-message gap is being handled by CB-267
+
+The gap described above — `Accepted` reported, message sitting in Claude Code's held queue — is the subject of CB-267. Orbweaver will offer a one-click way to turn on `crossSessionInbound: "accept"` for the account a session belongs to: a switch under Settings → Claude Code sessions (with a one-time card the first time someone opens that section), and an offer in the chat panel when a session that would hold the message is open. Nothing is written until the person confirms an inline trade-off sentence, and the existing `settings.json` is copied to `settings.json.orbweaver-backup` first.
+
+**Step 0 measurements: pending.** The plan calls for real-machine measurements before the copy and the rule are finalised, and none have been taken yet. This section will be filled in with what was actually observed, and until then nothing below is a result:
+
+1. Whether a running session picks up an edited `settings.json` without a restart, and whether an already-held message is released by it (decides the wording of the "done" text).
+2. Which permission modes hold a message besides `bypassPermissions` (`auto`, `dontAsk`, `acceptEdits`).
+3. Whether a held message writes anything to the transcript.
+4. Whether Claude Code on Windows puts a named pipe or a Unix socket in `messagingSocketPath`.
+5. Whether a project's `.claude/settings.json` or `settings.local.json` setting of `crossSessionInbound` counts.
+
+Until then the rule assumes only `bypassPermissions` holds and that a restart may be needed; both are labelled as assumed in the plan.
+
 ## Still assumed
 
+- **The "Done" wording in the chat panel and Settings is unverified.** "Done — new messages go straight in." asserts that a running session picks up an edited `settings.json` without a restart. That has not been observed; it is Step 0 item 1 above, still pending. Likewise the README and Read Me First claim only `bypassPermissions` holds a message, because it is the one mode seen; `--dangerously-skip-permissions` is assumed equivalent and has not been measured.
 - **Whether `Accepted`-but-`working` truly settles once the running turn ends**
   was not observed live — both probe sessions were idle at delivery time. The
   UI and integration tests cover the wording and the receipt plumbing; nobody

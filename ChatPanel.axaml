@@ -506,6 +506,51 @@
             </Border>
 
             <StackPanel Grid.Row="5" Spacing="6">
+                <!-- CB-267: a session running without permission prompts holds
+                     every message this panel delivers to it until someone
+                     approves it there, and the socket accepts the bytes either
+                     way. So before anything is sent, the panel says so and offers
+                     the one-line settings change that lets them straight in —
+                     armed two-step, like the orb's own confirmations, because it
+                     changes what *every* session on the machine accepts. Styled
+                     as FetchWaitBox is: a note about the conversation, not a
+                     dialog the session is stopped on (that one is amber).
+                     Above the pictures and the box, so it is read before typing.
+                     Shown and filled by ApplyInbound. -->
+                <Border x:Name="InboundBox" IsVisible="False"
+                        Padding="10,7" CornerRadius="8"
+                        Background="#FF2C2C31"
+                        BorderBrush="#33FFFFFF" BorderThickness="1">
+                    <StackPanel Spacing="6">
+                        <TextBlock x:Name="InboundText" TextWrapping="Wrap"
+                                   FontSize="11" Foreground="#EEFFFFFF"/>
+                        <TextBlock x:Name="InboundPath" TextWrapping="Wrap"
+                                   FontSize="10" Foreground="#99FFFFFF"/>
+                        <WrapPanel x:Name="InboundButtons" Orientation="Horizontal">
+                            <Border x:Name="InboundAskButton" Margin="0,0,6,0"
+                                    Background="#33FFFFFF" BorderBrush="#40FFFFFF" BorderThickness="1"
+                                    CornerRadius="6" Padding="7,4" Cursor="Hand">
+                                <TextBlock x:Name="InboundAskLabel" FontSize="11" Foreground="#EEFFFFFF"/>
+                            </Border>
+                            <Border x:Name="InboundConfirmButton" Margin="0,0,6,0"
+                                    Background="#4DB8860B" BorderBrush="#80B8860B" BorderThickness="1"
+                                    CornerRadius="6" Padding="7,4" Cursor="Hand">
+                                <TextBlock x:Name="InboundConfirmLabel" FontSize="11" Foreground="#F2FFFFFF"/>
+                            </Border>
+                            <Border x:Name="InboundCancelButton" Margin="0,0,6,0"
+                                    Background="#33FFFFFF" BorderBrush="#40FFFFFF" BorderThickness="1"
+                                    CornerRadius="6" Padding="7,4" Cursor="Hand">
+                                <TextBlock x:Name="InboundCancelLabel" FontSize="11" Foreground="#EEFFFFFF"/>
+                            </Border>
+                            <Border x:Name="InboundResendButton" Margin="0,0,6,0"
+                                    Background="#33FFFFFF" BorderBrush="#40FFFFFF" BorderThickness="1"
+                                    CornerRadius="6" Padding="7,4" Cursor="Hand">
+                                <TextBlock x:Name="InboundResendLabel" FontSize="11" Foreground="#EEFFFFFF"/>
+                            </Border>
+                        </WrapPanel>
+                    </StackPanel>
+                </Border>
+
                 <!-- Pictures pasted since the last send, waiting to go out
                      with whatever gets typed next. Hidden rather than
                      collapsed-to-nothing by an empty items source, so

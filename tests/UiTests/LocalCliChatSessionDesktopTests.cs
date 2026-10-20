@@ -43,16 +43,27 @@ public class LocalCliChatSessionDesktopTests : IDisposable
 
     private sealed class FakeApi : ICloudApi
     {
-        private readonly Func<CloudRequestContext, CloudOutcome> _answer;
+        private readonly Func<CloudRequestContext, Task<CloudOutcome>> _answer;
 
-        internal FakeApi(Func<CloudRequestContext, CloudOutcome> answer) => _answer = answer;
+        internal FakeApi(Func<CloudRequestContext, CloudOutcome> answer) =>
+            _answer = context => Task.FromResult(answer(context));
+
+        // An answer that has to wait on something before it can return — the
+        // echo-race test below. Asynchronous rather than blocking, because which
+        // thread this runs on is not the test's to choose: CloudTurnSender's
+        // credential read is a Task.WhenAny over a Task.Run, and when the fake
+        // read has already finished by the time it is awaited, its
+        // ConfigureAwait(false) continues inline — on the UI thread. A blocking
+        // wait on the dispatcher from there is a self-deadlock, which is what
+        // hung a coverage run for two hours at 0% CPU (CB-267).
+        internal FakeApi(Func<CloudRequestContext, Task<CloudOutcome>> answer) => _answer = answer;
 
         internal List<CloudRequestContext> Requests { get; } = new();
 
-        public Task<CloudApiResult> SendAsync(CloudRequestContext context, CancellationToken token)
+        public async Task<CloudApiResult> SendAsync(CloudRequestContext context, CancellationToken token)
         {
             Requests.Add(context);
-            return Task.FromResult(new CloudApiResult(_answer(context), null));
+            return new CloudApiResult(await _answer(context), null);
         }
     }
 
@@ -111,9 +122,9 @@ public class LocalCliChatSessionDesktopTests : IDisposable
     }
 
     private Rig Build(SessionStatus status, Func<CloudRequestContext, CloudOutcome>? answer = null,
-        bool wired = true)
+        bool wired = true, Func<CloudRequestContext, Task<CloudOutcome>>? answerLater = null)
     {
-        var api = new FakeApi(answer ?? Ok);
+        var api = answerLater is not null ? new FakeApi(answerLater) : new FakeApi(answer ?? Ok);
         var credentials = new FakeCredentials();
 
         // Made first because the session reads the cloud setting while it is
@@ -391,18 +402,27 @@ public class LocalCliChatSessionDesktopTests : IDisposable
         var path = Transcript();
         LocalCliChatSession? session = null;
 
-        var rig = Build(Status(path), answer: request =>
+        // Completed by the echo itself, so the 200 is held back until the row is
+        // provably in the history — the ordering this test is about — without
+        // blocking whichever thread the answer happens to run on.
+        var echoed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var rig = Build(Status(path), answerLater: async request =>
         {
             Append(path, PeerRow(UuidSentIn(request), "raced"));
-            Dispatcher.UIThread.InvokeAsync(() => Invoke(session!, "Pump")).GetAwaiter().GetResult();
+            await Dispatcher.UIThread.InvokeAsync(() => Invoke(session!, "Pump"));
 
-            // The row lands on the UI thread once the loop turns; wait for it
-            // from here rather than racing the continuation of the send.
-            for (var i = 0; i < 400 && !session!.History.Any(t => t.Text == "raced"); i++) Thread.Sleep(5);
+            // A bound, not a tolerance: a row that never lands fails here with a
+            // TimeoutException instead of hanging the suite.
+            await echoed.Task.WaitAsync(TimeSpan.FromSeconds(30));
             return new CloudOutcome(CloudOutcomeKind.Ok, 200);
         });
 
         session = Started(rig);
+        session.TurnAdded += turn =>
+        {
+            if (turn.Text == "raced") echoed.TrySetResult();
+        };
         var outcome = await session.SendAsync("raced");
         Dispatcher.UIThread.RunJobs();
 

@@ -47,7 +47,10 @@ namespace Orbweaver
             int PeerProtocol,
             string SocketPath,
             string? Status,
-            string? KeyPath);
+            string? KeyPath,
+            // The config root whose sessions/ directory this entry was read from.
+            // Null when built by hand (Parse alone has no directory to name).
+            string? ConfigRoot = null);
 
         // The messaging protocol version this build of Buddy knows how to
         // speak. A registry entry naming a higher number is a newer Claude
@@ -149,8 +152,8 @@ namespace Orbweaver
                             sessionsDir, KeyFileName(withoutKey.Value.Pid, withoutKey.Value.SocketPath));
 
                         found.Add(File.Exists(keyPath)
-                            ? withoutKey.Value with { KeyPath = keyPath }
-                            : withoutKey.Value);
+                            ? withoutKey.Value with { KeyPath = keyPath, ConfigRoot = root }
+                            : withoutKey.Value with { ConfigRoot = root });
                     }
                     catch
                     {

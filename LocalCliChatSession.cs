@@ -42,7 +42,8 @@ namespace Orbweaver
     //    trivially, since the whole turn is all there ever is.
     internal sealed class LocalCliChatSession :
         IRemoteChatSession, IRemoteChatBacklog, IRemoteChatComposer, IRemoteChatPrompts,
-        IRemoteChatImages, IRemoteChatSlashCommands, IRemoteChatElsewhere, IRemoteChatReadOnly, IDisposable
+        IRemoteChatImages, IRemoteChatSlashCommands, IRemoteChatElsewhere, IRemoteChatReadOnly,
+        IRemoteChatPeerInbound, IDisposable
     {
         // How much of the tail to read when the panel first opens.
         //
@@ -132,7 +133,9 @@ namespace Orbweaver
                                    Func<string?, ICloudCredentialSource>? credentialsFor = null,
                                    Func<bool>? cloudEnabled = null,
                                    Func<SessionStatus, bool>? focusDesktop = null,
-                                   Action<SessionStatus, string>? focusTerminal = null)
+                                   Action<SessionStatus, string>? focusTerminal = null,
+                                   Func<string, string?>? readSettings = null,
+                                   Func<string, bool, PeerInboundWrite>? applySetting = null)
         {
             SessionId = sessionId;
             _status = status;
@@ -148,6 +151,8 @@ namespace Orbweaver
             _cloudEnabled = cloudEnabled ?? (() => OrbweaverSettings.ClaudeCloudEnabled);
             _focusDesktop = focusDesktop ?? FocusDesktopWindow;
             _focusTerminal = focusTerminal ?? FocusTerminalWindow;
+            _readSettings = readSettings ?? PeerInboundSettingsFile.ReadText;
+            _applySetting = applySetting ?? PeerInboundSettingsFile.Apply;
             _announced = DesktopView();
         }
 
@@ -228,6 +233,11 @@ namespace Orbweaver
             _status = status;
             AnnounceView();
             if (!string.IsNullOrEmpty(status.Title)) DisplayName = status.Title;
+
+            // CB-267: the scan is also when replying gets switched on or off, the
+            // registry entry appears or goes, and settings.json is edited by hand
+            // — every input to the offer except the transcript's own mode row.
+            AnnounceInbound();
 
             Start();
 
@@ -371,11 +381,12 @@ namespace Orbweaver
                     var length = fs.Length;
                     var from = Math.Max(0, length - InitialBytes);
                     var (lines, alignedFrom) = ReadWindow(fs, from, length);
-                    return (Turns: MapLines(lines), From: alignedFrom, To: length);
+                    return (Turns: MapLines(lines), From: alignedFrom, To: length,
+                            Mode: PeerInbound.LastPermissionMode(lines));
                 }
                 catch
                 {
-                    return (Turns: new List<Mapped>(), From: 0L, To: 0L);
+                    return (Turns: new List<Mapped>(), From: 0L, To: 0L, Mode: (string?)null);
                 }
             });
 
@@ -384,6 +395,7 @@ namespace Orbweaver
                 _offset = window.To;
                 _backlogFrom = window.From;
                 _loaded = true;
+                _permissionMode = window.Mode ?? _permissionMode;
 
                 _history.Clear();
                 _seen.Clear();
@@ -405,6 +417,8 @@ namespace Orbweaver
                     _waiting = true;
                     _ = RefreshPromptAsync();
                 }
+
+                AnnounceInbound();
             });
         }
 
@@ -477,6 +491,7 @@ namespace Orbweaver
             _ = Task.Run(() =>
             {
                 List<Mapped> mapped = new();
+                string? mode = null;
 
                 // Only moved once the bytes behind it have actually been mapped.
                 // Assigning fs.Length up front and letting the catch below carry
@@ -505,7 +520,9 @@ namespace Orbweaver
                         fs.Seek(from, SeekOrigin.Begin);
                         var buffer = new byte[length - from];
                         fs.ReadExactly(buffer);
-                        mapped = MapLines(TakeWholeLines(buffer));
+                        var lines = TakeWholeLines(buffer);
+                        mapped = MapLines(lines);
+                        mode = PeerInbound.LastPermissionMode(lines);
                     }
 
                     to = length;
@@ -524,6 +541,14 @@ namespace Orbweaver
                     {
                         if (m.Uuid is not null && !_seen.Add(m.Uuid)) continue;
                         AddRow(m.Turn, m.Uuid);
+                    }
+
+                    // `/permissions` or shift-tab mid-session writes a new mode
+                    // row, and that changes whether a message would be held.
+                    if (mode is not null && mode != _permissionMode)
+                    {
+                        _permissionMode = mode;
+                        AnnounceInbound();
                     }
                 });
             });
@@ -1019,15 +1044,22 @@ namespace Orbweaver
 
             Add(mine);
 
+            return await HandOverAsync(mine, typedText);
+        }
+
+        // The delivery itself, split out so a held message can be sent again
+        // into the bubble it already has (CB-267): ResendHeldAsync hands this
+        // the same turn, and _pending pointing at it is what makes the row
+        // that eventually lands settle that bubble rather than add a second.
+        private async Task<ChatSendOutcome> HandOverAsync(ChatTurn mine, string typedText)
+        {
             _pending = mine;
             _pendingRaw = typedText.Trim();
-            _pendingCaption = displayText.Trim();
+            _pendingCaption = mine.Text.Trim();
             _pendingAt = DateTimeOffset.Now;
 
             var receipt = await _messenger.DeliverAsync(
                 SessionId, SessionMessenger.FromName(MachineNames.Tag()), typedText, CancellationToken.None);
-
-            Note(DeliveryNote(receipt, DisplayName));
 
             // CB-35: Accepted is the only receipt that means the socket took
             // the bytes — DeliveryNote's own comment says the same thing
@@ -1036,9 +1068,26 @@ namespace Orbweaver
             // decision draws the line in the same place. Every other arm is
             // a reason nothing reached the far side, which is exactly what
             // "the text is still worth keeping in the box" means.
-            return receipt.Result == DeliveryResult.Accepted
-                ? ChatSendOutcome.Sent
-                : ChatSendOutcome.Failed;
+            var accepted = receipt.Result == DeliveryResult.Accepted;
+
+            // CB-267: the socket taking the bytes is not the session reading
+            // them. A session running without permission prompts holds a peer
+            // message until someone approves it in that session, and nothing on
+            // the wire says so — so the same rule the offer box uses decides
+            // whether "Handed to X" would be a lie. An unreadable settings.json
+            // (CanEdit false) is not claimed either way: the old note stands.
+            var held = accepted && OfferNow() is { CanEdit: true };
+
+            Note(held ? PeerInbound.HeldNote(DisplayName) : DeliveryNote(receipt, DisplayName));
+
+            // Kept on a failed resend, so "Send it again" survives a socket
+            // that refused once; dropped only when this very turn went in.
+            if (held) _held = (mine, typedText);
+            else if (accepted && ReferenceEquals(_held?.Turn, mine)) _held = null;
+
+            AnnounceInbound();
+
+            return accepted ? ChatSendOutcome.Sent : ChatSendOutcome.Failed;
         }
 
         // What the composer says once a delivery attempt has actually been
@@ -1380,6 +1429,187 @@ namespace Orbweaver
         [ExcludeFromCodeCoverage]
         private static void FocusTerminalWindow(SessionStatus status, string sessionId) =>
             TerminalFocuser.Focus(status, null, sessionId);
+
+        // --- CB-267: messages Claude Code would hold ---
+        //
+        // A session started with --permission-mode bypassPermissions holds every
+        // peer message — this app's included — until someone approves it in that
+        // session, unless its config root's settings.json says
+        // "crossSessionInbound": "accept". The socket accepts the bytes either
+        // way, so without this the panel said "Handed to X" over a message that
+        // was sitting in a queue nobody was watching.
+        //
+        // What this class owns is *which* session, *which* settings.json and
+        // *when* to ask; the rule itself (PeerInbound.WouldHold) and the file
+        // edit (PeerInboundSettingsFile.Apply) are pure and IO respectively and
+        // tested where they live. readSettings and applySetting are seams for
+        // the same reason messenger is: the real ones read and write a file under
+        // a real Claude config root, which no test may touch.
+        private readonly Func<string, string?> _readSettings;
+        private readonly Func<string, bool, PeerInboundWrite> _applySetting;
+
+        // Off the last {"type":"permission-mode"} row the transcript carried.
+        // Claude Code writes one near the start and again around every turn, and
+        // the last one wins. Read from the opening window and the live tail only,
+        // never from an older page: a page is *older*, and letting it overwrite
+        // the current mode would wind the session back to whatever it was an hour
+        // ago. Null until a row is seen, when settings.json's defaultMode stands
+        // in for it.
+        private string? _permissionMode;
+
+        // The message the last delivery claimed was held, and exactly what was
+        // typed for it, so "Send it again" re-sends the same bytes into the same
+        // bubble.
+        private (ChatTurn Turn, string Typed)? _held;
+
+        private PeerInboundOffer? _inbound;
+
+        // What the panel was last told, compared against for the same reason
+        // _announced is: the inputs move between scans without this class being
+        // involved.
+        private (PeerInboundOffer? Offer, bool Held) _inboundAnnounced;
+
+        // settings.json's text, kept against its write time and length so a
+        // scan does not re-read a file nobody has touched. Re-read the moment
+        // either moves, which is what lets a hand edit show up on the next scan.
+        private (SettingsKey Key, SettingsRead Read)? _settingsRead;
+
+        // What identifies one version of one settings.json. Compared with Equals
+        // rather than field by field: a lifted comparison of nullable tuples
+        // compiles to HasValue arms per side, which no session can drive one by
+        // one and which only obscured what the cache is keyed on.
+        private readonly record struct SettingsKey(string Path, bool Exists, DateTime Written, long Length);
+
+        // Null text means two different things and only the stamp can tell them
+        // apart: no settings.json at all (an empty object, which can be created)
+        // or one that exists and could not be read — mode 000, a sharing
+        // violation — which must be explained and left alone, never offered a
+        // button whose write would fail on the same read (CB-267 QA).
+        private readonly record struct SettingsRead(string? Text, bool Unreadable);
+
+        public PeerInboundOffer? InboundOffer => _inbound;
+
+        public bool HasHeldMessage => _held is not null;
+
+        public event Action? InboundChanged;
+
+        // Which config root this session belongs to: the transcript path names
+        // it whenever the transcript lives where Claude Code puts it, and the
+        // registry entry the messenger would use names it otherwise. Neither
+        // means there is no settings.json this panel can honestly point at, and
+        // then nothing is offered rather than a guess at ~/.claude.
+        internal string? ConfigRootFor() =>
+            ClaudeConfigRoots.RootOfTranscript(_status.TranscriptPath) ?? _findRegistry(SessionId)?.ConfigRoot;
+
+        // A settings.json that is not JSON this app can safely rewrite. Said
+        // rather than offered: a file we could not parse is never written to,
+        // so the button would have nowhere to go.
+        internal static string UnreadableText(string name) =>
+            PeerInbound.OfferText(name) + " " + Brand.DisplayName
+            + " couldn't read its settings file as JSON it can safely edit, so it has been left alone — add \"" + PeerInbound.SettingKey + "\": \""
+            + PeerInbound.AcceptValue + "\" to it by hand to let them straight in.";
+
+        internal static string EnableFailedNote(string displayPath, string? reason) =>
+            $"Couldn't change {displayPath}, so nothing was turned on: {reason ?? "the write did not go through"}.";
+
+        // The offer, asked fresh. Gated in the order that is cheapest to refuse:
+        // a Desktop chat goes over Remote Control rather than the socket (CB-266,
+        // unchanged here); replying off means nothing is being sent; a mode that
+        // cannot hold ends it before the registry is scanned, which is most
+        // sessions; and only a session reached over its socket — no pane — is
+        // affected at all, since text typed into a pane is the user's own.
+        private PeerInboundOffer? OfferNow()
+        {
+            if (_status.IsDesktopHosted || !_format.ReplyEnabled()) return null;
+            if (_permissionMode is { } mode && !PeerInbound.HoldingModes.Contains(mode)) return null;
+            if (!ChannelIsMessaging) return null;
+
+            var root = ConfigRootFor();
+            if (root is null) return null;
+
+            var path = PeerInboundSettingsFile.PathFor(root);
+            var (text, unreadable) = SettingsText(root, path);
+
+            if (unreadable || PeerInbound.ReadSetting(text) == InboundSetting.Unreadable)
+            {
+                // Without the file the default mode is unknowable too, so only a
+                // mode the transcript itself named can make this worth saying.
+                return _permissionMode is null
+                    ? null
+                    : new PeerInboundOffer(UnreadableText(DisplayName), path, CanEdit: false);
+            }
+
+            return PeerInbound.WouldHold(_permissionMode, text)
+                ? new PeerInboundOffer(PeerInbound.OfferText(DisplayName), path, CanEdit: true)
+                : null;
+        }
+
+        private SettingsRead SettingsText(string root, string path)
+        {
+            var info = new FileInfo(path);
+            var key = info.Exists
+                ? new SettingsKey(path, true, info.LastWriteTimeUtc, info.Length)
+                : new SettingsKey(path, false, default, 0);
+
+            if (_settingsRead is { } cached && cached.Key.Equals(key)) return cached.Read;
+
+            var text = _readSettings(root);
+            var read = new SettingsRead(text, Unreadable: text is null && key.Exists);
+            _settingsRead = (key, read);
+            return read;
+        }
+
+        private void AnnounceInbound()
+        {
+            _inbound = OfferNow();
+
+            var now = (_inbound, _held is not null);
+            if (_inboundAnnounced == now) return;
+
+            _inboundAnnounced = now;
+            InboundChanged?.Invoke();
+        }
+
+        // The write runs off the UI thread — it is a read, a backup copy and an
+        // atomic replace — and everything after it is back on the thread that
+        // clicked. The cache is dropped rather than trusted: a write inside the
+        // same filesystem tick as the read would leave the stamp unchanged.
+        public async Task<bool> EnableInboundAsync()
+        {
+            var root = ConfigRootFor();
+            if (root is null) return false;
+
+            var write = await Task.Run(() => _applySetting(root, true));
+            _settingsRead = null;
+
+            var ok = write.Kind is PeerInboundWriteKind.Written or PeerInboundWriteKind.Unchanged;
+            if (!ok)
+            {
+                Note(EnableFailedNote(
+                    PeerInbound.DisplayPath(PeerInboundSettingsFile.PathFor(root),
+                        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)),
+                    write.Reason));
+            }
+
+            AnnounceInbound();
+            return ok;
+        }
+
+        // The held message, delivered again. Claude Code still has the first
+        // copy queued; it is not withdrawn by this, which the panel's done text
+        // leaves to the person who can see that session.
+        public async Task<ChatSendOutcome> ResendHeldAsync()
+        {
+            if (_held is not { } held) return ChatSendOutcome.Failed;
+
+            if (!_format.ReplyEnabled())
+            {
+                Note(ReplyingOffNote);
+                return ChatSendOutcome.Failed;
+            }
+
+            return await HandOverAsync(held.Turn, held.Typed);
+        }
 
         // --- plumbing ---
 

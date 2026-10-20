@@ -100,7 +100,7 @@ namespace Orbweaver
             "codexChatEnabled", "codexReplyEnabled", "codexAccountUsageEnabled", "autoColorSessions",
             "claudeCodeEnabled", "codexEnabled",
             "grokChatEnabled", "grokReplyEnabled", "grokEnabled", "grokAccountUsageEnabled",
-            "grokAutoRefreshEnabled",
+            "grokAutoRefreshEnabled", "peerInboundNoticeSeen",
             "clickAction", "doubleClickAction", "tripleClickAction",
             "remoteControlEnabled", "remoteControlProfileDir", "remoteControlProfileDirs",
             "remoteControlIdleMinutes", "remoteControlServeOnLaunch",
@@ -329,6 +329,11 @@ namespace Orbweaver
             // interrupting a run, which are the two places a wrong click costs
             // most.
             public bool ClaudeCodeReplyEnabled { get; set; }
+
+            // CB-267: the one-time card in Settings that explains why Claude Code
+            // holds messages sent from an orb. Set once the card has been acted
+            // on or dismissed, and never cleared by the app.
+            public bool PeerInboundNoticeSeen { get; set; }
 
             // Codex's own pair. Separate keys rather than one shared "local CLI"
             // switch, because seeing and controlling are separate powers per CLI
@@ -1327,6 +1332,12 @@ namespace Orbweaver
             set { Load(); lock (Gate) _model.ClaudeCodeReplyEnabled = value; Save(); }
         }
 
+        public static bool PeerInboundNoticeSeen
+        {
+            get { Load(); lock (Gate) return _model.PeerInboundNoticeSeen; }
+            set { Load(); lock (Gate) _model.PeerInboundNoticeSeen = value; Save(); }
+        }
+
         public static bool CodexChatEnabled
         {
             get { Load(); lock (Gate) return _model.CodexChatEnabled; }
@@ -1905,6 +1916,7 @@ namespace Orbweaver
                         CodexReplyEnabled = root["codexReplyEnabled"]?.GetValue<bool>() ?? false,
                         CodexAccountUsageEnabled = root["codexAccountUsageEnabled"]?.GetValue<bool>() ?? false,
                         AutoColorSessions = root["autoColorSessions"]?.GetValue<bool>() ?? false,
+                        PeerInboundNoticeSeen = root["peerInboundNoticeSeen"]?.GetValue<bool>() ?? false,
                         ClaudeCodeEnabled = root["claudeCodeEnabled"]?.GetValue<bool>() ?? true,
                         CodexEnabled = root["codexEnabled"]?.GetValue<bool>() ?? true,
                         GrokChatEnabled = root["grokChatEnabled"]?.GetValue<bool>() ?? true,
@@ -2506,6 +2518,7 @@ namespace Orbweaver
                         ["codexReplyEnabled"] = _model.CodexReplyEnabled,
                         ["codexAccountUsageEnabled"] = _model.CodexAccountUsageEnabled,
                         ["autoColorSessions"] = _model.AutoColorSessions,
+                        ["peerInboundNoticeSeen"] = _model.PeerInboundNoticeSeen,
                         ["claudeCodeEnabled"] = _model.ClaudeCodeEnabled,
                         ["codexEnabled"] = _model.CodexEnabled,
                         ["grokChatEnabled"] = _model.GrokChatEnabled,
