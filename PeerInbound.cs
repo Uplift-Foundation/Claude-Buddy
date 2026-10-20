@@ -52,7 +52,7 @@ namespace Orbweaver
             string? mode = null;
             foreach (var line in lines)
             {
-                if (line is null || !line.Contains("permission-mode", StringComparison.Ordinal)) continue;
+                if (!line.Contains("permission-mode", StringComparison.Ordinal)) continue;
                 try
                 {
                     using var doc = JsonDocument.Parse(line);

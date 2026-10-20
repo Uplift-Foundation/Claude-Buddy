@@ -51,14 +51,18 @@ namespace Orbweaver
             string target;
             try
             {
+                // Null means "not a link" (a missing path throws instead, handled below), so the common case falls through to
+                // the path itself. Resolving in one call rather than testing for
+                // a link first leaves no window for the link to be swapped for a
+                // file between the two.
+                target = File.ResolveLinkTarget(path, true)?.FullName ?? path;
+                if (target != path && !File.Exists(target))
+                    return Fail(PeerInboundWriteKind.Refused, $"{path} is a link to a file that is not there, so it was left alone.");
+            }
+            catch (FileNotFoundException)
+            {
+                // Nothing at the path at all: the create-it case, no link to follow.
                 target = path;
-                if (new FileInfo(path).LinkTarget is not null)
-                {
-                    var resolved = File.ResolveLinkTarget(path, true);
-                    if (resolved is null || !resolved.Exists)
-                        return Fail(PeerInboundWriteKind.Refused, $"{path} is a link to a file that is not there, so it was left alone.");
-                    target = resolved.FullName;
-                }
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException)
             {
