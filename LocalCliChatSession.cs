@@ -1472,7 +1472,14 @@ namespace Orbweaver
         // settings.json's text, kept against its write time and length so a
         // scan does not re-read a file nobody has touched. Re-read the moment
         // either moves, which is what lets a hand edit show up on the next scan.
-        private (string Path, (DateTime, long)? Stamp, string? Text)? _settingsRead;
+        private (string Path, (DateTime, long)? Stamp, SettingsRead Read)? _settingsRead;
+
+        // Null text means two different things and only the stamp can tell them
+        // apart: no settings.json at all (an empty object, which can be created)
+        // or one that exists and could not be read — mode 000, a sharing
+        // violation — which must be explained and left alone, never offered a
+        // button whose write would fail on the same read (CB-267 QA).
+        private readonly record struct SettingsRead(string? Text, bool Unreadable);
 
         public PeerInboundOffer? InboundOffer => _inbound;
 
@@ -1492,8 +1499,8 @@ namespace Orbweaver
         // rather than offered: a file we could not parse is never written to,
         // so the button would have nowhere to go.
         internal static string UnreadableText(string name) =>
-            PeerInbound.OfferText(name) + " Its settings file isn't JSON " + Brand.DisplayName
-            + " can safely edit, so it has been left alone — add \"" + PeerInbound.SettingKey + "\": \""
+            PeerInbound.OfferText(name) + " " + Brand.DisplayName
+            + " couldn't read its settings file as JSON it can safely edit, so it has been left alone — add \"" + PeerInbound.SettingKey + "\": \""
             + PeerInbound.AcceptValue + "\" to it by hand to let them straight in.";
 
         internal static string EnableFailedNote(string displayPath, string? reason) =>
@@ -1515,9 +1522,9 @@ namespace Orbweaver
             if (root is null) return null;
 
             var path = PeerInboundSettingsFile.PathFor(root);
-            var text = SettingsText(root, path);
+            var (text, unreadable) = SettingsText(root, path);
 
-            if (PeerInbound.ReadSetting(text) == InboundSetting.Unreadable)
+            if (unreadable || PeerInbound.ReadSetting(text) == InboundSetting.Unreadable)
             {
                 // Without the file the default mode is unknowable too, so only a
                 // mode the transcript itself named can make this worth saying.
@@ -1531,16 +1538,17 @@ namespace Orbweaver
                 : null;
         }
 
-        private string? SettingsText(string root, string path)
+        private SettingsRead SettingsText(string root, string path)
         {
             var info = new FileInfo(path);
             (DateTime, long)? stamp = info.Exists ? (info.LastWriteTimeUtc, info.Length) : null;
 
-            if (_settingsRead is { } read && read.Path == path && read.Stamp == stamp) return read.Text;
+            if (_settingsRead is { } cached && cached.Path == path && cached.Stamp == stamp) return cached.Read;
 
             var text = _readSettings(root);
-            _settingsRead = (path, stamp, text);
-            return text;
+            var read = new SettingsRead(text, Unreadable: text is null && stamp is not null);
+            _settingsRead = (path, stamp, read);
+            return read;
         }
 
         private void AnnounceInbound()

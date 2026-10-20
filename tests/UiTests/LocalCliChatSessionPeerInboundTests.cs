@@ -91,6 +91,10 @@ public class LocalCliChatSessionPeerInboundTests : IDisposable
         public List<(string Root, bool Accept)> Applies { get; } = new();
         public PeerInboundWrite Result { get; set; } = new(PeerInboundWriteKind.Written, null);
         public bool WriteAccept { get; set; } = true;
+
+        // Replaces the default reader, for the cases that need ReadText's own
+        // contract: null for a file that exists but cannot be read.
+        public Func<string, string?>? Reader { get; set; }
     }
 
     private LocalCliChatSession Session(
@@ -116,6 +120,7 @@ public class LocalCliChatSessionPeerInboundTests : IDisposable
         readSettings: root =>
         {
             settings.Reads++;
+            if (settings.Reader is { } reader) return reader(root);
             var path = Path.Combine(root, "settings.json");
             return File.Exists(path) ? File.ReadAllText(path) : null;
         },
@@ -335,6 +340,60 @@ public class LocalCliChatSessionPeerInboundTests : IDisposable
         Assert.Equal(LocalCliChatSession.UnreadableText("job-hunter"), offer.Explanation);
         Assert.Contains(Brand.DisplayName, offer.Explanation, StringComparison.Ordinal);
         Assert.Contains("\"crossSessionInbound\": \"accept\"", offer.Explanation, StringComparison.Ordinal);
+    }
+
+    // QA's finding: ReadText answers null both for no file and for a file it
+    // could not read. A null with a file on disk is the second, and gets the
+    // explanation with no button — the write would fail on the same read.
+    [AvaloniaFact]
+    public async Task AFileThatExistsButCannotBeReadIsExplainedNotOffered()
+    {
+        File.WriteAllText(SettingsPath, "{}");
+        var settings = new SettingsFake { Reader = _ => null };
+        var session = Loaded(Session(Transcript(Mode("bypassPermissions")), settings));
+
+        var offer = Assert.IsType<PeerInboundOffer>(session.InboundOffer);
+        Assert.False(offer.CanEdit);
+        Assert.Equal(LocalCliChatSession.UnreadableText("job-hunter"), offer.Explanation);
+
+        // ...and a send is not claimed held either way.
+        await session.SendAsync("check the deploy");
+        Assert.False(session.HasHeldMessage);
+        Assert.Contains(session.History, t => t.Text.StartsWith("Handed to job-hunter", StringComparison.Ordinal));
+    }
+
+    // The control for the case above: the same null with no file on disk is an
+    // empty settings object, and the button is offered.
+    [AvaloniaFact]
+    public void ANullReadWithNoFileIsAnEmptySettingsObject()
+    {
+        var settings = new SettingsFake { Reader = _ => null };
+        var session = Loaded(Session(Transcript(Mode("bypassPermissions")), settings));
+
+        Assert.True(session.InboundOffer!.CanEdit);
+    }
+
+    // The same through the real reader and a real permission denial. Unix only:
+    // mode 000 is a Unix permission, and Windows has no equivalent a test can set
+    // without an ACL API this suite does not use.
+    [AvaloniaFact]
+    public void AnUnreadableFileOnDiskIsExplainedThroughTheRealReader()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "mode 000 is a Unix permission; Windows has no equivalent here");
+
+        File.WriteAllText(SettingsPath, "{}");
+        File.SetUnixFileMode(SettingsPath, UnixFileMode.None);
+        try
+        {
+            var settings = new SettingsFake { Reader = PeerInboundSettingsFile.ReadText };
+            var session = Loaded(Session(Transcript(Mode("bypassPermissions")), settings));
+
+            Assert.False(session.InboundOffer!.CanEdit);
+        }
+        finally
+        {
+            File.SetUnixFileMode(SettingsPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
     }
 
     // ...but only when the transcript itself named a holding mode: without the
