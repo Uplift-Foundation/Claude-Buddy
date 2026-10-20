@@ -147,6 +147,7 @@ Until then the rule assumes only `bypassPermissions` holds and that a restart ma
 
 ## Still assumed
 
+- **The "Done" wording in the chat panel and Settings is unverified.** "Done — new messages go straight in." asserts that a running session picks up an edited `settings.json` without a restart. That has not been observed; it is Step 0 item 1 above, still pending. Likewise the README and Read Me First claim only `bypassPermissions` holds a message, because it is the one mode seen; `--dangerously-skip-permissions` is assumed equivalent and has not been measured.
 - **Whether `Accepted`-but-`working` truly settles once the running turn ends**
   was not observed live — both probe sessions were idle at delivery time. The
   UI and integration tests cover the wording and the receipt plumbing; nobody
