@@ -8,7 +8,7 @@ using Avalonia.Interactivity;
 using Avalonia.LogicalTree;
 using Xunit;
 
-namespace ClaudeBuddy.UiTests;
+namespace Orbweaver.UiTests;
 
 // The gateway address and token fields, and the voice name the picker shows
 // before anything has been enumerated.
@@ -32,8 +32,8 @@ public class SettingsGatewayFieldTests
 
     private static void Offline()
     {
-        ClaudeBuddySettings.ReloadForTests();
-        ClaudeBuddySettings.OpenClawEnabled = false;
+        OrbweaverSettings.ReloadForTests();
+        OrbweaverSettings.OpenClawEnabled = false;
     }
 
     // ---- the address field ----------------------------------------------
@@ -50,7 +50,7 @@ public class SettingsGatewayFieldTests
         box.Text = "gateway.example.com";
         box.RaiseEvent(new FocusChangedEventArgs(InputElement.LostFocusEvent));
 
-        Assert.Equal("gateway.example.com", ClaudeBuddySettings.OpenClawHost);
+        Assert.Equal("gateway.example.com", OrbweaverSettings.OpenClawHost);
     }
 
     // Trimmed, because an address pasted from a terminal or a chat message
@@ -66,7 +66,7 @@ public class SettingsGatewayFieldTests
         box.Text = "  gateway.example.com  ";
         box.RaiseEvent(new FocusChangedEventArgs(InputElement.LostFocusEvent));
 
-        Assert.Equal("gateway.example.com", ClaudeBuddySettings.OpenClawHost);
+        Assert.Equal("gateway.example.com", OrbweaverSettings.OpenClawHost);
     }
 
     // Losing focus without having changed anything does nothing at all. Worth its
@@ -76,8 +76,8 @@ public class SettingsGatewayFieldTests
     public void LosingFocusWithoutAChangeDoesNotReconnect()
     {
         Offline();
-        ClaudeBuddySettings.OpenClawHost = "gateway.example.com";
-        ClaudeBuddySettings.OpenClawFingerprint = "ab:cd:ef";
+        OrbweaverSettings.OpenClawHost = "gateway.example.com";
+        OrbweaverSettings.OpenClawFingerprint = "ab:cd:ef";
 
         var window = NewWindow();
         var box = (TextBox)window.GatewayHostBox();
@@ -86,7 +86,7 @@ public class SettingsGatewayFieldTests
 
         // The fingerprint survives, which is the observable difference: changing
         // the address clears it.
-        Assert.Equal("ab:cd:ef", ClaudeBuddySettings.OpenClawFingerprint);
+        Assert.Equal("ab:cd:ef", OrbweaverSettings.OpenClawFingerprint);
     }
 
     // Changing the address clears the pinned certificate fingerprint. It has to:
@@ -96,13 +96,13 @@ public class SettingsGatewayFieldTests
     public void ChangingTheAddressForgetsThePinnedCertificate()
     {
         Offline();
-        ClaudeBuddySettings.OpenClawHost = "old.example.com";
-        ClaudeBuddySettings.OpenClawFingerprint = "ab:cd:ef";
+        OrbweaverSettings.OpenClawHost = "old.example.com";
+        OrbweaverSettings.OpenClawFingerprint = "ab:cd:ef";
 
         NewWindow().OnGatewayHostChanged("new.example.com");
 
-        Assert.Equal("new.example.com", ClaudeBuddySettings.OpenClawHost);
-        Assert.Equal("", ClaudeBuddySettings.OpenClawFingerprint);
+        Assert.Equal("new.example.com", OrbweaverSettings.OpenClawHost);
+        Assert.Equal("", OrbweaverSettings.OpenClawFingerprint);
     }
 
     // Clearing the address is a legitimate act — it is how you switch the feature
@@ -111,7 +111,7 @@ public class SettingsGatewayFieldTests
     public void TheAddressCanBeCleared()
     {
         Offline();
-        ClaudeBuddySettings.OpenClawHost = "gateway.example.com";
+        OrbweaverSettings.OpenClawHost = "gateway.example.com";
 
         var window = NewWindow();
         var box = (TextBox)window.GatewayHostBox();
@@ -119,7 +119,7 @@ public class SettingsGatewayFieldTests
         box.Text = "";
         box.RaiseEvent(new FocusChangedEventArgs(InputElement.LostFocusEvent));
 
-        Assert.Equal("", ClaudeBuddySettings.OpenClawHost);
+        Assert.Equal("", OrbweaverSettings.OpenClawHost);
     }
 
     // ---- the token field -------------------------------------------------
@@ -131,7 +131,7 @@ public class SettingsGatewayFieldTests
     public void TheTokenIsStoredAgainstItsOwnHost()
     {
         Offline();
-        ClaudeBuddySettings.OpenClawHost = "one.example.com";
+        OrbweaverSettings.OpenClawHost = "one.example.com";
 
         NewWindow().OnGatewayTokenChanged("one.example.com", "token-one");
 
@@ -143,7 +143,7 @@ public class SettingsGatewayFieldTests
     public void TheTokenFieldShowsWhatIsAlreadyStoredForThatHost()
     {
         Offline();
-        ClaudeBuddySettings.OpenClawHost = "one.example.com";
+        OrbweaverSettings.OpenClawHost = "one.example.com";
         OpenClawIdentity.SetGatewayTokenFor("one.example.com", "token-one");
 
         var box = (TextBox)NewWindow().GatewayTokenBox();
@@ -157,7 +157,7 @@ public class SettingsGatewayFieldTests
     public void TheTokenFieldIsEmptyWithNoAddressSet()
     {
         Offline();
-        ClaudeBuddySettings.OpenClawHost = "";
+        OrbweaverSettings.OpenClawHost = "";
 
         var box = (TextBox)NewWindow().GatewayTokenBox();
 
@@ -173,18 +173,18 @@ public class SettingsGatewayFieldTests
     [AvaloniaFact]
     public void ThePlaceholderNamesTheVoiceForWhicheverEngineIsSelected()
     {
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
 
-        ClaudeBuddySettings.SpeakEngine = "custom";
-        ClaudeBuddySettings.SpeakCommandVoice = "a-custom-voice";
+        OrbweaverSettings.SpeakEngine = "custom";
+        OrbweaverSettings.SpeakCommandVoice = "a-custom-voice";
         Assert.Equal("a-custom-voice", SettingsWindow.SavedVoiceNameForPlaceholder());
 
-        ClaudeBuddySettings.SpeakEngine = "neural";
-        ClaudeBuddySettings.NeuralVoice = "af_heart";
+        OrbweaverSettings.SpeakEngine = "neural";
+        OrbweaverSettings.NeuralVoice = "af_heart";
         Assert.Equal("af_heart", SettingsWindow.SavedVoiceNameForPlaceholder());
 
-        ClaudeBuddySettings.SpeakEngine = "system";
-        ClaudeBuddySettings.SpeakVoice = "Daniel";
+        OrbweaverSettings.SpeakEngine = "system";
+        OrbweaverSettings.SpeakVoice = "Daniel";
         Assert.Equal("Daniel", SettingsWindow.SavedVoiceNameForPlaceholder());
     }
 
@@ -194,9 +194,9 @@ public class SettingsGatewayFieldTests
     [AvaloniaFact]
     public void AnUnknownEngineFallsBackToTheSystemVoice()
     {
-        ClaudeBuddySettings.ReloadForTests();
-        ClaudeBuddySettings.SpeakEngine = "something-new";
-        ClaudeBuddySettings.SpeakVoice = "Daniel";
+        OrbweaverSettings.ReloadForTests();
+        OrbweaverSettings.SpeakEngine = "something-new";
+        OrbweaverSettings.SpeakVoice = "Daniel";
 
         Assert.Equal("Daniel", SettingsWindow.SavedVoiceNameForPlaceholder());
     }

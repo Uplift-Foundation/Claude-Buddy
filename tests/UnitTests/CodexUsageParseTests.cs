@@ -2,7 +2,7 @@ using System;
 using System.IO;
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 public class CodexUsageParseTests
 {

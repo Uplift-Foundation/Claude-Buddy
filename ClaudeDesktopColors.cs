@@ -1,7 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using Avalonia.Media;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // One stable colour per Claude Desktop profile, shared by every surface that
     // shows it: the tray swatch, the tinted Dock icon of its cloned bundle, and
@@ -65,7 +65,7 @@ namespace ClaudeBuddy
         {
             // An explicit choice in settings beats both the derived colour and the
             // Default profile's reserved slate.
-            var chosen = ClaudeBuddySettings.For(folderName).Color;
+            var chosen = OrbweaverSettings.For(folderName).Color;
             if (chosen is { Length: > 0 })
             {
                 foreach (var (name, color) in Named)

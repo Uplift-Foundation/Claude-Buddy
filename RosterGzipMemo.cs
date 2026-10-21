@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // The last few rosters this Buddy compressed, kept so an identical one is not
     // compressed again.

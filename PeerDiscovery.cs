@@ -5,7 +5,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Finding the other machine without anybody typing an address.
     //

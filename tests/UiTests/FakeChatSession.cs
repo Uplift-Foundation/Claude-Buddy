@@ -1,4 +1,4 @@
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // An in-memory IRemoteChatSession, exactly the shape RemoteChat.cs's own
 // header comment says the interface was designed to be driven by "before any
@@ -16,7 +16,7 @@ namespace ClaudeBuddy.Tests;
 internal sealed class FakeChatSession :
     IRemoteChatSession, IRemoteChatImages, IRemoteChatSlashCommands,
     IRemoteChatComposer, IRemoteChatElsewhere, IRemoteChatFetchWait, IRemoteChatRoom,
-    IRemoteChatReadOnly, IRemoteChatInterrupt
+    IRemoteChatReadOnly, IRemoteChatInterrupt, IRemoteChatPeerInbound
 {
     public string SessionId { get; init; } = "fake-session";
     public string DisplayName { get; init; } = "Fake Session";
@@ -182,5 +182,47 @@ internal sealed class FakeChatSession :
     {
         WaitingSince = null;
         WaitChanged?.Invoke();
+    }
+
+    // IRemoteChatPeerInbound (CB-267). No offer by default, which is what every
+    // session that is not running without permission prompts answers — so every
+    // test that predates the ticket gets no box. Settable, and RaiseInboundChanged
+    // says so, the same two steps RaiseReadOnlyChanged takes.
+    public PeerInboundOffer? InboundOffer { get; set; }
+
+    public bool HasHeldMessage { get; set; }
+
+    public event Action? InboundChanged;
+
+    public void RaiseInboundChanged() => InboundChanged?.Invoke();
+
+    // How many handlers are attached, so a rebind test can prove the panel
+    // let go of the previous session.
+    public int InboundSubscribers => InboundChanged?.GetInvocationList().Length ?? 0;
+
+    // Counted, and answered from EnableGate when a test wants to hold the write
+    // open (a second click mid-write, a rebind mid-write); EnableResult otherwise.
+    public int EnableCalls { get; private set; }
+
+    public bool EnableResult { get; set; } = true;
+
+    public TaskCompletionSource<bool>? EnableGate { get; set; }
+
+    public Task<bool> EnableInboundAsync()
+    {
+        EnableCalls++;
+        return EnableGate?.Task ?? Task.FromResult(EnableResult);
+    }
+
+    // Counted. A resend that goes in clears the held flag and says so, which is
+    // what the real session does once the second attempt is not held.
+    public int ResendCalls { get; private set; }
+
+    public Task<ChatSendOutcome> ResendHeldAsync()
+    {
+        ResendCalls++;
+        HasHeldMessage = false;
+        InboundChanged?.Invoke();
+        return Task.FromResult(ChatSendOutcome.Sent);
     }
 }

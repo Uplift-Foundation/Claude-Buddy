@@ -1,6 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Reading a reply out loud, from whichever button was pressed.
     //
@@ -39,6 +39,19 @@ namespace ClaudeBuddy
         // list itself and runs the user's own listing command.
         internal static IEnumerable<TextToSpeech.VoiceOption>? VoiceOptionsForTests;
 
+        // And for the session table: the only thing that fills it in
+        // production is SessionManager's scan, which needs a status file on
+        // disk and a running timer.
+        internal static Func<string?, string?>? TranscriptPathForTests;
+
+        // Where a session's transcript is, which is what says whose account
+        // its summary runs on. Null for anything the scan does not know.
+        internal static string? TranscriptPathOf(string? sessionId)
+        {
+            var seam = TranscriptPathForTests;
+            return seam is not null ? seam(sessionId) : SessionManager.Instance?.StatusFor(sessionId)?.TranscriptPath;
+        }
+
         // How many speak requests have been made. Only ever read as "is the
         // request I started still the current one", never for its value.
         private static int _requestGeneration;
@@ -72,7 +85,7 @@ namespace ClaudeBuddy
         // would mean fetching a reply in order to discover it was not wanted.
         internal static void Speak(string? reply, string? sessionId)
         {
-            var plan = SpeechPlan.For(reply, ClaudeBuddySettings.SpeakScope);
+            var plan = SpeechPlan.For(reply, OrbweaverSettings.SpeakScope);
             if (plan.Silent) return;
 
             // Claimed before either branch, so a full-text utterance supersedes a
@@ -142,7 +155,12 @@ namespace ClaudeBuddy
 
             TextToSpeech.Enter(TextToSpeech.SpeakState.Preparing);
 
-            var text = await SpeechSummary.SummarizeOrSayWhyAsync(reply, kind).ConfigureAwait(true);
+            // Billed to the session's own account, not this app's (CB-248).
+            // Resolved here, before the await, because every caller is on the
+            // UI thread and that is the thread SessionManager's table is kept on.
+            var account = SpeechSummary.AccountDirFor(TranscriptPathOf(sessionId));
+
+            var text = await SpeechSummary.SummarizeOrSayWhyAsync(reply, kind, account).ConfigureAwait(true);
 
             // Either the user asked for silence while the summariser was running,
             // or a newer speak request replaced this one. Both mean speaking now
@@ -200,7 +218,7 @@ namespace ClaudeBuddy
         [ExcludeFromCodeCoverage]
         private static void Say(string text, TextToSpeech.VoiceOption? voice, double? rate)
         {
-            if (voice is null) TextToSpeech.Speak(text, ClaudeBuddySettings.SpeakVoice);
+            if (voice is null) TextToSpeech.Speak(text, OrbweaverSettings.SpeakVoice);
             else TextToSpeech.Speak(text, voice, rate);
         }
     }

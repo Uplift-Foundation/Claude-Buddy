@@ -5,7 +5,7 @@ using System.IO;
 using System.Text.Json;
 using System.Threading.Tasks;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Where the `codex` CLI is, for the parts of this app that shell out to it.
     //
@@ -171,7 +171,7 @@ namespace ClaudeBuddy
 
         internal const string InitializeRequest =
             "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"clientInfo\":" +
-            "{\"name\":\"claude-buddy\",\"title\":\"Claude Buddy\",\"version\":\"1\"}}}";
+            $"{{\"name\":\"{Brand.Slug}\",\"title\":\"{Brand.DisplayName}\",\"version\":\"1\"}}}}}}";
 
         internal const string RateLimitsRequest =
             "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"account/rateLimits/read\",\"params\":null}";

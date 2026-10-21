@@ -1,7 +1,7 @@
 using Avalonia;
 using Xunit;
 
-namespace ClaudeBuddy.Tests
+namespace Orbweaver.Tests
 {
     // OrbArrangement.LandedCenter (CB-211): the anchor a shape actually landed
     // on, which is what SessionManager saves after every arrange so a drag back

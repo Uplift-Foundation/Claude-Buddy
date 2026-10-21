@@ -4,7 +4,7 @@ using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using Microsoft.Win32.SafeHandles;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Best-effort "take me to that session's terminal" for a left-click on
     // an orb. Silently does nothing when the status file predates the hook
@@ -84,6 +84,13 @@ namespace ClaudeBuddy
             // exception is that background-session branch, which stays Claude
             // Code's — see the guard on it.
             if (!status.IsLocalCli) return;
+
+            // Claude Desktop hosts this session, so there is no pane or tty to
+            // find. OrbWindow.GoToSession answers the click with
+            // DesktopSessionFocus before getting here; this is the belt to that
+            // braces, for any other caller, because the failure it prevents is a
+            // terminal hunt that ends in a surprise window (CB-265).
+            if (status.IsDesktopHosted) return;
 
             // Resolving a target runs several short-lived processes (tmux
             // queries, ps walks, osascript) and waits on their output; doing
@@ -852,7 +859,7 @@ namespace ClaudeBuddy
             });
         }
 
-        private const string PasteBuffer = "claude-buddy";
+        private const string PasteBuffer = Brand.Slug;
 
         // A named key — "Enter", "Escape", or a bare digit for a numbered
         // dialog. Not -l: these are key names, which is the one case where
@@ -1498,18 +1505,18 @@ namespace ClaudeBuddy
                 || detail.Contains("assistive access", StringComparison.OrdinalIgnoreCase))
             {
                 Console.Error.WriteLine(
-                    "Claude Buddy: the mic transcribed your speech, but typing it into the " +
+                    $"{Brand.DisplayName}: the mic transcribed your speech, but typing it into the " +
                     "terminal failed — macOS has not granted Accessibility permission (this is " +
                     "separate from the Automation permission clicking an orb already uses).\n" +
                     "  Fix: System Settings > Privacy & Security > Accessibility, and enable the " +
-                    "terminal app (or Claude Buddy, if System Events prompts for it there instead).\n" +
+                    $"terminal app (or {Brand.DisplayName}, if System Events prompts for it there instead).\n" +
                     "  If it was granted before a rebuild, the grant may have been invalidated. Run:\n" +
-                    "    tccutil reset Accessibility io.github.wtvamp.claudebuddy\n" +
+                    $"    tccutil reset Accessibility {Brand.MacBundleId}\n" +
                     "  then dictate again and approve the prompt.");
                 return;
             }
 
-            Console.Error.WriteLine($"Claude Buddy: typing the transcribed text failed: {detail}");
+            Console.Error.WriteLine($"{Brand.DisplayName}: typing the transcribed text failed: {detail}");
         }
 
         // Once per app run, not per click: a denied grant fails on every click,
@@ -1528,17 +1535,17 @@ namespace ClaudeBuddy
             if (detail.Contains("-1743") || detail.Contains("Not authorized to send Apple events"))
             {
                 Console.Error.WriteLine(
-                    "Claude Buddy: clicking an orb can't focus your terminal — macOS has not " +
+                    $"{Brand.DisplayName}: clicking an orb can't focus your terminal — macOS has not " +
                     "granted Automation permission.\n" +
                     "  Fix: System Settings > Privacy & Security > Automation, and enable the " +
-                    "terminal under Claude Buddy.\n" +
-                    "  If Claude Buddy isn't listed, its permission was invalidated by a rebuild. Run:\n" +
-                    "    tccutil reset AppleEvents io.github.wtvamp.claudebuddy\n" +
+                    $"terminal under {Brand.DisplayName}.\n" +
+                    $"  If {Brand.DisplayName} isn't listed, its permission was invalidated by a rebuild. Run:\n" +
+                    $"    tccutil reset AppleEvents {Brand.MacBundleId}\n" +
                     "  then click an orb again and approve the prompt.");
                 return;
             }
 
-            Console.Error.WriteLine($"Claude Buddy: focusing the terminal failed: {detail}");
+            Console.Error.WriteLine($"{Brand.DisplayName}: focusing the terminal failed: {detail}");
         }
 
         // --- Windows keystroke injection ---
@@ -1723,15 +1730,15 @@ namespace ClaudeBuddy
             if (error == 5)
             {
                 Console.Error.WriteLine(
-                    "Claude Buddy: the mic transcribed your speech, but Windows blocked typing it " +
+                    $"{Brand.DisplayName}: the mic transcribed your speech, but Windows blocked typing it " +
                     "into the terminal — the terminal is running elevated (as Administrator) and " +
-                    "Claude Buddy is not.\n" +
-                    "  Fix: run the terminal without elevation, or start Claude Buddy elevated too.");
+                    $"{Brand.DisplayName} is not.\n" +
+                    $"  Fix: run the terminal without elevation, or start {Brand.DisplayName} elevated too.");
                 return;
             }
 
             Console.Error.WriteLine(
-                $"Claude Buddy: typing the transcribed text failed — SendInput accepted {sent} of " +
+                $"{Brand.DisplayName}: typing the transcribed text failed — SendInput accepted {sent} of " +
                 $"{expected} events (GetLastError {error}).");
         }
 
@@ -1755,7 +1762,7 @@ namespace ClaudeBuddy
 
         // OrbWindow sets ShowActivated="False" (it's a click-to-act overlay,
         // not something that should steal keyboard focus just by existing),
-        // so clicking it never makes ClaudeBuddy.exe the foreground process —
+        // so clicking it never makes Orbweaver.exe the foreground process —
         // hence WindowsForegroundWindow's AttachThreadInput dance below.
         private static bool FocusWindows(SessionStatus status)
         {
@@ -1772,7 +1779,7 @@ namespace ClaudeBuddy
                 // the case it was tested in: switching *away* from some other
                 // tab. Selecting the tab that is already current is a no-op, so
                 // it raises nothing — and clicking an orb or its mic has just
-                // made Claude Buddy the foreground app, so "already on the
+                // made Orbweaver the foreground app, so "already on the
                 // right tab" left the terminal behind us. Dictation into a
                 // session you were already looking at typed into the flyout
                 // instead, which is exactly the shape of "it only works if

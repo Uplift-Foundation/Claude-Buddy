@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The scan's half of the persona feature, driven against a real filesystem.
 //
@@ -502,7 +502,7 @@ public class LocalPersonaScanTests : IDisposable
         manager.ApplyPersona(_sessionId, Status(), Pass());
         var first = LocalPersonas.For(_sessionId);
 
-        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-cb143");
+        OrbweaverSettings.AddClaudeCodeProfileDir(".claude-cb143");
         try
         {
             manager.ApplyPersona(_sessionId, Status(), Pass());
@@ -510,7 +510,7 @@ public class LocalPersonaScanTests : IDisposable
         }
         finally
         {
-            ClaudeBuddySettings.RemoveClaudeCodeProfileDir(".claude-cb143");
+            OrbweaverSettings.RemoveClaudeCodeProfileDir(".claude-cb143");
         }
 
         manager.ApplyPersona(_sessionId, Status(), Pass());

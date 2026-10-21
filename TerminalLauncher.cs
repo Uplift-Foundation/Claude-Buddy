@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // The "open a terminal window and run this in it" mechanism, extracted out
     // of AgentTeamViewer so a second feature that needs it — CB-168's "start a
@@ -74,8 +74,8 @@ namespace ClaudeBuddy
 
             try
             {
-                System.IO.Directory.CreateDirectory(ClaudeBuddySettings.Directory);
-                var script = Path.Combine(ClaudeBuddySettings.Directory, Guid.NewGuid() + ".sh");
+                System.IO.Directory.CreateDirectory(OrbweaverSettings.Directory);
+                var script = Path.Combine(OrbweaverSettings.Directory, Guid.NewGuid() + ".sh");
 
                 File.WriteAllText(script,
                     "#!/bin/sh\n" + TerminalScripts.ShellCommandLine(cwd, command) + "\n");

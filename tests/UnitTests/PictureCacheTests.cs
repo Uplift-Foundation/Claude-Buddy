@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-216: the client's pictures-by-id cache, and the rule for which roster hash
 // it hands back on the next ask.

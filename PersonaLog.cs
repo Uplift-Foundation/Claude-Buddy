@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Why a persona picture was not drawn.
     //

@@ -5,7 +5,7 @@ using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-93: the note line a refused picture leaves in the slot the image would
 // have occupied, and its tooltip. Same singleton-cleanup rule as

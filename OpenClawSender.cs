@@ -1,4 +1,4 @@
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Who said a user-role message the gateway handed us, and what of it is
     // worth showing.
@@ -23,7 +23,7 @@ namespace ClaudeBuddy
     //
     //   * The operator typing in Discord — senderIsOwner true, plus their
     //     Discord id, display name and username.
-    //   * The operator typing here, in Claude Buddy — no sender fields at all,
+    //   * The operator typing here, in Orbweaver — no sender fields at all,
     //     and a top-level idempotencyKey of "<guid>:user". That suffix is what
     //     separates it from the agent's own reply, which carries
     //     "cli-assistant:<guid>" and is assistant-role anyway.
@@ -50,7 +50,7 @@ namespace ClaudeBuddy
     // controls and nobody else documents.
     internal static class OpenClawSender
     {
-        // What a message Claude Buddy posts to a channel wears at the front.
+        // What a message Orbweaver posts to a channel wears at the front.
         //
         // Fixed rather than composed, and it lives here rather than at the
         // composer, because it is read back as well as written: the copies that
@@ -65,7 +65,16 @@ namespace ClaudeBuddy
         // release, which is how a successful room send came to be drawn twice:
         // once plain from the carrier's own transcript, once prefixed from
         // everybody else's, with nothing matching the two together.
-        public const string MirrorPrefix = "**(via Claude Buddy)** ";
+        public const string MirrorPrefix = $"**(via {Brand.DisplayName})** ";
+
+        // What builds before the Orbweaver rename wrote, and it must stay
+        // recognised forever: a room's history never expires, so every message
+        // an older build mirrored — here, or from another machine that has not
+        // upgraded yet — still opens with this, and without it those would be
+        // drawn as somebody else's words. Composed from Brand.Legacy so the
+        // string is not a second literal to drift; only ever stripped, never
+        // written. The cleanup after phase 3 must NOT delete this one.
+        public const string LegacyMirrorPrefix = $"**(via {Brand.Legacy.DisplayName})** ";
 
         internal enum SenderKind
         {
@@ -101,7 +110,7 @@ namespace ClaudeBuddy
             // words as somebody else's.
             //
             // Nothing else is *expected* to write this prefix, and the only
-            // thing Claude Buddy mirrors is a message the person at the keyboard
+            // thing Orbweaver mirrors is a message the person at the keyboard
             // just typed. Expected, not guaranteed: anyone in the channel can
             // type those characters, and if they do their words are drawn as the
             // operator's — blue and right-aligned — beating an explicit
@@ -116,6 +125,11 @@ namespace ClaudeBuddy
             if (text.StartsWith(MirrorPrefix, StringComparison.Ordinal))
             {
                 return new Sender(SenderKind.Mine, null, text[MirrorPrefix.Length..]);
+            }
+
+            if (text.StartsWith(LegacyMirrorPrefix, StringComparison.Ordinal))
+            {
+                return new Sender(SenderKind.Mine, null, text[LegacyMirrorPrefix.Length..]);
             }
 
             // The gateway's own word for it, and the only one of these that is

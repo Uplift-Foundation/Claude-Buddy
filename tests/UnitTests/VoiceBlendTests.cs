@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The blend grammar (CB-136), and the arithmetic behind the file it names.
 //

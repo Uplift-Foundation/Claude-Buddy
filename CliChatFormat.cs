@@ -1,4 +1,4 @@
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // What LocalCliChatSession needs to know about the CLI whose transcript it
     // is tailing, and nothing more.
@@ -19,18 +19,18 @@ namespace ClaudeBuddy
     {
         public static readonly CliChatFormat ClaudeCode = new(
             ChatTranscript.Map,
-            () => ClaudeBuddySettings.ClaudeCodeChatEnabled,
-            () => ClaudeBuddySettings.ClaudeCodeReplyEnabled);
+            () => OrbweaverSettings.ClaudeCodeChatEnabled,
+            () => OrbweaverSettings.ClaudeCodeReplyEnabled);
 
         public static readonly CliChatFormat Codex = new(
             CodexTranscript.Map,
-            () => ClaudeBuddySettings.CodexChatEnabled,
-            () => ClaudeBuddySettings.CodexReplyEnabled);
+            () => OrbweaverSettings.CodexChatEnabled,
+            () => OrbweaverSettings.CodexReplyEnabled);
 
         public static readonly CliChatFormat Grok = new(
             GrokTranscript.Map,
-            () => ClaudeBuddySettings.GrokChatEnabled,
-            () => ClaudeBuddySettings.GrokReplyEnabled);
+            () => OrbweaverSettings.GrokChatEnabled,
+            () => OrbweaverSettings.GrokReplyEnabled);
 
         public static CliChatFormat For(SessionSource source) => source switch
         {

@@ -1,7 +1,7 @@
 using System.Text;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Drives a whole mirror — client, protocol and server — over real transcript
 // files on disk, with the relay replaced by a delegate that hands one side's

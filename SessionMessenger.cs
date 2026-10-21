@@ -8,7 +8,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // How a delivery attempt against a headless session's registry socket
     // came out.
@@ -200,7 +200,7 @@ namespace ClaudeBuddy
         // there is exactly one machine tag per delivery, and building the
         // string here rather than at each call site is what keeps that
         // literal in one place.
-        internal static string FromName(string machineTag) => $"Claude Buddy on {machineTag}";
+        internal static string FromName(string machineTag) => $"{Brand.DisplayName} on {machineTag}";
 
         // Looks up the session, checks it can actually be reached, and hands
         // it one message. Each early return is a distinct DeliveryResult

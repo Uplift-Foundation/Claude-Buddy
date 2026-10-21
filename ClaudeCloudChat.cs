@@ -7,7 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Threading;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Reading a cloud session's transcript.
     //
@@ -448,7 +448,7 @@ namespace ClaudeBuddy
         // makes for the whole cloud arm; a panel opened before the switch was
         // flipped must not be a way round it. A seam so a test does not depend on
         // the settings file of the machine running it.
-        internal Func<bool> Enabled { get; init; } = () => ClaudeBuddySettings.ClaudeCloudEnabled;
+        internal Func<bool> Enabled { get; init; } = () => OrbweaverSettings.ClaudeCloudEnabled;
 
         // The live event stream, primary whenever there is one. Null means none —
         // the polling loop is then the only live source, which is also what this
@@ -630,53 +630,25 @@ namespace ClaudeBuddy
                 return ChatSendOutcome.Failed;
             }
 
-            if (CloudRequest.CodeEventsPath(SessionId) is not { } path)
+            // The credential read, the POST, the one retry and the wording live in
+            // CloudTurnSender, shared with the Desktop-bridge send (CB-266).
+            var attempt = await CloudTurnSender.SendUserTurnAsync(
+                _api, _credentials, ReadBudget, SessionId, text, Delay, CancellationToken.None)
+                .ConfigureAwait(false);
+
+            if (attempt.Result != CloudSendResult.Sent)
             {
-                Note("Not sent: this session's id is not in a shape Buddy will write to.");
+                Note(attempt.Note!);
+
+                // Only a refusal the API gave is about the session; a missing
+                // credential or a double timeout has no outcome to learn from.
+                if (attempt.Result == CloudSendResult.NotSent && attempt.Outcome is { } refused)
+                    Refused(refused);
+
                 return ChatSendOutcome.Failed;
             }
 
-            // Re-read on every send and never kept, as on every load. Through the
-            // source this session was handed — the one that owns the session's
-            // account — and never one built here: a second source would be a
-            // second Keychain consent surface, and would not know whose login
-            // this session needs.
-            var read = await ClaudeCliCredentials
-                .ReadWithinAsync(_credentials, ReadBudget, CancellationToken.None).ConfigureAwait(false);
-
-            if (read.Outcome != CredentialOutcome.Found || read.AccessToken is not { } token)
-            {
-                Note("Not sent: " + ClaudeCliCredentials.StatusFor(read) + ".");
-                return ChatSendOutcome.Failed;
-            }
-
-            var uuid = Guid.NewGuid().ToString();
-            var context = new CloudRequestContext(token, path, HttpMethod.Post,
-                ClaudeCloudSend.UserMessageBody(SessionId, text, uuid));
-
-            var result = await _api.SendAsync(context, CancellationToken.None).ConfigureAwait(false);
-
-            if (result.Outcome.Kind == CloudOutcomeKind.Unavailable)
-            {
-                await Delay(Backoff.UnavailableFloor, CancellationToken.None).ConfigureAwait(false);
-                result = await _api.SendAsync(context, CancellationToken.None).ConfigureAwait(false);
-
-                if (result.Outcome.Kind == CloudOutcomeKind.Unavailable)
-                {
-                    // Not "not sent": a request that timed out may well have
-                    // been written, and saying otherwise invites a resend that —
-                    // with a fresh uuid from the box — would land twice.
-                    Note("Your message may not have arrived (" + result.Outcome.Detail
-                         + ", twice). Check the session before sending it again.");
-                    return ChatSendOutcome.Failed;
-                }
-            }
-
-            if (result.Outcome.Kind != CloudOutcomeKind.Ok)
-            {
-                Refused(result.Outcome);
-                return ChatSendOutcome.Failed;
-            }
+            var uuid = attempt.Uuid;
 
             // A 2xx whose receipt this version cannot read is still a 2xx: the
             // event almost certainly landed, and ClaudeCloudSend.ParseSendResult
@@ -714,17 +686,6 @@ namespace ClaudeBuddy
         // about the session rather than about this attempt.
         private void Refused(CloudOutcome outcome)
         {
-            var advice = outcome.Kind switch
-            {
-                CloudOutcomeKind.TokenRefused or CloudOutcomeKind.AuthFailed =>
-                    " Run `claude` in a terminal and sign in, then try again.",
-                CloudOutcomeKind.RateLimited => " Wait a minute before trying again.",
-                CloudOutcomeKind.TooLarge => " Try a shorter message.",
-                _ => "",
-            };
-
-            Note("Not sent: " + outcome.Detail + "." + advice);
-
             if (CloudChatSendability.RefusalFor(outcome) is { } refusal)
             {
                 _post(() =>
@@ -779,7 +740,7 @@ namespace ClaudeBuddy
                 var path = CloudRequest.CodeEventsPath(SessionId);
                 if (path is null)
                 {
-                    failure = "this session's id is not in a shape Buddy will write to";
+                    failure = $"this session's id is not in a shape {Brand.ShortName} will write to";
                 }
                 else
                 {

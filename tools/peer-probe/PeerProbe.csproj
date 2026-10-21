@@ -7,8 +7,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RollForward>LatestMajor</RollForward>
     <AssemblyName>PeerProbe</AssemblyName>
-    <RootNamespace>ClaudeBuddy</RootNamespace>
-    <!-- Matches ClaudeBuddy.csproj, which publishes self-contained: the SDK
+    <RootNamespace>Orbweaver</RootNamespace>
+    <!-- Matches Orbweaver.csproj, which publishes self-contained: the SDK
          refuses to let a framework-dependent executable reference a
          self-contained one. -->
     <SelfContained>true</SelfContained>
@@ -20,9 +20,9 @@
          answer a question the app would answer differently, which is the one
          thing it must not do.
 
-         PeerLink and RemoteMirrorClient are internal, so ClaudeBuddy.csproj
+         PeerLink and RemoteMirrorClient are internal, so Orbweaver.csproj
          grants this assembly InternalsVisibleTo alongside the test ones. -->
-    <ProjectReference Include="../../ClaudeBuddy.csproj" />
+    <ProjectReference Include="../../Orbweaver.csproj" />
   </ItemGroup>
 
 </Project>

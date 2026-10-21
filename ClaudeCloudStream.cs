@@ -10,7 +10,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // A cloud session's live event stream:
     // `GET /v1/code/sessions/{id}/events/stream`, server-sent events.

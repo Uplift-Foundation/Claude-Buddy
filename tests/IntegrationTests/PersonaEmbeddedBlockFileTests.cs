@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-141 at the seam: profile-gen's `claude-md` output mode, in a real
 // CLAUDE.md, on a real disk, through the real resolver.

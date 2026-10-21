@@ -1,7 +1,7 @@
-using ClaudeBuddy;
+using Orbweaver;
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 // Which mechanism types into a session, and why one of them used to be the
 // only answer.

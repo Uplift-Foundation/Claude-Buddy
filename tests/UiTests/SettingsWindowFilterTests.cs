@@ -5,7 +5,7 @@ using Avalonia.LogicalTree;
 using Avalonia.Threading;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The glue half of CB-166's filter box: SettingsRow, SettingsCard and
 // SettingsSection.ApplyFilter applying SettingsFilter's pure answers to a
@@ -197,16 +197,16 @@ public class SettingsWindowFilterTests
         var window = NewWindow();
         var voice = window.Sections["voice"];
 
-        Assert.False(ClaudeBuddySettings.IsSettingsSectionCollapsed("voice"));
+        Assert.False(OrbweaverSettings.IsSettingsSectionCollapsed("voice"));
         voice.IsOpen = false;
-        ClaudeBuddySettings.SetSettingsSectionCollapsed("voice", true);
+        OrbweaverSettings.SetSettingsSectionCollapsed("voice", true);
 
         try
         {
             SetFilter(window, "voice");
 
             Assert.True(window.Sections["voice"].IsOpen);
-            Assert.True(ClaudeBuddySettings.IsSettingsSectionCollapsed("voice"));
+            Assert.True(OrbweaverSettings.IsSettingsSectionCollapsed("voice"));
 
             SetFilter(window, "");
 
@@ -214,7 +214,7 @@ public class SettingsWindowFilterTests
         }
         finally
         {
-            ClaudeBuddySettings.SetSettingsSectionCollapsed("voice", false);
+            OrbweaverSettings.SetSettingsSectionCollapsed("voice", false);
         }
     }
 

@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The two halves of the scan's transcript repair: which status files are worth
 // hunting for (SessionManager.WantsTranscriptRepair) and when the hunt is worth

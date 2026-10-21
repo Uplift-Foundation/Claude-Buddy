@@ -56,7 +56,7 @@ cd Claude-Buddy
 ```
 
 This publishes the app and compiles the installer in one step, producing
-`dist\ClaudeBuddy-<version>-win-x64-setup.exe`. It's unsigned (no
+`dist\Orbweaver-<version>-win-x64-setup.exe`. It's unsigned (no
 `WINDOWS_CERT_THUMBPRINT` set), so expect a SmartScreen warning in the next
 step — that's normal for this build, not a bug.
 
@@ -77,8 +77,8 @@ wizard.
     only appear if WSL is installed on the machine. If you don't have WSL,
     confirm it's simply absent (not shown, greyed out, or shown-but-broken).
     If you do have WSL, confirm it's present and ticked.
-  - "Start Claude Buddy automatically when I sign in"
-- Finish with "Start Claude Buddy now" ticked.
+  - "Start Orbweaver automatically when I sign in"
+- Finish with "Start Orbweaver now" ticked.
 
 ## 3. Confirm native orbs work
 
@@ -90,7 +90,7 @@ wizard.
 - Click the orb — does the right terminal window come forward?
 - Exit the session — does the orb disappear?
 
-If nothing appears, check `%TEMP%\claude_buddy\` for status files and run
+If nothing appears, check `%TEMP%\orbweaver\` for status files and run
 `/hooks` in the session to see whether the entries actually registered.
 
 ## 4. *(WSL only)* Confirm WSL orbs work
@@ -137,7 +137,7 @@ In Settings → **Claude Code profiles**:
 - Click **Add**. Confirm the entry shows up in the list.
 - **Close and reopen the Settings window** — the entry should still be
   there.
-- **Fully exit Claude Buddy (tray menu → Exit) and relaunch it, then reopen
+- **Fully exit Orbweaver (tray menu → Exit) and relaunch it, then reopen
   Settings** — the entry should *still* be there. (This exact case — an
   added profile silently vanishing after a full app restart — was a real bug
   fixed in this PR; it's worth deliberately re-checking, not just trusting
@@ -151,10 +151,10 @@ In Settings → **Claude Code profiles**:
 Go through Settings → Apps the way a person would, not `unins000.exe`
 directly.
 
-- Is the entry named "Claude Buddy" with a sensible version and icon?
+- Is the entry named "Orbweaver" with a sensible version and icon?
 - Does uninstalling stop the running app (tray icon gone)?
 - Check **every** `settings.json` you wired in this session and confirm none
-  of them still reference `ClaudeBuddyHook.ps1`:
+  of them still reference `OrbweaverHook.ps1`:
   - Native default: `Get-Content "$env:USERPROFILE\.claude\settings.json"`
   - The extra profile you added in step 6 (native or WSL path, matching
     whichever you tested).
@@ -166,7 +166,7 @@ directly.
 
 ## 8. *(Optional)* Sign out and back in
 
-If you left "Start Claude Buddy automatically" checked: does it start by
+If you left "Start Orbweaver automatically" checked: does it start by
 itself? Confirm exactly **one** instance in the tray, not two.
 
 ## What to write up

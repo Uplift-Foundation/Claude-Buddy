@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.IntegrationTests;
+namespace Orbweaver.IntegrationTests;
 
 // The whole mirror, over a real TLS socket, with nothing faked between the two
 // halves but the machines themselves.
@@ -189,7 +189,7 @@ public class PeerMirrorEndToEndTests : IDisposable
     [Fact]
     public async Task APairedHostRoutesOnlySamePinnedKnownAgentVoicesToTheReceiver()
     {
-        var savedPin = ClaudeBuddySettings.OpenClawFingerprint;
+        var savedPin = OrbweaverSettings.OpenClawFingerprint;
         const string gatewayPin = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         var option = new TextToSpeech.VoiceOption(TextToSpeech.SpeakEngine.Neural,
             "af_bella", "af_bella (Kokoro)");
@@ -198,7 +198,7 @@ public class PeerMirrorEndToEndTests : IDisposable
         {
             // Do not let the connection callback send an automatic request: the
             // three explicit requests below are the observations this test makes.
-            ClaudeBuddySettings.OpenClawFingerprint = "";
+            OrbweaverSettings.OpenClawFingerprint = "";
             OpenClawSessions.SetIdentitiesForTests(new Dictionary<string, OpenClawSessions.AgentIdentity>
             {
                 ["main"] = new("Gateway Main", null, null),
@@ -223,7 +223,7 @@ public class PeerMirrorEndToEndTests : IDisposable
             Assert.True(await receiver.Link.ConnectAsync("profile-source", "127.0.0.1",
                 source.Link.BoundPort, new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token));
 
-            ClaudeBuddySettings.OpenClawFingerprint = gatewayPin;
+            OrbweaverSettings.OpenClawFingerprint = gatewayPin;
 
             async Task<IReadOnlyList<OpenClawPeerIdentity.Row>> Ask(string pin, params string[] ids)
             {
@@ -247,7 +247,7 @@ public class PeerMirrorEndToEndTests : IDisposable
         }
         finally
         {
-            ClaudeBuddySettings.OpenClawFingerprint = savedPin;
+            OrbweaverSettings.OpenClawFingerprint = savedPin;
             OpenClawSessions.SetIdentitiesForTests(new Dictionary<string, OpenClawSessions.AgentIdentity>());
         }
     }

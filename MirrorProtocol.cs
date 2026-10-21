@@ -4,7 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // The wire format two Claude Buddies use to show each other's sessions
     // verbatim, and the reason it exists rather than a nicer one.
@@ -17,7 +17,7 @@ namespace ClaudeBuddy
     // thing being asked is the thing that rewrites.
     //
     // So this stops asking a model for content at all. When the far machine is
-    // also running Claude Buddy, that Buddy reads its session's transcript
+    // also running Orbweaver, that Buddy reads its session's transcript
     // **bytes off its own disk** and sends them here in framed pieces. The relay
     // model in the middle is reduced from an author to a courier: it pastes a
     // line of base64 it cannot read, and every piece carries a SHA-256 of what it

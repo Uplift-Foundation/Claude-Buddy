@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // PersonaMarkdown's prose arm — the half of the grammar that exists because a
 // CLAUDE.md is not a profile.

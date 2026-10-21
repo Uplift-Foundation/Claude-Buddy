@@ -1,7 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using Avalonia.Threading;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // A channel as one conversation, instead of as one conversation per agent
     // standing in it.
@@ -128,7 +128,7 @@ namespace ClaudeBuddy
 
         public event Action<int>? HistoryPrepended;
 
-        public string ComposerHint => ClaudeBuddySettings.OpenClawReplyEnabled
+        public string ComposerHint => OrbweaverSettings.OpenClawReplyEnabled
             ? "Message the channel…"
             : "Replying is off";
 
@@ -967,7 +967,7 @@ namespace ClaudeBuddy
                 Role = ChatRole.User, Text = text, IsComplete = true, Mine = true
             });
 
-            if (!ClaudeBuddySettings.OpenClawReplyEnabled)
+            if (!OrbweaverSettings.OpenClawReplyEnabled)
             {
                 Note("Replying is off. Turn on \"Allow replying to agents\" in Settings.");
                 return ChatSendOutcome.Failed;

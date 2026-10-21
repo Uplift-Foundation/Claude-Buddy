@@ -2,37 +2,37 @@ using System.Diagnostics;
 using System.Text.Json;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
-// Exercises ClaudeBuddyHook.sh — the bash half of the hook that Claude Code,
+// Exercises OrbweaverHook.sh — the bash half of the hook that Claude Code,
 // Codex and Grok Build invoke on every tool call — as a real subprocess, the
 // same way the CLIs themselves do: argv is `[claude|codex|grok]
 // <idle|generating|waiting|ended>`, the JSON payload arrives on stdin, and the
 // only observable contract is the exit code, stdout, and stderr (see
-// ClaudeBuddyHook.sh's own header comment) plus whatever it writes under
-// $TMPDIR/claude_buddy.
+// OrbweaverHook.sh's own header comment) plus whatever it writes under
+// $TMPDIR/orbweaver.
 //
 // Every test point at its own fresh TMPDIR (Directory.CreateTempSubdirectory)
-// so nothing here ever touches a real /tmp/claude_buddy or a developer's
+// so nothing here ever touches a real /tmp/orbweaver or a developer's
 // actual $HOME/.codex — except the path-traversal test below, which proves
 // that isolation itself is not airtight.
 public class HookScriptShTests
 {
     private static readonly string RepoRoot = FindRepoRoot();
-    private static readonly string HookScript = Path.Combine(RepoRoot, "ClaudeBuddyHook.sh");
+    private static readonly string HookScript = Path.Combine(RepoRoot, "OrbweaverHook.sh");
 
     private static string FindRepoRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null)
         {
-            if (File.Exists(Path.Combine(dir.FullName, "ClaudeBuddyHook.sh")))
+            if (File.Exists(Path.Combine(dir.FullName, "OrbweaverHook.sh")))
                 return dir.FullName;
             dir = dir.Parent;
         }
 
         throw new InvalidOperationException(
-            "Could not find ClaudeBuddyHook.sh by walking up from " + AppContext.BaseDirectory);
+            "Could not find OrbweaverHook.sh by walking up from " + AppContext.BaseDirectory);
     }
 
     private sealed record HookResult(int ExitCode, string Stdout, string Stderr);
@@ -72,6 +72,8 @@ public class HookScriptShTests
         psi.Environment.Remove("GROK_HOOK_EVENT");
         psi.Environment.Remove("GROK_WORKSPACE_ROOT");
         psi.Environment.Remove("GROK_HOME");
+        psi.Environment.Remove("CLAUDE_CODE_ENTRYPOINT");
+        psi.Environment.Remove("CLAUDE_CODE_HOST_SESSION_ID");
         if (extraEnv is not null)
         {
             foreach (var (key, value) in extraEnv)
@@ -125,7 +127,7 @@ public class HookScriptShTests
     }
 
     private static string StatusDir(string tmpDir) =>
-        Path.Combine(tmpDir.TrimEnd('/'), "claude_buddy");
+        Path.Combine(tmpDir.TrimEnd('/'), "orbweaver");
 
     private static string StatusFile(string tmpDir, string sessionId) =>
         Path.Combine(StatusDir(tmpDir), sessionId + ".txt");
@@ -200,7 +202,7 @@ public class HookScriptShTests
     [UnixFact]
     public void HookIgnoresAnUnrecognisedState_SilentlyAndWithoutReadingStdin()
     {
-        // ClaudeBuddyHook.sh checks $STATE against its four valid values
+        // OrbweaverHook.sh checks $STATE against its four valid values
         // before it ever reads stdin (`case "$STATE" in ... *) exit 0 ;; esac`
         // comes before `PAYLOAD=$(cat)`), so a bogus state is a fast, silent
         // no-op rather than an attempt to parse whatever was piped in.
@@ -243,19 +245,19 @@ public class HookScriptShTests
 
     // *** Security finding ***
     //
-    // FILE="$DIR/$SESSION_ID.txt" (ClaudeBuddyHook.sh, ~line 76) builds the
+    // FILE="$DIR/$SESSION_ID.txt" (OrbweaverHook.sh, ~line 76) builds the
     // status file's path by direct string concatenation of the attacker-
     // controlled session_id straight out of the hook payload — no
     // sanitisation. The SAFE_ID scrubber that exists in the file
     // (`tr -cd '0-9a-fA-F-'`, ~line 223) is applied only to the value handed
     // to sqlite3 later on, never to $SESSION_ID before $FILE is built. A
     // session_id containing ".." therefore walks the resulting path out of
-    // $DIR/claude_buddy entirely.
+    // $DIR/orbweaver entirely.
     //
     // This test proves the escape is real rather than theoretical: it hands
     // the hook `session_id: "../../evil"` and shows the JSON status blob
     // (cwd, tty, tmux socket, etc.) actually lands two directories above the
-    // isolated temp dir, outside both the intended claude_buddy status
+    // isolated temp dir, outside both the intended orbweaver status
     // directory *and* the fresh TMPDIR the test set up for isolation.
     [UnixFact]
     public void SessionIdPathTraversal_EscapesTheStatusDirectory()
@@ -285,11 +287,11 @@ public class HookScriptShTests
 
             Assert.False(
                 escapedPath.StartsWith(StatusDir(tmp.FullName), StringComparison.Ordinal),
-                "the written file should be OUTSIDE the intended claude_buddy status directory " +
+                "the written file should be OUTSIDE the intended orbweaver status directory " +
                 "— that is the vulnerability being demonstrated.");
 
             // Confirms it escaped the test's own isolation, not just the
-            // claude_buddy subfolder.
+            // orbweaver subfolder.
             Assert.False(
                 escapedPath.StartsWith(tmp.FullName, StringComparison.Ordinal),
                 "the written file escaped even the test's own temp sandbox, landing in a " +
@@ -527,7 +529,7 @@ public class HookScriptShTests
         File.WriteAllText(rolloutFile, "not a real codex rollout row\n");
 
         // transcript_path deliberately empty — that's what triggers the glob
-        // fallback (ClaudeBuddyHook.sh, ~line 89-93).
+        // fallback (OrbweaverHook.sh, ~line 89-93).
         var payload = Payload(new { session_id = sessionId, cwd = "/tmp/proj", transcript_path = "" });
         var env = new Dictionary<string, string> { ["CODEX_HOME"] = codexHome };
 
@@ -549,5 +551,111 @@ public class HookScriptShTests
         AssertSilentSuccess(result);
 
         Assert.True(File.Exists(StatusFile(tmp.FullName, "unknown")));
+    }
+
+    // CB-265: the hook records CLAUDE_CODE_ENTRYPOINT as "entrypoint" so the app
+    // can keep an orb for a Claude Code session Claude Desktop launched, which
+    // has no terminal at all. The harness strips the variable from every
+    // child (this suite itself usually runs inside Claude Code, where it is
+    // "cli"), so each case below sets exactly what it is about.
+    private static string EntrypointRun(
+        string agent, string? entrypoint, string sessionId, string? hostSessionId = null)
+    {
+        var tmp = Directory.CreateTempSubdirectory("cb-hook-");
+        var payload = Payload(new { session_id = sessionId, cwd = "/tmp/proj", transcript_path = "" });
+        var env = new Dictionary<string, string>
+        {
+            ["CODEX_HOME"] = EmptyCodexHome(tmp.FullName),
+            ["GROK_HOME"] = Path.Combine(tmp.FullName, "grok-home")
+        };
+        if (entrypoint is not null) env["CLAUDE_CODE_ENTRYPOINT"] = entrypoint;
+        if (hostSessionId is not null) env["CLAUDE_CODE_HOST_SESSION_ID"] = hostSessionId;
+
+        var result = RunHook(agent, "idle", payload, tmp.FullName, env);
+        AssertSilentSuccess(result);
+        return File.ReadAllText(StatusFile(tmp.FullName, sessionId));
+    }
+
+    [UnixFact]
+    public void DesktopEntrypointIsRecordedForAClaudeSession()
+    {
+        var status = EntrypointRun("claude", "claude-desktop", "ep-desktop");
+
+        Assert.Contains("\"cli\":\"claude\",\"entrypoint\":\"claude-desktop\",\"host_session_id\":\"\",\"cwd\"", status);
+        Assert.True(JsonSerializer.Deserialize<SessionStatus>(status)!.IsDesktopHosted);
+    }
+
+    [UnixFact]
+    public void ACliEntrypointIsRecordedAsIsAndIsNotDesktop()
+    {
+        var status = EntrypointRun("claude", "cli", "ep-cli");
+
+        Assert.Contains("\"entrypoint\":\"cli\"", status);
+        Assert.False(JsonSerializer.Deserialize<SessionStatus>(status)!.IsDesktopHosted);
+    }
+
+    [UnixFact]
+    public void AnUnsetEntrypointIsWrittenEmpty()
+    {
+        var status = EntrypointRun("claude", null, "ep-unset");
+
+        Assert.Contains("\"entrypoint\":\"\"", status);
+    }
+
+    [UnixFact]
+    public void QuotesAndBackslashesAreStrippedFromTheEntrypointSoTheJsonSurvives()
+    {
+        var status = EntrypointRun("claude", "claude-\"desk\\top x", "ep-hostile");
+
+        Assert.Contains("\"entrypoint\":\"claude-desktopx\"", status);
+        // The whole file must still parse; an unescaped quote would break it.
+        Assert.Equal("claude-desktopx", JsonSerializer.Deserialize<SessionStatus>(status)!.Entrypoint);
+    }
+
+    [UnixFact]
+    public void CodexAndGrokFilesNeverCarryAnEntrypointEvenWhenTheVariableIsInherited()
+    {
+        Assert.Contains("\"entrypoint\":\"\"", EntrypointRun("codex", "claude-desktop", "ep-codex"));
+        Assert.Contains("\"entrypoint\":\"\"", EntrypointRun("grok", "claude-desktop", "ep-grok"));
+    }
+
+    // CB-266: Claude Desktop's own id for the chat, recorded right after
+    // "entrypoint" so the app can find the chat's Remote Control bridge. Invented
+    // id throughout: a real one names a real chat on a real machine.
+    private const string InventedHostId = "local_00000000-aaaa-bbbb-cccc-000000000001";
+
+    [UnixFact]
+    public void TheHostSessionIdIsRecordedRightAfterTheEntrypointForAClaudeSession()
+    {
+        var status = EntrypointRun("claude", "claude-desktop", "hs-claude", InventedHostId);
+
+        Assert.Contains(
+            "\"entrypoint\":\"claude-desktop\",\"host_session_id\":\"" + InventedHostId + "\",\"cwd\"", status);
+        Assert.Equal(InventedHostId, JsonSerializer.Deserialize<SessionStatus>(status)!.HostSessionId);
+    }
+
+    [UnixFact]
+    public void AnUnsetHostSessionIdIsWrittenEmpty()
+    {
+        var status = EntrypointRun("claude", "cli", "hs-unset");
+
+        Assert.Contains("\"host_session_id\":\"\"", status);
+        Assert.Equal("", JsonSerializer.Deserialize<SessionStatus>(status)!.HostSessionId);
+    }
+
+    [UnixFact]
+    public void CodexAndGrokFilesNeverCarryAHostSessionIdEvenWhenTheVariableIsInherited()
+    {
+        Assert.Contains("\"host_session_id\":\"\"", EntrypointRun("codex", "claude-desktop", "hs-codex", InventedHostId));
+        Assert.Contains("\"host_session_id\":\"\"", EntrypointRun("grok", "claude-desktop", "hs-grok", InventedHostId));
+    }
+
+    [UnixFact]
+    public void QuotesBackslashesAndSpacesAreStrippedFromTheHostSessionIdSoTheJsonSurvives()
+    {
+        var status = EntrypointRun("claude", "claude-desktop", "hs-hostile", "local_ab\"c\\d e/..");
+
+        Assert.Contains("\"host_session_id\":\"local_abcde\"", status);
+        Assert.Equal("local_abcde", JsonSerializer.Deserialize<SessionStatus>(status)!.HostSessionId);
     }
 }

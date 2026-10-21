@@ -2,7 +2,7 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // ImageUrl and ImageBytes are settable rather than init-only, and raise
 // PropertyChanged like Text already does — the mechanism a live turn needs to

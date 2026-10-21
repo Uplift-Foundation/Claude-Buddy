@@ -6,7 +6,7 @@ using System.Reflection;
 using System.Text.RegularExpressions;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-241's regression pin, in the shape CB-183's UiDispatcherIsolationTests set:
 // it fails the day the next unserialised class arrives, which a kept
@@ -59,10 +59,10 @@ public class SettingsSerialisationPinTests
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null)
         {
-            if (File.Exists(Path.Combine(dir.FullName, "ClaudeBuddy.csproj"))) return dir.FullName;
+            if (File.Exists(Path.Combine(dir.FullName, "Orbweaver.csproj"))) return dir.FullName;
             dir = dir.Parent;
         }
-        throw new InvalidOperationException("Could not find ClaudeBuddy.csproj above " + AppContext.BaseDirectory);
+        throw new InvalidOperationException("Could not find Orbweaver.csproj above " + AppContext.BaseDirectory);
     }
 
     // The source with every // comment removed, so a sentence mentioning
@@ -156,7 +156,7 @@ public class SettingsSerialisationPinTests
         const string source = """
             public class Writes
             {
-                void M() { ClaudeBuddySettings.AddClaudeCodeProfileDir(".x"); }
+                void M() { OrbweaverSettings.AddClaudeCodeProfileDir(".x"); }
             }
 
             public class OnlyMentions
@@ -183,7 +183,7 @@ public class SettingsSerialisationPinTests
     {
         const string home = "/tmp/cb241-pin";
 
-        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-board");
+        OrbweaverSettings.AddClaudeCodeProfileDir(".claude-board");
         try
         {
             var held = ClaudeCliCredentials.SourcesFor(isMacOS: true, home: home);
@@ -192,7 +192,7 @@ public class SettingsSerialisationPinTests
         }
         finally
         {
-            ClaudeBuddySettings.RemoveClaudeCodeProfileDir(".claude-board");
+            OrbweaverSettings.RemoveClaudeCodeProfileDir(".claude-board");
         }
 
         Assert.Single(ClaudeCliCredentials.SourcesFor(isMacOS: true, home: home));

@@ -2,13 +2,13 @@ using System;
 using System.IO;
 using System.Runtime.CompilerServices;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Runs once, before any test in this assembly, no matter which test class
-// happens to run first. ClaudeBuddySettings.Directory reads
-// CLAUDE_BUDDY_SETTINGS_DIR when it's set and falls back to the developer's
+// happens to run first. OrbweaverSettings.Directory reads
+// ORBWEAVER_SETTINGS_DIR when it's set and falls back to the developer's
 // real %APPDATA%/~/Library/... path otherwise — any test that touches a
-// ClaudeBuddySettings property (even indirectly, e.g. via OrbColors or
+// OrbweaverSettings property (even indirectly, e.g. via OrbColors or
 // ClaudeDesktopColors, both of which read through to settings) would
 // otherwise read and possibly overwrite Owner's real settings.json.
 internal static class TestBootstrap
@@ -17,7 +17,7 @@ internal static class TestBootstrap
     public static void Init()
     {
         var dir = Path.Combine(Path.GetTempPath(), "cb-unittests-" + Guid.NewGuid());
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
+        Environment.SetEnvironmentVariable("ORBWEAVER_SETTINGS_DIR", dir);
 
         // Where LocalPersona's walk up from a session's directory stops. The
         // scratch projects these tests build live under the temp directory,
@@ -27,7 +27,7 @@ internal static class TestBootstrap
         // developer's instead. Ceilinged at the temp directory itself: the walk
         // still climbs through every scratch ancestor a test builds.
         Environment.SetEnvironmentVariable(
-            "CLAUDE_BUDDY_PERSONA_WALK_CEILING", Path.GetTempPath());
+            "ORBWEAVER_PERSONA_WALK_CEILING", Path.GetTempPath());
 
         // No test in this assembly asks the OS for a credential. On macOS the
         // cloud arm's credential lives in the login Keychain, and reading it from
@@ -38,28 +38,20 @@ internal static class TestBootstrap
         // exists and the query fails fast, and it only bites on a machine where
         // somebody has actually logged in. Set here with the settings seam above,
         // before any static constructor can run.
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_NO_CREDENTIAL_STORE", "1");
+        Environment.SetEnvironmentVariable("ORBWEAVER_NO_CREDENTIAL_STORE", "1");
 
         // Where StatusDirectory.Path() puts settings-errors.log — left unset,
         // every suite run appends failure traces to the developer's real
-        // $TMPDIR/claude_buddy/settings-errors.log (CB-17).
+        // $TMPDIR/orbweaver/settings-errors.log (CB-17).
         //
-        // CLAUDE_BUDDY_STATUS_ROOT, not TMPDIR: moving TMPDIR from inside the
+        // ORBWEAVER_STATUS_ROOT, not TMPDIR: moving TMPDIR from inside the
         // test process breaks the coverage collector's IPC and cost this repo
         // its added-line coverage rule for a while. See IntegrationTests'
         // TestBootstrap for the full reasoning (CB-172).
         var statusRoot = Path.Combine(
             Path.GetTempPath(), "cbt-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(statusRoot);
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_STATUS_ROOT", statusRoot);
-
-        // ...and no test in this assembly may start a real relay: that is a live
-        // Claude Code session in tmux, on the developer's own account, holding a
-        // relay name the installed app also wants. Set here rather than trusted
-        // to call discipline because CB-42 proved the discipline was already
-        // broken and nobody could tell — the call was dormant only because the
-        // relay it started always failed. See RemoteControlSessions.StartsBlocked.
-        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_NO_RELAY", "1");
+        Environment.SetEnvironmentVariable("ORBWEAVER_STATUS_ROOT", statusRoot);
 
         // CB-168: no test in this assembly, including one nobody has
         // written yet, may reach a real speech engine or chime process — see
@@ -69,6 +61,6 @@ internal static class TestBootstrap
         TextToSpeech.SilenceForTests = true;
         ChimePlayer.SilenceForTests = true;
 
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
     }
 }

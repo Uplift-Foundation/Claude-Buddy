@@ -1,6 +1,6 @@
 using Avalonia.Media.Imaging;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Where a picture pasted into the chat panel is written before its path
     // is typed into a terminal — the outgoing counterpart of OpenClawMedia,
@@ -15,7 +15,7 @@ namespace ClaudeBuddy
         // its way out with the ones already opened would let one sweep
         // delete a file a CLI hasn't read yet.
         private static string Directory_ =>
-            Path.Combine(Path.GetTempPath(), "claude_buddy_pasted_images");
+            Path.Combine(Path.GetTempPath(), $"{Brand.StatusFolderName}_pasted_images");
 
         // Saves a pasted bitmap and returns its path. PNG regardless of
         // whatever the pasteboard's own format was — Bitmap.Save always

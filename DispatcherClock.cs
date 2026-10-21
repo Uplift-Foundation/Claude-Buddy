@@ -1,7 +1,7 @@
 using System.Reflection;
 using Avalonia.Threading;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Puts Avalonia's UI dispatcher back on the platform's clock, once the
     // platform exists.

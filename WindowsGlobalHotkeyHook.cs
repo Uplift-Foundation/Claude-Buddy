@@ -2,7 +2,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 using Avalonia.Input;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Registers global hotkeys on Windows via user32's RegisterHotKey, which
     // delivers WM_HOTKEY to whatever window registered it. Avalonia doesn't
@@ -117,7 +117,7 @@ namespace ClaudeBuddy
             if (_hwnd != IntPtr.Zero) return;
 
             _wndProc = WndProc;
-            var className = "ClaudeBuddyGlobalHotkeyWindow";
+            var className = Brand.HotkeyWindowClass;
             var wndClass = new WndClass
             {
                 lpfnWndProc = _wndProc,

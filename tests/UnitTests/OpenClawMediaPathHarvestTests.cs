@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 // CB-94, second round. A delivery mirror names a file and strips its
 // directory, so gluing the name to a constant media directory is a guess —

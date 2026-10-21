@@ -1,7 +1,7 @@
 using System.IO;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // SessionPark's I/O half against real files on disk: finding the record under
 // whichever account owns it, the stat, and the cache keyed on it. The decision
@@ -45,7 +45,7 @@ public class SessionParkRecordTests
         Directory.CreateDirectory(Path.Combine(home, ".claude", "sessions"));
         WriteRecord(home, ".claude-board", 70580, Record(Owner, "e4f5c5e4"));
 
-        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-board");
+        OrbweaverSettings.AddClaudeCodeProfileDir(".claude-board");
         try
         {
             SessionPark.ClearCacheForTests();
@@ -53,7 +53,7 @@ public class SessionParkRecordTests
         }
         finally
         {
-            ClaudeBuddySettings.RemoveClaudeCodeProfileDir(".claude-board");
+            OrbweaverSettings.RemoveClaudeCodeProfileDir(".claude-board");
         }
     }
 

@@ -1,6 +1,6 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        x:Class="ClaudeBuddy.AccountOrbWindow"
+        x:Class="Orbweaver.AccountOrbWindow"
         Width="72" Height="72"
         SizeToContent="Manual"
         WindowDecorations="None"

@@ -13,7 +13,7 @@ using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using Avalonia.Threading;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // A small conversation anchored to an orb: the last few turns, a line to
     // type in, and a mic. Opened by clicking an orb that represents a session
@@ -266,6 +266,17 @@ namespace ClaudeBuddy
 
             PinButton.PointerPressed += (_, e) => { e.Handled = true; TogglePin(); };
 
+            // CB-267's box. Labels set once: they are PeerInbound's copy and do
+            // not change per session.
+            InboundAskLabel.Text = PeerInbound.ButtonLabel;
+            InboundConfirmLabel.Text = PeerInbound.ConfirmLabel;
+            InboundCancelLabel.Text = "Cancel";
+            InboundResendLabel.Text = ResendLabel;
+            InboundAskButton.PointerPressed += (_, e) => { e.Handled = true; StepInbound(InboundInput.Ask); };
+            InboundCancelButton.PointerPressed += (_, e) => { e.Handled = true; StepInbound(InboundInput.Cancel); };
+            InboundConfirmButton.PointerPressed += (_, e) => { e.Handled = true; _ = ConfirmInboundAsync(); };
+            InboundResendButton.PointerPressed += (_, e) => { e.Handled = true; _ = ResendInboundAsync(); };
+
             // A pinned panel is a window the user placed, so it has to be
             // movable, and with WindowDecorations="None" there is no title bar
             // to drag it by — the header is the title bar.
@@ -423,7 +434,7 @@ namespace ClaudeBuddy
             // resize. PositionChanged is what the platform gives back instead,
             // and it fires for every kind of move — Reposition() included — so
             // the guard is what keeps this from writing a save for a panel
-            // that only followed its orb. ClaudeBuddySettings.
+            // that only followed its orb. OrbweaverSettings.
             // SetPinnedChatPanelPosition already no-ops when the position
             // hasn't actually changed, so a native drag's stream of identical
             // in-between events costs nothing once it settles.
@@ -431,7 +442,7 @@ namespace ClaudeBuddy
             {
                 if (!_pinned || _owner is not { PositionKey.Length: > 0 } owner) return;
 
-                ClaudeBuddySettings.SetPinnedChatPanelPosition(owner.PositionKey, Position.X, Position.Y);
+                OrbweaverSettings.SetPinnedChatPanelPosition(owner.PositionKey, Position.X, Position.Y);
             };
 
             // See NwSeCursor/NeSwCursor: no StandardCursorType member draws
@@ -671,6 +682,7 @@ namespace ClaudeBuddy
             // taking the box away from an unrelated one.
             if (_session is IRemoteChatReadOnly wasReadOnly) wasReadOnly.ReadOnlyChanged -= OnReadOnlyChanged;
             if (_session is IRemoteChatInterrupt wasInterruptible) wasInterruptible.InterruptChanged -= OnInterruptChanged;
+            if (_session is IRemoteChatPeerInbound wasInbound) wasInbound.InboundChanged -= OnInboundChanged;
 
             // Nobody is looking any more, so its live loop stops.
             // It does not stop a turn: closing a window should not cancel work
@@ -810,6 +822,13 @@ namespace ClaudeBuddy
             if (session is IRemoteChatReadOnly readOnlyNow) readOnlyNow.ReadOnlyChanged += OnReadOnlyChanged;
             if (session is IRemoteChatInterrupt interruptible) interruptible.InterruptChanged += OnInterruptChanged;
 
+            // CB-267: the offer comes and goes under an open panel — the
+            // transcript's mode row lands after bind, settings.json is edited
+            // by hand — and a half-finished confirmation belongs to the session
+            // it was started for, so a rebind starts the box over.
+            _inboundStage = InboundStage.Offer;
+            if (session is IRemoteChatPeerInbound inboundNow) inboundNow.InboundChanged += OnInboundChanged;
+
             // Somebody is looking, which is what licenses the one transcript read
             // the session makes when a turn finishes (busy to idle on the roster).
             if (session is ClaudeCloudChatSession cloud) cloud.PanelOpened();
@@ -855,7 +874,7 @@ namespace ClaudeBuddy
             HideSlashSuggestions();
 
             Input.Text = Drafts.GetValueOrDefault(session.SessionId, "");
-            MicButton.IsVisible = ClaudeBuddySettings.VoiceInputEnabled;
+            MicButton.IsVisible = OrbweaverSettings.VoiceInputEnabled;
             ApplySpeakState(TextToSpeech.State);
 
             // The box stays enabled even when sending won't work, and says why
@@ -932,6 +951,13 @@ namespace ClaudeBuddy
             // the panel is open*, which is why this also runs on
             // ReadOnlyChanged rather than only at bind.
             //
+            // CB-266: a Claude Desktop session is the second thing that flips
+            // while the panel is up — read-only until its chat is put on Remote
+            // Control (or "Show cloud sessions" is turned on), sendable after, and
+            // read-only again if the bridge ends or the API refuses it. Nothing
+            // here is Desktop-specific: LocalCliChatSession raises
+            // ReadOnlyChanged and this redraws, so the panel is never rebound.
+            //
             // The hint is kept rather than dropped with the box, because it says
             // where the session *can* be replied to. Hiding the box and
             // explaining nothing would leave a panel that looks truncated.
@@ -958,6 +984,7 @@ namespace ClaudeBuddy
             SessionLink.Text = _sessionUrl is null ? "" : "Open in your browser";
 
             ApplyStop(session);
+            ApplyInbound(session);
         }
 
         // Stop is shown only while the session says pressing it would stop
@@ -981,6 +1008,112 @@ namespace ClaudeBuddy
         private void OnReadOnlyChanged() => ApplyComposerAffordances(_session);
 
         private void OnInterruptChanged() => ApplyStop(_session);
+
+        // --- CB-267: a message the session would hold ---
+
+        internal enum InboundStage { Offer, Confirming, Working, Done, Failed }
+
+        internal enum InboundInput { Ask, Cancel, Confirm, Succeeded, Failed }
+
+        internal const string ResendLabel = "Send it again";
+
+        internal const string InboundFailedText =
+            "Couldn't change that file, so nothing was turned on — the chat says why.";
+
+        // Where the box is. Per panel rather than per session, and reset at
+        // every bind: see Bind.
+        private InboundStage _inboundStage = InboundStage.Offer;
+
+        // The confirmation's whole state machine, pure so every arrow is a case.
+        // Anything not listed leaves the stage alone — a stray Succeeded after
+        // the user cancelled, or a second Confirm while the first is writing.
+        internal static InboundStage InboundStep(InboundStage stage, InboundInput input) => (stage, input) switch
+        {
+            (InboundStage.Offer, InboundInput.Ask) => InboundStage.Confirming,
+            (InboundStage.Failed, InboundInput.Ask) => InboundStage.Confirming,
+            (InboundStage.Confirming, InboundInput.Cancel) => InboundStage.Offer,
+            (InboundStage.Confirming, InboundInput.Confirm) => InboundStage.Working,
+            (InboundStage.Working, InboundInput.Succeeded) => InboundStage.Done,
+            (InboundStage.Working, InboundInput.Failed) => InboundStage.Failed,
+            _ => stage,
+        };
+
+        internal readonly record struct InboundView(
+            string Text, string? Path, bool Ask, bool Confirm, bool Cancel, bool Resend);
+
+        // What the box shows, or null for no box. Done outlives the offer on
+        // purpose — the offer is gone *because* it worked — and so does a write
+        // in flight, since enabling raises InboundChanged before it returns.
+        // An offer that cannot be edited (settings.json unreadable) is said with
+        // no button, whatever stage the panel was in.
+        internal static InboundView? InboundViewFor(
+            InboundStage stage, PeerInboundOffer? offer, bool held, string home)
+        {
+            var path = offer is null ? null : PeerInbound.DisplayPath(offer.SettingsPath, home);
+
+            return stage switch
+            {
+                InboundStage.Done => new(PeerInbound.DoneText, null, false, false, false, Resend: held),
+                InboundStage.Working => new(PeerInbound.TradeOff, path, false, false, false, false),
+                InboundStage.Failed => new(InboundFailedText, path, Ask: offer?.CanEdit == true, false, false, false),
+                _ when offer is null => null,
+                InboundStage.Confirming when offer.CanEdit => new(PeerInbound.TradeOff, path, false, true, true, false),
+                _ => new(offer.Explanation, path, Ask: offer.CanEdit, false, false, false),
+            };
+        }
+
+        private void ApplyInbound(IRemoteChatSession? session)
+        {
+            var inbound = session as IRemoteChatPeerInbound;
+            var view = inbound is null
+                ? null
+                : InboundViewFor(_inboundStage, inbound.InboundOffer, inbound.HasHeldMessage,
+                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+
+            InboundBox.IsVisible = view is not null;
+            if (view is not { } v) return;
+
+            InboundText.Text = v.Text;
+            InboundPath.Text = v.Path ?? "";
+            InboundPath.IsVisible = v.Path is not null;
+            InboundAskButton.IsVisible = v.Ask;
+            InboundConfirmButton.IsVisible = v.Confirm;
+            InboundCancelButton.IsVisible = v.Cancel;
+            InboundResendButton.IsVisible = v.Resend;
+            InboundButtons.IsVisible = v.Ask || v.Confirm || v.Cancel || v.Resend;
+        }
+
+        // Raised on the UI thread by contract, and only by the bound session.
+        private void OnInboundChanged() => ApplyInbound(_session);
+
+        private void StepInbound(InboundInput input)
+        {
+            _inboundStage = InboundStep(_inboundStage, input);
+            ApplyInbound(_session);
+        }
+
+        // Only from Confirming, so a second click while the write is running
+        // does not write twice. The answer is applied only if the panel is still
+        // showing the session it was asked for.
+        internal async Task ConfirmInboundAsync()
+        {
+            if (_session is not IRemoteChatPeerInbound inbound || _inboundStage != InboundStage.Confirming) return;
+
+            var session = _session;
+            StepInbound(InboundInput.Confirm);
+
+            var ok = await inbound.EnableInboundAsync();
+            if (!ReferenceEquals(session, _session)) return;
+
+            StepInbound(ok ? InboundInput.Succeeded : InboundInput.Failed);
+        }
+
+        // The session redraws the box through InboundChanged once it knows
+        // whether the second attempt was held too.
+        internal async Task ResendInboundAsync()
+        {
+            if (_session is IRemoteChatPeerInbound inbound) await inbound.ResendHeldAsync();
+        }
 
         // Where the read-only link goes. Held rather than read back off the
         // TextBlock, because what is *shown* is a label and what is opened is an
@@ -1295,7 +1428,7 @@ namespace ClaudeBuddy
             var name = TitleText.Text;
             return string.IsNullOrWhiteSpace(name)
                 ? ""
-                : OrbGlyph.For(name, ClaudeBuddySettings.TwoLetterGlyphs);
+                : OrbGlyph.For(name, OrbweaverSettings.TwoLetterGlyphs);
         }
 
         // Ink that can be read on a given circle.
@@ -1710,11 +1843,11 @@ namespace ClaudeBuddy
             // Once per drag, not once per pixel: OnResizePointerMoved fires
             // continuously and this writes a file. Saved against the orb rather
             // than the session so the size follows the agent across runs — see
-            // ChatPanelSizes in ClaudeBuddySettings for why a session id would
+            // ChatPanelSizes in OrbweaverSettings for why a session id would
             // not have survived one.
             if (_owner is { } owner)
             {
-                ClaudeBuddySettings.SetChatPanelSize(owner.PositionKey, Width, Height);
+                OrbweaverSettings.SetChatPanelSize(owner.PositionKey, Width, Height);
             }
         }
 
@@ -1728,7 +1861,7 @@ namespace ClaudeBuddy
         // panel wider than any screen has no visible way back.
         private void ApplySavedSize(OrbWindow orb)
         {
-            var saved = ClaudeBuddySettings.ChatPanelSizeFor(orb.PositionKey);
+            var saved = OrbweaverSettings.ChatPanelSizeFor(orb.PositionKey);
 
             Width = saved is null
                 ? _defaultWidth
@@ -2257,10 +2390,10 @@ namespace ClaudeBuddy
             // would put a "0" in the composer for someone pressing Cmd+0 twice.
             e.Handled = true;
 
-            var next = ChatZoom.Apply(command, ClaudeBuddySettings.ChatTextScale);
+            var next = ChatZoom.Apply(command, OrbweaverSettings.ChatTextScale);
             if (next.Equals(_textScale.Value)) return;
 
-            ClaudeBuddySettings.ChatTextScale = next;
+            OrbweaverSettings.ChatTextScale = next;
             ApplyTextScale();
         }
 
@@ -2269,7 +2402,7 @@ namespace ClaudeBuddy
         // settings slider through ReapplyTextScale below.
         private void ApplyTextScale()
         {
-            var scale = ClaudeBuddySettings.ChatTextScale;
+            var scale = OrbweaverSettings.ChatTextScale;
 
             _textScale.Value = scale;
 
@@ -2288,6 +2421,15 @@ namespace ClaudeBuddy
             PromptTitle.FontSize = 11 * scale;
             PromptOptions.FontSize = 11 * scale;
             PromptElsewhere.FontSize = 10.5 * scale;
+
+            // CB-267's box sits right over the composer and is read before
+            // typing, so it scales with everything else that is read.
+            InboundText.FontSize = 11 * scale;
+            InboundPath.FontSize = 10 * scale;
+            InboundAskLabel.FontSize = 11 * scale;
+            InboundConfirmLabel.FontSize = 11 * scale;
+            InboundCancelLabel.FontSize = 11 * scale;
+            InboundResendLabel.FontSize = 11 * scale;
 
             foreach (var turn in _turns) turn.Rescaled();
         }
@@ -2875,7 +3017,7 @@ namespace ClaudeBuddy
             // that hasn't gone anywhere.
             if (_owner is { PositionKey.Length: > 0 } owner)
             {
-                ClaudeBuddySettings.SetPinnedChatPanelPosition(owner.PositionKey, Position.X, Position.Y);
+                OrbweaverSettings.SetPinnedChatPanelPosition(owner.PositionKey, Position.X, Position.Y);
             }
         }
 
@@ -2909,7 +3051,7 @@ namespace ClaudeBuddy
             // See ClearPinnedChatPanelPosition's own comment.
             if (_owner is { PositionKey.Length: > 0 } owner)
             {
-                ClaudeBuddySettings.ClearPinnedChatPanelPosition(owner.PositionKey);
+                OrbweaverSettings.ClearPinnedChatPanelPosition(owner.PositionKey);
             }
         }
 

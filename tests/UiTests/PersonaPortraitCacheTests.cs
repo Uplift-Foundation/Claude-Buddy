@@ -2,7 +2,7 @@ using Avalonia.Headless.XUnit;
 using SkiaSharp;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The decoded-picture cache, driven from the scan rather than from a persona
 // handed over by hand.
@@ -202,7 +202,7 @@ public class PersonaPortraitCacheTests : IDisposable
         var before = Decoded();
         Assert.NotNull(before);
 
-        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-cb143-ui");
+        OrbweaverSettings.AddClaudeCodeProfileDir(".claude-cb143-ui");
         try
         {
             manager.ApplyPersona(_sessionId, Status(), Pass());
@@ -210,7 +210,7 @@ public class PersonaPortraitCacheTests : IDisposable
         }
         finally
         {
-            ClaudeBuddySettings.RemoveClaudeCodeProfileDir(".claude-cb143-ui");
+            OrbweaverSettings.RemoveClaudeCodeProfileDir(".claude-cb143-ui");
         }
 
         manager.ApplyPersona(_sessionId, Status(), Pass());

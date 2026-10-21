@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-Wires Claude Buddy into every agent CLI on this machine.
+Wires Orbweaver into every agent CLI on this machine.
 
 .DESCRIPTION
 The one thing an install should run, and the Windows twin of
@@ -23,7 +23,7 @@ CB-49's crash keep-alive (a Scheduled Task that restarts the app after a
 crash, gated on "Serve on launch") is deliberately NOT wired in here, unlike
 its macOS twin in install-hooks.sh. On macOS this script is the only thing
 every install path already runs, because a DMG has no real installer. Windows
-already has one -- tools/ClaudeBuddy.iss -- with a real install/uninstall
+already has one -- tools/Orbweaver.iss -- with a real install/uninstall
 lifecycle ([Code]'s CurStepChanged and [UninstallRun]), which is the natural
 place for OS-level task registration and its matching teardown. Putting it
 here too would tie a Scheduled Task's lifecycle to a script people also run by
@@ -123,7 +123,7 @@ if ($failed.Count -gt 0) {
 
 if ($wired -eq 0) {
     Write-Host 'Neither Claude Code nor Codex was found, so nothing was wired.'
-    Write-Host 'Claude Buddy will show no orbs until one of them is installed.'
+    Write-Host 'Orbweaver will show no orbs until one of them is installed.'
     exit 0
 }
 

@@ -4,7 +4,7 @@ using System.Linq;
 using Avalonia;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Covers SessionManager.cs ~295-470: the rules that turn a directory full of
 // status files into one orb per real session, and ~1295-1340: the keys used
@@ -542,7 +542,7 @@ public class SessionScanRulesTests
     // teammate in every project, since none of them carry a cwd into it.
     // Muting one would have silently muted them all, everywhere. Staying
     // empty whenever PositionKeyFor does is what the accessors on
-    // ClaudeBuddySettings already read as "no override" — see
+    // OrbweaverSettings already read as "no override" — see
     // OrbTurnSoundFor's own guard.
     [Fact]
     public void SoundKeyFor_AnAgentWithNoCwdIsNotASharedCrossProjectKey()

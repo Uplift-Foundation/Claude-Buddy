@@ -3,7 +3,7 @@ using System.Linq;
 using System.Text.Json;
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 // CB-101. A picture the agent named by path used to render only while its
 // reply was streaming in, because CB-88 wired LocalMediaPathFrom into the live

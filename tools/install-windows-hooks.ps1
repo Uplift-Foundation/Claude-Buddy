@@ -1,4 +1,4 @@
-# Installs the Claude Buddy hook into Claude Code's Windows settings, and
+# Installs the Orbweaver hook into Claude Code's Windows settings, and
 # optionally into one or more WSL distros' settings too.
 #
 # The hook is what makes orbs appear: Claude Code runs it on session start,
@@ -18,8 +18,14 @@
 #   .\tools\install-windows-hooks.ps1 -UninstallWsl -WslDistro Ubuntu -WslProfileDir .claude-work -WslProfileDirOnly
 #     # unwire just that one extra WSL profile, leaving the distro's default ~/.claude alone
 #
-# Safe to re-run: it strips any existing Claude Buddy entries before adding
-# fresh ones, so it converges rather than accumulating duplicates.
+# Safe to re-run: it strips any existing entries of ours before adding fresh
+# ones, so it converges rather than accumulating duplicates.
+#
+# "Ours" is either hook filename, OrbweaverHook.* or the pre-rename
+# ClaudeBuddyHook.* (CB-255), matched case-insensitively, so an upgrade
+# re-wires in the same pass. The old %LOCALAPPDATA%\ClaudeBuddy copy is left on
+# disk for sessions still running against it, with a .superseded marker the
+# app's LegacyHookCleanup reads.
 #
 # WSL is opt-in via -Wsl/-UninstallWsl so a bare invocation -- which is what the
 # installer's [Run]/[Icons] entries and the plain "wire up hooks" shortcut all
@@ -41,7 +47,7 @@ param(
 
     # Where the hook script is copied to. Kept out of the repo so the hook keeps
     # working if the clone moves or is deleted.
-    [string] $InstallDir = (Join-Path $env:LOCALAPPDATA 'ClaudeBuddy'),
+    [string] $InstallDir = (Join-Path $env:LOCALAPPDATA 'Orbweaver'),
 
     [string] $SettingsPath = (Join-Path $env:USERPROFILE '.claude\settings.json'),
 
@@ -93,8 +99,24 @@ $ErrorActionPreference = 'Stop'
 # running app can never disagree about which extra profiles are configured.
 # Works with no app installed or ever run yet: that's just an absent file,
 # same as the caller genuinely having nothing configured.
+#
+# Orbweaver's folder first, then the pre-rename ClaudeBuddy one: on upgrade day
+# the Inno installer runs this before the new app has started and moved the
+# folder, and reading only the new path then would wire zero extra profiles.
 function Get-ConfiguredExtraProfileDirs {
-    $path = Join-Path $env:APPDATA 'ClaudeBuddy\settings.json'
+    # ORBWEAVER_SETTINGS_DIR first and alone, as the app and the macOS
+    # installers do, so a test instance pointed at a scratch directory is not
+    # wired from the real list (CB-258); its pre-rename spelling still works
+    # (CB-256), and the new one wins when both are set. Otherwise Orbweaver's
+    # folder, then the pre-rename ClaudeBuddy one.
+    if ($env:ORBWEAVER_SETTINGS_DIR) {
+        $path = Join-Path $env:ORBWEAVER_SETTINGS_DIR 'settings.json'
+    } elseif ($env:CLAUDE_BUDDY_SETTINGS_DIR) {
+        $path = Join-Path $env:CLAUDE_BUDDY_SETTINGS_DIR 'settings.json'
+    } else {
+        $path = Join-Path $env:APPDATA 'Orbweaver\settings.json'
+        if (-not (Test-Path -LiteralPath $path)) { $path = Join-Path $env:APPDATA 'ClaudeBuddy\settings.json' }
+    }
     if (-not (Test-Path -LiteralPath $path)) { return @() }
 
     try {
@@ -102,6 +124,10 @@ function Get-ConfiguredExtraProfileDirs {
         return @($json.claudeCodeProfileDirs | Where-Object { $_ })
     }
     catch {
+        # Said, not swallowed: an unreadable list used to look exactly like an
+        # empty one (CB-258).
+        Write-Warning "Could not read the saved profile list from $path ($($_.Exception.Message)); no extra profiles will be wired."
+        $script:ProfileListUnreadable = $true
         return @()
     }
 }
@@ -110,8 +136,11 @@ if ($null -eq $ProfileDir) { $ProfileDir = @(Get-ConfiguredExtraProfileDirs) }
 if ($null -eq $WslProfileDir) { $WslProfileDir = @(Get-ConfiguredExtraProfileDirs) }
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$source = Join-Path $repoRoot 'ClaudeBuddyHook.ps1'
-$installed = Join-Path $InstallDir 'ClaudeBuddyHook.ps1'
+$source = Join-Path $repoRoot 'OrbweaverHook.ps1'
+$installed = Join-Path $InstallDir 'OrbweaverHook.ps1'
+# Where every install before the rename copied the script: the sibling named
+# ClaudeBuddy, so a custom -InstallDir finds its own legacy twin.
+$legacyInstallDir = Join-Path (Split-Path -Parent $InstallDir) 'ClaudeBuddy'
 
 # -UninstallWsl on its own is documented above as touching only WSL, leaving
 # native Windows hooks exactly as they were. Every other combination still
@@ -128,12 +157,23 @@ $touchNative = $Uninstall -or $Wsl -or (-not $UninstallWsl)
 if ($touchNative) {
     if (-not $Uninstall) {
         if (-not (Test-Path -LiteralPath $source)) {
-            throw "Can't find ClaudeBuddyHook.ps1 next to the repo root ($source)."
+            throw "Can't find OrbweaverHook.ps1 next to the repo root ($source)."
         }
 
         New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
         Copy-Item -LiteralPath $source -Destination $installed -Force
         Write-Host "Hook installed: $installed"
+
+        # Mark, never delete, and only when absent: the Settings window
+        # reapplies hooks on every colour toggle, and a refreshed mtime each
+        # time would keep the app's 14-day retirement clock from running out.
+        # The folder also still holds Logs\ until the app's data-dir migration
+        # moves it, which is one more reason this script must not delete it.
+        $legacyMarker = Join-Path $legacyInstallDir '.superseded'
+        if ((Test-Path -LiteralPath $legacyInstallDir -PathType Container) -and -not (Test-Path -LiteralPath $legacyMarker)) {
+            [System.IO.File]::WriteAllText($legacyMarker, '')
+            Write-Host "Marked $legacyInstallDir as superseded; Orbweaver retires it once nothing calls it."
+        }
     }
 }
 
@@ -209,7 +249,7 @@ function Set-ClaudeBuddyHooks {
     $json = Get-Content -LiteralPath $SettingsPath -Raw -Encoding UTF8
     $settings = if ([string]::IsNullOrWhiteSpace($json)) { @{} } else { ConvertTo-HashtableDeep ($json | ConvertFrom-Json) }
 
-    $backup = "$SettingsPath.claudebuddy-backup"
+    $backup = "$SettingsPath.orbweaver-backup"
     Copy-Item -LiteralPath $SettingsPath -Destination $backup -Force
     Write-Host "Backed up settings to $backup"
 
@@ -221,6 +261,9 @@ function Set-ClaudeBuddyHooks {
 
     # Strip our own entries wherever they appear, so re-running repairs rather
     # than duplicating, and an uninstall leaves other tools' hooks untouched.
+    # Either filename is ours: the pre-rename ClaudeBuddyHook.ps1 entries go in
+    # the same pass, which is the whole of the upgrade's re-wire. -like is
+    # case-insensitive, as a Windows path is.
     # $event is an automatic variable in PowerShell; using it as a loop
     # variable here would shadow it and can misbehave.
     foreach ($eventName in @($hooks.Keys)) {
@@ -231,7 +274,8 @@ function Set-ClaudeBuddyHooks {
             if ($null -eq $group) { continue }
 
             $inner = @(@($group['hooks']) | Where-Object {
-                $_ -and ($_['command'] -notlike '*ClaudeBuddyHook.ps1*')
+                $_ -and ($_['command'] -notlike '*ClaudeBuddyHook.*') `
+                   -and ($_['command'] -notlike '*OrbweaverHook.*')
             })
 
             if ($inner.Count -gt 0) {
@@ -263,7 +307,7 @@ function Set-ClaudeBuddyHooks {
     [System.IO.File]::WriteAllText($SettingsPath, $out, (New-Object System.Text.UTF8Encoding($false)))
 
     if ($Uninstall) {
-        Write-Host "Removed Claude Buddy hooks from $SettingsPath"
+        Write-Host "Removed Orbweaver hooks from $SettingsPath"
     }
     else {
         Write-Host "Wired $($script:Wanted.Count) hook entries into $SettingsPath"
@@ -272,9 +316,9 @@ function Set-ClaudeBuddyHooks {
 
 # Computed once, here, in this script's own normal full environment, and
 # baked into every wired command as a literal -- rather than letting
-# ClaudeBuddyHook.ps1 re-derive it via $env:TEMP at hook-run time, where a
+# OrbweaverHook.ps1 re-derive it via $env:TEMP at hook-run time, where a
 # WSL-interop-launched invocation's environment can't be trusted to have
-# TEMP/TMP set at all (see ClaudeBuddyHook.ps1's own comment on this; found
+# TEMP/TMP set at all (see OrbweaverHook.ps1's own comment on this; found
 # on a real machine to silently point the hook at an unrelated folder with no
 # visible error -- the hook reported success, but the app never saw a status
 # file). This keeps every hook, on both native Windows and WSL, resolving to
@@ -318,7 +362,7 @@ if ($touchNative) {
 # native Windows hooks ultimately shell out to powershell.exe as a normal
 # Windows process, so $env:TEMP resolves to the same real folder either way --
 # a WSL session and a native session show up as two independent orbs in one
-# running ClaudeBuddy.exe, which is the whole point of doing this.
+# running Orbweaver.exe, which is the whole point of doing this.
 # ---------------------------------------------------------------------------
 
 $wslExe = Join-Path $env:SystemRoot 'System32\wsl.exe'
@@ -508,7 +552,7 @@ function Invoke-WslTimeout {
 # wins. Still one wsl.exe call: the fallback chain runs as a single compound
 # command inside it, not as separate invocations.
 function Get-WslDistroInfo([string] $Distro) {
-    $marker = '__CLAUDEBUDDY_SPLIT__'
+    $marker = '__ORBWEAVER_SPLIT__'
     $findClaude = "command -v claude 2>/dev/null" +
         " || bash -ic 'command -v claude' 2>/dev/null" +
         " || { command -v zsh >/dev/null 2>&1 && zsh -ic 'command -v claude' 2>/dev/null; }" +
@@ -633,7 +677,7 @@ if ($Uninstall -or $Wsl -or $UninstallWsl) {
 
 if ($Uninstall) {
     Write-Host ''
-    Write-Host 'Removed Claude Buddy hooks (native Windows and any WSL distros found).'
+    Write-Host 'Removed Orbweaver hooks (native Windows and any WSL distros found).'
     Write-Host 'The installed hook script was left in place; delete it if you want it gone.'
 }
 else {
@@ -641,3 +685,8 @@ else {
     Write-Host 'Restart any running Claude Code sessions -- hooks are read at session start,'
     Write-Host 'so existing sessions will not produce orbs until they are restarted.'
 }
+
+# Exit 3 means the saved profile list could not be read: the default profile was
+# still wired, but any extra ones were not (HookInstaller.SavedListUnreadableExit,
+# CB-258).
+if ($script:ProfileListUnreadable) { exit 3 }

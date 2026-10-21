@@ -2,7 +2,7 @@ using Avalonia.Headless.XUnit;
 using Avalonia.Threading;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-167's "vibe summary" turn-finished sound, from SpeechRequest.
 // SpeakTurnSummary down through OrbWindow.SpeakTurnSummary — the layer
@@ -17,13 +17,15 @@ namespace ClaudeBuddy.Tests;
 [Collection("Settings")]
 public class TurnSummarySpeechTests : IDisposable
 {
-    private readonly SpeakScope _scopeWas = ClaudeBuddySettings.SpeakScope;
+    private readonly SpeakScope _scopeWas = OrbweaverSettings.SpeakScope;
 
     public void Dispose()
     {
-        ClaudeBuddySettings.SpeakScope = _scopeWas;
+        OrbweaverSettings.SpeakScope = _scopeWas;
         SpeechSummary.SummarizerForTests = null;
+        SpeechSummary.AccountSummarizerForTests = null;
         SpeechRequest.UtteranceForTests = null;
+        SpeechRequest.TranscriptPathForTests = null;
         TextToSpeech.Enter(TextToSpeech.SpeakState.Idle);
     }
 
@@ -61,7 +63,7 @@ public class TurnSummarySpeechTests : IDisposable
     [AvaloniaFact]
     public void ALongReplyIsSummarisedAndTheResultIsSpoken()
     {
-        ClaudeBuddySettings.SpeakScope = SpeakScope.Full; // proves the forced override below
+        OrbweaverSettings.SpeakScope = SpeakScope.Full; // proves the forced override below
         var reply = LongReply();
 
         string? seenBySummariser = null;
@@ -104,7 +106,7 @@ public class TurnSummarySpeechTests : IDisposable
     [AvaloniaFact]
     public void AShortReplyIsSpokenInFullEvenWithTheGlobalScopeSetToFull()
     {
-        ClaudeBuddySettings.SpeakScope = SpeakScope.Full;
+        OrbweaverSettings.SpeakScope = SpeakScope.Full;
 
         var spoken = (string?)null;
         SpeechRequest.UtteranceForTests = (text, _, _) => spoken = text;
@@ -126,7 +128,7 @@ public class TurnSummarySpeechTests : IDisposable
     [AvaloniaFact]
     public void ALongReplyEntersPreparingSynchronouslyBeforeAnyRoundTrip()
     {
-        ClaudeBuddySettings.SpeakScope = SpeakScope.Full;
+        OrbweaverSettings.SpeakScope = SpeakScope.Full;
 
         // Never lets the round trip finish within this test, so the state
         // this asserts is unambiguously the synchronous part of the call.
@@ -249,10 +251,10 @@ public class TurnSummarySpeechTests : IDisposable
     [AvaloniaFact]
     public async Task AGatewayOrbWithOpenClawDisabledFiresTheRemotePathWithoutThrowing()
     {
-        var wasEnabled = ClaudeBuddySettings.OpenClawEnabled;
+        var wasEnabled = OrbweaverSettings.OpenClawEnabled;
         try
         {
-            ClaudeBuddySettings.OpenClawEnabled = false;
+            OrbweaverSettings.OpenClawEnabled = false;
 
             var orb = new OrbWindow(Guid.NewGuid().ToString());
             orb.UpdateFrom(new SessionStatus
@@ -267,7 +269,7 @@ public class TurnSummarySpeechTests : IDisposable
         }
         finally
         {
-            ClaudeBuddySettings.OpenClawEnabled = wasEnabled;
+            OrbweaverSettings.OpenClawEnabled = wasEnabled;
         }
     }
 
@@ -304,7 +306,7 @@ public class TurnSummarySpeechTests : IDisposable
     [AvaloniaFact]
     public async Task SpeakTurnSummaryRemoteAsyncFindsARealHistoryEntryAndSchedulesTheRead()
     {
-        var wasEnabled = ClaudeBuddySettings.OpenClawEnabled;
+        var wasEnabled = OrbweaverSettings.OpenClawEnabled;
         var agent = "nova" + Guid.NewGuid().ToString("N")[..8];
         var sessionId = $"openclaw:agent:{agent}:discord:channel:1";
 
@@ -313,7 +315,7 @@ public class TurnSummarySpeechTests : IDisposable
 
         try
         {
-            ClaudeBuddySettings.OpenClawEnabled = true;
+            OrbweaverSettings.OpenClawEnabled = true;
 
             var chat = (OpenClawChatSession)OpenClawSessions.ChatFor(sessionId, "Nova")!;
             chat.SetHistory(new[]
@@ -338,7 +340,65 @@ public class TurnSummarySpeechTests : IDisposable
         finally
         {
             SpeechRequest.UtteranceForTests = null;
-            ClaudeBuddySettings.OpenClawEnabled = wasEnabled;
+            OrbweaverSettings.OpenClawEnabled = wasEnabled;
         }
     }
+
+    // --- whose account (CB-248) ----------------------------------------------
+
+    // The user's own scenario: two terminal sessions, one on the default
+    // account and one on a second, each finishing a turn. Each summary has to
+    // run on its own session's account — before this, both ran on whichever
+    // account Buddy itself had inherited. The two roots exist on disk because
+    // AccountDirFor refuses one that does not; a session the scan does not
+    // know is the third case, and keeps the old inheriting behaviour.
+    [AvaloniaFact]
+    public void EachSessionsSummaryRunsOnThatSessionsAccount()
+    {
+        var home = Directory.CreateTempSubdirectory("cb248-ui-").FullName;
+        try
+        {
+            var accountA = Path.Combine(home, ".claude");
+            var accountB = Path.Combine(home, ".claude-b");
+            Directory.CreateDirectory(accountA);
+            Directory.CreateDirectory(accountB);
+
+            var transcripts = new Dictionary<string, string>
+            {
+                ["session-a"] = Path.Combine(accountA, "projects", "proj", "a.jsonl"),
+                ["session-b"] = Path.Combine(accountB, "projects", "proj", "b.jsonl"),
+            };
+            SpeechRequest.TranscriptPathForTests =
+                id => id is not null && transcripts.TryGetValue(id, out var path) ? path : null;
+
+            var billed = new List<(string Reply, string? Account)>();
+            SpeechSummary.AccountSummarizerForTests = (reply, account) =>
+            {
+                billed.Add((reply, account));
+                return Task.FromResult<string?>("Done.");
+            };
+            SpeechRequest.UtteranceForTests = (_, _, _) => { };
+
+            var replyA = "A: " + LongReply();
+            var replyB = "B: " + LongReply();
+            var replyUnknown = "?: " + LongReply();
+            SpeechRequest.SpeakTurnSummary(replyA, "session-a");
+            SpeechRequest.SpeakTurnSummary(replyB, "session-b");
+            SpeechRequest.SpeakTurnSummary(replyUnknown, "session-not-scanned");
+
+            Assert.Equal(
+                new (string, string?)[] { (replyA, accountA), (replyB, accountB), (replyUnknown, null) },
+                billed);
+        }
+        finally
+        {
+            Directory.Delete(home, recursive: true);
+        }
+    }
+
+    // With no seam, the lookup asks the live scan; a test host has none, so
+    // the answer is "unknown" rather than a throw.
+    [AvaloniaFact]
+    public void WithNoScanRunningASessionsTranscriptIsUnknown() =>
+        Assert.Null(SpeechRequest.TranscriptPathOf("session-a"));
 }

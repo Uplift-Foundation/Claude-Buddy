@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Covers which credential store each platform uses.
 //
@@ -132,7 +132,7 @@ public class ClaudeCloudCredentialPlatformTests
     [Fact]
     public void AConfiguredExtraRootIsItsOwnAccountWithASuffixedServiceOnly()
     {
-        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-board");
+        OrbweaverSettings.AddClaudeCodeProfileDir(".claude-board");
         try
         {
             var accounts = ClaudeCliCredentials.SourcesFor(isMacOS: true, Home);
@@ -147,7 +147,7 @@ public class ClaudeCloudCredentialPlatformTests
         }
         finally
         {
-            ClaudeBuddySettings.RemoveClaudeCodeProfileDir(".claude-board");
+            OrbweaverSettings.RemoveClaudeCodeProfileDir(".claude-board");
         }
     }
 

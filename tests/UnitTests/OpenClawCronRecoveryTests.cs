@@ -2,7 +2,7 @@ using System.Collections.Generic;
 using System.Text.Json;
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 // CB-115: recovering a cron-delivered picture's real path once OpenClaw's
 // delivery route has stripped both the "MEDIA:" prefix and the directory out

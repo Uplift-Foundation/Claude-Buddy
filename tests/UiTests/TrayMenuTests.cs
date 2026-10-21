@@ -3,7 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The shape of the tray menu, and the two rules about when it is allowed to be
 // rebuilt.
@@ -27,7 +27,7 @@ public class TrayMenuTests
     private const string NoSessions = "No sessions";
     private const string ResetAll = "Reset all sessions to idle";
     private const string ShowOrbs = "Show orbs";
-    private const string Quit = "Quit Claude Buddy";
+    private const string Quit = $"Quit {Brand.DisplayName}";
     private const string NewChat = "New chat…";
     private const string Settings = "Settings…";
 
@@ -201,10 +201,10 @@ public class TrayMenuTests
         // Buddy" the TrayIcon was created with, so the tooltip is honest from
         // the first paint rather than after the first scan.
         var icon = IconOf(tray);
-        Assert.Equal("Claude Buddy — no sessions", icon.ToolTipText);
+        Assert.Equal($"{Brand.DisplayName} — no sessions", icon.ToolTipText);
 
         tray.Update(new[] { Entry("id-1", state: "generating", title: "first") });
-        Assert.Equal("Claude Buddy — 1 session, 1 working", icon.ToolTipText);
+        Assert.Equal($"{Brand.DisplayName} — 1 session, 1 working", icon.ToolTipText);
 
         var menu = MenuOf(tray);
         if (!TryRaise(menu, "RaiseOpening")) return;
@@ -212,7 +212,7 @@ public class TrayMenuTests
         tray.Update(new[] { Entry("id-1", state: "waiting", title: "first") });
 
         // The menu was held; the tooltip was not.
-        Assert.Equal("Claude Buddy — 1 session, 1 needs you", icon.ToolTipText);
+        Assert.Equal($"{Brand.DisplayName} — 1 session, 1 needs you", icon.ToolTipText);
         Assert.DoesNotContain("first — needs you", Labels(menu));
     }
 
@@ -224,23 +224,23 @@ public class TrayMenuTests
         // gate cannot see, which is exactly what ReapplyStateColors is for. A
         // non-default colour also sends LoadIcon down the re-tint path rather
         // than straight to the baked PNG.
-        var before = ClaudeBuddySettings.IdleColor;
+        var before = OrbweaverSettings.IdleColor;
         try
         {
             var tray = NewController();
             if (tray is null) return;
 
-            ClaudeBuddySettings.IdleColor = "#FF00AA";
+            OrbweaverSettings.IdleColor = "#FF00AA";
             Assert.False(OrbColors.IsDefault("idle"));
 
             tray.ReapplyStateColors();
 
-            Assert.Equal("Claude Buddy — no sessions", IconOf(tray).ToolTipText);
+            Assert.Equal($"{Brand.DisplayName} — no sessions", IconOf(tray).ToolTipText);
             Assert.NotNull(IconOf(tray).Icon);
         }
         finally
         {
-            ClaudeBuddySettings.IdleColor = before;
+            OrbweaverSettings.IdleColor = before;
         }
     }
 

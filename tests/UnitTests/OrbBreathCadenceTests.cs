@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // When the shared pulse tick may move an orb's scale, and the curve it moves
 // it along. The OrbWindow half — the avatar's frame stepping the breath

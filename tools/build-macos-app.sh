@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
-# Builds "Claude Buddy.app" — a real macOS app bundle you can double-click,
+# Builds "Orbweaver.app" — a real macOS app bundle you can double-click,
 # drop in /Applications, and add to Login Items.
+#
+# The bundle was "Claude Buddy.app" until CB-255. What did NOT change with it,
+# deliberately: the bundle id (see BUNDLE_ID below — Automation consent is
+# keyed on it). The executable inside followed in phase 3 (CB-256): it is the
+# assembly name, Contents/MacOS/Orbweaver now, and was Contents/MacOS/ClaudeBuddy
+# in every build before — including the phase-2 Orbweaver.app, which is why
+# --install knows three executable paths rather than two (see INSTALLED_EXE).
+# --install removes the legacy bundle as well as the current one, so the two
+# never sit side by side under one bundle id.
 #
 #   ./tools/build-macos-app.sh              # build into dist/
 #   ./tools/build-macos-app.sh --install    # ...and copy to /Applications
@@ -19,14 +28,22 @@
 #   * It carries NSAppleEventsUsageDescription, which macOS requires before
 #     it will even show the Automation prompt that click-to-focus needs.
 #   * A bundle has a stable code identity, so the Automation permission you
-#     grant sticks to "Claude Buddy" instead of to whatever terminal happened
+#     grant sticks to this app instead of to whatever terminal happened
 #     to launch a loose binary.
 
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-APP_NAME="Claude Buddy"
+APP_NAME="Orbweaver"
+# The name every build before CB-255 installed under. Only --install reads it,
+# to stop and remove a copy still sitting in /Applications.
+LEGACY_APP_NAME="Claude Buddy"
+# The bundle's executable, Contents/MacOS/$EXECUTABLE. Not a free choice: it is
+# the file `dotnet publish` names after <AssemblyName> in Orbweaver.csproj, and
+# CFBundleExecutable has to name that file. Equal to APP_NAME by coincidence of
+# the rename, not by definition, so it is spelled out on its own (CB-256).
+EXECUTABLE="Orbweaver"
 # Kept as-is even though the canonical repo is Uplift-Foundation/Claude-Buddy, and
 # deliberately so: macOS keys the Automation (Apple Events) consent a user grants
 # to the bundle identifier. Renaming it makes every existing install look like a
@@ -43,8 +60,8 @@ INSTALL=0
 
 # The csproj owns the version; parse it out rather than keeping a second copy
 # here that would silently drift from the one compiled into the binary.
-VERSION="$(sed -n 's|.*<Version>\(.*\)</Version>.*|\1|p' ClaudeBuddy.csproj | head -1)"
-[[ -n "$VERSION" ]] || { echo "Could not read <Version> from ClaudeBuddy.csproj" >&2; exit 1; }
+VERSION="$(sed -n 's|.*<Version>\(.*\)</Version>.*|\1|p' Orbweaver.csproj | head -1)"
+[[ -n "$VERSION" ]] || { echo "Could not read <Version> from Orbweaver.csproj" >&2; exit 1; }
 
 # CFBundleVersion must be a plain dotted number — a "-beta" suffix in it makes
 # the bundle unlaunchable — so strip any prerelease label for that key while
@@ -52,7 +69,7 @@ VERSION="$(sed -n 's|.*<Version>\(.*\)</Version>.*|\1|p' ClaudeBuddy.csproj | he
 VERSION_NUMERIC="${VERSION%%-*}"
 
 SIGN_IDENTITY="${MACOS_SIGNING_IDENTITY:-}"
-ENTITLEMENTS="tools/ClaudeBuddy.entitlements"
+ENTITLEMENTS="tools/Orbweaver.entitlements"
 
 # Default to this Mac's architecture; override for cross-building.
 case "$(uname -m)" in
@@ -75,7 +92,7 @@ echo "==> Publishing ($RID)"
 # Multi-file on purpose: PublishSingleFile (the csproj default, for handing
 # someone one loose executable) would self-extract native libs to a temp dir
 # at every launch, which is exactly what a .app bundle exists to avoid.
-dotnet publish ClaudeBuddy.csproj -c Release -r "$RID" \
+dotnet publish Orbweaver.csproj -c Release -r "$RID" \
   -p:PublishSingleFile=false \
   -p:DebugType=none \
   -o "$DIST/publish-$RID" \
@@ -85,7 +102,7 @@ echo "==> Assembling $APP"
 rm -rf "$APP"
 mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
 cp -R "$DIST/publish-$RID/." "$CONTENTS/MacOS/"
-chmod +x "$CONTENTS/MacOS/ClaudeBuddy"
+chmod +x "$CONTENTS/MacOS/$EXECUTABLE"
 
 # Ship the hook and both its installers inside the bundle. Orbs only appear
 # once the hook is wired into the CLI's own config, so carrying all three means
@@ -103,19 +120,19 @@ chmod +x "$CONTENTS/MacOS/ClaudeBuddy"
 # what it calls. Nobody should have to know which of two scripts their machine
 # needs; that knowledge belongs in a script, not in a README step someone reads
 # once.
-cp ClaudeBuddyHook.sh \
+cp OrbweaverHook.sh \
    tools/install-hooks.sh \
    tools/install-macos-hooks.sh \
    tools/install-codex-hooks.sh \
    tools/install-grok-hooks.sh "$CONTENTS/Resources/"
-chmod +x "$CONTENTS/Resources/ClaudeBuddyHook.sh" \
+chmod +x "$CONTENTS/Resources/OrbweaverHook.sh" \
          "$CONTENTS/Resources/install-hooks.sh" \
          "$CONTENTS/Resources/install-macos-hooks.sh" \
          "$CONTENTS/Resources/install-codex-hooks.sh" \
          "$CONTENTS/Resources/install-grok-hooks.sh"
 
 echo "==> Building icon"
-ICONSET="$DIST/ClaudeBuddy.iconset"
+ICONSET="$DIST/$APP_NAME.iconset"
 rm -rf "$ICONSET"; mkdir -p "$ICONSET"
 for size in 16 32 128 256 512; do
   sips -z $size $size Assets/appicon-1024.png \
@@ -124,7 +141,7 @@ for size in 16 32 128 256 512; do
   sips -z $double $double Assets/appicon-1024.png \
     --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null
 done
-iconutil -c icns "$ICONSET" -o "$CONTENTS/Resources/ClaudeBuddy.icns"
+iconutil -c icns "$ICONSET" -o "$CONTENTS/Resources/$APP_NAME.icns"
 rm -rf "$ICONSET"
 
 cat > "$CONTENTS/Info.plist" <<PLIST
@@ -135,8 +152,8 @@ cat > "$CONTENTS/Info.plist" <<PLIST
     <key>CFBundleName</key>              <string>$APP_NAME</string>
     <key>CFBundleDisplayName</key>       <string>$APP_NAME</string>
     <key>CFBundleIdentifier</key>        <string>$BUNDLE_ID</string>
-    <key>CFBundleExecutable</key>        <string>ClaudeBuddy</string>
-    <key>CFBundleIconFile</key>          <string>ClaudeBuddy</string>
+    <key>CFBundleExecutable</key>        <string>$EXECUTABLE</string>
+    <key>CFBundleIconFile</key>          <string>$APP_NAME</string>
     <key>CFBundlePackageType</key>       <string>APPL</string>
     <key>CFBundleShortVersionString</key><string>$VERSION</string>
     <key>CFBundleVersion</key>           <string>$VERSION_NUMERIC</string>
@@ -148,7 +165,7 @@ cat > "$CONTENTS/Info.plist" <<PLIST
          again for Claude Desktop the first time a profile is quit from the
          menu (quitting sends a quit Apple Event, which is TCC-gated). -->
     <key>NSAppleEventsUsageDescription</key>
-    <string>Claude Buddy uses automation to bring the terminal window of a Claude Code session to the front when you click its orb, and to quit a Claude Desktop profile when you choose Quit from its menu.</string>
+    <string>$APP_NAME uses automation to bring the terminal window of a Claude Code session to the front when you click its orb, and to quit a Claude Desktop profile when you choose Quit from its menu.</string>
     <!-- Shown the moment PvRecorder opens the input device, which only
          happens if the user has turned on voice input in Settings and then
          clicks the mic that appears on hover — see VoiceRecorder. Without
@@ -199,7 +216,7 @@ cat > "$CONTENTS/Info.plist" <<PLIST
         </dict>
     </array>
     <key>NSMicrophoneUsageDescription</key>
-    <string>Claude Buddy uses the microphone to transcribe what you say, entirely on this machine, when you click the mic that appears on hovering an orb — only after you turn voice input on in Settings.</string>
+    <string>$APP_NAME uses the microphone to transcribe what you say, entirely on this machine, when you click the mic that appears on hovering an orb — only after you turn voice input on in Settings.</string>
 
     <!-- Required before the app may open a socket to, or listen for, another
          machine on the local network. Without it the peer link fails as
@@ -211,13 +228,13 @@ cat > "$CONTENTS/Info.plist" <<PLIST
          have already bitten:
 
            * The grant is tied to the app's code identity. Replacing
-             /Applications/Claude Buddy.app gives the bundle a new CDHash,
+             /Applications/Orbweaver.app gives the bundle a new CDHash,
              macOS re-evaluates, and the grant DOES NOT carry over. It breaks on
              every upgrade.
            * Nothing prompts loudly enough to notice, because LSUIElement is
              true: no Dock icon and no window. -->
     <key>NSLocalNetworkUsageDescription</key>
-    <string>Claude Buddy connects directly to your other machines running Claude Buddy, so you can see and reply to sessions on them. It talks only to machines you have paired, over an encrypted connection, and nothing leaves your network.</string>
+    <string>$APP_NAME connects directly to your other machines running $APP_NAME, so you can see and reply to sessions on them. It talks only to machines you have paired, over an encrypted connection, and nothing leaves your network.</string>
 </dict>
 </plist>
 PLIST
@@ -245,7 +262,7 @@ fi
 # ("code object is not signed at all"). For a self-contained .NET publish that
 # means all ~200 files: the dylibs, the extensionless `createdump` helper, the
 # managed .dll assemblies (PE32, which sign as Format=generic), and even
-# ClaudeBuddy.runtimeconfig.json — .NET's apphost requires those sit next to the
+# Orbweaver.runtimeconfig.json — .NET's apphost requires those sit next to the
 # executable, so they cannot be moved to Resources/ to sidestep this.
 #
 # The main executable is skipped: signing the bundle covers it, and it has to
@@ -253,7 +270,7 @@ fi
 #
 # Resources/ is untouched by this loop on purpose. It is not an executable
 # directory, so the hook scripts there are sealed as ordinary resources.
-MAIN_EXE="$APP/Contents/MacOS/ClaudeBuddy"
+MAIN_EXE="$APP/Contents/MacOS/$EXECUTABLE"
 while IFS= read -r nested; do
   [[ "$nested" == "$MAIN_EXE" ]] && continue
   codesign "${SIGN_ARGS[@]}" "$nested" >/dev/null 2>&1 ||
@@ -274,9 +291,29 @@ rm -rf "$DIST/publish-$RID"
 
 echo "==> Built $APP"
 if [[ $INSTALL -eq 1 ]]; then
-  INSTALLED_EXE="/Applications/$APP_NAME.app/Contents/MacOS/ClaudeBuddy"
+  INSTALLED_APP="/Applications/$APP_NAME.app"
+  # Three executable paths are in the wild, and every stop and scan below
+  # has to know all of them (CB-256):
+  #
+  #   INSTALLED_EXE  Orbweaver.app/Contents/MacOS/Orbweaver      this build
+  #   INTERIM_EXE    Orbweaver.app/Contents/MacOS/ClaudeBuddy    phase 2 (CB-255)
+  #   LEGACY_EXE     Claude Buddy.app/Contents/MacOS/ClaudeBuddy before CB-255
+  #
+  # The interim one is the easy one to forget: it sits in the bundle this
+  # install replaces, under the bundle name this build already has, so
+  # nothing about the folder says it is old. Left out, a phase-2 copy keeps
+  # running, holds the single-instance mutex, and the new one exits 0 —
+  # CB-206 again.
+  INSTALLED_EXE="$INSTALLED_APP/Contents/MacOS/$EXECUTABLE"
+  INTERIM_EXE="$INSTALLED_APP/Contents/MacOS/ClaudeBuddy"
+  # The pre-CB-255 bundle. Same bundle id, so left in place it is a second
+  # copy LaunchServices and a login item can pick instead of this one — see
+  # MacOSLegacyBundle.cs, which does the same cleanup for people who install
+  # by dragging from the DMG.
+  LEGACY_APP="/Applications/$LEGACY_APP_NAME.app"
+  LEGACY_EXE="$LEGACY_APP/Contents/MacOS/ClaudeBuddy"
   KEEPALIVE_PLIST="$HOME/Library/LaunchAgents/$BUNDLE_ID.plist"
-  # The pids of Buddies running from the installed path.
+  # The pids of Buddies running from any of the given executable paths.
   #
   # Never fails, and that is load-bearing. It is only ever called inside
   # `$(...)`, and under `set -euo pipefail` a failing substitution in an
@@ -287,14 +324,38 @@ if [[ $INSTALL -eq 1 ]]; then
   # straight after a successful install, before the 0/1/many report below,
   # whose own "launch it with" arm could therefore never print. (CB-206's
   # install tail; found installing develop at 0e09981d, fixed under CB-245.)
-  running_installed() {
-    local p
-    for p in $(pgrep -x ClaudeBuddy || true); do
-      if [[ "$(ps -o comm= -p "$p" 2>/dev/null || true)" == "$INSTALLED_EXE" ]]; then
-        echo "$p"
-      fi
+  #
+  # Both process names, because `pgrep -x` matches the executable's basename:
+  # $EXECUTABLE for this build, ClaudeBuddy for every build before it (the
+  # legacy bundle and the phase-2 one alike). Asking for one name only makes
+  # the other half of the table invisible — a phase-2 copy is then neither
+  # waited for nor stopped, and survives holding the mutex (CB-256). Two
+  # calls rather than a pattern, each `|| true` for the reason above; the
+  # comm check below is what actually decides, by full path.
+  running_from() {
+    local p comm exe
+    for p in $(pgrep -x "$EXECUTABLE" || true) $(pgrep -x ClaudeBuddy || true); do
+      comm="$(ps -o comm= -p "$p" 2>/dev/null || true)"
+      for exe in "$@"; do
+        if [[ "$comm" == "$exe" ]]; then
+          echo "$p"
+        fi
+      done
     done
     return 0
+  }
+
+  # The ones running the binary this install put in place — the new path
+  # only. A copy still running out of the legacy bundle, or the phase-2
+  # executable, is exactly what the report below must not count as success.
+  running_installed() { running_from "$INSTALLED_EXE"; }
+
+  # Whether the bundle at $1 is ours, by its Info.plist's bundle id. Guards
+  # the legacy removal below: a folder called "Claude Buddy.app" is only a
+  # name, and rm -rf is not a thing to do to someone else's app on the
+  # strength of one.
+  is_our_bundle() {
+    [[ "$(plutil -extract CFBundleIdentifier raw -o - "$1/Contents/Info.plist" 2>/dev/null || true)" == "$BUNDLE_ID" ]]
   }
 
   # Whether launchd currently has the keep-alive job. Asked rather than
@@ -307,7 +368,12 @@ if [[ $INSTALL -eq 1 ]]; then
   # machine opted in to the keep-alive, and with only STOPPED to go on the
   # tail below believed nothing had been running, skipped its wait, and read
   # RUNNING before launchd had started the new copy (CB-245 / CB-206).
-  WAS_RUNNING="$(running_installed)"
+  #
+  # All three paths: on the first install after a rename, the Buddy that was
+  # running is an older one — the phase-2 copy out of this same bundle, or
+  # the legacy bundle's — and it still counts as "one was running" for the
+  # relaunch below.
+  WAS_RUNNING="$(running_from "$INSTALLED_EXE" "$INTERIM_EXE" "$LEGACY_EXE")"
 
   # CB-206: the running Buddy goes before the bundle under it is replaced.
   # The single-instance mutex is one per user since CB-206, so the copy the
@@ -320,16 +386,28 @@ if [[ $INSTALL -eq 1 ]]; then
   if [[ -f "$KEEPALIVE_PLIST" ]]; then
     launchctl unload "$KEEPALIVE_PLIST" >/dev/null 2>&1 || true
   fi
-  STOPPED="$(tools/stop-installed-buddy.sh "$INSTALLED_EXE")" ||
-    echo "    warning: a running Claude Buddy survived SIGKILL" >&2
+  #
+  # All three executables in one call, so a legacy, a phase-2 and a current
+  # copy are stopped together and the grace period is waited out once.
+  STOPPED="$(tools/stop-installed-buddy.sh "$INSTALLED_EXE" "$INTERIM_EXE" "$LEGACY_EXE")" ||
+    echo "    warning: a running $APP_NAME survived SIGKILL" >&2
   if [[ -n "$STOPPED" ]]; then
-    echo "==> Stopped the running Claude Buddy ($(echo $STOPPED | tr '\n' ' '))"
+    echo "==> Stopped the running $APP_NAME ($(echo $STOPPED | tr '\n' ' '))"
   fi
 
   echo "==> Installing to /Applications"
-  rm -rf "/Applications/$APP_NAME.app"
+  rm -rf "$INSTALLED_APP"
+  if [[ -d "$LEGACY_APP" ]]; then
+    if is_our_bundle "$LEGACY_APP"; then
+      rm -rf "$LEGACY_APP"
+      echo "==> Removed the legacy $LEGACY_APP"
+      echo "    If it was in your Login Items, add $APP_NAME instead (System Settings > General > Login Items)."
+    else
+      echo "    warning: left $LEGACY_APP alone -- its bundle id is not $BUNDLE_ID" >&2
+    fi
+  fi
   cp -R "$APP" "/Applications/"
-  echo "==> Installed /Applications/$APP_NAME.app"
+  echo "==> Installed $INSTALLED_APP"
   # CB-49: reconcile the crash keep-alive LaunchAgent against whatever
   # settings.json already says about "Serve on launch" -- installed here
   # rather than assumed, so a --install run on a machine already opted in
@@ -337,7 +415,7 @@ if [[ $INSTALL -eq 1 ]]; then
   # running one. --keepalive-only skips hook wiring; install-hooks.sh's own
   # header explains why this call lives there instead of in this script.
   # Best-effort: a failure here shouldn't fail an otherwise-successful build.
-  "/Applications/$APP_NAME.app/Contents/Resources/install-hooks.sh" --keepalive-only || true
+  "$INSTALLED_APP/Contents/Resources/install-hooks.sh" --keepalive-only || true
 
   # CB-206: one Buddy, running the new binary, if one was running before.
   # With the keep-alive registered, launchd has just started it; give that a
@@ -367,7 +445,7 @@ if [[ $INSTALL -eq 1 ]]; then
   case "$(printf '%s' "$RUNNING" | grep -c .)" in
     0) echo "    Launch it with: open -a \"$APP_NAME\"" ;;
     1) echo "==> Running: pid $RUNNING" ;;
-    *) echo "    warning: more than one Claude Buddy is running: $(echo $RUNNING)" >&2 ;;
+    *) echo "    warning: more than one $APP_NAME is running: $(echo $RUNNING)" >&2 ;;
   esac
 else
   echo "    Try it with:    open \"$APP\""

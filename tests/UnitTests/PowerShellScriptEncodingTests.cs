@@ -1,7 +1,7 @@
 using System.Text;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Windows PowerShell 5.1 reads a .ps1 with no BOM as the ANSI codepage, not
 // UTF-8. An em dash (E2 80 94) then decodes to three characters, one of which
@@ -54,11 +54,11 @@ public class PowerShellScriptEncodingTests
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null)
         {
-            if (File.Exists(Path.Combine(dir.FullName, "ClaudeBuddyHook.ps1"))) return dir.FullName;
+            if (File.Exists(Path.Combine(dir.FullName, "OrbweaverHook.ps1"))) return dir.FullName;
             dir = dir.Parent;
         }
         throw new InvalidOperationException(
-            "Could not find ClaudeBuddyHook.ps1 by walking up from " + AppContext.BaseDirectory);
+            "Could not find OrbweaverHook.ps1 by walking up from " + AppContext.BaseDirectory);
     }
 
     private static IEnumerable<string> ScriptsUnder(string root)

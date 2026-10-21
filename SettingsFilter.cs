@@ -1,4 +1,4 @@
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // The decisions behind the settings window's filter box, pulled out of
     // SettingsWindow.cs so they can be reached with a plain [Fact] — no

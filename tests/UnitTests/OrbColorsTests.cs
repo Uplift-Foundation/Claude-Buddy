@@ -1,7 +1,7 @@
 using Avalonia.Media;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Covers OrbColors.cs. State is a bare string off a hook script — there's no
 // enum for it, "idle"/"generating"/"waiting" plus "anything unrecognised

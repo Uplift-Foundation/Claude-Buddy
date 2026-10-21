@@ -2,7 +2,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // SessionMessenger.DeliverAsync — every DeliveryResult arm, driven against a
 // fake Seams. No real socket anywhere here; that seam is proved wire-compatible
@@ -122,6 +122,6 @@ public class SessionMessengerTests
     [Fact]
     public void FromNameWrapsTheMachineTag()
     {
-        Assert.Equal("Claude Buddy on mini", SessionMessenger.FromName("mini"));
+        Assert.Equal("Orbweaver on mini", SessionMessenger.FromName("mini"));
     }
 }

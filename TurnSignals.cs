@@ -1,4 +1,4 @@
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // What a state transition means for CB-167's purposes, and nothing else.
     //

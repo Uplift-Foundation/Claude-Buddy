@@ -4,7 +4,7 @@ using Avalonia.Headless.XUnit;
 using Avalonia.Threading;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The handful of behaviours that only run once an orb is actually Loaded:
 // UpdateFrom's own "apply the new state immediately" branch, and
@@ -89,10 +89,10 @@ public class OrbWindowShownTests
 
         var before = ((Avalonia.Media.SolidColorBrush)orb.Orb.Fill!).Color;
 
-        var previous = ClaudeBuddySettings.WaitingColor;
+        var previous = OrbweaverSettings.WaitingColor;
         try
         {
-            ClaudeBuddySettings.WaitingColor = "#AA00FF";
+            OrbweaverSettings.WaitingColor = "#AA00FF";
             orb.ReapplyStateColors();
 
             // Wall-clock bounded rather than iteration-bounded — see
@@ -112,7 +112,7 @@ public class OrbWindowShownTests
         }
         finally
         {
-            ClaudeBuddySettings.WaitingColor = previous;
+            OrbweaverSettings.WaitingColor = previous;
         }
     }
 

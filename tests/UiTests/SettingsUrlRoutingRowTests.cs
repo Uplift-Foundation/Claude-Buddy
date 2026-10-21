@@ -5,7 +5,7 @@ using Avalonia.Headless.XUnit;
 using Avalonia.LogicalTree;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The one visible surface CB-4 adds: the switch that decides whether Claude
 // Buddy claims Claude Desktop's URL schemes.

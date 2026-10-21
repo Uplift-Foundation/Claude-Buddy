@@ -4,7 +4,7 @@ using System.Linq;
 using System.Reflection;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // What this app reads off a live process: whether a session belongs to an agent
 // team (AgentTeam), and the shape both platforms' Claude Desktop scans agree on

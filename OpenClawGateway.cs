@@ -5,7 +5,7 @@ using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // A connection to one OpenClaw gateway: TLS, the JSON-RPC handshake it
     // demands, and request/response correlation over a single socket.
@@ -72,7 +72,7 @@ namespace ClaudeBuddy
         // Read per connection rather than cached: changing the setting restarts
         // the connection, and the gateway treats the new scope set as a fresh
         // pairing to approve.
-        private static string[] Scopes => ClaudeBuddySettings.OpenClawReplyEnabled
+        private static string[] Scopes => OrbweaverSettings.OpenClawReplyEnabled
             ? new[] { "operator.read", "operator.write" }
             : new[] { "operator.read" };
 
@@ -780,7 +780,7 @@ namespace ClaudeBuddy
                         // isn't a boolean, a subscriber that threw — used to
                         // take the whole loop down and cost a full TLS 1.3
                         // reconnect. A frame we can't read is a frame we skip.
-                        Console.Error.WriteLine($"Claude Buddy: bad gateway frame: {ex.Message}");
+                        Console.Error.WriteLine($"{Brand.DisplayName}: bad gateway frame: {ex.Message}");
                     }
 
                     message.Clear();

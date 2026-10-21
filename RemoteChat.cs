@@ -1,7 +1,7 @@
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // What the chat panel needs from a session it can talk to, and nothing more.
     //
@@ -615,5 +615,23 @@ namespace ClaudeBuddy
         // The fall back for when the dialog could not be read, which is the only
         // honest answer at that point.
         void AnswerElsewhere();
+    }
+}
+
+namespace Orbweaver
+{
+    // CB-267: what the panel shows when a peer message to this session would be
+    // held by Claude Code until someone approves it in that session.
+    public sealed record PeerInboundOffer(string Explanation, string SettingsPath, bool CanEdit);
+
+    public interface IRemoteChatPeerInbound
+    {
+        // Null when there is nothing to offer.
+        PeerInboundOffer? InboundOffer { get; }
+        bool HasHeldMessage { get; }
+        Task<bool> EnableInboundAsync();
+        Task<ChatSendOutcome> ResendHeldAsync();
+        // Raised on the UI thread.
+        event Action? InboundChanged;
     }
 }

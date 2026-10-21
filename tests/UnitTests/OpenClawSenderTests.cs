@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 // Who said a user-role message the gateway handed us.
 //
@@ -93,6 +93,38 @@ public class OpenClawSenderTests
             false, "Quillbot", null, Prefix + "everyone still awake?");
 
         Assert.Equal("everyone still awake?", sender.Text);
+    }
+
+    // The same, for history an older build mirrored - and for an older build on
+    // another machine still mirroring today. Room history never expires, so
+    // this stays true forever.
+    [Fact]
+    public void TheLegacyMirrorPrefixIsStrippedAndStillMine()
+    {
+        var sender = OpenClawSender.Classify(
+            false, "Quillbot", null, OpenClawSender.LegacyMirrorPrefix + "everyone still awake?");
+
+        Assert.Equal(OpenClawSender.SenderKind.Mine, sender.Kind);
+        Assert.Null(sender.Name);
+        Assert.Equal("everyone still awake?", sender.Text);
+    }
+
+    [Fact]
+    public void TheCurrentMirrorPrefixIsMineToo()
+    {
+        var sender = OpenClawSender.Classify(
+            false, "Quillbot", null, Prefix + "everyone still awake?");
+
+        Assert.Equal(OpenClawSender.SenderKind.Mine, sender.Kind);
+    }
+
+    // The two literals, pinned: the first is what new builds write, the second
+    // what every old transcript holds.
+    [Fact]
+    public void TheTwoPrefixesAreTheBrandedStrings()
+    {
+        Assert.Equal("**(via Orbweaver)** ", OpenClawSender.MirrorPrefix);
+        Assert.Equal("**(via Claude Buddy)** ", OpenClawSender.LegacyMirrorPrefix);
     }
 
     // Only at the front. Somebody writing the words in the middle of a sentence

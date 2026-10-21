@@ -5,7 +5,7 @@ using Avalonia.Headless.XUnit;
 using Avalonia.Threading;
 using Xunit;
 
-namespace ClaudeBuddy.UiTests;
+namespace Orbweaver.UiTests;
 
 // RemoteControlSessions' three remaining decisions: which sessions the orb scan
 // sees, when a session going busy is worth telling anyone about, and when an

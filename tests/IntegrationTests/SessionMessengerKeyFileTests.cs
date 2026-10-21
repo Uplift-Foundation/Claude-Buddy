@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.IntegrationTests;
+namespace Orbweaver.IntegrationTests;
 
 // SessionMessenger.Live's ReadKey seam against a real key file on disk — the
 // half of the seam that isn't a socket. Marked [ExcludeFromCodeCoverage]

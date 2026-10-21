@@ -1,7 +1,7 @@
 using System;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Covers the exact shape of the request the cloud arm sends.
 //

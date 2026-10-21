@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The decisions behind "what does the speaker read", with no speech engine,
 // no settings file and no subprocess anywhere near them.
@@ -148,7 +148,9 @@ public class SpeechSummaryTextTests
         var instruction = SpeechSummary.Instruction(SpeechSummaryKind.TurnFinished);
 
         Assert.Contains("what's next", instruction);
-        Assert.Contains("one to three", instruction);
+        Assert.Contains("two or three short sentences", instruction);
+        Assert.Contains("at most three sentences", instruction);
+        Assert.Contains("about 40 words in total", instruction);
         Assert.Contains("read aloud", instruction);
         Assert.Contains("No preamble", instruction);
     }
@@ -291,6 +293,7 @@ public class SpeechSummaryTextTests
 // This exists as its own class because it drives the seam, which is
 // process-wide: the disposal below has to put it back or a later class in this
 // assembly gets this one's fake summariser.
+[Collection("SpeechSummarySeam")]
 public class SpeechSummaryOutcomeTests : IDisposable
 {
     public void Dispose() => SpeechSummary.SummarizerForTests = null;
@@ -410,5 +413,319 @@ public class SpeechSummaryOutcomeTests : IDisposable
         Assert.Equal(
             "Fixed the bug and pushed it.",
             await SpeechSummary.SummarizeOrSayWhyAsync("a very long reply", SpeechSummaryKind.TurnFinished));
+    }
+}
+
+// Whose account a summary is billed to (CB-248): the session's own, read off
+// where its transcript lives, and handed to the child as CLAUDE_CONFIG_DIR —
+// named for an extra account, unset for the default one, left alone when
+// nothing could be worked out.
+//
+// Paths are built with Path.Combine rather than written out, so every case
+// means the same thing on both CI legs.
+[Collection("SpeechSummarySeam")]
+public class SpeechSummaryAccountTests : IDisposable
+{
+    public void Dispose() => SpeechSummary.AccountSummarizerForTests = null;
+
+    private static readonly string Home = Path.Combine(Path.GetTempPath(), "cb248-home");
+
+    private static string Transcript(string accountDir, params string[] below) =>
+        Path.Combine(new[] { accountDir, "projects", "K--some-project" }.Concat(below).ToArray());
+
+    private static bool Exists(string _) => true;
+
+    // --- AccountDirFor --------------------------------------------------------
+
+    [Fact]
+    public void ATranscriptsAccountIsTheParentOfItsProjectsDirectory()
+    {
+        var account = Path.Combine(Home, ".claude-work");
+        Assert.Equal(account, SpeechSummary.AccountDirFor(Transcript(account, "abc.jsonl"), Exists));
+    }
+
+    // A subagent's transcript sits two levels further down, under the parent
+    // session's own directory; it still belongs to the same account.
+    [Fact]
+    public void ASubagentsTranscriptBelongsToTheSameAccount()
+    {
+        var account = Path.Combine(Home, ".claude");
+        var path = Transcript(account, "abc", "subagents", "agent-1.jsonl");
+        Assert.Equal(account, SpeechSummary.AccountDirFor(path, Exists));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void NoTranscriptMeansNoAccount(string? path) =>
+        Assert.Null(SpeechSummary.AccountDirFor(path, Exists));
+
+    // Codex keeps its rollouts under ~/.codex/sessions, with no `projects`
+    // above them: that is not a Claude account, and must not be guessed at.
+    [Fact]
+    public void ATranscriptWithNoProjectsAboveItIsNotAClaudeAccount()
+    {
+        var path = Path.Combine(Home, ".codex", "sessions", "2026", "10", "06", "rollout-x.jsonl");
+        Assert.Null(SpeechSummary.AccountDirFor(path, Exists));
+    }
+
+    // A WSL session's Linux path seen from Windows names a root that is not
+    // there. Naming it would start the CLI in a fresh, logged-out context.
+    // The paired positive is the first case above, same shape, root present.
+    [Fact]
+    public void ARootThatDoesNotExistOnThisMachineIsNotUsed()
+    {
+        var account = Path.Combine(Home, ".claude-work");
+        Assert.Null(SpeechSummary.AccountDirFor(Transcript(account, "abc.jsonl"), _ => false));
+    }
+
+    // The default is the real filesystem, so a temp tree on disk is enough to
+    // prove the default arm is Directory.Exists and not something looser.
+    [Fact]
+    public void TheDefaultExistenceCheckIsTheRealFilesystem()
+    {
+        var account = Directory.CreateTempSubdirectory("cb248-account-").FullName;
+        try
+        {
+            Assert.Equal(account, SpeechSummary.AccountDirFor(Transcript(account, "abc.jsonl")));
+        }
+        finally
+        {
+            Directory.Delete(account, recursive: true);
+        }
+
+        Assert.Null(SpeechSummary.AccountDirFor(Transcript(account, "abc.jsonl")));
+    }
+
+    // --- StartInfoFor ---------------------------------------------------------
+
+    [Fact]
+    public void AnExtraAccountIsNamedToTheChild()
+    {
+        var account = Path.Combine(Home, ".claude-work");
+        var startInfo = SpeechSummary.StartInfoFor("claude", accountDir: account, home: Home);
+        Assert.Equal(account, startInfo.Environment["CLAUDE_CONFIG_DIR"]);
+    }
+
+    // Unset, not named and not inherited. Named would be CB-42's different
+    // context; inherited would bill whichever account Buddy was launched under.
+    // Where the test run itself has CLAUDE_CONFIG_DIR set — a developer on a
+    // second account — this is also the proof that an inherited value is
+    // actively removed rather than merely not added.
+    [Theory]
+    [InlineData(".claude")]
+    [InlineData(".claude/")]
+    [InlineData(".CLAUDE")]
+    public void TheDefaultAccountIsUnsetEvenWhenSpelledDifferently(string spelling)
+    {
+        var startInfo = SpeechSummary.StartInfoFor(
+            "claude", accountDir: Path.Combine(Home, spelling), home: Home);
+        Assert.False(startInfo.Environment.ContainsKey("CLAUDE_CONFIG_DIR"));
+    }
+
+    // Unknown leaves the child exactly as it was before this ticket.
+    [Fact]
+    public void AnUnknownAccountLeavesTheInheritedEnvironmentAlone()
+    {
+        var startInfo = SpeechSummary.StartInfoFor("claude", accountDir: null, home: Home);
+        Assert.Equal(
+            Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR"),
+            startInfo.Environment.TryGetValue("CLAUDE_CONFIG_DIR", out var value) ? value : null);
+    }
+
+    // --- the seam carries it --------------------------------------------------
+
+    [Fact]
+    public async Task TheAccountReachesTheSummariser()
+    {
+        string? seen = "not called";
+        SpeechSummary.AccountSummarizerForTests = (_, account) =>
+        {
+            seen = account;
+            return Task.FromResult<string?>("Done.");
+        };
+
+        var account = Path.Combine(Home, ".claude-work");
+        var spoken = await SpeechSummary.SummarizeOrSayWhyAsync("a reply", SpeechSummaryKind.Reply, account);
+
+        Assert.Equal("Done.", spoken);
+        Assert.Equal(account, seen);
+    }
+}
+
+// CB-254: the turn-finished cue is capped by sentence count and length, the
+// reply summary is not.
+[Collection("SpeechSummarySeam")]
+public class SpeechSummaryShortenTests : IDisposable
+{
+    public void Dispose() => SpeechSummary.SummarizerForTests = null;
+
+    private static string S(string t, int sentences = 3, int chars = 400) => SpeechSummary.Shorten(t, sentences, chars);
+
+    [Fact]
+    public void ReplyInstructionStillAsksForTwoOrThreeSentences() =>
+        Assert.Contains("two or three sentences", SpeechSummary.Instruction(SpeechSummaryKind.Reply));
+
+    [Fact]
+    public void TextWithinBothLimitsIsUnchanged() =>
+        Assert.Equal("Done. Next up.", S("  Done. Next up.  "));
+
+    [Fact]
+    public void OnlyTheFirstThreeSentencesAreKept() =>
+        Assert.Equal("A b. C d! E f?", S("A b. C d! E f? G h. I j. K l."));
+
+    [Fact]
+    public void ExactlyThreeSentencesAreKept() =>
+        Assert.Equal("A. B. C.", S("A. B. C."));
+
+    [Fact]
+    public void DecimalsDoNotSplit() =>
+        Assert.Equal("Volume is 0.5 now. Fine. Ok.", S("Volume is 0.5 now. Fine. Ok. Extra."));
+
+    [Fact]
+    public void AbbreviationsDoNotSplit() =>
+        Assert.Equal("Use e.g. a flag, i.e. this one. Next. Last.", S("Use e.g. a flag, i.e. this one. Next. Last. Four."));
+
+    [Fact]
+    public void AnEllipsisDoesNotSplit() =>
+        Assert.Equal("Hmm... still going. Two. Three.", S("Hmm... still going. Two. Three. Four."));
+
+    [Fact]
+    public void ACapMidSentenceCutsAtTheLastSentenceEnd() =>
+        Assert.Equal("One two.", S("One two. Three four five six seven", 3, 25));
+
+    [Fact]
+    public void WithNoSentenceEndInsideTheCapItCutsAtTheLastWord() =>
+        Assert.Equal("alpha beta", S("alpha beta gamma delta", 3, 12));
+
+    [Fact]
+    public void WithNoSpacesAtAllItCutsHardAtTheCap() =>
+        Assert.Equal("abcde", S("abcdefghij", 3, 5));
+
+    [Fact]
+    public void ASixSentenceSummaryOfRealisticLengthComesOutAsThree() =>
+        Assert.Equal("Fixed the bug. Pushed it. Tests pass.",
+            S("Fixed the bug. Pushed it. Tests pass. CI is green. PR is open. Waiting on review. Nothing else."));
+
+    [Fact]
+    public void FileNamesAndVersionsDoNotSplit() =>
+        Assert.Equal("Edited a.cs and v1.2 in 3.5 seconds. Two. Three.", S("Edited a.cs and v1.2 in 3.5 seconds. Two. Three. Four."));
+
+    [Fact]
+    public void TextExactlyAtTheCapIsUnchanged() =>
+        Assert.Equal("abcdefghij", S("abcdefghij", 3, 10));
+
+    [Fact]
+    public void OneCharOverTheCapIsCut() =>
+        Assert.Equal("abcd", S("abcd efghi", 3, 9));
+
+    [Fact]
+    public void AFirstSentenceLongerThanTheCapFallsToTheWordCut() =>
+        Assert.Equal("aaa bbb", S("aaa bbb ccc ddd. Next.", 3, 9));
+
+    [Fact]
+    public void AnyWhitespaceIsAWordBoundary() =>
+        Assert.Equal("aaa", S("aaa\tbbb ccc", 3, 6));
+
+    [Fact]
+    public void TheHardCutDoesNotSplitASurrogatePair() =>
+        Assert.Equal("ab", S("ab\U0001F600cd", 3, 3));
+
+    [Fact]
+    public void UnspacedCjkIsCutHardAtTheCap() =>
+        Assert.Equal("\u3053\u3093\u306B", S("\u3053\u3093\u306B\u3061\u306F", 3, 3));
+
+    [Fact]
+    public async Task AFiveHundredCharReplyIsByteIdentical()
+    {
+        var five = string.Join(" ", Enumerable.Repeat("This is a fairly long reply sentence for the test.", 10));
+        SpeechSummary.SummarizerForTests = _ => Task.FromResult<string?>(five);
+        Assert.Equal(five, await SpeechSummary.SummarizeOrSayWhyAsync("x", SpeechSummaryKind.Reply));
+    }
+
+    [Fact]
+    public void ACloserAfterTheStopStillEndsTheSentence() =>
+        Assert.Equal("He said \"done.\" Then \"next.\" Then \"last.\"",
+            S("He said \"done.\" Then \"next.\" Then \"last.\" Then \"more.\" Then \"x.\""));
+
+    [Fact]
+    public void ABracketCloserAfterTheStopStillEndsTheSentence() =>
+        Assert.Equal("Fixed it (see foo.) Next (bar.) Third (baz.)",
+            S("Fixed it (see foo.) Next (bar.) Third (baz.) Fourth (qux.) Fifth."));
+
+    [Fact]
+    public void ACloserFollowedByMoreTextIsNotASentenceEnd() =>
+        Assert.Equal("a \"bb.\"c dd. Ee. Ff.", S("a \"bb.\"c dd. Ee. Ff. Gg."));
+
+    [Fact]
+    public void InitialsLikeUSDoNotSplit() =>
+        Assert.Equal("Built the U.S. release. Shipped to the U.S. Army. Done.",
+            S("Built the U.S. release. Shipped to the U.S. Army. Done. Extra."));
+
+    [Fact]
+    public void AParenthesisedAbbreviationDoesNotSplit() =>
+        Assert.Equal("Fixed (e.g. this) now. Two. Three.", S("Fixed (e.g. this) now. Two. Three. Four."));
+
+    [Fact]
+    public void ALoneLetterBeforeTheStopStillEndsTheSentence() =>
+        Assert.Equal("Take plan B. Then C. Then D.", S("Take plan B. Then C. Then D. Then E."));
+
+    [Fact]
+    public void ADigitBeforeTheStopIsNotAnInitial() =>
+        Assert.Equal("Version 2. Two. Three.", S("Version 2. Two. Three. Four."));
+
+    [Fact]
+    public void AWordCutNeverEndsMidWordOnTabsOrNewlines() =>
+        Assert.Equal("alpha\tbeta\nalpha", S("alpha\tbeta\nalpha\tbeta\n", 3, 20));
+
+    [Fact]
+    public void AWindowEndingExactlyOnAWordKeepsTheWord() =>
+        Assert.Equal("alpha beta", S("alpha beta gamma", 3, 10));
+
+    [Fact]
+    public void AnUnpunctuatedBulletListIsBoundedByTheCap() =>
+        Assert.Equal("one two", S("one two three four", 3, 9));
+
+    [Fact]
+    public void ASixOrSevenSentenceFixtureInTheRealRangeComesOutAsThree()
+    {
+        var raw = "Fixed the bug in the parser. Added tests for it. The suite is green. "
+            + "Pushed the branch to origin. Opened a pull request. CI is running now. Waiting on review.";
+        Assert.InRange(raw.Length, 150, 470);
+        Assert.Equal("Fixed the bug in the parser. Added tests for it. The suite is green.", S(raw));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void NullOrWhitespaceBecomesEmpty(string? text) =>
+        Assert.Equal("", SpeechSummary.Shorten(text, 3, 400));
+
+    [Fact]
+    public async Task TurnFinishedIsShortenedButReplyIsNot()
+    {
+        var many = string.Join(" ", Enumerable.Repeat("Words go here.", 8));
+        SpeechSummary.SummarizerForTests = _ => Task.FromResult<string?>(many);
+
+        var turn = await SpeechSummary.SummarizeOrSayWhyAsync("x", SpeechSummaryKind.TurnFinished);
+        var reply = await SpeechSummary.SummarizeOrSayWhyAsync("x", SpeechSummaryKind.Reply);
+
+        Assert.Equal("Words go here. Words go here. Words go here.", turn);
+        Assert.Equal(many, reply);
+    }
+
+    [Fact]
+    public async Task FailureSentencesAreNotTouchedForTurnFinished()
+    {
+        SpeechSummary.SummarizerForTests = _ => Task.FromResult<string?>(null);
+        Assert.Equal(SpeechSummary.Unavailable,
+            await SpeechSummary.SummarizeOrSayWhyAsync("x", SpeechSummaryKind.TurnFinished));
+
+        var longMsg = new string('a', 400);
+        SpeechSummary.SummarizerForTests = _ => throw new SpeechSummary.SpokenFailureException(longMsg);
+        Assert.Equal(longMsg,
+            await SpeechSummary.SummarizeOrSayWhyAsync("x", SpeechSummaryKind.TurnFinished));
     }
 }

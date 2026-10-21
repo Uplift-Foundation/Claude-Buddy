@@ -2,7 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The header's third line, against bytes this process did not write.
 //
@@ -22,20 +22,20 @@ namespace ClaudeBuddy.Tests;
 public class ChatHeaderMetaStatusFileTests
 {
     private static readonly string RepoRoot = FindRepoRoot();
-    private static readonly string HookScript = Path.Combine(RepoRoot, "ClaudeBuddyHook.sh");
+    private static readonly string HookScript = Path.Combine(RepoRoot, "OrbweaverHook.sh");
 
     private static string FindRepoRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null)
         {
-            if (File.Exists(Path.Combine(dir.FullName, "ClaudeBuddyHook.sh")))
+            if (File.Exists(Path.Combine(dir.FullName, "OrbweaverHook.sh")))
                 return dir.FullName;
             dir = dir.Parent;
         }
 
         throw new InvalidOperationException(
-            "Could not find ClaudeBuddyHook.sh by walking up from " + AppContext.BaseDirectory);
+            "Could not find OrbweaverHook.sh by walking up from " + AppContext.BaseDirectory);
     }
 
     // The same invocation shape HookScriptShTests uses, down to stripping the
@@ -60,6 +60,8 @@ public class ChatHeaderMetaStatusFileTests
         psi.Environment.Remove("GROK_HOOK_EVENT");
         psi.Environment.Remove("GROK_WORKSPACE_ROOT");
         psi.Environment.Remove("GROK_HOME");
+        psi.Environment.Remove("CLAUDE_CODE_ENTRYPOINT");
+        psi.Environment.Remove("CLAUDE_CODE_HOST_SESSION_ID");
 
         using var process = Process.Start(psi)
             ?? throw new InvalidOperationException("Failed to start bash");
@@ -90,7 +92,7 @@ public class ChatHeaderMetaStatusFileTests
 
     private static SessionStatus StatusAfterHook(string tmpDir, string sessionId)
     {
-        var file = Path.Combine(tmpDir.TrimEnd('/'), "claude_buddy", sessionId + ".txt");
+        var file = Path.Combine(tmpDir.TrimEnd('/'), "orbweaver", sessionId + ".txt");
         Assert.True(File.Exists(file), "the hook wrote no status file at " + file);
 
         return JsonSerializer.Deserialize<SessionStatus>(File.ReadAllText(file))
@@ -270,7 +272,7 @@ public class ChatHeaderMetaStatusFileTests
         psi.ArgumentList.Add("-NoProfile");
         psi.ArgumentList.Add("-NonInteractive");
         psi.ArgumentList.Add("-File");
-        psi.ArgumentList.Add(Path.Combine(RepoRoot, "ClaudeBuddyHook.ps1"));
+        psi.ArgumentList.Add(Path.Combine(RepoRoot, "OrbweaverHook.ps1"));
         psi.ArgumentList.Add("-State");
         psi.ArgumentList.Add("idle");
         psi.ArgumentList.Add("-Agent");

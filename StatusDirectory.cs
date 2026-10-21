@@ -2,14 +2,14 @@ using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 using System.Text;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
-    // Where the hooks leave a session's status file, and where Claude Buddy
+    // Where the hooks leave a session's status file, and where Orbweaver
     // looks for it.
     //
     // **These have to be the same directory, and on a launchd-started Mac they
     // were not.** The hooks run from the user's shell, where `TMPDIR` is set to
-    // the per-user temp directory macOS gives every login session. Claude Buddy
+    // the per-user temp directory macOS gives every login session. Orbweaver
     // asks .NET for `Path.GetTempPath()`, which on Unix reads `TMPDIR` and falls
     // back to `/tmp` when it is unset — and a launchd agent's environment does
     // not carry `TMPDIR` at all. `launchctl print` on the mini listed none, and
@@ -26,7 +26,27 @@ namespace ClaudeBuddy
     // somebody is actually sitting at.
     internal static class StatusDirectory
     {
-        internal const string FolderName = "claude_buddy";
+        internal const string FolderName = Brand.StatusFolderName;
+
+        // The folder the pre-Orbweaver hooks write, and the one the app goes
+        // on watching beside FolderName (CB-255 §1). Claude Code and Codex
+        // read their hooks at session start, so a session that was alive
+        // across the upgrade keeps calling the old script, and the old script
+        // keeps writing here until that session restarts. Not watching it
+        // would be "Orbweaver shows no orbs" for every session that predates
+        // the install — the canonical silent failure, on upgrade day.
+        //
+        // Same root as FolderName, always: the old hook and the new one agree
+        // with the app about TMPDIR exactly as before, and only the last path
+        // segment moved. Goes with the rest of Brand.Legacy in the cleanup
+        // after phase 3, and not sooner than two releases after phase 2.
+        internal const string LegacyFolderName = Brand.Legacy.StatusFolderName;
+
+        // Both folders under one root, new first. Pure, so the "same root"
+        // rule above is a test rather than a promise: Path() and LegacyPath()
+        // are each this, applied to the real root.
+        internal static (string Current, string Legacy) Under(string root) =>
+            (System.IO.Path.Combine(root, FolderName), System.IO.Path.Combine(root, LegacyFolderName));
 
         // The name macOS gives the per-user temp directory, and what `TMPDIR`
         // holds in any ordinary shell. Asked of the C library rather than
@@ -42,9 +62,9 @@ namespace ClaudeBuddy
         // Pure so every arm is a test rather than a launchd job. The order is
         // the point.
         //
-        // `statusRoot` is CLAUDE_BUDDY_STATUS_ROOT, and it exists so a test can
+        // `statusRoot` is ORBWEAVER_STATUS_ROOT, and it exists so a test can
         // get its own status directory **without moving TMPDIR**, which is the
-        // same seam CLAUDE_BUDDY_SETTINGS_DIR and CLAUDE_BUDDY_PROFILE_ROOT
+        // same seam ORBWEAVER_SETTINGS_DIR and ORBWEAVER_PROFILE_ROOT
         // already are for their own directories. Moving TMPDIR looks like the
         // cheaper trick and is not: it is process-wide, so it reaches every
         // other thing in the process that asks the OS for a temp path —
@@ -68,7 +88,7 @@ namespace ClaudeBuddy
         // What it decides is Root, which is pure.
         [ExcludeFromCodeCoverage]
         internal static string Path0() => Root(
-            Environment.GetEnvironmentVariable("CLAUDE_BUDDY_STATUS_ROOT"),
+            BrandEnv.Get(BrandEnv.StatusRoot),
             Environment.GetEnvironmentVariable("TMPDIR"),
             PerUserTemp,
             System.IO.Path.GetTempPath());
@@ -97,6 +117,10 @@ namespace ClaudeBuddy
 
         // The directory itself.
         [ExcludeFromCodeCoverage]
-        internal static string Path() => System.IO.Path.Combine(Path0(), FolderName);
+        internal static string Path() => Under(Path0()).Current;
+
+        // The folder pre-Orbweaver hooks write — see LegacyFolderName.
+        [ExcludeFromCodeCoverage]
+        internal static string LegacyPath() => Under(Path0()).Legacy;
     }
 }

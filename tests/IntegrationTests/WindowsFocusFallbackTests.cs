@@ -1,7 +1,7 @@
 using System.Reflection;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // This has to run on Windows: FocusCore deliberately selects its platform
 // boundary from OperatingSystem rather than from an injected test double. An

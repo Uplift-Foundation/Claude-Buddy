@@ -1,6 +1,6 @@
 using System.Reflection;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Reaching the panel the static entry points are talking to.
 //

@@ -9,7 +9,7 @@ using System.Threading.Tasks;
 using Org.BouncyCastle.Tls;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The half of OpenClawSocket that is a protocol rather than a socket: the
 // RFC 6455 upgrade, the HTTP response reader the media endpoint uses, and the

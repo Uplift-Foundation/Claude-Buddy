@@ -2,7 +2,7 @@ using System;
 using System.Globalization;
 using System.Text.Json;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // How much of a rate-limit window an account has spent, as Claude Code
     // reports it.

@@ -5,11 +5,11 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // The optional high-quality speech engine: a neural TTS model (Kokoro) run by
     // a separate downloaded process. See TextToSpeech, which routes to it when the
-    // user has opted in, and tools/ClaudeBuddySpeech for the engine itself.
+    // user has opted in, and tools/OrbweaverSpeech for the engine itself.
     //
     // Downloaded rather than shipped because the engine's dependencies weigh
     // ~82MB on disk, 66MB of it phoneme lexicons for languages this never uses.
@@ -25,7 +25,7 @@ namespace ClaudeBuddy
     internal static class NeuralSpeech
     {
         // Read from this assembly rather than written down here, so it cannot
-        // drift from ClaudeBuddy.csproj's <Version> — which the README calls the
+        // drift from Orbweaver.csproj's <Version> — which the README calls the
         // single source of truth for the shipped version, and which the packaging
         // scripts and the release workflow all parse out of that one element.
         //
@@ -85,9 +85,9 @@ namespace ClaudeBuddy
 
         internal static string EngineUrl =>
             "https://github.com/Uplift-Foundation/Claude-Buddy/releases/download/"
-            + $"v{EngineVersion}/ClaudeBuddySpeech-{EngineVersion}-{EngineRid}.zip";
+            + $"v{EngineVersion}/{Brand.SpeechEngineName}-{EngineVersion}-{EngineRid}.zip";
 
-        internal static string Root => Path.Combine(ClaudeBuddySettings.Directory, "speech-engine");
+        internal static string Root => Path.Combine(OrbweaverSettings.Directory, "speech-engine");
 
         // Voices the user added themselves, kept deliberately *outside* Root: an
         // engine upgrade deletes and replaces the whole versioned directory, so
@@ -111,10 +111,20 @@ namespace ClaudeBuddy
         // prefix falls through to the American English list and shows up
         // normally.
         public static string UserVoicesDirectory =>
-            Path.Combine(ClaudeBuddySettings.Directory, "voices");
+            Path.Combine(OrbweaverSettings.Directory, "voices");
         internal static string ModelPath => Path.Combine(Root, "kokoro-fp16.onnx");
-        internal static string EngineExeName =>
-            OperatingSystem.IsWindows() ? "ClaudeBuddySpeech.exe" : "ClaudeBuddySpeech";
+        internal static string EngineExeName => ExeName(Brand.SpeechEngineName);
+
+        // What every engine downloaded before phase 3 (CB-256) is called. Only
+        // NewestOtherEngine looks for it: an engine already on disk keeps
+        // speaking under its old name while this build's own engine downloads,
+        // or when that download fails. The download itself never accepts it —
+        // a release that ships this build's version under the old stem is a
+        // broken release, and saying so beats quietly installing it.
+        internal static string LegacyEngineExeName => ExeName(Brand.Legacy.SpeechEngineName);
+
+        private static string ExeName(string stem) =>
+            OperatingSystem.IsWindows() ? $"{stem}.exe" : stem;
 
         internal static string EnginePath => Path.Combine(Root, EngineVersion, EngineExeName);
 
@@ -196,20 +206,31 @@ namespace ClaudeBuddy
             {
                 if (!Directory.Exists(Root)) return null;
 
+                // Either name, the current one preferred within a directory.
+                // Newest version still decides first: a legacy-named engine one
+                // release back beats a current-named one two releases back.
                 return Directory.EnumerateDirectories(Root)
-                    .Where(directory => File.Exists(Path.Combine(directory, EngineExeName)))
-                    .OrderByDescending(directory => Path.GetFileName(directory), VersionOrder)
-                    .Select(directory => Path.Combine(directory, EngineExeName))
+                    .Select(directory => (directory, exe: EngineIn(directory)))
+                    .Where(found => found.exe is not null)
+                    .OrderByDescending(found => Path.GetFileName(found.directory), VersionOrder)
+                    .Select(found => found.exe)
                     .FirstOrDefault();
             }
             catch (Exception ex)
             {
                 // A directory we cannot enumerate is the same as no fallback:
                 // speaking degrades, it does not fail.
-                Console.Error.WriteLine($"Claude Buddy: couldn't scan for a fallback engine: {ex.Message}");
+                Console.Error.WriteLine($"{Brand.DisplayName}: couldn't scan for a fallback engine: {ex.Message}");
                 return null;
             }
         }
+
+        // The engine executable in one version directory, or null: the
+        // current name if it is there, else the pre-phase-3 one.
+        private static string? EngineIn(string directory) =>
+            new[] { EngineExeName, LegacyEngineExeName }
+                .Select(name => Path.Combine(directory, name))
+                .FirstOrDefault(File.Exists);
 
         // Newest by version number, not by string. An ordinal sort puts
         // "0.10.0-beta" *below* "0.2.0-beta", which would pick a year-old engine
@@ -285,7 +306,7 @@ namespace ClaudeBuddy
         // What TextToSpeech asks before routing anything here. Usable rather than
         // Installed, so a version bump costs an older engine for a few minutes
         // instead of costing the user their voice.
-        public static bool Available => Usable && ClaudeBuddySettings.NeuralVoiceEnabled;
+        public static bool Available => Usable && OrbweaverSettings.NeuralVoiceEnabled;
 
         public static string DefaultVoiceName => "af_heart";
 
@@ -340,7 +361,7 @@ namespace ClaudeBuddy
 
                     // Extract beside the target and rename, the same
                     // crash-safety the model download and settings writes use: a
-                    // half-extracted directory containing ClaudeBuddySpeech.exe
+                    // half-extracted directory containing OrbweaverSpeech.exe
                     // would make Installed true while the engine is unusable.
                     var staging = target + ".tmp";
                     if (Directory.Exists(staging)) Directory.Delete(staging, recursive: true);
@@ -432,13 +453,13 @@ namespace ClaudeBuddy
                     catch (Exception ex)
                     {
                         Console.Error.WriteLine(
-                            $"Claude Buddy: couldn't remove the old speech engine {name}: {ex.Message}");
+                            $"{Brand.DisplayName}: couldn't remove the old speech engine {name}: {ex.Message}");
                     }
                 }
             }
             catch (Exception ex)
             {
-                Console.Error.WriteLine($"Claude Buddy: couldn't tidy old speech engines: {ex.Message}");
+                Console.Error.WriteLine($"{Brand.DisplayName}: couldn't tidy old speech engines: {ex.Message}");
             }
         }
 
@@ -462,7 +483,7 @@ namespace ClaudeBuddy
         [ExcludeFromCodeCoverage]
         public static Task EnsureCurrentAsync()
         {
-            if (!ClaudeBuddySettings.NeuralVoiceEnabled) return Task.CompletedTask;
+            if (!OrbweaverSettings.NeuralVoiceEnabled) return Task.CompletedTask;
 
             // Already current: nothing to fetch, but this is the moment to
             // reclaim anything a previous version left behind. Without this the
@@ -482,7 +503,7 @@ namespace ClaudeBuddy
                 if (task.IsFaulted)
                 {
                     Console.Error.WriteLine(
-                        "Claude Buddy: couldn't update the speech engine for this version; "
+                        $"{Brand.DisplayName}: couldn't update the speech engine for this version; "
                         + $"still using an older one. {task.Exception?.GetBaseException().Message}");
                 }
             }, TaskScheduler.Default);
@@ -545,7 +566,7 @@ namespace ClaudeBuddy
             }
             catch (Exception ex)
             {
-                Console.Error.WriteLine($"Claude Buddy: couldn't list neural voices: {ex.Message}");
+                Console.Error.WriteLine($"{Brand.DisplayName}: couldn't list neural voices: {ex.Message}");
             }
 
             return voices;
@@ -558,7 +579,7 @@ namespace ClaudeBuddy
         // overload is the one Start calls, and it is where the Speech level
         // is read — the other mutant QA planted was that read replaced with 1.
         internal static ProcessStartInfo StartInfoFor(string engine, string? voice, double? rate) =>
-            StartInfoFor(engine, voice, rate, ClaudeBuddySettings.SpeechVolume);
+            StartInfoFor(engine, voice, rate, OrbweaverSettings.SpeechVolume);
 
         internal static ProcessStartInfo StartInfoFor(string engine, string? voice, double? rate, double volume)
         {
@@ -640,7 +661,7 @@ namespace ClaudeBuddy
             {
                 if (IsWorthReporting(e.Data))
                 {
-                    Console.Error.WriteLine($"Claude Buddy: speech engine: {e.Data}");
+                    Console.Error.WriteLine($"{Brand.DisplayName}: speech engine: {e.Data}");
                 }
             };
 
@@ -656,7 +677,7 @@ namespace ClaudeBuddy
             }
             catch (Exception ex)
             {
-                Console.Error.WriteLine($"Claude Buddy: couldn't start the speech engine: {ex.Message}");
+                Console.Error.WriteLine($"{Brand.DisplayName}: couldn't start the speech engine: {ex.Message}");
                 try { process.Dispose(); } catch { }
                 return null;
             }

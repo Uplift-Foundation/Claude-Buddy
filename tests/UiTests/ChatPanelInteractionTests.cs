@@ -11,7 +11,7 @@ using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Everything on the panel that is a click or a keystroke rather than a
 // rendering decision: the heartbeat chip's own beat, the speak button's two

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Wires Claude Buddy into every agent CLI on this machine.
+# Wires Orbweaver into every agent CLI on this machine.
 #
 # The one thing an install should run. Orbs appear because a CLI calls the hook,
 # so an app with no hooks wired doesn't error — it sits there showing nothing —
@@ -23,7 +23,7 @@
 # already runs: build-macos-app.sh's --install flag and the DMG's
 # "Install Hooks.command" both exec this file (see either one's header), and
 # a bare `.app` dragged out of a DMG has no other installer step to hang this
-# on. Windows takes a different route — see tools/ClaudeBuddy.iss — because
+# on. Windows takes a different route — see tools/Orbweaver.iss — because
 # it already has a real installer with a real install/uninstall lifecycle,
 # which is a better home for this than install-hooks.ps1's own repair-anytime
 # entry point.
@@ -53,29 +53,67 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 KEEPALIVE_BUNDLE_ID="io.github.wtvamp.claudebuddy"
 KEEPALIVE_THROTTLE_SECONDS=60
 
-# Test seams, same pattern as CLAUDE_BUDDY_SETTINGS_DIR elsewhere in this repo:
+# CB-256: ORBWEAVER_<name>, falling back to the pre-rename CLAUDE_BUDDY_<name>.
+brand_env() { local n="ORBWEAVER_$1" l="CLAUDE_BUDDY_$1"; printf '%s' "${!n:-${!l:-}}"; }
+
+# Test seams, same pattern as ORBWEAVER_SETTINGS_DIR elsewhere in this repo:
 # without them, exercising this from tests/IntegrationTests would mean writing
 # into a developer's real ~/Library/LaunchAgents and calling real launchctl.
+# Each is read through brand_env, so the CLAUDE_BUDDY_ spelling a developer
+# may still have exported keeps working, and the new one wins when both are.
 keepalive_launchagents_dir() {
-    printf '%s' "${CLAUDE_BUDDY_LAUNCHAGENTS_DIR:-$HOME/Library/LaunchAgents}"
+    local dir
+    dir="$(brand_env LAUNCHAGENTS_DIR)"
+    printf '%s' "${dir:-$HOME/Library/LaunchAgents}"
 }
 
+# Whether launchctl is to be left alone (the tests' dry run).
+keepalive_dry_run() { [[ "$(brand_env KEEPALIVE_DRY_RUN)" == 1 ]]; }
+
+# The settings.json the app will read. CB-255 moved the data folder from
+# Application Support/ClaudeBuddy to Application Support/Orbweaver, and the app
+# moves it on its first launch — so on upgrade day this script can run before
+# that launch ever has, with the user's settings still under the old name.
+# Reading only the new path then would read "no settings", take Serve on
+# launch as off, and tear down a keep-alive the user had opted in to. So: the
+# new folder's file if it exists (it wins, as it does in the app's own
+# migration), the legacy folder's otherwise. The override, when set, is the
+# whole answer — it is a test seam and must never fall through to a real
+# folder.
 keepalive_settings_path() {
-    printf '%s' "${CLAUDE_BUDDY_SETTINGS_DIR:-$HOME/Library/Application Support/ClaudeBuddy}/settings.json"
+    local override
+    override="$(brand_env SETTINGS_DIR)"
+    if [[ -n "$override" ]]; then
+        printf '%s' "$override/settings.json"
+        return
+    fi
+    local support="$HOME/Library/Application Support"
+    if [[ ! -f "$support/Orbweaver/settings.json" && -f "$support/ClaudeBuddy/settings.json" ]]; then
+        printf '%s' "$support/ClaudeBuddy/settings.json"
+    else
+        printf '%s' "$support/Orbweaver/settings.json"
+    fi
 }
 
 # Colon-separated .app bundles to look for an installed executable in,
 # checked in order. Overridable so tests can point this at a fabricated
 # bundle (or a directory guaranteed not to exist) instead of depending on
 # whatever happens to be installed on the machine running the suite.
+#
+# Orbweaver.app first, then the pre-CB-255 Claude Buddy.app, so a machine
+# that has not been upgraded yet still gets its keep-alive — and one that has
+# both (a DMG drag that left the old bundle behind) points launchd at the new
+# one.
 keepalive_app_candidates() {
-    printf '%s' "${CLAUDE_BUDDY_KEEPALIVE_APP_CANDIDATES:-/Applications/Claude Buddy.app:$HOME/Applications/Claude Buddy.app}"
+    local candidates
+    candidates="$(brand_env KEEPALIVE_APP_CANDIDATES)"
+    printf '%s' "${candidates:-/Applications/Orbweaver.app:$HOME/Applications/Orbweaver.app:/Applications/Claude Buddy.app:$HOME/Applications/Claude Buddy.app}"
 }
 
 # True (via grep's exit code) only when settings.json exists and its
 # remoteControlServeOnLaunch key is true. A missing file (fresh install, no
 # settings written yet) or an explicit false both read as "not enabled" --
-# the same value the app itself would read via ClaudeBuddySettings.
+# the same value the app itself would read via OrbweaverSettings.
 serve_on_launch_enabled() {
     local settings
     settings="$(keepalive_settings_path)"
@@ -91,17 +129,27 @@ serve_on_launch_enabled() {
 # unusual. Falls back to the well-known install locations otherwise (the
 # case when this runs from tools/ in a repo checkout, e.g. a manual
 # `install-hooks.sh --keepalive-only`).
+#
+# CB-256 renamed the executable from ClaudeBuddy to Orbweaver. The bundled arm
+# only ever names the new one: a copy of this script sits in the bundle it
+# ships with, which is a phase-3 bundle by construction. The candidate loop
+# tries both per bundle, new name first, because a checkout's copy of this
+# script can meet an installed phase-2 Orbweaver.app (Contents/MacOS/ClaudeBuddy)
+# or a pre-CB-255 Claude Buddy.app, and finding nothing there would skip a
+# keep-alive the user opted in to.
 resolve_app_executable() {
     if [[ "$(basename "$HERE")" == "Resources" && "$(basename "$(dirname "$HERE")")" == "Contents" ]]; then
-        local bundled_exe="$(dirname "$HERE")/MacOS/ClaudeBuddy"
+        local bundled_exe="$(dirname "$HERE")/MacOS/Orbweaver"
         [[ -x "$bundled_exe" ]] && { printf '%s' "$bundled_exe"; return 0; }
     fi
 
     local IFS=':'
-    local app
+    local app name
     for app in $(keepalive_app_candidates); do
-        local exe="$app/Contents/MacOS/ClaudeBuddy"
-        [[ -x "$exe" ]] && { printf '%s' "$exe"; return 0; }
+        for name in Orbweaver ClaudeBuddy; do
+            local exe="$app/Contents/MacOS/$name"
+            [[ -x "$exe" ]] && { printf '%s' "$exe"; return 0; }
+        done
     done
     return 1
 }
@@ -132,9 +180,9 @@ keepalive_plist_content() {
     <key>ProcessType</key>
     <string>Interactive</string>
     <key>StandardOutPath</key>
-    <string>$HOME/Library/Logs/ClaudeBuddy/keepalive.log</string>
+    <string>$HOME/Library/Logs/Orbweaver/keepalive.log</string>
     <key>StandardErrorPath</key>
-    <string>$HOME/Library/Logs/ClaudeBuddy/keepalive.log</string>
+    <string>$HOME/Library/Logs/Orbweaver/keepalive.log</string>
 </dict>
 </plist>
 PLIST
@@ -143,7 +191,7 @@ PLIST
 remove_keepalive_agent() {
     local plist="$1"
     [[ -f "$plist" ]] || return 0
-    if [[ "${CLAUDE_BUDDY_KEEPALIVE_DRY_RUN:-0}" -ne 1 ]]; then
+    if ! keepalive_dry_run; then
         launchctl unload "$plist" >/dev/null 2>&1 || true
     fi
     rm -f "$plist"
@@ -177,14 +225,14 @@ reconcile_keepalive() {
 
     local exe
     if ! exe="$(resolve_app_executable)"; then
-        echo "=== Crash keep-alive: couldn't find an installed Claude Buddy.app, skipping."
+        echo "=== Crash keep-alive: couldn't find an installed Orbweaver.app, skipping."
         return 0
     fi
 
     mkdir -p "$dir"
     keepalive_plist_content "$exe" > "$plist"
 
-    if [[ "${CLAUDE_BUDDY_KEEPALIVE_DRY_RUN:-0}" -eq 1 ]]; then
+    if keepalive_dry_run; then
         echo "=== Crash keep-alive: wrote $plist (dry run, not loaded)"
         return 0
     fi
@@ -324,7 +372,7 @@ fi
 
 if [[ $wired -eq 0 ]]; then
     echo "Neither Claude Code, Codex, nor Grok Build was found, so nothing was wired."
-    echo "Claude Buddy will show no orbs until one of them is installed."
+    echo "Orbweaver will show no orbs until one of them is installed."
     exit 0
 fi
 

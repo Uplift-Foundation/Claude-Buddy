@@ -6,7 +6,7 @@ using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // The menu-bar / notification-area presence: one status item whose icon
     // reflects the most urgent state across all sessions (waiting beats
@@ -69,7 +69,7 @@ namespace ClaudeBuddy
             _tray = new TrayIcon
             {
                 Icon = LoadIcon("idle"),
-                ToolTipText = "Claude Buddy",
+                ToolTipText = Brand.DisplayName,
                 IsVisible = true,
                 Menu = _menu
             };
@@ -265,7 +265,7 @@ namespace ClaudeBuddy
             // Hidden entirely unless the feature is on, so the menu does not
             // grow a line about machines for the majority who have not asked
             // for any.
-            if (ClaudeBuddySettings.PeerLinkEnabled)
+            if (OrbweaverSettings.PeerLinkEnabled)
             {
                 var remoteItem = new NativeMenuItem("Connect to other machines");
                 remoteItem.Click += (_, _) => ConnectToOtherMachines();
@@ -282,7 +282,7 @@ namespace ClaudeBuddy
             settingsItem.Click += (_, _) => OpenSettings();
             menu.Add(settingsItem);
 
-            var quitItem = new NativeMenuItem("Quit Claude Buddy");
+            var quitItem = new NativeMenuItem($"Quit {Brand.DisplayName}");
             quitItem.Click += (_, _) => QuitApp();
             menu.Add(quitItem);
         }
@@ -336,7 +336,7 @@ namespace ClaudeBuddy
             // QA (CB-167) round 3, finding 5: the ChimePlayer.StopAll call
             // that used to live here moved to App.OnFrameworkInitializationCompleted's
             // desktop.Exit handler, because this Shutdown was only ever the
-            // tray menu's own Quit — the orb menu's "Exit Claude Buddy" and
+            // tray menu's own Quit — the orb menu's "Exit Orbweaver" and
             // the OS's Cmd-Q both call desktop.Shutdown() directly and never
             // ran through here, so either one used to leave a chime
             // orphaned. Exit fires for every path that ends in
@@ -374,12 +374,12 @@ namespace ClaudeBuddy
 
         internal static string Summary(int total, int waiting, int generating)
         {
-            if (total == 0) return "Claude Buddy — no sessions";
+            if (total == 0) return $"{Brand.DisplayName} — no sessions";
 
             var parts = new List<string> { total == 1 ? "1 session" : $"{total} sessions" };
             if (waiting > 0) parts.Add($"{waiting} needs you");
             if (generating > 0) parts.Add($"{generating} working");
-            return "Claude Buddy — " + string.Join(", ", parts);
+            return $"{Brand.DisplayName} — " + string.Join(", ", parts);
         }
 
         // An agent's name within its team if it has one, else the chat name if
@@ -436,7 +436,7 @@ namespace ClaudeBuddy
 
             var icon = Tinted(state)
                        ?? new WindowIcon(AssetLoader.Open(
-                           new Uri($"avares://ClaudeBuddy/Assets/tray-{state}.png")));
+                           new Uri($"avares://{Brand.AssemblyName}/Assets/tray-{state}.png")));
             _iconCache[state] = icon;
             return icon;
         }
@@ -472,7 +472,7 @@ namespace ClaudeBuddy
             try
             {
                 using var source = new Bitmap(AssetLoader.Open(
-                    new Uri($"avares://ClaudeBuddy/Assets/tray-{state}.png")));
+                    new Uri($"avares://{Brand.AssemblyName}/Assets/tray-{state}.png")));
 
                 // 64x64, which is what make-icons.py renders so the menu bar has
                 // retina pixels to downsample from.

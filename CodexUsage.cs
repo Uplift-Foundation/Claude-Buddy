@@ -6,7 +6,7 @@ using System.Linq;
 using System.Globalization;
 using System.Text.Json;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Turning Codex's rate_limits snapshot into AccountUsage, and nothing else.
     //
@@ -381,12 +381,12 @@ namespace ClaudeBuddy
 
         public IReadOnlyList<AccountUsage> Read()
         {
-            if (!ClaudeBuddySettings.CodexAccountUsageEnabled)
+            if (!OrbweaverSettings.CodexAccountUsageEnabled)
                 return Array.Empty<AccountUsage>();
 
             var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             return ReadFrom(
-                CodexUsageAccounts.Homes(home, ClaudeBuddySettings.CodexHomes),
+                CodexUsageAccounts.Homes(home, OrbweaverSettings.CodexHomes),
                 DateTimeOffset.UtcNow);
         }
 

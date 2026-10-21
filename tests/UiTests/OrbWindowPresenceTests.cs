@@ -10,7 +10,7 @@ using Avalonia.Headless.XUnit;
 using Avalonia.Threading;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Presence on the orb: the third axis, beside identity and state. A parked
 // background job or an orphaned teammate is dimmed and held still, and it wears
@@ -24,7 +24,7 @@ namespace ClaudeBuddy.Tests;
 // needed to tell them apart was parsed, and then discarded.
 //
 // [Collection("Settings")] because constructing an OrbWindow reads a colour
-// setting in a field initializer, and ClaudeBuddySettings is a process-wide
+// setting in a field initializer, and OrbweaverSettings is a process-wide
 // static — see tests/UiTests/SettingsCollection.cs.
 [Collection("Settings")]
 public class OrbWindowPresenceTests
@@ -406,6 +406,29 @@ public class OrbWindowPresenceTests
         Assert.True(orb.FindControl<MenuItem>("EndSessionItem")!.IsVisible);
     }
 
+    // CB-265. Claude Desktop owns the process, so ending it from here would
+    // kill a session inside someone else's app; Dismiss still clears the file.
+    [AvaloniaFact]
+    public void AClaudeDesktopSessionIsOfferedDismissButNotEnd()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        var status = Status();
+        status.Entrypoint = SessionStatus.DesktopEntrypoint;
+        orb.UpdateFrom(status);
+
+        Assert.True(orb.FindControl<MenuItem>("DismissItem")!.IsVisible);
+        Assert.False(orb.FindControl<MenuItem>("EndSessionItem")!.IsVisible);
+
+        // Control: the same status under "cli" offers both.
+        var twin = new OrbWindow(Guid.NewGuid().ToString());
+        var cli = Status();
+        cli.Entrypoint = "cli";
+        twin.UpdateFrom(cli);
+
+        Assert.True(twin.FindControl<MenuItem>("DismissItem")!.IsVisible);
+        Assert.True(twin.FindControl<MenuItem>("EndSessionItem")!.IsVisible);
+    }
+
     // A hook older than the session_pid field. There is nothing to signal, so
     // End is not offered — but the file is still there to be dismissed.
     [AvaloniaFact]
@@ -711,7 +734,7 @@ public class OrbWindowPresenceTests
     [AvaloniaTheory]
     [InlineData(SessionSource.OpenClaw,
         "OpenClaw controls this session's state",
-        "This session is managed by OpenClaw, so Claude Buddy cannot reset its state.")]
+        $"This session is managed by OpenClaw, so {Brand.DisplayName} cannot reset its state.")]
     [InlineData(SessionSource.RemoteControl,
         "This session's state is controlled on its other machine",
         "This session is managed on its other machine, so it must be reset there.")]

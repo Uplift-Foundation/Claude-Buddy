@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Covers reading the roster: the envelope, the filter, the state, the link, and
 // the two ways an empty answer can be a bug rather than an answer.
@@ -238,6 +238,12 @@ public class ClaudeCloudRosterTests
     [InlineData("bridge", "archived", false)]
     [InlineData("something_new", "running", false)]
     [InlineData("ANTHROPIC_CLOUD", "running", false)]
+    // CB-266: the row a Remote Control-bridged Claude Desktop chat shows up as
+    // on the roster, measured as environment_kind "bridge" and connected. It is
+    // the one the Desktop orb already represents, so Keep must never promote it
+    // to an orb of its own whatever status word it carries.
+    [InlineData("bridge", "connected", false)]
+    [InlineData("bridge", "idle", false)]
     public void KeepIsCloudAndNotArchived(string kind, string status, bool kept)
     {
         var page = ClaudeCloudRoster.ParsePage(Envelope(new[] { Row("session_a", kind, status) }));

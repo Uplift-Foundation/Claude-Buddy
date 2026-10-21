@@ -2,7 +2,7 @@ using System.IO;
 using System.Linq;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // ClaudeConfigRoots.All — every Claude Code account on this machine.
 //
@@ -29,7 +29,7 @@ public class ClaudeConfigRootsTests
     [Fact]
     public void AConfiguredAccountIsIncluded()
     {
-        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-board");
+        OrbweaverSettings.AddClaudeCodeProfileDir(".claude-board");
         try
         {
             var roots = ClaudeConfigRoots.All(Home);
@@ -38,7 +38,7 @@ public class ClaudeConfigRootsTests
         }
         finally
         {
-            ClaudeBuddySettings.RemoveClaudeCodeProfileDir(".claude-board");
+            OrbweaverSettings.RemoveClaudeCodeProfileDir(".claude-board");
         }
     }
 
@@ -53,7 +53,7 @@ public class ClaudeConfigRootsTests
     [InlineData("   ")]
     public void ABlankEntryIsSkipped(string blank)
     {
-        ClaudeBuddySettings.AddClaudeCodeProfileDir(blank);
+        OrbweaverSettings.AddClaudeCodeProfileDir(blank);
         try
         {
             var roots = ClaudeConfigRoots.All(Home);
@@ -63,14 +63,14 @@ public class ClaudeConfigRootsTests
         }
         finally
         {
-            ClaudeBuddySettings.RemoveClaudeCodeProfileDir(blank);
+            OrbweaverSettings.RemoveClaudeCodeProfileDir(blank);
         }
     }
 
     [Fact]
     public void SurroundingSpaceIsTrimmedRatherThanTakenLiterally()
     {
-        ClaudeBuddySettings.AddClaudeCodeProfileDir("  .claude-board  ");
+        OrbweaverSettings.AddClaudeCodeProfileDir("  .claude-board  ");
         try
         {
             var roots = ClaudeConfigRoots.All(Home);
@@ -79,7 +79,7 @@ public class ClaudeConfigRootsTests
         }
         finally
         {
-            ClaudeBuddySettings.RemoveClaudeCodeProfileDir("  .claude-board  ");
+            OrbweaverSettings.RemoveClaudeCodeProfileDir("  .claude-board  ");
         }
     }
 
@@ -90,7 +90,7 @@ public class ClaudeConfigRootsTests
     [Fact]
     public void TheDefaultAccountIsNotAskedTwice()
     {
-        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude");
+        OrbweaverSettings.AddClaudeCodeProfileDir(".claude");
         try
         {
             var roots = ClaudeConfigRoots.All(Home);
@@ -99,15 +99,15 @@ public class ClaudeConfigRootsTests
         }
         finally
         {
-            ClaudeBuddySettings.RemoveClaudeCodeProfileDir(".claude");
+            OrbweaverSettings.RemoveClaudeCodeProfileDir(".claude");
         }
     }
 
     [Fact]
     public void TwoAccountsBothAppearInOrder()
     {
-        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-board");
-        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-work");
+        OrbweaverSettings.AddClaudeCodeProfileDir(".claude-board");
+        OrbweaverSettings.AddClaudeCodeProfileDir(".claude-work");
         try
         {
             var roots = ClaudeConfigRoots.All(Home);
@@ -121,8 +121,32 @@ public class ClaudeConfigRootsTests
         }
         finally
         {
-            ClaudeBuddySettings.RemoveClaudeCodeProfileDir(".claude-board");
-            ClaudeBuddySettings.RemoveClaudeCodeProfileDir(".claude-work");
+            OrbweaverSettings.RemoveClaudeCodeProfileDir(".claude-board");
+            OrbweaverSettings.RemoveClaudeCodeProfileDir(".claude-work");
         }
     }
+
+    // RootOfTranscript: which account a transcript belongs to, read off its path
+    // (CB-266). Pure, so it needs no settings and the Settings collection is only
+    // incidental to these.
+    [Theory]
+    [InlineData("/home/w/.claude/projects/-home-w-code/abc.jsonl", "/home/w/.claude")]
+    [InlineData("/home/w/.claude-board/projects/-x/abc.jsonl", "/home/w/.claude-board")]
+    [InlineData("C:\\Users\\w\\.claude\\projects\\C--code\\abc.jsonl", "C:\\Users\\w\\.claude")]
+    // A slug that is itself called projects does not shift the answer.
+    [InlineData("/home/w/.claude/projects/projects/abc.jsonl", "/home/w/.claude")]
+    [InlineData("/projects/x/abc.jsonl", "/")]
+    public void TheRootIsTheParentOfTheProjectsSegment(string path, string expected) =>
+        Assert.Equal(expected, ClaudeConfigRoots.RootOfTranscript(path));
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("/home/w/.claude/sessions/abc.jsonl")]
+    // "projects" as the file name, or as the first segment with nothing before it.
+    [InlineData("/home/w/.claude/projects")]
+    [InlineData("projects/x/abc.jsonl")]
+    public void APathWithNoUsableProjectsSegmentIsUnknown(string? path) =>
+        Assert.Null(ClaudeConfigRoots.RootOfTranscript(path));
 }

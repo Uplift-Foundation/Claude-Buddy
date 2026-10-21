@@ -3,7 +3,7 @@ using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Text;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // What the speaker reads: the whole reply, or two or three sentences of it.
     //
@@ -143,7 +143,7 @@ namespace ClaudeBuddy
             // "what's next" is what makes it worth listening to over a
             // Glass sound — it can tell you whether you need to come back.
             (kind == SpeechSummaryKind.TurnFinished
-                ? "Summarise what was just done and what's next, in one to three sentences, "
+                ? "Summarise what was just done and what's next, in two or three short sentences, about 40 words in total, at most three sentences, "
                     + "for someone who will hear it read aloud rather than read it. "
                     + "Say what changed and what to expect next, not what the text is about. "
                 : "Summarise the assistant reply below in two or three sentences, "
@@ -234,6 +234,88 @@ namespace ClaudeBuddy
             return result.Length == 0 ? null : result;
         }
 
+        // The prompt already said "one to three sentences" and Haiku wrote six or
+        // seven short ones anyway (250-470 chars in the bridge log), so the count
+        // is enforced here as well as asked for.
+        internal const int TurnFinishedMaxSentences = 3;
+        internal const int TurnFinishedMaxChars = 400;
+
+        // Dotted words that end in a full stop without ending a sentence.
+        private static readonly HashSet<string> Abbreviations =
+            new(StringComparer.OrdinalIgnoreCase) { "e.g", "i.e", "vs", "mr", "mrs", "ms", "dr", "approx" };
+
+        // Closing quotes and brackets that may sit between a stop and the
+        // whitespace after it: He said "done." Then...
+        private const string Closers = "\"')]}\u201D\u2019\u00BB";
+
+        // Where each sentence ends: `.`, `!` or `?` followed by whitespace or the
+        // end of the text. "0.5" has no whitespace after its dot, an ellipsis is
+        // skipped (a trailing "..." is a pause, not a stop), and the
+        // abbreviations above are skipped.
+        internal static List<int> SentenceEnds(string t)
+        {
+            var ends = new List<int>();
+            for (var i = 0; i < t.Length; i++)
+            {
+                if (t[i] is not ('.' or '!' or '?')) continue;
+
+                // The stop counts only when whitespace or the end follows it,
+                // after any closing quotes or brackets.
+                var after = i + 1;
+                while (after < t.Length && Closers.Contains(t[after])) after++;
+                if (after < t.Length && !char.IsWhiteSpace(t[after])) continue;
+
+                if (t[i] == '.' && i > 0 && t[i - 1] == '.') continue;
+                if (t[i] == '.')
+                {
+                    var start = i;
+                    while (start > 0 && !char.IsWhiteSpace(t[start - 1])) start--;
+                    var word = t[start..i].TrimStart('(', '"', '\'', '[', '\u201C', '\u2018');
+                    if (Abbreviations.Contains(word) || IsInitials(word)) continue;
+                }
+                ends.Add(after - 1);
+            }
+            return ends;
+        }
+
+        // "U.S", "a.m" — dotted single letters are initials. A lone letter is not:
+        // "plan B." and "step A." really do end sentences, and a summary naming a
+        // person by initial is rarer than either.
+        private static bool IsInitials(string word)
+        {
+            if (word.Length < 3) return false;
+            for (var i = 0; i < word.Length; i++)
+                if (i % 2 == 0 ? !char.IsLetter(word[i]) : word[i] != '.') return false;
+            return word.Length % 2 == 1;
+        }
+
+        // Keep at most `maxSentences` sentences, then at most `maxChars`
+        // characters: cut at the last sentence end inside the cap, else the last
+        // word boundary, else hard (one unbroken token). Text that already fits
+        // both limits comes back trimmed but otherwise unchanged.
+        internal static string Shorten(string? text, int maxSentences, int maxChars)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return "";
+            var t = text.Trim();
+
+            var ends = SentenceEnds(t);
+            if (ends.Count > maxSentences) t = t[..(ends[maxSentences - 1] + 1)];
+            if (t.Length <= maxChars) return t;
+
+            var lastEnd = ends.LastOrDefault(e => e < maxChars, -1);
+            if (lastEnd >= 0) return t[..(lastEnd + 1)];
+
+            // Any whitespace is a word boundary, not only a space. The hard cut
+            // steps back over a split surrogate pair rather than leave half an emoji.
+            var window = t[..maxChars];
+            if (char.IsWhiteSpace(t[maxChars])) return window.TrimEnd();
+            var space = -1;
+            for (var i = window.Length - 1; i > 0; i--)
+                if (char.IsWhiteSpace(window[i])) { space = i; break; }
+            if (space > 0) return window[..space].TrimEnd();
+            return char.IsHighSurrogate(window[^1]) ? window[..^1] : window;
+        }
+
         // What the speaker says when the summary could not be produced.
         //
         // Deliberately not "fall back to the full text". Somebody who chose this
@@ -269,15 +351,28 @@ namespace ClaudeBuddy
         // ever spawning a CLI; null means the real one.
         internal static Func<string, Task<string?>>? SummarizerForTests;
 
+        // The same seam for a test that is about *whose account* the summary
+        // runs on (CB-248) rather than what comes back: it is handed the
+        // account directory alongside the reply. Checked first, so the many
+        // tests that only care about the text keep the one-argument shape.
+        internal static Func<string, string?, Task<string?>>? AccountSummarizerForTests;
+
         // `kind` only ever changes what RunAsync sends as the prompt — the
         // seam itself stays kind-agnostic, because a test driving it has
         // already decided what comes back and does not need to know which
         // question would have produced it. Reply is the default so every
         // existing caller of the one-argument shape is unchanged.
-        internal static Task<string?> SummarizeAsync(string reply, SpeechSummaryKind kind = SpeechSummaryKind.Reply)
+        //
+        // `accountDir` is the Claude Code config directory of the session being
+        // summarised, from AccountDirFor; null when it is not known.
+        internal static Task<string?> SummarizeAsync(
+            string reply, SpeechSummaryKind kind = SpeechSummaryKind.Reply, string? accountDir = null)
         {
+            var withAccount = AccountSummarizerForTests;
+            if (withAccount is not null) return withAccount(reply, accountDir);
+
             var seam = SummarizerForTests;
-            return seam is not null ? seam(reply) : RunAsync(reply, kind);
+            return seam is not null ? seam(reply) : RunAsync(reply, kind, accountDir);
         }
 
         // Everything the summary leg decides, with the utterance left to the
@@ -292,16 +387,21 @@ namespace ClaudeBuddy
         internal static Task<string> SummarizeOrSayWhyAsync(string reply) =>
             SummarizeOrSayWhyAsync(reply, SpeechSummaryKind.Reply);
 
-        internal static async Task<string> SummarizeOrSayWhyAsync(string reply, SpeechSummaryKind kind)
+        internal static async Task<string> SummarizeOrSayWhyAsync(
+            string reply, SpeechSummaryKind kind, string? accountDir = null)
         {
             try
             {
-                var summary = await SummarizeAsync(reply, kind).ConfigureAwait(true);
-                return string.IsNullOrWhiteSpace(summary) ? Unavailable : summary;
+                var summary = await SummarizeAsync(reply, kind, accountDir).ConfigureAwait(true);
+                if (string.IsNullOrWhiteSpace(summary)) return Unavailable;
+
+                // Only the model's own words are capped. The failure sentences
+                // above and below are fixed text and never pass through here.
+                return kind == SpeechSummaryKind.TurnFinished ? Shorten(summary, TurnFinishedMaxSentences, TurnFinishedMaxChars) : summary;
             }
             catch (SpokenFailureException ex)
             {
-                Console.Error.WriteLine($"Claude Buddy: couldn't summarise for speech: {ex.Message}");
+                Console.Error.WriteLine($"{Brand.DisplayName}: couldn't summarise for speech: {ex.Message}");
                 return ex.Message;
             }
             catch (Exception ex)
@@ -311,7 +411,7 @@ namespace ClaudeBuddy
                 // swallowed, for the same reason the speak command's stderr is:
                 // this is the only explanation anyone gets for why they heard a
                 // sentence instead of their summary.
-                Console.Error.WriteLine($"Claude Buddy: couldn't summarise for speech: {ex.Message}");
+                Console.Error.WriteLine($"{Brand.DisplayName}: couldn't summarise for speech: {ex.Message}");
                 return Unavailable;
             }
         }
@@ -338,13 +438,61 @@ namespace ClaudeBuddy
         // ~/.claude/CLAUDE.md was checked and does not colour the output here.
         internal static string NeutralWorkingDirectory => Path.GetTempPath();
 
+        // Which Claude account a summary is billed to: the one the summarised
+        // session runs under (CB-248).
+        //
+        // Before this, the child simply inherited this app's environment, so
+        // every summary ran on whichever account Buddy itself had been launched
+        // under — for a Buddy started from the Start menu or a login item, the
+        // default ~/.claude. With one terminal on the default account and
+        // another on CLAUDE_CONFIG_DIR=~/.claude-<other>, both sessions'
+        // replies were summarised on, and counted against, the default one.
+        // It coupled failures too: measured on a real Windows machine, the
+        // default account's OAuth expired and every summary for *every*
+        // account came back "Summary unavailable.", including the one the user
+        // was actively working in and was logged in fine.
+        //
+        // The account is read off the transcript path, because Claude Code
+        // writes every transcript under its own config root —
+        // `<root>/projects/<slug>/<id>.jsonl`, or deeper for a subagent's — so
+        // the root is the parent of the nearest `projects` above it. Nothing
+        // has to be configured for that to hold, which matters: an account the
+        // user never listed in ClaudeCodeProfileDirs still bills correctly.
+        //
+        // Null — today's behaviour, inheriting — whenever that cannot be
+        // trusted: no transcript (a gateway or cloud session), no `projects`
+        // ancestor (Codex and Grok keep theirs under `sessions`), or a root
+        // that does not exist on this machine (a WSL session's Linux path seen
+        // from Windows). Naming a nonexistent directory would start a CLI in a
+        // fresh, logged-out context, which is the failure this exists to stop.
+        internal static string? AccountDirFor(string? transcriptPath, Func<string, bool>? directoryExists = null)
+        {
+            if (string.IsNullOrWhiteSpace(transcriptPath)) return null;
+
+            var dir = Path.GetDirectoryName(transcriptPath.Trim());
+            while (!string.IsNullOrEmpty(dir))
+            {
+                if (string.Equals(Path.GetFileName(dir), "projects", StringComparison.OrdinalIgnoreCase))
+                {
+                    var root = Path.GetDirectoryName(dir);
+                    return !string.IsNullOrEmpty(root) && (directoryExists ?? Directory.Exists)(root) ? root : null;
+                }
+
+                dir = Path.GetDirectoryName(dir);
+            }
+
+            return null;
+        }
+
         // The invocation, as a value, so a test can assert it without spawning
         // anything. Extracted for the reason OrbWindowSpeakTests gives about
         // Speak: a decision left inside the method that performs the side
         // effect is a decision nothing can assert — which is exactly how CB-174
         // shipped, since the prompt and the cleaning were both covered while
         // the thing actually wrong was never looked at.
-        internal static ProcessStartInfo StartInfoFor(string claude, SpeechSummaryKind kind = SpeechSummaryKind.Reply)
+        internal static ProcessStartInfo StartInfoFor(
+            string claude, SpeechSummaryKind kind = SpeechSummaryKind.Reply,
+            string? accountDir = null, string? home = null)
         {
             var startInfo = new ProcessStartInfo
             {
@@ -373,6 +521,24 @@ namespace ClaudeBuddy
             // the session scan or `claude --resume` to find.
             startInfo.ArgumentList.Add("--no-session-persistence");
 
+            // The session's account, three ways (CB-248). Unknown leaves the
+            // inherited environment alone, as before. An extra account is named.
+            // The default account is *unset* rather than named, for CB-42's
+            // reason (see ClaudeProfile): CLAUDE_CONFIG_DIR=~/.claude is a
+            // different context from no variable at all — and unset rather than
+            // inherited, because a Buddy launched under another account would
+            // otherwise bill that one for a default-account session, which is
+            // this bug pointing the other way.
+            if (accountDir is not null)
+            {
+                home ??= Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+                var configDir = ClaudeProfile.ConfigDirFor(
+                    home, accountDir, OrbweaverSettings.DefaultRemoteControlProfileDir);
+
+                if (configDir is null) startInfo.Environment.Remove("CLAUDE_CONFIG_DIR");
+                else startInfo.Environment["CLAUDE_CONFIG_DIR"] = configDir;
+            }
+
             return startInfo;
         }
 
@@ -383,14 +549,14 @@ namespace ClaudeBuddy
         // carries, and running it in a test would make a real billed request on
         // the developer's own account.
         [ExcludeFromCodeCoverage]
-        private static async Task<string?> RunAsync(string reply, SpeechSummaryKind kind)
+        private static async Task<string?> RunAsync(string reply, SpeechSummaryKind kind, string? accountDir)
         {
             var claude = ClaudeBinary.Path;
             if (claude is null) return null;
 
             try
             {
-                var startInfo = StartInfoFor(claude, kind);
+                var startInfo = StartInfoFor(claude, kind, accountDir);
 
                 using var proc = new Process { StartInfo = startInfo };
                 if (!proc.Start()) return null;

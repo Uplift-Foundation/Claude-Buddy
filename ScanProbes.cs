@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Where a `claude agents` viewer for a directory is sitting: its tmux
     // server and pane when it runs inside tmux, and its tty either way.
@@ -93,6 +93,7 @@ namespace ClaudeBuddy
             // and leadsWithLiveAgents is a subset of leadsNamed.
             var viewerCwds = found
                 .Where(e => e.Status.Source == SessionSource.ClaudeCode
+                            && !e.Status.IsDesktopHosted
                             && !SessionManager.KnowsATerminal(e.Status)
                             && !string.IsNullOrEmpty(e.Status.Cwd)
                             && (e.Status.SessionPid <= 0 || leadsNamed.Contains(e.SessionId)))

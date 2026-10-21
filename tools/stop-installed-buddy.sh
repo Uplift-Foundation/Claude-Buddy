@@ -1,8 +1,19 @@
 #!/usr/bin/env bash
-# Stops every Claude Buddy this user is running from one executable path, so
-# an install can replace it (CB-206).
+# Stops every Orbweaver (or older Claude Buddy) this user is running from any
+# of the given executable paths, so an install can replace it (CB-206).
 #
-#   stop-installed-buddy.sh <executable-path>
+#   stop-installed-buddy.sh <executable-path> [<executable-path>...]
+#
+# More than one path since the rename (CB-255): `build-macos-app.sh --install`
+# replaces /Applications/Orbweaver.app and removes the legacy
+# /Applications/Claude Buddy.app in the same run, and a copy left running out
+# of either would hold the single-instance mutex against the new one. Three
+# since the executable rename (CB-256), because the phase-2 Orbweaver.app ran
+# Contents/MacOS/ClaudeBuddy and this one runs Contents/MacOS/Orbweaver — two
+# paths inside the one bundle, as well as the legacy bundle's. Nothing here
+# knows which is which: the caller names them all, and all the paths are
+# matched in one pass and stopped together, so the grace period is paid once
+# rather than once per path.
 #
 # Prints each pid it stopped, one per line. Exits 0 once none is left, 1 if
 # one survived SIGKILL.
@@ -26,24 +37,39 @@
 # must flush on the way out, but a clean exit is still the better one to give
 # it, and the grace is short because an install is waiting.
 #
-# Test seam: CLAUDE_BUDDY_STOP_GRACE_SECONDS shortens the wait, so the suite
-# can drive the SIGKILL arm with a process that ignores SIGTERM.
+# Test seam: ORBWEAVER_STOP_GRACE_SECONDS (or the pre-rename
+# CLAUDE_BUDDY_STOP_GRACE_SECONDS) shortens the wait, so the suite can drive
+# the SIGKILL arm with a process that ignores SIGTERM.
 set -uo pipefail
 
-if [[ $# -ne 1 || -z "$1" ]]; then
-  echo "usage: $0 <executable-path>" >&2
-  exit 2
-fi
+# CB-256: ORBWEAVER_<name>, falling back to the pre-rename CLAUDE_BUDDY_<name>.
+brand_env() { local n="ORBWEAVER_$1" l="CLAUDE_BUDDY_$1"; printf '%s' "${!n:-${!l:-}}"; }
 
-EXE="$1"
-GRACE="${CLAUDE_BUDDY_STOP_GRACE_SECONDS:-10}"
+# At least one path, and no empty ones: an empty path matches nothing, which
+# would make a mistake in the caller read as "nothing was running".
+usage() { echo "usage: $0 <executable-path> [<executable-path>...]" >&2; exit 2; }
+[[ $# -ge 1 ]] || usage
+for exe in "$@"; do
+  [[ -n "$exe" ]] || usage
+done
+
+GRACE="$(brand_env STOP_GRACE_SECONDS)"
+GRACE="${GRACE:-10}"
 UID_NOW="$(id -u)"
 
+# The paths reach awk through the environment, one per line, rather than as
+# -v assignments: awk processes backslash escapes in a -v value, and a path is
+# a path, not an escape sequence. (A path with a newline in it cannot be
+# matched, which no install location has.)
 pids_running_exe() {
-  ps -axo pid=,uid=,comm= | awk -v u="$UID_NOW" -v exe="$EXE" '
+  ps -axo pid=,uid=,comm= | STOP_EXES="$(printf '%s\n' "$@")" awk -v u="$UID_NOW" '
+    BEGIN {
+      n = split(ENVIRON["STOP_EXES"], list, "\n")
+      for (i = 1; i <= n; i++) if (list[i] != "") want[list[i]] = 1
+    }
     match($0, /^ *[0-9]+ +[0-9]+ /) {
       split(substr($0, 1, RLENGTH), head, " ")
-      if (head[2] == u && substr($0, RLENGTH + 1) == exe) print head[1]
+      if (head[2] == u && (substr($0, RLENGTH + 1) in want)) print head[1]
     }'
 }
 
@@ -58,7 +84,7 @@ any_alive() {
 PIDS=()
 while IFS= read -r pid; do
   [[ -n "$pid" ]] && PIDS+=("$pid")
-done < <(pids_running_exe)
+done < <(pids_running_exe "$@")
 
 [[ ${#PIDS[@]} -eq 0 ]] && exit 0
 

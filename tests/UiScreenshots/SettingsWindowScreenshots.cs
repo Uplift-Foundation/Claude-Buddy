@@ -9,7 +9,7 @@ using Avalonia.Headless.XUnit;
 using Avalonia.LogicalTree;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Matches tests/UiTests/SettingsWindowSmokeTest.cs's one scenario. Same
 // private-constructor-via-reflection seam, same reason (Toggle() makes real
@@ -106,7 +106,7 @@ public class SettingsWindowScreenshots
     }
 
     // The Claude Desktop group, which CB-4 added a row to: the switch that
-    // decides whether Claude Buddy claims Claude Desktop's URL schemes.
+    // decides whether Orbweaver claims Claude Desktop's URL schemes.
     //
     // Captured on its own rather than trusting the whole-window shot above,
     // because that one renders at the window's own height and this group sits
@@ -157,13 +157,13 @@ public class SettingsWindowScreenshots
     [AvaloniaFact]
     public void SpeechGroupShowsTheSpeakScopePicker()
     {
-        var wasScope = ClaudeBuddySettings.SpeakScope;
+        var wasScope = OrbweaverSettings.SpeakScope;
         try
         {
             // Captured on the non-default mode deliberately: it shows the
             // picker holding a saved choice rather than its initial state, so
             // the capture would change if the round trip stopped working.
-            ClaudeBuddySettings.SpeakScope = SpeakScope.Summary;
+            OrbweaverSettings.SpeakScope = SpeakScope.Summary;
 
             var ctor = typeof(SettingsWindow).GetConstructor(
                 BindingFlags.NonPublic | BindingFlags.Instance,
@@ -188,7 +188,7 @@ public class SettingsWindowScreenshots
         }
         finally
         {
-            ClaudeBuddySettings.SpeakScope = wasScope;
+            OrbweaverSettings.SpeakScope = wasScope;
         }
     }
 
@@ -268,10 +268,10 @@ public class SettingsWindowScreenshots
     [AvaloniaFact]
     public void SoundsGroupShowsThePickers()
     {
-        var wasFinished = ClaudeBuddySettings.TurnFinishedSound;
+        var wasFinished = OrbweaverSettings.TurnFinishedSound;
         try
         {
-            ClaudeBuddySettings.TurnFinishedSound = "off";
+            OrbweaverSettings.TurnFinishedSound = "off";
 
             var ctor = typeof(SettingsWindow).GetConstructor(
                 BindingFlags.NonPublic | BindingFlags.Instance,
@@ -287,7 +287,7 @@ public class SettingsWindowScreenshots
         }
         finally
         {
-            ClaudeBuddySettings.TurnFinishedSound = wasFinished;
+            OrbweaverSettings.TurnFinishedSound = wasFinished;
         }
     }
 
@@ -357,7 +357,7 @@ public class SettingsWindowScreenshots
 
     private static void WithOlderEngineOnly(Action capture)
     {
-        var wasEnabled = ClaudeBuddySettings.NeuralVoiceEnabled;
+        var wasEnabled = OrbweaverSettings.NeuralVoiceEnabled;
         var directory = System.IO.Path.Combine(NeuralSpeech.Root, "0.0.1-older");
         var modelExisted = System.IO.File.Exists(NeuralSpeech.ModelPath);
         System.IO.Directory.CreateDirectory(directory);
@@ -365,12 +365,12 @@ public class SettingsWindowScreenshots
         if (!modelExisted) System.IO.File.WriteAllBytes(NeuralSpeech.ModelPath, Array.Empty<byte>());
         try
         {
-            ClaudeBuddySettings.NeuralVoiceEnabled = true;
+            OrbweaverSettings.NeuralVoiceEnabled = true;
             capture();
         }
         finally
         {
-            ClaudeBuddySettings.NeuralVoiceEnabled = wasEnabled;
+            OrbweaverSettings.NeuralVoiceEnabled = wasEnabled;
             System.IO.Directory.Delete(directory, recursive: true);
             if (!modelExisted) System.IO.File.Delete(NeuralSpeech.ModelPath);
         }
@@ -391,27 +391,27 @@ public class SettingsWindowScreenshots
 
     private static void WithVolumes(string engine, double speech, double alert, Action capture)
     {
-        var wasEngine = ClaudeBuddySettings.SpeakEngine;
-        var wasSpeech = ClaudeBuddySettings.SpeechVolume;
-        var wasAlert = ClaudeBuddySettings.AlertVolume;
-        var wasCommand = ClaudeBuddySettings.SpeakCommand;
+        var wasEngine = OrbweaverSettings.SpeakEngine;
+        var wasSpeech = OrbweaverSettings.SpeechVolume;
+        var wasAlert = OrbweaverSettings.AlertVolume;
+        var wasCommand = OrbweaverSettings.SpeakCommand;
         try
         {
-            ClaudeBuddySettings.SpeakEngine = engine;
-            ClaudeBuddySettings.SpeechVolume = speech;
-            ClaudeBuddySettings.AlertVolume = alert;
+            OrbweaverSettings.SpeakEngine = engine;
+            OrbweaverSettings.SpeechVolume = speech;
+            OrbweaverSettings.AlertVolume = alert;
             // A command that exists, so "custom" is the engine that will
             // really speak and the greyed state is the honest one. Never run:
             // nothing here opens the voice picker.
-            ClaudeBuddySettings.SpeakCommand = "my-own-tts";
+            OrbweaverSettings.SpeakCommand = "my-own-tts";
             capture();
         }
         finally
         {
-            ClaudeBuddySettings.SpeakEngine = wasEngine;
-            ClaudeBuddySettings.SpeechVolume = wasSpeech;
-            ClaudeBuddySettings.AlertVolume = wasAlert;
-            ClaudeBuddySettings.SpeakCommand = wasCommand;
+            OrbweaverSettings.SpeakEngine = wasEngine;
+            OrbweaverSettings.SpeechVolume = wasSpeech;
+            OrbweaverSettings.AlertVolume = wasAlert;
+            OrbweaverSettings.SpeakCommand = wasCommand;
         }
     }
 
@@ -428,10 +428,10 @@ public class SettingsWindowScreenshots
     [AvaloniaFact]
     public void PeerLinkGroupShowsThePairingControls()
     {
-        var wasEnabled = ClaudeBuddySettings.PeerLinkEnabled;
+        var wasEnabled = OrbweaverSettings.PeerLinkEnabled;
         try
         {
-            ClaudeBuddySettings.PeerLinkEnabled = true;
+            OrbweaverSettings.PeerLinkEnabled = true;
 
             var ctor = typeof(SettingsWindow).GetConstructor(
                 BindingFlags.NonPublic | BindingFlags.Instance,
@@ -455,7 +455,7 @@ public class SettingsWindowScreenshots
         }
         finally
         {
-            ClaudeBuddySettings.PeerLinkEnabled = wasEnabled;
+            OrbweaverSettings.PeerLinkEnabled = wasEnabled;
         }
     }
 
@@ -506,7 +506,7 @@ public class SettingsWindowScreenshots
     [AvaloniaFact]
     public void GrokBuildGroupShowsTheAutoRefreshRowOnceUsageOrbsAreOn()
     {
-        ClaudeBuddySettings.GrokAccountUsageEnabled = true;
+        OrbweaverSettings.GrokAccountUsageEnabled = true;
 
         var ctor = typeof(SettingsWindow).GetConstructor(
             BindingFlags.NonPublic | BindingFlags.Instance,
@@ -521,7 +521,7 @@ public class SettingsWindowScreenshots
         CaptureGroup(window, "Keep Grok usage fresh automatically", "Grok Build",
             "settings-grok-auto-refresh.png");
 
-        ClaudeBuddySettings.GrokAccountUsageEnabled = false;
+        OrbweaverSettings.GrokAccountUsageEnabled = false;
     }
 
     // The one ancestor-climb every control-scoped scenario above shares,
@@ -619,10 +619,10 @@ public class SettingsWindowScreenshots
     [AvaloniaFact]
     public void AMouseClickOnTheHeaderPaddingTogglesTheSection()
     {
-        var was = ClaudeBuddySettings.IsSettingsSectionCollapsed("orbs");
+        var was = OrbweaverSettings.IsSettingsSectionCollapsed("orbs");
         try
         {
-            ClaudeBuddySettings.SetSettingsSectionCollapsed("orbs", false);
+            OrbweaverSettings.SetSettingsSectionCollapsed("orbs", false);
 
             var ctor = typeof(SettingsWindow).GetConstructor(
                 BindingFlags.NonPublic | BindingFlags.Instance, types: Type.EmptyTypes)
@@ -652,11 +652,11 @@ public class SettingsWindowScreenshots
             ScreenshotHelper.Flush();
 
             Assert.False(section.IsOpen);
-            Assert.True(ClaudeBuddySettings.IsSettingsSectionCollapsed("orbs"));
+            Assert.True(OrbweaverSettings.IsSettingsSectionCollapsed("orbs"));
         }
         finally
         {
-            ClaudeBuddySettings.SetSettingsSectionCollapsed("orbs", was);
+            OrbweaverSettings.SetSettingsSectionCollapsed("orbs", was);
         }
     }
 }

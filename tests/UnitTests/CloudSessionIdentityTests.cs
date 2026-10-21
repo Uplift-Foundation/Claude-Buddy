@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 // SessionIdentity.IsCloud — the discriminator for a session that lives in
 // Anthropic's cloud rather than on this machine.

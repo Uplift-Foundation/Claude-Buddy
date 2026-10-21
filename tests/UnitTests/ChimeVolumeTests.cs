@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-200's Alert level at the one place every chime passes through —
 // ChimePlayer.BuildProcess — plus the Windows path decision, which is not
@@ -37,16 +37,16 @@ public class ChimeVolumeTests
     {
         if (!OperatingSystem.IsMacOS()) return;
 
-        var saved = ClaudeBuddySettings.AlertVolume;
+        var saved = OrbweaverSettings.AlertVolume;
         try
         {
-            ClaudeBuddySettings.AlertVolume = 0.2;
+            OrbweaverSettings.AlertVolume = 0.2;
             using var proc = ChimePlayer.BuildProcess("/System/Library/Sounds/Ping.aiff");
             Assert.Equal(new[] { "-v", "0.2", "/System/Library/Sounds/Ping.aiff" }, proc!.StartInfo.ArgumentList);
         }
         finally
         {
-            ClaudeBuddySettings.AlertVolume = saved;
+            OrbweaverSettings.AlertVolume = saved;
         }
     }
 
@@ -55,16 +55,16 @@ public class ChimeVolumeTests
     {
         if (!OperatingSystem.IsMacOS()) return;
 
-        var saved = ClaudeBuddySettings.SpeechVolume;
+        var saved = OrbweaverSettings.SpeechVolume;
         try
         {
-            ClaudeBuddySettings.SpeechVolume = 0.1;
-            using var proc = ChimePlayer.BuildProcess("/System/Library/Sounds/Ping.aiff", ClaudeBuddySettings.AlertVolume);
+            OrbweaverSettings.SpeechVolume = 0.1;
+            using var proc = ChimePlayer.BuildProcess("/System/Library/Sounds/Ping.aiff", OrbweaverSettings.AlertVolume);
             Assert.DoesNotContain("0.1", proc!.StartInfo.ArgumentList);
         }
         finally
         {
-            ClaudeBuddySettings.SpeechVolume = saved;
+            OrbweaverSettings.SpeechVolume = saved;
         }
     }
 

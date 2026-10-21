@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The pure half of DispatcherClock: how far apart the dispatcher's clock and
 // the platform's are, and when that is worth acting on. The reflection half is

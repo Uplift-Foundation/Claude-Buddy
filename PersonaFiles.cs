@@ -1,6 +1,6 @@
 using System.Globalization;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Every read a persona makes of the disk, and the proofs that go with it.
     //

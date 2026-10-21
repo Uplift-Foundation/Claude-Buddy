@@ -1,7 +1,7 @@
 using Avalonia;
-using ClaudeBuddy;
+using Orbweaver;
 
-namespace ClaudeBuddy.Tests
+namespace Orbweaver.Tests
 {
     // The orb-geometry sweep, as a class rather than as a script.
     //

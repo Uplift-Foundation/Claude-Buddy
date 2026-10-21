@@ -1,7 +1,7 @@
 using System.Linq;
 using Avalonia.Headless.XUnit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // One capture per scenario in tests/UiTests/OrbWindowUpdateFromTests.cs. No
 // clicks anywhere here, for the same reason that suite has none: OrbWindow's

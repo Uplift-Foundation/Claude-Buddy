@@ -15,5 +15,8 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="..\..\SingleInstance.cs" Link="SingleInstance.cs" />
+    <!-- SingleInstance.MutexName is Brand.SingleInstanceMutexName (CB-250),
+         so the probe needs the constant's home to name the same mutex. -->
+    <Compile Include="..\..\Brand.cs" Link="Brand.cs" />
   </ItemGroup>
 </Project>

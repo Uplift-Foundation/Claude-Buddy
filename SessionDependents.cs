@@ -2,7 +2,7 @@ using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.Versioning;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // What is running *underneath* a session's pid, asked before anything is
     // signalled to it.
@@ -310,7 +310,7 @@ namespace ClaudeBuddy
         internal const string UnknownHeader = "Couldn't check for background jobs";
 
         internal const string UnknownTip =
-            "Claude Buddy could not read what is running under this session, so it is not "
+            $"{Brand.DisplayName} could not read what is running under this session, so it is not "
             + "offering to end it. Close this menu and open it again to retry.";
 
         // How long the row waits for an answer before saying it has none. Twice
@@ -367,6 +367,14 @@ namespace ClaudeBuddy
             var table = Table();
             return table is null ? Nothing : Inspect(table, pid);
         }
+
+        // The cached table, for a caller that wants to walk it itself — the
+        // Claude Desktop click path (CB-265) climbs ppid links through it.
+        // Excluded from coverage for Table's own reason: it is the clock and a
+        // live process read, and what is done with the rows is covered where
+        // that happens.
+        [ExcludeFromCodeCoverage]
+        internal static IReadOnlyList<ProcessRow>? CurrentTable() => Table();
 
         // Excluded from coverage: the clock.
         [ExcludeFromCodeCoverage]

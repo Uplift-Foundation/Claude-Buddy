@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The seam between ClaudeDesktopUrlRouter's command line and open(1), driven
 // against a real /usr/bin/open and a real .app bundle.

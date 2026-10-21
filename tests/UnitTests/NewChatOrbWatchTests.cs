@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // NewChatOrbWatch: the ~20s "did an orb actually appear" check the New chat
 // dialog runs after a launch.

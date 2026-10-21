@@ -3,7 +3,7 @@ using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.Input;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // One capture per scenario in tests/UiTests/OrbFlyoutTests.cs, named to
 // match — the point is a screenshot for every behavior that suite already

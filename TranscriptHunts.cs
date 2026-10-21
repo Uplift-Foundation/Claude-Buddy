@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // A memo of transcript hunts, for status files whose transcript_path names
     // a file that is not there — see SessionManager.WantsTranscriptRepair for

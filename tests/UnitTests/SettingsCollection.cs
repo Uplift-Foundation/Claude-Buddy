@@ -1,8 +1,8 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests
+namespace Orbweaver.Tests
 {
-    // Serialises every test class that touches ClaudeBuddySettings.
+    // Serialises every test class that touches OrbweaverSettings.
     //
     // Same reasoning as tests/IntegrationTests' collection of the same name, and
     // it arrived here the same way: by a test failing. ClaudeDesktopColorsTests
@@ -10,7 +10,7 @@ namespace ClaudeBuddy.Tests
     // five runs of the suite under the coverage collector while passing every
     // time under a plain `dotnet test`. Nothing about that test is wrong.
     //
-    // ClaudeBuddySettings is a static class holding one model for the whole
+    // OrbweaverSettings is a static class holding one model for the whole
     // process. xUnit runs test *classes* in parallel by default, and nine classes
     // in this assembly read or write that model — profile colours, voice choices,
     // gateway filters, reply toggles. Under load they interleave, and a

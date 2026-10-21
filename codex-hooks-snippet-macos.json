@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$HOME/.codex/claude-buddy/ClaudeBuddyHook.sh\" codex idle"
+            "command": "bash \"$HOME/.codex/orbweaver/OrbweaverHook.sh\" codex idle"
           }
         ]
       }
@@ -15,7 +15,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$HOME/.codex/claude-buddy/ClaudeBuddyHook.sh\" codex generating"
+            "command": "bash \"$HOME/.codex/orbweaver/OrbweaverHook.sh\" codex generating"
           }
         ]
       }
@@ -26,7 +26,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$HOME/.codex/claude-buddy/ClaudeBuddyHook.sh\" codex generating"
+            "command": "bash \"$HOME/.codex/orbweaver/OrbweaverHook.sh\" codex generating"
           }
         ]
       }
@@ -37,7 +37,7 @@
           {
             "type": "command",
             "async": true,
-            "command": "bash \"$HOME/.codex/claude-buddy/ClaudeBuddyHook.sh\" codex waiting"
+            "command": "bash \"$HOME/.codex/orbweaver/OrbweaverHook.sh\" codex waiting"
           }
         ]
       }
@@ -48,7 +48,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$HOME/.codex/claude-buddy/ClaudeBuddyHook.sh\" codex generating"
+            "command": "bash \"$HOME/.codex/orbweaver/OrbweaverHook.sh\" codex generating"
           }
         ]
       }
@@ -58,7 +58,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$HOME/.codex/claude-buddy/ClaudeBuddyHook.sh\" codex idle"
+            "command": "bash \"$HOME/.codex/orbweaver/OrbweaverHook.sh\" codex idle"
           }
         ]
       }
@@ -68,7 +68,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$HOME/.codex/claude-buddy/ClaudeBuddyHook.sh\" codex ended"
+            "command": "bash \"$HOME/.codex/orbweaver/OrbweaverHook.sh\" codex ended"
           }
         ]
       }

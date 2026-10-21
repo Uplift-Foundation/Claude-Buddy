@@ -2,7 +2,7 @@ using System;
 using Avalonia;
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 // TeamLinkGeometry.ArrowOutline: the seven points of one arrow between two orbs.
 //

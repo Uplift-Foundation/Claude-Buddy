@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // What sounds exist, and turning a setting string back into a path
 // ChimePlayer can open — over a scratch directory of this test's own, never

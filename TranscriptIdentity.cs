@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // What a session calls itself and what colour it has been given, read out of
     // its own transcript.
@@ -29,7 +29,7 @@ namespace ClaudeBuddy
     // parsers are: the thing with a right answer is separated from the thing
     // that reads bytes off a disk, so the right answer can be asserted. The
     // precedence below is not invented here either — it mirrors
-    // ClaudeBuddyHook.sh's, deliberately, so the orb does not change identity
+    // OrbweaverHook.sh's, deliberately, so the orb does not change identity
     // depending on which of the two happened to answer.
     //
     // One deliberate divergence from the hook, and the only one. The hook,

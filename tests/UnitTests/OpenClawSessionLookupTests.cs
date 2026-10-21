@@ -1,7 +1,7 @@
 using System.Collections.Generic;
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 // OpenClawSessions.ChatFor and RoomChatFor: what the chat panel gets back when it
 // asks for a session.
@@ -22,8 +22,8 @@ public class OpenClawSessionLookupTests
 {
     private static void Enabled(bool on)
     {
-        ClaudeBuddySettings.ReloadForTests();
-        ClaudeBuddySettings.OpenClawEnabled = on;
+        OrbweaverSettings.ReloadForTests();
+        OrbweaverSettings.OpenClawEnabled = on;
     }
 
     // ---- the gate --------------------------------------------------------

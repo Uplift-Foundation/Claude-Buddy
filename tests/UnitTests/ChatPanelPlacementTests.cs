@@ -1,7 +1,7 @@
 using Avalonia;
 using Xunit;
 
-namespace ClaudeBuddy.Tests
+namespace Orbweaver.Tests
 {
     // ChatPanelPlacement.Resolve: where a chat panel opens when other panels
     // are already pinned on screen.

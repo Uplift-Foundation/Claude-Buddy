@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Installs the Claude Buddy hook into Grok Build's macOS hook config.
+# Installs the Orbweaver hook into Grok Build's macOS hook config.
 #
 # Grok discovers global hooks from $GROK_HOME/hooks/*.json and they are
 # always trusted — unlike Codex, there is no extra /hooks-trust step.
@@ -12,6 +12,12 @@
 # is wired too, in addition to the default ~/.grok.
 #
 # Safe to re-run: it overwrites our file rather than accumulating copies.
+#
+# Before the rename (CB-255) our file was hooks/claude-buddy.json. Grok loads
+# every hooks/*.json, so leaving it beside hooks/orbweaver.json would fire each
+# event twice, so an install removes it and an uninstall removes both. The old
+# claude-buddy script folder stays for sessions still running against it, with
+# a .superseded marker the app's LegacyHookCleanup reads.
 
 set -euo pipefail
 
@@ -35,42 +41,58 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-[[ -n "$HOOK_DIR" ]] || HOOK_DIR="$GROK_DIR/claude-buddy"
-[[ -n "$HOOKS_FILE" ]] || HOOKS_FILE="$GROK_DIR/hooks/claude-buddy.json"
+[[ -n "$HOOK_DIR" ]] || HOOK_DIR="$GROK_DIR/orbweaver"
+[[ -n "$HOOKS_FILE" ]] || HOOKS_FILE="$GROK_DIR/hooks/orbweaver.json"
+LEGACY_HOOK_DIR="$GROK_DIR/claude-buddy"
+LEGACY_HOOKS_FILE="$(dirname "$HOOKS_FILE")/claude-buddy.json"
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
-if [[ -f "$HERE/ClaudeBuddyHook.sh" ]]; then
-  SOURCE="$HERE/ClaudeBuddyHook.sh"
-elif [[ -f "$HERE/../ClaudeBuddyHook.sh" ]]; then
-  SOURCE="$HERE/../ClaudeBuddyHook.sh"
+if [[ -f "$HERE/OrbweaverHook.sh" ]]; then
+  SOURCE="$HERE/OrbweaverHook.sh"
+elif [[ -f "$HERE/../OrbweaverHook.sh" ]]; then
+  SOURCE="$HERE/../OrbweaverHook.sh"
 else
   SOURCE=""
 fi
 
-INSTALLED="$HOOK_DIR/ClaudeBuddyHook.sh"
+INSTALLED="$HOOK_DIR/OrbweaverHook.sh"
 
-if [[ "$HOOK_DIR" == "$HOME/.grok/claude-buddy" ]]; then
-  CONFIGURED='$HOME/.grok/claude-buddy/ClaudeBuddyHook.sh'
+if [[ "$HOOK_DIR" == "$HOME/.grok/orbweaver" ]]; then
+  CONFIGURED='$HOME/.grok/orbweaver/OrbweaverHook.sh'
 else
   CONFIGURED="$INSTALLED"
 fi
 
 if [[ $UNINSTALL -eq 0 ]]; then
   if [[ -z "$SOURCE" ]]; then
-    echo "Can't find ClaudeBuddyHook.sh next to $HERE or one level up." >&2
+    echo "Can't find OrbweaverHook.sh next to $HERE or one level up." >&2
     exit 1
   fi
   mkdir -p "$HOOK_DIR"
   cp "$SOURCE" "$INSTALLED"
   chmod +x "$INSTALLED"
   echo "Hook installed: $INSTALLED"
+
+  # Mark, never delete, and only when absent, for the reason
+  # install-macos-hooks.sh gives.
+  if [[ -d "$LEGACY_HOOK_DIR" && ! -e "$LEGACY_HOOK_DIR/.superseded" ]]; then
+    : > "$LEGACY_HOOK_DIR/.superseded"
+    echo "Marked $LEGACY_HOOK_DIR as superseded; Orbweaver retires it once nothing calls it."
+  fi
+fi
+
+# The pre-rename file goes in both modes. Guarded so a --hooks-file that is
+# itself named claude-buddy.json is not written and then deleted.
+if [[ "$LEGACY_HOOKS_FILE" != "$HOOKS_FILE" && -e "$LEGACY_HOOKS_FILE" ]]; then
+  rm -f "$LEGACY_HOOKS_FILE"
+  echo "Removed the pre-rename hooks file $LEGACY_HOOKS_FILE"
 fi
 
 if [[ $UNINSTALL -eq 1 ]]; then
   rm -f "$HOOKS_FILE"
-  echo "Removed Claude Buddy hooks from $HOOKS_FILE."
-  echo "The installed hook script was left in place; delete $HOOK_DIR if you want it gone."
+  echo "Removed Orbweaver hooks from $HOOKS_FILE."
+  echo "The installed hook script was left in place; delete $HOOK_DIR (and $LEGACY_HOOK_DIR, if present) if you want it gone."
 else
   mkdir -p "$(dirname "$HOOKS_FILE")"
   # timeout is explicit because Grok's default for observe hooks is 5 seconds.
@@ -98,7 +120,7 @@ else
   }
 }
 EOF
-  echo "Wired Claude Buddy hooks into $HOOKS_FILE"
+  echo "Wired Orbweaver hooks into $HOOKS_FILE"
   echo
   echo "Restart any running Grok sessions: hooks are read at session start."
 fi
@@ -109,8 +131,29 @@ if [[ $NO_PROFILES -eq 1 ]]; then
   exit 0
 fi
 
+# The app's environment overrides are ORBWEAVER_* since the rename, and the old
+# CLAUDE_BUDDY_* spelling still works for a shell that exports it. A copy per
+# script rather than a sourced file, because each script is installed on its own.
+# CB-256: ORBWEAVER_<name>, falling back to the pre-rename CLAUDE_BUDDY_<name>.
+brand_env() { local n="ORBWEAVER_$1" l="CLAUDE_BUDDY_$1"; printf '%s' "${!n:-${!l:-}}"; }
+
+# Honours ORBWEAVER_SETTINGS_DIR like the app does; a failed read is reported
+# on stderr rather than discarded (CB-258).
+# With no override, Orbweaver's folder first, then the pre-rename ClaudeBuddy
+# one: on upgrade day this runs before the new app has started and moved the
+# folder, and reading only the new path then would quietly wire zero extra
+# profiles. When ORBWEAVER_SETTINGS_DIR (or its old spelling) is set it is the
+# only path read, so a test instance never falls through to the real list.
 saved_profiles() {
-  local settings="$HOME/Library/Application Support/ClaudeBuddy/settings.json"
+  local settings override
+  override="$(brand_env SETTINGS_DIR)"
+  if [[ -n "$override" ]]; then
+    settings="$override/settings.json"
+  else
+    local support="$HOME/Library/Application Support"
+    settings="$support/Orbweaver/settings.json"
+    [[ -f "$settings" ]] || settings="$support/ClaudeBuddy/settings.json"
+  fi
   [[ -f "$settings" ]] || return 0
 
   osascript -l JavaScript -e '
@@ -119,21 +162,41 @@ saved_profiles() {
       const s = $.NSString.stringWithContentsOfFileEncodingError(a[0], $.NSUTF8StringEncoding, null);
       if (s.isNil()) return "";
       let parsed;
-      try { parsed = JSON.parse(ObjC.unwrap(s)); } catch (e) { return ""; }
+      try { parsed = JSON.parse(ObjC.unwrap(s)); } catch (e) { throw new Error("settings.json is not valid JSON"); }
       const dirs = parsed.grokHomes;
       if (!Array.isArray(dirs)) return "";
       return dirs.filter(function (d) { return typeof d === "string" && d.length > 0; }).join("\n");
     }
-  ' "$settings" 2>/dev/null || true
+  ' "$settings" || {
+    echo "warning: could not read the saved profile list from $settings (exit $?); no extra profiles were wired." >&2
+    return 1
+  }
 }
 
 SELF="$HERE/$(basename "$0")"
 [[ -x "$SELF" ]] || SELF="$0"
 
-for name in "${EXTRA_PROFILES[@]+"${EXTRA_PROFILES[@]}"}" $(saved_profiles); do
+LIST_UNREADABLE=0
+saved=$(saved_profiles) || LIST_UNREADABLE=1
+
+for name in "${EXTRA_PROFILES[@]+"${EXTRA_PROFILES[@]}"}" $saved; do
   [[ -n "$name" ]] || continue
   extra="$HOME/$name"
   echo
   echo "=== extra Grok home: $extra"
-  "$SELF" ${UNINSTALL:+--uninstall} --grok-home "$extra" --no-profiles
+  # An array, not ${UNINSTALL:+--uninstall}: UNINSTALL is 0 or 1 and "0" is a
+  # non-empty string, so :+ expanded every time and an *install* unwired every
+  # extra Grok home it was meant to wire (CB-258). install-macos-hooks.sh hit the
+  # same trap and says so beside the same fix.
+  mode=()
+  [[ $UNINSTALL -eq 1 ]] && mode=(--uninstall)
+  "$SELF" "${mode[@]+"${mode[@]}"}" --grok-home "$extra" --no-profiles
 done
+
+# Exit 3 means "the saved profile list could not be read": the default profile was
+# still wired, but any extra ones were not, and the app turns that code into a
+# message of its own (HookInstaller.SavedListUnreadableExit). Exit 0 here used to
+# make an unreadable list indistinguishable from an empty one (CB-258).
+if [[ $LIST_UNREADABLE -eq 1 ]]; then
+  exit 3
+fi

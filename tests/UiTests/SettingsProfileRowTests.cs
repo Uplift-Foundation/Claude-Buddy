@@ -8,7 +8,7 @@ using Avalonia.Headless.XUnit;
 using Avalonia.LogicalTree;
 using Xunit;
 
-namespace ClaudeBuddy.UiTests;
+namespace Orbweaver.UiTests;
 
 // One row of the Claude Desktop profiles table: its name box, its colour picker,
 // and the three switches beside them.
@@ -103,7 +103,7 @@ public class SettingsProfileRowTests
     [AvaloniaFact]
     public void TheDockIconSwitchWritesItsSetting()
     {
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
         var row = NewWindow().Row(Profile());
 
         var boxes = row.GetLogicalDescendants().OfType<CheckBox>().ToList();
@@ -112,14 +112,14 @@ public class SettingsProfileRowTests
         // Column 3 is "Tint the Dock icon" — see Row()'s Add(grid, 3, ...).
         boxes[1].IsChecked = !boxes[1].IsChecked;
 
-        var stored = ClaudeBuddySettings.For("Claude-Profile-1");
+        var stored = OrbweaverSettings.For("Claude-Profile-1");
         Assert.Equal(boxes[1].IsChecked, stored.TintDockIcon);
     }
 
     [AvaloniaFact]
     public void TheWindowTintSwitchWritesItsSetting()
     {
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
         var row = NewWindow().Row(Profile("Claude-Profile-2"));
 
         var boxes = row.GetLogicalDescendants().OfType<CheckBox>().ToList();
@@ -127,7 +127,7 @@ public class SettingsProfileRowTests
 
         boxes[2].IsChecked = !boxes[2].IsChecked;
 
-        var stored = ClaudeBuddySettings.For("Claude-Profile-2");
+        var stored = OrbweaverSettings.For("Claude-Profile-2");
         Assert.Equal(boxes[2].IsChecked, stored.TintWindow);
     }
 
@@ -139,9 +139,9 @@ public class SettingsProfileRowTests
     [AvaloniaFact]
     public void AStoredColourIsPreselectedInThePicker()
     {
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
         var name = ClaudeDesktopColors.Names.First();
-        ClaudeBuddySettings.Update("Claude-Profile-3", p => p.Color = name);
+        OrbweaverSettings.Update("Claude-Profile-3", p => p.Color = name);
 
         var row = NewWindow().Row(Profile("Claude-Profile-3"));
         var combo = row.GetLogicalDescendants().OfType<ComboBox>().First();
@@ -153,7 +153,7 @@ public class SettingsProfileRowTests
     [AvaloniaFact]
     public void NoStoredColourOpensOnAuto()
     {
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
 
         var row = NewWindow().Row(Profile("Claude-Profile-4"));
         var combo = row.GetLogicalDescendants().OfType<ComboBox>().First();
@@ -166,8 +166,8 @@ public class SettingsProfileRowTests
     [AvaloniaFact]
     public void AColourThisVersionNoLongerOffersFallsBackToAuto()
     {
-        ClaudeBuddySettings.ReloadForTests();
-        ClaudeBuddySettings.Update("Claude-Profile-5", p => p.Color = "vantablack");
+        OrbweaverSettings.ReloadForTests();
+        OrbweaverSettings.Update("Claude-Profile-5", p => p.Color = "vantablack");
 
         var row = NewWindow().Row(Profile("Claude-Profile-5"));
         var combo = row.GetLogicalDescendants().OfType<ComboBox>().First();
@@ -183,11 +183,11 @@ public class SettingsProfileRowTests
     [AvaloniaFact]
     public void SettingAProfileColourWritesIt()
     {
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
 
-        ClaudeBuddySettings.SetProfileColor("Claude-Profile-9", "red");
+        OrbweaverSettings.SetProfileColor("Claude-Profile-9", "red");
 
-        Assert.Equal("red", ClaudeBuddySettings.For("Claude-Profile-9").Color);
+        Assert.Equal("red", OrbweaverSettings.For("Claude-Profile-9").Color);
     }
 
     // Null is how a profile goes back to its name-derived colour, so it has to
@@ -195,23 +195,23 @@ public class SettingsProfileRowTests
     [AvaloniaFact]
     public void ClearingAProfileColourStoresNothing()
     {
-        ClaudeBuddySettings.ReloadForTests();
-        ClaudeBuddySettings.SetProfileColor("Claude-Profile-9", "red");
+        OrbweaverSettings.ReloadForTests();
+        OrbweaverSettings.SetProfileColor("Claude-Profile-9", "red");
 
-        ClaudeBuddySettings.SetProfileColor("Claude-Profile-9", null);
+        OrbweaverSettings.SetProfileColor("Claude-Profile-9", null);
 
-        Assert.Null(ClaudeBuddySettings.For("Claude-Profile-9").Color);
+        Assert.Null(OrbweaverSettings.For("Claude-Profile-9").Color);
     }
 
     [AvaloniaFact]
     public void SettingAProfileSwatchWritesIt()
     {
-        ClaudeBuddySettings.ReloadForTests();
+        OrbweaverSettings.ReloadForTests();
 
-        ClaudeBuddySettings.SetProfileShowSwatch("Claude-Profile-9", false);
-        Assert.False(ClaudeBuddySettings.For("Claude-Profile-9").ShowSwatch);
+        OrbweaverSettings.SetProfileShowSwatch("Claude-Profile-9", false);
+        Assert.False(OrbweaverSettings.For("Claude-Profile-9").ShowSwatch);
 
-        ClaudeBuddySettings.SetProfileShowSwatch("Claude-Profile-9", true);
-        Assert.True(ClaudeBuddySettings.For("Claude-Profile-9").ShowSwatch);
+        OrbweaverSettings.SetProfileShowSwatch("Claude-Profile-9", true);
+        Assert.True(OrbweaverSettings.For("Claude-Profile-9").ShowSwatch);
     }
 }

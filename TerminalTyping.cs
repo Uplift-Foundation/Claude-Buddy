@@ -1,6 +1,6 @@
 using System;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // How a line of text gets into a session that is already running.
     //
@@ -116,6 +116,12 @@ namespace ClaudeBuddy
             // here at all, whatever else it has.
             if (status is not { IsLocalCli: true }) return Route.None;
 
+            // Claude Desktop hosts this session: there is no terminal, and on
+            // Windows the pid-keyed console route below would otherwise claim
+            // one — it would AttachConsole to a process with no console and type
+            // into whatever it found. Typing goes through Desktop itself.
+            if (status.IsDesktopHosted) return Route.None;
+
             // **A background job is run by a daemon precisely so that no
             // terminal has to hold it.** There is no window and no console, so
             // there is nothing to address — which is why the panel offers
@@ -193,6 +199,10 @@ namespace ClaudeBuddy
         {
             if (route != Route.None) return Channel.Terminal;
 
+            // A Desktop-hosted session has no registry socket this app should
+            // message: replying is Claude Desktop's job (CB-265).
+            if (status is { IsDesktopHosted: true }) return Channel.None;
+
             if (status is { IsLocalCli: true, Source: SessionSource.ClaudeCode } && registryLive)
                 return Channel.Messaging;
 
@@ -262,12 +272,15 @@ namespace ClaudeBuddy
         // of these sentences answers the same question — *why can't I type
         // here* — and a user who has learned to recognise one answer should
         // not have to learn a second because they moved machines.
-        internal const string CantTypePhrase = "isn't a terminal Buddy can type into";
+        internal const string CantTypePhrase = $"isn't a terminal {Brand.ShortName} can type into";
 
         internal static string WhyNot(SessionStatus? status, bool onMacOS, bool onWindows)
         {
             if (status is not { IsLocalCli: true })
                 return "this isn't a CLI session on that machine, so there is nowhere to type.";
+
+            if (status.IsDesktopHosted)
+                return $"Claude Desktop {CantTypePhrase} — reply in its Code tab, or turn on Remote Control for the chat to send from here.";
 
             var program = string.IsNullOrWhiteSpace(status.TermProgram)
                 ? "its terminal"
@@ -280,7 +293,7 @@ namespace ClaudeBuddy
             // here is a status file with no pid: one written by a hook older
             // than the field, or by a session that had already gone.
             if (onWindows)
-                return $"{program} {CantTypePhrase} — Buddy couldn't find the console this "
+                return $"{program} {CantTypePhrase} — {Brand.ShortName} couldn't find the console this "
                        + "session is running in.";
 
             if (!onMacOS)

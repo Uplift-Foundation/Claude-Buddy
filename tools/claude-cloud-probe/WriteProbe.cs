@@ -3,7 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
-namespace ClaudeBuddy;
+namespace Orbweaver;
 
 // CB-199's gate: can the Claude Code CLI's own token *write* into a cloud
 // session from outside one?
@@ -167,11 +167,17 @@ internal static class WriteProbe
             }
             else
             {
+                // `--bridge` (CB-266) widens this to a `bridge` row, and only
+                // that: a Remote Control session the caller started for the
+                // probe, e.g. `claude --remote-control` in a scratch directory.
+                // Still never a user's real session — that remains the caller's
+                // word under --throwaway, backed now by the kind check alone.
                 var kind = await KindOfAsync(id, token);
                 Console.WriteLine($"guard    environment_kind {kind ?? "(unreadable)"}");
-                if (kind != "anthropic_cloud")
+                var allowed = opts.Contains("--bridge") ? "bridge" : "anthropic_cloud";
+                if (kind != allowed)
                 {
-                    Console.Error.WriteLine("refusing to write: not an anthropic_cloud session.");
+                    Console.Error.WriteLine($"refusing to write: not an {allowed} session.");
                     return 2;
                 }
             }

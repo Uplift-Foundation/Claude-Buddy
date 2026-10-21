@@ -1,4 +1,4 @@
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // Same seam as tests/UiTests/ChatPanelTestAccess.cs, copied for the same
 // reason FakeChatSession is: this project stays isolated from tests/UiTests,

@@ -1,13 +1,17 @@
 using System.Diagnostics;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // tools/stop-installed-buddy.sh, which `build-macos-app.sh --install` runs
-// before it replaces /Applications/Claude Buddy.app (CB-206). Once the
+// before it replaces /Applications/Orbweaver.app (CB-206). Once the
 // single-instance mutex spans sessions, the copy launchd starts after an
 // install finds the old one holding it and exits, so the old one has to be
-// gone first or the install leaves a stale Buddy running.
+// gone first or the install leaves a stale Buddy running. Since CB-255 the
+// install also removes the legacy /Applications/Claude Buddy.app, so the
+// script takes every path to stop in one call — three since CB-256 renamed
+// the executable, the phase-2 Contents/MacOS/ClaudeBuddy beside the new
+// Contents/MacOS/Orbweaver in the one bundle.
 //
 // Driven against stand-ins rather than Buddy: an ad-hoc re-signed copy of
 // /bin/bash at a scratch path with a space in it, as /Applications' has. The
@@ -47,7 +51,8 @@ public class StopInstalledBuddyScriptTests : IDisposable
         try { Directory.Delete(_dir, recursive: true); } catch (IOException) { }
     }
 
-    // A stand-in executable at <scratch>/<name>.app/Contents/MacOS/ClaudeBuddy.
+    // A stand-in executable at <scratch>/<name>.app/Contents/MacOS/<executable>
+    // — ClaudeBuddy unless a case asks for the phase-3 name (CB-256).
     //
     // **Written as plain bytes, not File.Copy'd (CB-245).** /bin/bash is stored
     // with APFS transparent compression (`ls -lO` says `compressed`), and
@@ -61,9 +66,9 @@ public class StopInstalledBuddyScriptTests : IDisposable
     // reach it: the run that found this failed all three attempts on the same
     // file. A plain write is never compressed, so the race has nothing to act
     // on — `Stand_ins_are_not_compressed` pins that rather than the timing.
-    private string StandIn(string name)
+    private string StandIn(string name, string executable = "ClaudeBuddy")
     {
-        var exe = UnsignedStandIn(name);
+        var exe = UnsignedStandIn(name, executable);
         Sign(exe);
         return exe;
     }
@@ -71,11 +76,11 @@ public class StopInstalledBuddyScriptTests : IDisposable
     // The copy before codesign sees it. Separate because signing rewrites the
     // file and clears its compression whichever way it was made, so a check
     // after Sign could not tell a plain write from a compressed clone.
-    private string UnsignedStandIn(string name)
+    private string UnsignedStandIn(string name, string executable = "ClaudeBuddy")
     {
         var macOs = Path.Combine(_dir, name + ".app", "Contents", "MacOS");
         Directory.CreateDirectory(macOs);
-        var exe = Path.Combine(macOs, "ClaudeBuddy");
+        var exe = Path.Combine(macOs, executable);
         File.WriteAllBytes(exe, File.ReadAllBytes("/bin/bash"));
         File.SetUnixFileMode(exe,
             UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
@@ -224,7 +229,14 @@ public class StopInstalledBuddyScriptTests : IDisposable
 
     private sealed record Result(int ExitCode, string Stdout, string Stderr, TimeSpan Took);
 
-    private static Result Stop(string[] args, string? grace = null)
+    internal const string GraceVariable = "ORBWEAVER_STOP_GRACE_SECONDS";
+    internal const string LegacyGraceVariable = "CLAUDE_BUDDY_STOP_GRACE_SECONDS";
+
+    // `grace` goes in under ORBWEAVER_STOP_GRACE_SECONDS, `legacyGrace` under
+    // the pre-rename spelling the script still falls back to (CB-256). Both
+    // are cleared first, so neither a developer's shell nor the other case
+    // can leak a value in.
+    private static Result Stop(string[] args, string? grace = null, string? legacyGrace = null)
     {
         var psi = new ProcessStartInfo("/bin/bash")
         {
@@ -234,7 +246,10 @@ public class StopInstalledBuddyScriptTests : IDisposable
         };
         psi.ArgumentList.Add(Script);
         foreach (var arg in args) psi.ArgumentList.Add(arg);
-        if (grace is not null) psi.Environment["CLAUDE_BUDDY_STOP_GRACE_SECONDS"] = grace;
+        psi.Environment.Remove(GraceVariable);
+        psi.Environment.Remove(LegacyGraceVariable);
+        if (grace is not null) psi.Environment[GraceVariable] = grace;
+        if (legacyGrace is not null) psi.Environment[LegacyGraceVariable] = legacyGrace;
 
         var clock = Stopwatch.StartNew();
         using var process = Process.Start(psi)!;
@@ -337,6 +352,123 @@ public class StopInstalledBuddyScriptTests : IDisposable
     public void Refuses_to_run_without_a_path()
     {
         var result = Stop([]);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Contains("usage", result.Stderr);
+    }
+
+    // CB-255: the new bundle and the legacy one in one call, as --install
+    // makes it. Both are stopped and named; a third build at another path —
+    // the negative control — is left running, so a pass cannot come from the
+    // script stopping everything once it has more than one path.
+    [MacInstallFact]
+    public void Stops_copies_running_from_any_of_several_paths()
+    {
+        var current = StandIn("Orbweaver");
+        var legacy = StandIn("Claude Buddy");
+        var elsewhere = StandIn("Claude Buddy dev");
+        var fromCurrent = Launch(current);
+        var fromLegacy = Launch(legacy);
+        var bystander = Launch(elsewhere);
+
+        var result = Stop([current, legacy]);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(new[] { fromCurrent.Id, fromLegacy.Id }.Order().ToArray(), Pids(result.Stdout));
+        Assert.True(fromCurrent.WaitForExit(5000));
+        Assert.True(fromLegacy.WaitForExit(5000));
+        Assert.False(bystander.HasExited);
+        Assert.Equal(new[] { bystander.Id }, Running(elsewhere).ToArray());
+    }
+
+    // One path running, one not — the ordinary upgrade from a machine where
+    // only the legacy bundle was ever installed.
+    [MacInstallFact]
+    public void A_path_with_nothing_running_beside_one_that_has_a_copy_is_fine()
+    {
+        var current = StandIn("Orbweaver");
+        var legacy = StandIn("Claude Buddy");
+        var fromLegacy = Launch(legacy);
+
+        var result = Stop([current, legacy]);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(new[] { fromLegacy.Id }, Pids(result.Stdout));
+        Assert.True(fromLegacy.WaitForExit(5000));
+    }
+
+    // CB-256: the three paths --install now passes — this build's
+    // Orbweaver.app/Contents/MacOS/Orbweaver, the phase-2 executable in the
+    // same bundle (Contents/MacOS/ClaudeBuddy) and the legacy bundle's — with
+    // a copy running from each. All three are stopped and named in one call;
+    // the bystander at a fourth path is the control, as above.
+    [MacInstallFact]
+    public void Stops_a_copy_from_each_of_the_three_install_paths()
+    {
+        var current = StandIn("Orbweaver", executable: "Orbweaver");
+        var interim = StandIn("Orbweaver", executable: "ClaudeBuddy");
+        var legacy = StandIn("Claude Buddy");
+        var elsewhere = StandIn("Orbweaver dev", executable: "Orbweaver");
+        var fromCurrent = Launch(current);
+        var fromInterim = Launch(interim);
+        var fromLegacy = Launch(legacy);
+        var bystander = Launch(elsewhere);
+
+        var result = Stop([current, interim, legacy]);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(new[] { fromCurrent.Id, fromInterim.Id, fromLegacy.Id }.Order().ToArray(), Pids(result.Stdout));
+        Assert.True(fromCurrent.WaitForExit(5000));
+        Assert.True(fromInterim.WaitForExit(5000));
+        Assert.True(fromLegacy.WaitForExit(5000));
+        Assert.False(bystander.HasExited);
+        Assert.Equal(new[] { bystander.Id }, Running(elsewhere).ToArray());
+    }
+
+    // CB-256: the grace still shortens under its pre-rename spelling. Pinned
+    // through the SIGKILL arm, which is the only thing the grace changes: a
+    // stubborn copy is killed after one second rather than the default ten,
+    // so a run that finishes well inside ten seconds read the legacy value.
+    [MacInstallFact]
+    public void The_legacy_grace_spelling_is_still_read()
+    {
+        var exe = StandIn("Claude Buddy");
+        var stubborn = Launch(exe, ignoreTerm: true);
+
+        var result = Stop([exe], legacyGrace: "1");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(new[] { stubborn.Id }, Pids(result.Stdout));
+        Assert.True(stubborn.WaitForExit(5000));
+        Assert.Equal(137, stubborn.ExitCode);
+        Assert.True(result.Took >= TimeSpan.FromSeconds(1), "the script sent SIGKILL before the grace ran out");
+        Assert.True(result.Took < TimeSpan.FromSeconds(8), $"took {result.Took}: the legacy grace was not read");
+    }
+
+    // And with both spellings set, the new one wins: one second under
+    // ORBWEAVER_, a minute under the legacy name. Reading the legacy value
+    // would hold this case for a minute.
+    [MacInstallFact]
+    public void The_orbweaver_grace_spelling_wins_over_the_legacy_one()
+    {
+        var exe = StandIn("Claude Buddy");
+        var stubborn = Launch(exe, ignoreTerm: true);
+
+        var result = Stop([exe], grace: "1", legacyGrace: "60");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(137, stubborn.WaitForExit(5000) ? stubborn.ExitCode : -1);
+        Assert.True(result.Took < TimeSpan.FromSeconds(8), $"took {result.Took}: the legacy grace won");
+    }
+
+    // An empty path anywhere in the list is a caller's mistake, refused
+    // rather than read as "nothing was running there".
+    [MacInstallFact]
+    public void Refuses_an_empty_path_among_several()
+    {
+        var current = StandIn("Orbweaver");
+
+        var result = Stop([current, ""]);
 
         Assert.Equal(2, result.ExitCode);
         Assert.Contains("usage", result.Stderr);

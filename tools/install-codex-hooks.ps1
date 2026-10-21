@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-Wires the Claude Buddy hook into Codex on Windows, so Codex sessions show orbs.
+Wires the Orbweaver hook into Codex on Windows, so Codex sessions show orbs.
 
 .DESCRIPTION
 The Windows twin of tools/install-codex-hooks.sh, and the sibling of
@@ -21,10 +21,16 @@ macOS against a real Codex -- see docs/codex-findings.md:
     decision, which is the only guarantee worth having when the failure mode is
     refusing something the user asked for.
 
-Safe to re-run: it strips existing Claude Buddy entries before adding fresh
-ones, so it converges rather than accumulating duplicates. That matters more
-here than for Claude Code, because Codex's own /import copies a Claude Code
-setup across and can leave hooks of its own behind.
+Safe to re-run: it strips existing entries of ours before adding fresh ones,
+so it converges rather than accumulating duplicates. That matters more here
+than for Claude Code, because Codex's own /import copies a Claude Code setup
+across and can leave hooks of its own behind.
+
+"Ours" is either hook filename, OrbweaverHook.* or the pre-rename
+ClaudeBuddyHook.* (CB-255), in command or commandWindows, so an upgrade
+re-wires in the same pass. The old claude-buddy script folder is left on disk
+for sessions still running against it, with a .superseded marker the app's
+LegacyHookCleanup reads.
 
 .PARAMETER Uninstall
 Remove just our entries, leaving any other tool's hooks alone.
@@ -41,28 +47,37 @@ $ErrorActionPreference = 'Stop'
 if (-not $CodexHome) {
     $CodexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $env:USERPROFILE '.codex' }
 }
-if (-not $HookDir)   { $HookDir   = Join-Path $CodexHome 'claude-buddy' }
+if (-not $HookDir)   { $HookDir   = Join-Path $CodexHome 'orbweaver' }
 if (-not $HooksPath) { $HooksPath = Join-Path $CodexHome 'hooks.json' }
+$legacyHookDir = Join-Path $CodexHome 'claude-buddy'
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 # Alongside (installed layout) wins over one level up (repo checkout), matching
 # how install-windows-hooks.ps1 resolves the same script.
 $source = @(
-    (Join-Path $here 'ClaudeBuddyHook.ps1'),
-    (Join-Path (Split-Path -Parent $here) 'ClaudeBuddyHook.ps1')
+    (Join-Path $here 'OrbweaverHook.ps1'),
+    (Join-Path (Split-Path -Parent $here) 'OrbweaverHook.ps1')
 ) | Where-Object { Test-Path $_ } | Select-Object -First 1
 
-$installed = Join-Path $HookDir 'ClaudeBuddyHook.ps1'
+$installed = Join-Path $HookDir 'OrbweaverHook.ps1'
 
 if (-not $Uninstall) {
     if (-not $source) {
-        Write-Error "Can't find ClaudeBuddyHook.ps1 next to $here or one level up."
+        Write-Error "Can't find OrbweaverHook.ps1 next to $here or one level up."
         exit 1
     }
     New-Item -ItemType Directory -Path $HookDir -Force | Out-Null
     Copy-Item -LiteralPath $source -Destination $installed -Force
     Write-Host "Hook installed: $installed"
+
+    # Mark, never delete, and only when absent: a refreshed mtime on every
+    # re-run would keep the app's 14-day retirement clock from running out.
+    $marker = Join-Path $legacyHookDir '.superseded'
+    if ((Test-Path -LiteralPath $legacyHookDir -PathType Container) -and -not (Test-Path -LiteralPath $marker)) {
+        [System.IO.File]::WriteAllText($marker, '')
+        Write-Host "Marked $legacyHookDir as superseded; Orbweaver retires it once nothing calls it."
+    }
 }
 
 function ConvertTo-HashtableDeep($value) {
@@ -101,7 +116,7 @@ if (-not (Test-Path $HooksPath)) {
 $json = Get-Content -LiteralPath $HooksPath -Raw -Encoding UTF8
 $config = if ([string]::IsNullOrWhiteSpace($json)) { @{} } else { ConvertTo-HashtableDeep ($json | ConvertFrom-Json) }
 
-$backup = "$HooksPath.claudebuddy-backup"
+$backup = "$HooksPath.orbweaver-backup"
 Copy-Item -LiteralPath $HooksPath -Destination $backup -Force
 Write-Host "Backed up hooks to $backup"
 
@@ -127,10 +142,17 @@ $wanted = @(
 # Strip our own entries wherever they appear. Matched on the filename rather
 # than the full path, so a config written by an older version -- or carried over
 # by the /import command in Codex, which points at a .claude path -- is still
-# recognised as ours and replaced instead of left to fire twice.
+# recognised as ours and replaced instead of left to fire twice. Either
+# filename, either extension: the pre-rename ClaudeBuddyHook.* entries are the
+# upgrade's re-wire, and an /import from macOS carries the .sh spelling.
+# -like is case-insensitive, as a Windows path is.
 #
 # $event is an automatic variable in PowerShell; using it as a loop variable
 # here would shadow it and can misbehave.
+function Test-OurCommand($value) {
+    ($value -like '*ClaudeBuddyHook.*') -or ($value -like '*OrbweaverHook.*')
+}
+
 foreach ($eventName in @($hooks.Keys)) {
     $groups = @($hooks[$eventName])
     $kept = @()
@@ -139,8 +161,8 @@ foreach ($eventName in @($hooks.Keys)) {
         if ($null -eq $group) { continue }
 
         $inner = @(@($group['hooks']) | Where-Object {
-            $_ -and ($_['command'] -notlike '*ClaudeBuddyHook.ps1*') `
-                 -and ($_['commandWindows'] -notlike '*ClaudeBuddyHook.ps1*')
+            $_ -and -not (Test-OurCommand $_['command']) `
+                 -and -not (Test-OurCommand $_['commandWindows'])
         })
 
         if ($inner.Count -gt 0) { $group['hooks'] = $inner; $kept += $group }
@@ -150,7 +172,7 @@ foreach ($eventName in @($hooks.Keys)) {
 }
 
 if (-not $Uninstall) {
-    # TEMP is baked in at wiring time for the reason ClaudeBuddyHook.ps1's own
+    # TEMP is baked in at wiring time for the reason OrbweaverHook.ps1's own
     # comment gives: a hook invoked through an interop shell cannot be trusted
     # to have TEMP set, and without it the script writes its status file
     # somewhere the app never looks -- with no visible error.
@@ -185,8 +207,8 @@ $out = $config | ConvertTo-Json -Depth 20
 [System.IO.File]::WriteAllText($HooksPath, $out, (New-Object System.Text.UTF8Encoding($false)))
 
 if ($Uninstall) {
-    Write-Host "Removed Claude Buddy hooks from $HooksPath"
-    Write-Host "The installed hook script was left in place; delete $HookDir if you want it gone."
+    Write-Host "Removed Orbweaver hooks from $HooksPath"
+    Write-Host "The installed hook script was left in place; delete $HookDir (and $legacyHookDir, if present) if you want it gone."
     exit 0
 }
 
@@ -202,7 +224,7 @@ Write-Host ''
 Write-Host '  Codex will not run a hook it has not been told to trust, and a hooks.json'
 Write-Host '  written by anything other than Codex itself starts out untrusted. Start'
 Write-Host '  Codex and accept the hook review it shows you, or run /hooks inside it'
-Write-Host '  and trust the Claude Buddy entries.'
+Write-Host '  and trust the Orbweaver entries.'
 Write-Host ''
 Write-Host '  Editing hooks.json later - including re-running this installer - changes'
 Write-Host '  its hash and asks you again.'

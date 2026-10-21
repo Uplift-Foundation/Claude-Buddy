@@ -3,7 +3,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Runtime.Versioning;
 using Microsoft.Win32;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // Backs the Settings window's "WSL integration" section: list a machine's
     // WSL distros, tell whether each one's Claude Code already has Claude
@@ -60,7 +60,7 @@ namespace ClaudeBuddy
         // structure) means the two surfaces can never disagree about whether a
         // distro is wired. Plain file I/O — no subprocess call needed just to
         // check status. profileDirName defaults to the standard '.claude';
-        // any CLAUDE_CONFIG_DIR-style name (see ClaudeBuddySettings.
+        // any CLAUDE_CONFIG_DIR-style name (see OrbweaverSettings.
         // ClaudeCodeProfileDirs) works the same way.
         // Excluded from coverage: resolves a path through the registry and reads a
         // file inside a live distro; what it looks for in that text is
@@ -84,13 +84,21 @@ namespace ClaudeBuddy
         }
 
         // "Wired" means the same thing here as it does to the PowerShell side:
-        // the settings file's text mentions ClaudeBuddyHook.ps1. Split out of
+        // the settings file's text mentions the hook script. Split out of
         // IsWired so the definition can be asserted without a WSL distro — the
         // whole reason it is a text match rather than a JSON structure check is
         // that the two surfaces must never disagree about it, and a definition
         // two implementations share is worth a test of its own.
+        //
+        // Either script name counts since CB-255 (§1): a distro an
+        // un-upgraded installer wired still names ClaudeBuddyHook.ps1, its
+        // hooks still fire, and calling it un-wired would show a toggle that
+        // lies. It is also what makes ReapplyProfiles re-wire such a distro to
+        // the new script on the next reapply, since it only touches distros
+        // that read as wired. The installers strip on the same two substrings.
         internal static bool SettingsTextMentionsHook(string text) =>
-            text.Contains("ClaudeBuddyHook.ps1", StringComparison.OrdinalIgnoreCase);
+            text.Contains(Brand.HookScriptPowerShell, StringComparison.OrdinalIgnoreCase)
+            || text.Contains(Brand.Legacy.HookScriptPowerShell, StringComparison.OrdinalIgnoreCase);
 
         // Enable or disable hooks for one distro by shelling out to the
         // shipped installer script — same script the installer itself runs,
@@ -127,7 +135,7 @@ namespace ClaudeBuddy
             return TryRun(@"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe", 45_000, args);
         }
 
-        // Call after ClaudeBuddySettings.Add/RemoveClaudeCodeProfileDir, so an
+        // Call after OrbweaverSettings.Add/RemoveClaudeCodeProfileDir, so an
         // edit to the extra-profile list takes effect immediately rather than
         // silently doing nothing until every already-wired surface is
         // manually re-toggled — matching this window's "changes apply
@@ -140,22 +148,39 @@ namespace ClaudeBuddy
         // Excluded from coverage: runs the installer script for every listed
         // distro.
         [ExcludeFromCodeCoverage]
-        public static void ReapplyProfiles()
+        public static HookInstallResult ReapplyProfiles()
         {
-            if (!OperatingSystem.IsWindows()) return;
+            const string label = "install-windows-hooks.ps1";
+            if (!OperatingSystem.IsWindows())
+            {
+                return HookInstaller.Finish(label,
+                    new HookInstallResult(HookInstallOutcome.Threw, label, Error: "Not Windows."));
+            }
 
             var script = ResolveInstallerScriptPath();
-            if (script is null) return;
+            if (script is null) return HookInstaller.Finish(label, HookInstallResult.NotFound(label));
 
             // No -Wsl here on purpose: this call's only job is the native
             // side. Fast — no WSL VM involved — so a short timeout is enough.
-            TryRun(@"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe", 10_000,
-                new[] { "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script });
+            var native = HookInstaller.Run(@"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+                new[] { "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script }, label, 10_000);
 
+            // A distro that would not re-wire is a failure the card has to say,
+            // not a bool this loop used to drop (CB-258). Native's own result
+            // wins when it failed, since that is the more basic problem.
+            var failed = new List<string>();
             foreach (var distro in ListDistros())
             {
-                if (IsWired(distro)) SetWired(distro, true);
+                if (IsWired(distro) && !SetWired(distro, true)) failed.Add(distro);
             }
+
+            if (native.Outcome != HookInstallOutcome.Ok || failed.Count == 0) return native;
+
+            return HookInstaller.Finish(label, native with
+            {
+                Outcome = HookInstallOutcome.Threw,
+                Error = $"WSL distro(s) {string.Join(", ", failed)} could not be re-wired."
+            });
         }
 
         // Deliberately not shared with TerminalFocuser.TryRun or

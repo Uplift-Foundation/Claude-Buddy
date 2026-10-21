@@ -6,7 +6,7 @@ using Avalonia.Media;
 using Avalonia.Media.TextFormatting;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // SettingsWindow.HelpText, and the Avalonia defect it exists to route around.
 //
@@ -93,7 +93,7 @@ public class SettingsHelpTextTests : IDisposable
     [AvaloniaFact]
     public void EveryWrappedTextInAFullyPopulatedSettingsWindowLaysOutToItsEnd()
     {
-        foreach (var flag in typeof(ClaudeBuddySettings)
+        foreach (var flag in typeof(OrbweaverSettings)
                      .GetProperties(BindingFlags.Public | BindingFlags.Static)
                      .Where(p => p.PropertyType == typeof(bool) && p.CanWrite))
         {

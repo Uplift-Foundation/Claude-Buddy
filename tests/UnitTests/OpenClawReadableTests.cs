@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.UnitTests;
+namespace Orbweaver.UnitTests;
 
 // OpenClawSessions.Readable: turning what OpenClaw actually writes into a
 // transcript into what a person should read.

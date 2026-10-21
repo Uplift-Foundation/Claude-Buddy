@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace ClaudeBuddy
+namespace Orbweaver
 {
     // What shape of local session a status file describes.
     //
@@ -167,6 +167,7 @@ namespace ClaudeBuddy
         internal static bool WorthAskingTheDaemon(
             SessionStatus status, bool knowsATerminal, bool sharesItsPid) =>
             status.Source == SessionSource.ClaudeCode
+            && !status.IsDesktopHosted
             && (status.SessionPid <= 0 || !knowsATerminal || sharesItsPid);
 
         // Which of the four an orb should be drawn as.
@@ -298,7 +299,7 @@ namespace ClaudeBuddy
         // NotAJob — which RuledOutAsAJob above turns into NotALiveJob for any
         // file naming no process. The hook records no process for exactly these
         // sessions, on purpose: its walk up the Windows process tree dead-ends in
-        // the interop bridge, and ClaudeBuddyHook.ps1 says in as many words that
+        // the interop bridge, and OrbweaverHook.ps1 says in as many words that
         // the app treats an unrecorded pid as "can't check" and keeps the orb.
         // The two rules together dropped every WSL orb on every scan (CB-194),
         // while the same session started from a Windows prompt drew normally,
@@ -707,7 +708,7 @@ namespace ClaudeBuddy
         // than Dismiss with an extra clause. Such a session can still be
         // dismissed; it just cannot be ended.
         internal static bool CanEndSession(SessionStatus status) =>
-            status.IsLocalCli && status.SessionPid > 0;
+            status.IsLocalCli && !status.IsDesktopHosted && status.SessionPid > 0;
 
         // CB-170: the two OpenClaw rows. An OpenClaw conversation has no pid, so
         // CanEndSession is correctly false for every one of them and these are

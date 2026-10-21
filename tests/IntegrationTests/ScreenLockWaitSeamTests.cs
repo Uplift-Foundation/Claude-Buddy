@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // The screen-lock wait against the two things it does not own: the real
 // wall clock and the real scheduler.

@@ -1,7 +1,7 @@
 using Avalonia.Headless.XUnit;
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-106: a live `sample` caught the main thread pinned for 8-11 seconds
 // inside a raw sync() syscall, reached through Avalonia's native macOS
@@ -59,8 +59,8 @@ public class ScheduleScanTests
 
     private static SessionManager Manager(Scratch scratch)
     {
-        ClaudeBuddySettings.ClaudeCodeEnabled = true;
-        ClaudeBuddySettings.CodexEnabled = true;
+        OrbweaverSettings.ClaudeCodeEnabled = true;
+        OrbweaverSettings.CodexEnabled = true;
         return new SessionManager(scratch.Dir);
     }
 

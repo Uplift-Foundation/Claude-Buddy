@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace ClaudeBuddy.Tests;
+namespace Orbweaver.Tests;
 
 // CB-144: a fenced code block is an *example*, and no arm of the grammar may
 // read a field out of one — with exactly one exception, CB-141's marked `yaml`
