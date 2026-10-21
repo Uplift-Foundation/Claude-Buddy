@@ -84,7 +84,7 @@ namespace Orbweaver
                 : "win-x64";
 
         internal static string EngineUrl =>
-            "https://github.com/Uplift-Foundation/Claude-Buddy/releases/download/"
+            "https://github.com/Uplift-Foundation/Orbweaver/releases/download/"
             + $"v{EngineVersion}/{Brand.SpeechEngineName}-{EngineVersion}-{EngineRid}.zip";
 
         internal static string Root => Path.Combine(OrbweaverSettings.Directory, "speech-engine");

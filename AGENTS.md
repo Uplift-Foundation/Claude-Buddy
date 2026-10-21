@@ -43,7 +43,7 @@ Then it writes a plan, and **plans on a stronger model than the one that impleme
 
 Those are the `model:` values the Agent and Workflow tools accept; `effort:` is the other dial and moves the same way — high while planning, lower for mechanical stages.
 
-**If the PM isn't confident the requirement and plan support autonomous implementation, it asks a human before spending a team.** Ask on GitHub with a link to the CB ticket, and — the Jira site needs its own login separate from GitHub's — enough of the requirement inline that the question stands alone for someone who can't open the link. Repo admins are the escalation point (`wtvamp`, `lunarjuice` at time of writing; `gh api repos/Uplift-Foundation/Claude-Buddy/collaborators` is the live list). If it *is* confident, it hands straight to the architects and engineers and no human is in the loop.
+**If the PM isn't confident the requirement and plan support autonomous implementation, it asks a human before spending a team.** Ask on GitHub with a link to the CB ticket, and — the Jira site needs its own login separate from GitHub's — enough of the requirement inline that the question stands alone for someone who can't open the link. Repo admins are the escalation point (`wtvamp`, `lunarjuice` at time of writing; `gh api repos/Uplift-Foundation/Orbweaver/collaborators` is the live list). If it *is* confident, it hands straight to the architects and engineers and no human is in the loop.
 
 ### Build and QA, in a loop
 
@@ -59,7 +59,7 @@ The feature goes up as a PR against `develop`, per **Pull requests** below.
 
 The PM agent reviews it — **both** rids, since that is exactly where a macOS-only implementation shows itself — and **if it can approve the feature as done autonomously, it should**: approving the PR itself, and moving the ticket accordingly.
 
-**Approving is the agent's own call, not a checkpoint to hand back.** An agent that has read both rids, can point at the tests covering the change and can say what it confirmed on a real machine is holding everything a human reviewer would be handed; asking a person anyway is a checkpoint out of habit. So approve it — `gh pr review <number> --repo Uplift-Foundation/Claude-Buddy --approve --body "..."` — and put the substance in the body: both rids by name, which suites ran, and what was confirmed on a machine kept separate from what is assumed. "LGTM" from an agent is worth nothing to the next person.
+**Approving is the agent's own call, not a checkpoint to hand back.** An agent that has read both rids, can point at the tests covering the change and can say what it confirmed on a real machine is holding everything a human reviewer would be handed; asking a person anyway is a checkpoint out of habit. So approve it — `gh pr review <number> --repo Uplift-Foundation/Orbweaver --approve --body "..."` — and put the substance in the body: both rids by name, which suites ran, and what was confirmed on a machine kept separate from what is assumed. "LGTM" from an agent is worth nothing to the next person.
 
 GitHub refuses an approving review on a PR the same account opened, which is the common case here. That is a mechanical limit, not a reason to escalate: post the identical body as a review comment instead. The written record is the point, not the green tick.
 
@@ -112,7 +112,7 @@ Two mechanical notes that look like problems and are not. GitHub refuses an appr
 Open every PR **against `develop`** — `feature/` and `bugfix/` both — unless it's a `release/` or `hotfix/` branch, which target `main`. The repository's default branch is still `main`, so GitHub will offer the wrong base — pass it explicitly:
 
 ```bash
-gh pr create --repo Uplift-Foundation/Claude-Buddy --base develop \
+gh pr create --repo Uplift-Foundation/Orbweaver --base develop \
   --head <branch> --title "..." --body "..."
 ```
 
@@ -124,7 +124,7 @@ That includes the tests — see **Every feature ships with its tests** below. A 
 
 ## Remotes
 
-`Uplift-Foundation/Claude-Buddy` is the canonical repository. **Which remote name points at it varies by clone** — run `git remote -v` rather than assuming. Clones from the canonical repo call it `origin`; clones from the `wtvamp/Claude-Buddy` fork call the fork `origin` and the canonical repo `upstream`.
+`Uplift-Foundation/Orbweaver` is the canonical repository. **Which remote name points at it varies by clone** — run `git remote -v` rather than assuming. Clones from the canonical repo call it `origin`; clones from the `wtvamp/Claude-Buddy` fork call the fork `origin` and the canonical repo `upstream`.
 
 ## Reading the code: never from this clone
 

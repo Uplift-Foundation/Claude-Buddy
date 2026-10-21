@@ -59,8 +59,7 @@ MASK_PATTERNS = [
     re.compile(r"(?i)io\.github\.wtvamp\.claudebuddy"),            # macOS bundle id / LaunchAgent label
     re.compile(r"claude-buddy-rc-"),                               # MachineNames.RelayPrefix
     re.compile(r"CLAUDEBUDDY_(?:CHIME|VOICE|SPEECH_VOLUME|SPEAK_TEXT|SPEAK_VOICE)"),  # shipped env vars
-    re.compile(r"(?i)Uplift-Foundation/Claude-Buddy"),             # repo URL (repo not renamed)
-    re.compile(r"(?i)wtvamp/Claude-Buddy"),                        # repo URL (repo not renamed)
+    re.compile(r"(?i)wtvamp/Claude-Buddy"),                        # the personal fork's URL; that repo keeps its name
 ]
 
 # Directory/glob exclusions, matched against the forward-slash repo path.

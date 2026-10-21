@@ -49,7 +49,7 @@ Then the PM writes a plan, and **plans on a stronger model than the one that wil
 
 Those are the `model:` values the Agent and Workflow tools accept (`fable`, `opus`, `sonnet`, `haiku`). `effort:` is the other dial and moves the same way — high while planning, lower for the mechanical stages afterwards.
 
-**If the PM is not confident the requirement and plan are enough to build from autonomously, it asks a human before spending a team on it.** Ask on GitHub, against the repo, with a link to the CB ticket — and because the Jira site needs its own login separate from GitHub's, put enough of the requirement in the comment that the question stands on its own for someone who cannot open the link. Repo admins are the escalation point (`wtvamp` and `lunarjuice` at the time of writing; `gh api repos/Uplift-Foundation/Claude-Buddy/collaborators` prints the current list).
+**If the PM is not confident the requirement and plan are enough to build from autonomously, it asks a human before spending a team on it.** Ask on GitHub, against the repo, with a link to the CB ticket — and because the Jira site needs its own login separate from GitHub's, put enough of the requirement in the comment that the question stands on its own for someone who cannot open the link. Repo admins are the escalation point (`wtvamp` and `lunarjuice` at the time of writing; `gh api repos/Uplift-Foundation/Orbweaver/collaborators` prints the current list).
 
 If it *is* confident, it hands straight to the architects and engineers, and the feature proceeds without a human in the loop.
 
@@ -70,7 +70,7 @@ The PM agent reviews that comment — **both** rids, since a macOS-only implemen
 **Approving is the agent's own call, not a checkpoint to hand back.** An agent that has read both rids, can point at the tests covering the change and can say what it confirmed on a real machine is holding everything a human reviewer would be handed — asking a person to look anyway is the "checkpoint out of habit" this file already warns against, and it costs a round trip to be told what the agent already knew. So approve it:
 
 ```bash
-gh pr review <number> --repo Uplift-Foundation/Claude-Buddy --approve --body "..."
+gh pr review <number> --repo Uplift-Foundation/Orbweaver --approve --body "..."
 ```
 
 The body is the part that matters, and it is the same distinction the rest of this file keeps: name both rids, say which suites ran, and separate what was confirmed on a machine from what is assumed. "LGTM" from an agent is worth nothing to the next person; "routing verified end to end on a real Mac, Windows not reproduced and not fixed" is worth the whole review.
@@ -135,7 +135,7 @@ Two mechanical notes that look like problems and are not. GitHub refuses an appr
 Open every PR **against `develop`** — `feature/` and `bugfix/` both — unless it's a `release/` or `hotfix/` branch, which target `main`. The repository's default branch is still `main`, so GitHub will offer the wrong base — pass it explicitly:
 
 ```bash
-gh pr create --repo Uplift-Foundation/Claude-Buddy --base develop \
+gh pr create --repo Uplift-Foundation/Orbweaver --base develop \
   --head <branch> --title "..." --body "..."
 ```
 
@@ -147,7 +147,7 @@ That includes the tests — see **Every feature ships with its tests** below. A 
 
 ## Remotes
 
-`Uplift-Foundation/Claude-Buddy` is the canonical repository; branches and PRs go there. **Which remote name points at it varies by clone** — run `git remote -v` rather than assuming:
+`Uplift-Foundation/Orbweaver` is the canonical repository; branches and PRs go there. **Which remote name points at it varies by clone** — run `git remote -v` rather than assuming:
 
 - Clones made from the canonical repo call it **`origin`** and have no `upstream`, so `git fetch upstream` fails outright.
 - Clones made from the **`wtvamp/Claude-Buddy`** fork call the fork `origin` and the canonical repo `upstream`. Older branches still track the fork; don't add to them.
