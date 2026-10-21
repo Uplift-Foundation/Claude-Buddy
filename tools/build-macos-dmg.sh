@@ -197,7 +197,7 @@ $APP_NAME does it itself the first time it starts, and says so in
 ~/Library/Logs/Orbweaver/migration.log. Either way the keep-alive covers the
 copy launchd starts, so it is fully back after your next login.
 
-Source, issues and docs: https://github.com/Uplift-Foundation/Claude-Buddy
+Source, issues and docs: https://github.com/Uplift-Foundation/Orbweaver
 MIT licensed.
 READ_ME
 

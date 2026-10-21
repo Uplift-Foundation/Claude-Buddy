@@ -61,7 +61,7 @@ public class BrandCallSiteTests
     public void TheSpeechEngineUrlNamesTheShippedAsset()
     {
         Assert.Equal(
-            "https://github.com/Uplift-Foundation/Claude-Buddy/releases/download/"
+            "https://github.com/Uplift-Foundation/Orbweaver/releases/download/"
             + $"v{NeuralSpeech.EngineVersion}/OrbweaverSpeech-{NeuralSpeech.EngineVersion}-{NeuralSpeech.EngineRid}.zip",
             NeuralSpeech.EngineUrl);
     }

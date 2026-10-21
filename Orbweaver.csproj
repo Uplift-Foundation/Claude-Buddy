@@ -24,14 +24,14 @@
          Version flows into AssemblyInformationalVersion, which is what
          actually shows the prerelease label. Version must stay a literal
          element here: the packaging scripts and release.yml parse it. -->
-    <Version>0.5.11-beta</Version>
+    <Version>1.0.0</Version>
     <AssemblyVersion>$(Version.Split('-')[0]).0</AssemblyVersion>
     <FileVersion>$(Version.Split('-')[0]).0</FileVersion>
     <Product>Orbweaver</Product>
     <Authors>Kawika Miller, Repo Owner</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <PackageProjectUrl>https://github.com/Uplift-Foundation/Claude-Buddy</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/Uplift-Foundation/Claude-Buddy</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/Uplift-Foundation/Orbweaver</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/Uplift-Foundation/Orbweaver</RepositoryUrl>
     <!-- Run on whatever newer runtime is installed (e.g. .NET 10 SDK only) -->
     <RollForward>LatestMajor</RollForward>
     <!-- Single-file, self-contained output when publishing; pick the RID on

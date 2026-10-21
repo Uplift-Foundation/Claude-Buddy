@@ -22,7 +22,7 @@
 ; keep-alive task that an old install left behind are all keyed on it.
 #define LegacyAppName "Claude Buddy"
 #define AppPublisher "Kawika Miller and Repo Owner"
-#define AppUrl "https://github.com/Uplift-Foundation/Claude-Buddy"
+#define AppUrl "https://github.com/Uplift-Foundation/Orbweaver"
 ; The publish output, named after the csproj's <AssemblyName>.
 #define AppExe "Orbweaver.exe"
 ; What every install before CB-256 shipped as the app's exe. An upgrade keeps
