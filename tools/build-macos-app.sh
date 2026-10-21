@@ -44,7 +44,7 @@ LEGACY_APP_NAME="Claude Buddy"
 # CFBundleExecutable has to name that file. Equal to APP_NAME by coincidence of
 # the rename, not by definition, so it is spelled out on its own (CB-256).
 EXECUTABLE="Orbweaver"
-# Kept as-is even though the canonical repo is Uplift-Foundation/Claude-Buddy, and
+# Kept as-is even though the canonical repo is Uplift-Foundation/Orbweaver, and
 # deliberately so: macOS keys the Automation (Apple Events) consent a user grants
 # to the bundle identifier. Renaming it makes every existing install look like a
 # brand-new app, so click-to-focus silently stops working until each user

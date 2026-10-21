@@ -50,7 +50,7 @@ is still useful signal.
 ## 1. Clone and build
 
 ```powershell
-git clone https://github.com/Uplift-Foundation/Claude-Buddy.git
+git clone https://github.com/Uplift-Foundation/Orbweaver.git
 cd Claude-Buddy
 .\tools\build-windows-installer.ps1
 ```

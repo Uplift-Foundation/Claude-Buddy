@@ -192,7 +192,6 @@ class MaskingTests(unittest.TestCase):
                     "claude-buddy-rc-host42",
                     "CLAUDEBUDDY_CHIME", "CLAUDEBUDDY_VOICE", "CLAUDEBUDDY_SPEECH_VOLUME",
                     "CLAUDEBUDDY_SPEAK_TEXT", "CLAUDEBUDDY_SPEAK_VOICE",
-                    "https://github.com/Uplift-Foundation/Claude-Buddy/releases",
                     "git@github.com:wtvamp/Claude-Buddy.git"):
             with self.subTest(tok=tok):
                 self.check_masked(tok)
@@ -207,8 +206,15 @@ class MaskingTests(unittest.TestCase):
         self.repo.allow("a.txt\t1\tr")
         self.assertEqual(self.repo.run()[0], 0)
 
+    def test_old_canonical_repo_url_is_not_masked(self):
+        # The repo was renamed to Uplift-Foundation/Orbweaver (CB-271), so the
+        # old URL is now a stale reference to fix, not a permanent token.
+        self.repo.write("a.txt", "https://github.com/Uplift-Foundation/Claude-Buddy/releases\n")
+        self.repo.allow("# empty")
+        self.assertEqual(self.repo.run()[0], 1)
+
     def test_mask_constant_is_labelled_and_nonempty(self):
-        self.assertGreaterEqual(len(check_brand.MASK_PATTERNS), 5)
+        self.assertGreaterEqual(len(check_brand.MASK_PATTERNS), 4)
 
 
 class ExclusionTests(unittest.TestCase):
