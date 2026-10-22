@@ -88,6 +88,14 @@ namespace Orbweaver
         private static readonly Dictionary<string, PeerVoiceCache> PeerVoices =
             new(StringComparer.OrdinalIgnoreCase);
 
+        // CB-277: agent id -> the absolute folder agents.list says is that
+        // agent's workspace. Kept so a clip can be asked for under the session
+        // of the agent whose folder holds it (OpenClawMediaOwner). Ordinal,
+        // unlike the tables above: the gateway's paths are case-sensitive and
+        // so are the ids it builds session keys from.
+        private static readonly Dictionary<string, string> AgentWorkspaces =
+            new(StringComparer.Ordinal);
+
         private sealed record PeerVoiceCache(
             string GatewayPin, Dictionary<string, (string Voice, double? Rate)> Voices);
 
@@ -111,6 +119,62 @@ namespace Orbweaver
         internal static void ForgetRunningForTests()
         {
             lock (Gate) Running.Clear();
+        }
+
+        // CB-277: the same seam for the workspace table, for the same reason —
+        // only LoadAgentNamesAsync fills it and that is a live request.
+        internal static void SetAgentWorkspacesForTests(IReadOnlyDictionary<string, string> workspaces)
+        {
+            lock (Gate)
+            {
+                AgentWorkspaces.Clear();
+                foreach (var (id, dir) in workspaces) AgentWorkspaces[id] = dir;
+            }
+        }
+
+        // What OpenClawMediaOwner needs, taken in one lock so a reconnect that
+        // is rewriting the table cannot hand back half of it. Reads _snapshot
+        // rather than Snapshot(): the latter answers empty when OpenClaw is
+        // switched off in settings, and this must not depend on a setting.
+        internal static OwnerIndex OwnerIndexSnapshot()
+        {
+            Dictionary<string, string> workspaces;
+            lock (Gate) workspaces = new Dictionary<string, string>(AgentWorkspaces, StringComparer.Ordinal);
+
+            return new OwnerIndex(workspaces, _snapshot.Select(s => s.Key).ToList());
+        }
+
+        // The route for a file, under the session of whoever owns it. The one
+        // place that decides the key, so no producer can be left on the asking
+        // key by accident (the CB-109 failure shape). A null askingKey stays
+        // null: the no-session route is the shape fixtures may still use.
+        internal static OpenClawMediaSource MediaSourceFor(string path, string? askingKey, OwnerIndex index) =>
+            new(path, askingKey is null ? null : OpenClawMediaOwner.SessionKeyFor(path, askingKey, index));
+
+        // agents.list -> agent id -> workspace. Pure, so the shape is testable
+        // without a socket. An agent with no workspace field is skipped, and the
+        // value is kept verbatim: the gateway's own string is what a media path
+        // will be compared against.
+        internal static Dictionary<string, string> WorkspacesFrom(JsonElement agentsList)
+        {
+            var map = new Dictionary<string, string>(StringComparer.Ordinal);
+
+            if (agentsList.ValueKind != JsonValueKind.Object
+                || !agentsList.TryGetProperty("agents", out var agents)
+                || agents.ValueKind != JsonValueKind.Array)
+            {
+                return map;
+            }
+
+            foreach (var agent in agents.EnumerateArray())
+            {
+                var id = Str(agent, "id");
+                var workspace = Str(agent, "workspace");
+                if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(workspace)) continue;
+                map[id!] = workspace!;
+            }
+
+            return map;
         }
 
         internal static void SetIdentitiesForTests(
@@ -1042,6 +1106,7 @@ namespace Orbweaver
                 // every scan to read agent names — holding it through that would
                 // stall the orbs for as long as the decode took.
                 var parsed = new List<(string Id, AgentIdentity Identity)>();
+                var workspaces = WorkspacesFrom(res);
 
                 foreach (var agent in agents.EnumerateArray())
                 {
@@ -1055,6 +1120,8 @@ namespace Orbweaver
                     AgentNames.Clear();
                     Identities.Clear();
                     PeerVoices.Clear();
+                    AgentWorkspaces.Clear();
+                    foreach (var (id, dir) in workspaces) AgentWorkspaces[id] = dir;
 
                     foreach (var (id, identity) in parsed)
                     {
@@ -2110,8 +2177,13 @@ namespace Orbweaver
         // (FetchHistoryPageAsync, which has chat.GatewayKey in hand). Nullable
         // so a fixture or a caller with genuinely no session gets exactly the
         // routes this built before.
-        internal static List<HistoryTurn> TurnsFromHistory(JsonElement messages, string? sessionKey)
+        internal static List<HistoryTurn> TurnsFromHistory(
+            JsonElement messages, string? sessionKey, OwnerIndex? owners = null)
         {
+            // CB-277: null keeps every route exactly as it was built before —
+            // the asking key — so a caller or fixture that does not know the
+            // owners gets today's behaviour, not a half-applied one.
+            var ownerIndex = owners ?? OwnerIndex.Empty;
             var turns = new List<HistoryTurn>();
 
             // Read the whole page for paths before building any turn. A
@@ -2340,7 +2412,7 @@ namespace Orbweaver
                     }
 
                     var named0 = ResolveLocalMediaPath(bare, mediaPaths);
-                    var media0 = new OpenClawMediaSource(named0, sessionKey);
+                    var media0 = MediaSourceFor(named0, sessionKey, ownerIndex);
                     turns.Add(new HistoryTurn(role, caption, media0.Route, bare, at, speaker, colour,
                         mine, null, media0.Path, Automation: cronAutomation,
                         Confidence: MediaConfidence.High, Attachment: a));
@@ -2393,7 +2465,7 @@ namespace Orbweaver
                     // building the same string slightly differently. What goes
                     // on the turn is the finished url plus the clean path
                     // beside it; the builder itself is not stored anywhere.
-                    var media = new OpenClawMediaSource(source, sessionKey);
+                    var media = MediaSourceFor(source, sessionKey, ownerIndex);
 
                     mirrorDrawn.Add((turns.Count, source));
                     turns.Add(new HistoryTurn(
@@ -2498,7 +2570,7 @@ namespace Orbweaver
                     // Same media value as the mirror arm above, and for the
                     // same reason: one place builds the route, so one place
                     // decides what identity goes on it.
-                    var namedMedia = new OpenClawMediaSource(named, sessionKey);
+                    var namedMedia = MediaSourceFor(named, sessionKey, ownerIndex);
 
                     turns.Add(new HistoryTurn(role, text.Trim(), namedMedia.Route,
                         named[(named.LastIndexOf('/') + 1)..],
@@ -4260,7 +4332,8 @@ namespace Orbweaver
                 // pictures are fetched over a separate HTTP route that has to
                 // be told whose conversation they belong to (CB-109), and
                 // this is the one place that knows.
-                var turns = TurnsFromHistory(messages, chat.GatewayKey);
+                var owners = OwnerIndexSnapshot();
+                var turns = TurnsFromHistory(messages, chat.GatewayKey, owners);
 
                 // CB-115: recover a cron-delivered picture whose transcript
                 // lost its directory. Only turns TurnsFromHistory tagged with
@@ -4291,7 +4364,7 @@ namespace Orbweaver
                     // path look like, whether the MEDIA: line came straight
                     // off the message or, as here, off the run record that
                     // produced it.
-                    var media = new OpenClawMediaSource(recovered, chat.GatewayKey);
+                    var media = MediaSourceFor(recovered, chat.GatewayKey, owners);
                     turns[i] = turns[i] with
                     {
                         ImageUrl = media.Route,
