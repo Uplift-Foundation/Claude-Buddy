@@ -25,21 +25,8 @@ namespace Orbweaver
     // test. The three delegates at the bottom are the only seams with the
     // outside world, and exist so a headless test can drive a tile and a click
     // without a gateway or a real process launch.
-    internal static class OpenClawVideo
+    internal static partial class OpenClawVideo
     {
-        internal static readonly string[] Extensions = { ".mp4", ".mov", ".webm", ".m4v" };
-
-        internal static bool HasVideoExtension(string text) =>
-            Array.Exists(Extensions, ext => text.EndsWith(ext, StringComparison.OrdinalIgnoreCase));
-
-        // Whether a path names a video, by extension alone. This is what
-        // ChatTurn.IsVideo reads off ImageSourcePath, rather than a flag every
-        // producer and every one of the turn-copying sites would have to carry
-        // beside the path: the path is already set with the route by each
-        // producer, so the kind cannot drift from it.
-        internal static bool IsVideoPath(string? path) =>
-            !string.IsNullOrEmpty(path) && HasVideoExtension(path!);
-
         // The gateway's `&meta=1` answer for a servable clip, e.g.
         //
         //   {"available":true,"mimeType":"video/mp4","sizeBytes":1042813,
