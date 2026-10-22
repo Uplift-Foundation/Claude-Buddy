@@ -519,6 +519,60 @@ public class ChatPanelVideoTileTests : IDisposable
         Assert.Contains(TextsIn(panel), t => t.Contains("a little message just for you"));
     }
 
+    // CB-277: a clip another agent made, asked for under that agent's session.
+    // The turn carries the owner-key route; the panel must ask meta and fetch
+    // bytes with that exact string, not a prefix of it.
+    private static readonly string OwnerRoute =
+        new OpenClawMediaSource(ClipPath, "agent:comfyui:discord:direct:1").Route;
+
+    private static ChatTurn OwnerKeyClipTurn() => new()
+    {
+        Role = ChatRole.Assistant,
+        Text = "a little message just for you",
+        IsComplete = true,
+        ImageSourcePath = ClipPath,
+        Confidence = MediaConfidence.High,
+        ImageAlt = "sample_clip.mp4",
+        ImageUrl = OwnerRoute,
+        Attachment = new ChatAttachment(AttachmentKind.Video, null, "sample_clip.mp4", "video/mp4",
+            null, null, null, null, "delivery-failed"),
+    };
+
+    [AvaloniaFact]
+    public void AClipAskedUnderTheOwnersSessionDrawsAPlayableTileFromThatExactRoute()
+    {
+        var panel = Open(NewFake(new[] { OwnerKeyClipTurn() }));
+
+        Assert.Equal(OwnerRoute, Assert.Single(_metaAsked));
+
+        var tile = Tile(panel);
+        Assert.True(tile.IsVisible);
+        Assert.Equal(228, tile.Width);
+        Assert.Equal(320, tile.Height);
+        Assert.Contains("0:13", TextsIn(tile));
+        Assert.False(NoteBlock(panel).IsVisible);
+
+        Click(panel, tile);
+
+        Assert.Equal(OwnerRoute, Assert.Single(_bytesAsked));
+        Assert.EndsWith(".mp4", Assert.Single(_opened).Name);
+    }
+
+    [AvaloniaFact]
+    public void AClipTheOwnersSessionStillRefusesSaysWhichSessionItAskedUnder()
+    {
+        _metaAnswer = "{\"available\":false,\"code\":\"unsupported-media-type\",\"reason\":\"Not an image\"}";
+
+        var panel = Open(NewFake(new[] { OwnerKeyClipTurn() }));
+
+        Assert.False(Tile(panel).IsVisible);
+        var note = NoteBlock(panel);
+        Assert.StartsWith("Video not delivered", note.Text);
+        Assert.Equal(
+            ClipPath + " — unsupported-media-type — asked under agent:comfyui:discord:direct:1",
+            ToolTip.GetTip(note));
+    }
+
     // A failed delivery whose recovered path the gateway *will* serve is a
     // working clip: the tile draws and nothing complains.
     [AvaloniaFact]
