@@ -75,6 +75,12 @@ jobs:
       - name: Brand check (check-brand.py)
         run: python tools/check-brand.py
 
+      # CB-273: the PreToolUse hook that keeps agent-team members as team
+      # processes and PR bodies honest. Skips itself where bash or jq is
+      # missing, which is where the hook fails open by design.
+      - name: Unit tests (require-team-sdlc.sh)
+        run: python tools/test-require-team-sdlc.py
+
       # CB-237: runs publish-screenshots.yml's real publish step against a local
       # bare repository. Skips itself on Windows -- that workflow runs on ubuntu.
       - name: Unit tests (publish-screenshots.yml)
