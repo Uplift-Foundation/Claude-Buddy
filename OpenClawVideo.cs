@@ -50,7 +50,7 @@ namespace Orbweaver
         // a clip says so by leaving the numbers out, and the tile then falls
         // back to a default shape and no duration rather than a made-up one.
         internal readonly record struct Meta(
-            bool Available, long? DurationMs, int? Width, int? Height);
+            bool Available, long? DurationMs, int? Width, int? Height, long? SizeBytes);
 
         // Null when there is no answer at all (the gateway did not reply, or
         // replied with something that is not a JSON object) — distinct from an
@@ -74,7 +74,8 @@ namespace Orbweaver
                     available,
                     LongOrNull(root, "durationMs"),
                     (int?)LongOrNull(root, "width"),
-                    (int?)LongOrNull(root, "height"));
+                    (int?)LongOrNull(root, "height"),
+                    LongOrNull(root, "sizeBytes"));
             }
             catch (JsonException)
             {
@@ -129,6 +130,47 @@ namespace Orbweaver
             return Math.Clamp(h, MinHeight, MaxHeight);
         }
 
+        // ---- the socket's body ceiling ----
+        //
+        // OpenClawSocket.ReadResponseAsync stops once a body has exceeded
+        // MaxBodyBytes and returns what it has rather than null, so for a clip
+        // — ordinarily bigger than a picture — a fetch can succeed with a
+        // truncated file that QuickTime would then be handed. Two checks stand
+        // between that and the player: one before the fetch from the meta's
+        // `sizeBytes`, and one after it for a gateway whose meta left it out.
+        // The second costs one wasted download before the note appears, which
+        // is acceptable for a gateway that did not say how big the clip was.
+        internal static long MaxOpenBytes => OpenClawSocket.MaxBodyBytes;
+
+        internal static bool TooLargeToOpen(Meta? meta) => meta?.SizeBytes is > OpenClawSocket.MaxBodyBytes;
+
+        internal static bool IsTruncated(int length) => length > MaxOpenBytes;
+
+        internal static string TooLargeNote(long sizeBytes)
+        {
+            var megabytes = (sizeBytes + 1_048_575) / 1_048_576;
+            return $"Video not opened — the clip is {megabytes} MB and this app fetches at most "
+                   + $"{MaxOpenBytes / 1_048_576} MB. Open it on the gateway machine instead.";
+        }
+
+        internal const string NotSentNote = "Video not opened — the gateway didn't send the clip.";
+
+        internal static readonly string TruncatedNote =
+            $"Video not opened — the clip came back incomplete (over {OpenClawSocket.MaxBodyBytes / 1_048_576} MB).";
+
+        // The name the clip is written under for the player. macOS `open` and
+        // Windows ShellExecute choose the player by extension, so a nameless
+        // clip keeps its own (.mov stays .mov) rather than being called .mp4.
+        // OpenClawMedia.SafeName strips anything path-shaped afterwards, as it
+        // does for pictures.
+        internal static string OpenName(string? alt, string? sourcePath)
+        {
+            if (!string.IsNullOrEmpty(alt)) return alt;
+
+            var ext = string.IsNullOrEmpty(sourcePath) ? "" : Path.GetExtension(sourcePath);
+            return "video" + (string.IsNullOrEmpty(ext) ? ".mp4" : ext);
+        }
+
         // ---- seams with the outside world ----
         //
         // Static and replaceable for the same reason OpenClawSessions' own
@@ -140,6 +182,10 @@ namespace Orbweaver
         internal static Func<string, CancellationToken, Task<string?>> FetchMeta =
             OpenClawSessions.FetchLocalMediaMetaAsync;
 
+        // A clip shares the picture cache (24 entries, oldest out) on purpose:
+        // one transport, one cache, one excluded fetcher, and the 32 MiB body
+        // ceiling bounds every entry. A clip evicted by later pictures is
+        // simply fetched again on the next click.
         internal static Func<string, CancellationToken, Task<byte[]?>> FetchBytes =
             OpenClawSessions.FetchMediaAsync;
 

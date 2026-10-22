@@ -152,14 +152,19 @@ namespace Orbweaver
 
                 body.Write(buffer, 0, read);
 
-                // A ceiling rather than a limit anyone should hit: these are
-                // pictures in a chat window, and a malformed length header
-                // shouldn't be able to fill memory.
-                if (body.Length > 32 * 1024 * 1024) break;
+                // A ceiling rather than a limit anyone should hit for a picture,
+                // and a malformed length header shouldn't be able to fill memory.
+                // Note what happens at it: the loop stops once the body has
+                // *exceeded* the ceiling and returns what it has, truncated,
+                // rather than null — so a body longer than MaxBodyBytes is by
+                // construction incomplete, which CB-272's clip guard relies on.
+                if (body.Length > MaxBodyBytes) break;
             }
 
             return body.ToArray();
         }
+
+        internal const long MaxBodyBytes = 32 * 1024 * 1024;
 
         internal static long ContentLength(string headers)
         {

@@ -3630,7 +3630,8 @@ namespace Orbweaver
                     foreach (var name in new[]
                     {
                         nameof(HasVideo), nameof(VideoHeight),
-                        nameof(VideoDuration), nameof(HasVideoDuration)
+                        nameof(VideoDuration), nameof(HasVideoDuration),
+                        nameof(Pad)
                     })
                     {
                         PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
@@ -3663,20 +3664,39 @@ namespace Orbweaver
 
                 try
                 {
-                    var bytes = await OpenClawVideo.FetchBytes(_turn.ImageUrl!, CancellationToken.None);
-                    if (bytes is not { Length: > 0 })
+                    if (OpenClawVideo.TooLargeToOpen(_video))
                     {
-                        _turn.ImageNoteDetail = _turn.ImageSourcePath;
-                        _turn.ImageNote = "Video not opened — the gateway didn't send the clip.";
+                        VideoNote(OpenClawVideo.TooLargeNote(_video!.Value.SizeBytes!.Value));
                         return;
                     }
 
-                    OpenClawVideo.Open(bytes, string.IsNullOrEmpty(_turn.ImageAlt) ? "video.mp4" : _turn.ImageAlt);
+                    var bytes = await OpenClawVideo.FetchBytes(_turn.ImageUrl!, CancellationToken.None);
+                    if (bytes is not { Length: > 0 })
+                    {
+                        VideoNote(OpenClawVideo.NotSentNote);
+                        return;
+                    }
+
+                    if (OpenClawVideo.IsTruncated(bytes.Length))
+                    {
+                        VideoNote(OpenClawVideo.TruncatedNote);
+                        return;
+                    }
+
+                    OpenClawVideo.Open(bytes, OpenClawVideo.OpenName(_turn.ImageAlt, _turn.ImageSourcePath));
                 }
                 finally
                 {
                     _videoOpening = false;
                 }
+            }
+
+            // Detail before note: only the note's setter raises (see
+            // ChatTurn.ImageNoteDetail's header).
+            private void VideoNote(string text)
+            {
+                _turn.ImageNoteDetail = _turn.ImageSourcePath;
+                _turn.ImageNote = text;
             }
 
             public string ImageAlt => _turn.ImageAlt;
@@ -3864,7 +3884,7 @@ namespace Orbweaver
 
             public Thickness Pad => IsSystem
                 ? new Thickness(0, 1)
-                : HasImage && !HasText ? new Thickness(5) : new Thickness(9, 6);
+                : (HasImage || HasVideo) && !HasText ? new Thickness(5) : new Thickness(9, 6);
 
             // Bubbles sit closer to their own side's previous bubble than to the
             // other side's, which is what gives a conversation its rhythm.

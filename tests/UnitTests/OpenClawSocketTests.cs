@@ -312,7 +312,13 @@ public class OpenClawSocketTests
         var bytes = await OpenClawSocket.ReadResponseAsync(stream, CancellationToken.None);
 
         Assert.NotNull(bytes);
-        Assert.InRange(bytes!.Length, 32 * 1024 * 1024, 33 * 1024 * 1024);
+
+        // Cut at the ceiling and returned, not refused: the loop only stops once
+        // the body has exceeded it, so a body over MaxBodyBytes is a truncated
+        // one. CB-272's clip guard depends on exactly this, so it is asserted
+        // strictly rather than as "about 32MB".
+        Assert.True(bytes!.Length > OpenClawSocket.MaxBodyBytes);
+        Assert.InRange(bytes.Length, OpenClawSocket.MaxBodyBytes, OpenClawSocket.MaxBodyBytes + 64 * 1024);
     }
 
     // Serves a fixed prefix — headers, and optionally the whole body — and then

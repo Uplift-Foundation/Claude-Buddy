@@ -246,7 +246,7 @@ public class OpenClawVideoTests
     {
         var meta = OpenClawVideo.ParseMeta(ServableMeta);
 
-        Assert.Equal(new OpenClawVideo.Meta(true, 12750, 544, 800), meta);
+        Assert.Equal(new OpenClawVideo.Meta(true, 12750, 544, 800, 1042813), meta);
     }
 
     [Fact]
@@ -254,7 +254,7 @@ public class OpenClawVideoTests
     {
         var meta = OpenClawVideo.ParseMeta(RefusedMeta);
 
-        Assert.Equal(new OpenClawVideo.Meta(false, null, null, null), meta);
+        Assert.Equal(new OpenClawVideo.Meta(false, null, null, null, null), meta);
     }
 
     [Fact]
@@ -273,9 +273,9 @@ public class OpenClawVideoTests
     public void FieldsTheGatewayLeavesOutOrMistypesComeBackNull()
     {
         var meta = OpenClawVideo.ParseMeta(
-            "{\"available\":true,\"durationMs\":\"long\",\"width\":-5,\"height\":1.5}");
+            "{\"available\":true,\"durationMs\":\"long\",\"width\":-5,\"height\":1.5,\"sizeBytes\":\"big\"}");
 
-        Assert.Equal(new OpenClawVideo.Meta(true, null, null, null), meta);
+        Assert.Equal(new OpenClawVideo.Meta(true, null, null, null, null), meta);
     }
 
     [Theory]
@@ -421,5 +421,68 @@ public class OpenClawVideoTests
     public void AnUnmappedCodeFallsThroughToTheNeutralLinesForAClip(string json, string expected)
     {
         Assert.Equal(expected, OpenClawMediaRefusal.Explain(json, video: true));
+    }
+
+    // ---- the socket's body ceiling ---------------------------------------
+
+    private static OpenClawVideo.Meta MetaOfSize(long? size) => new(true, null, null, null, size);
+
+    [Fact]
+    public void AClipOverTheSocketCeilingIsTooLargeToOpen()
+    {
+        Assert.True(OpenClawVideo.TooLargeToOpen(MetaOfSize(OpenClawVideo.MaxOpenBytes + 1)));
+        Assert.False(OpenClawVideo.TooLargeToOpen(MetaOfSize(OpenClawVideo.MaxOpenBytes)));
+        Assert.False(OpenClawVideo.TooLargeToOpen(MetaOfSize(null)));
+        Assert.False(OpenClawVideo.TooLargeToOpen(null));
+    }
+
+    [Fact]
+    public void ABodyOverTheCeilingIsTruncated()
+    {
+        Assert.True(OpenClawVideo.IsTruncated((int)OpenClawVideo.MaxOpenBytes + 1));
+        Assert.False(OpenClawVideo.IsTruncated((int)OpenClawVideo.MaxOpenBytes));
+        Assert.False(OpenClawVideo.IsTruncated(0));
+    }
+
+    [Fact]
+    public void TheCeilingIsTheSocketsOwn()
+    {
+        Assert.Equal(OpenClawSocket.MaxBodyBytes, OpenClawVideo.MaxOpenBytes);
+        Assert.Equal(32L * 1024 * 1024, OpenClawVideo.MaxOpenBytes);
+    }
+
+    [Fact]
+    public void TheTooLargeNoteSaysTheSizeInWholeMegabytes()
+    {
+        Assert.Equal(
+            "Video not opened — the clip is 42 MB and this app fetches at most 32 MB. "
+            + "Open it on the gateway machine instead.",
+            OpenClawVideo.TooLargeNote(41L * 1024 * 1024 + 1));
+        Assert.Contains("is 41 MB", OpenClawVideo.TooLargeNote(41L * 1024 * 1024));
+    }
+
+    [Fact]
+    public void TheOtherClickTimeNotesAreFixedSentences()
+    {
+        Assert.Equal("Video not opened — the gateway didn't send the clip.", OpenClawVideo.NotSentNote);
+        Assert.Equal("Video not opened — the clip came back incomplete (over 32 MB).", OpenClawVideo.TruncatedNote);
+    }
+
+    [Theory]
+    [InlineData("holiday.webm", "/a/b/other.mov", "holiday.webm")]
+    [InlineData("", "/a/b/clip.mov", "video.mov")]
+    [InlineData(null, "/a/b/clip.WEBM", "video.WEBM")]
+    [InlineData("", "", "video.mp4")]
+    [InlineData(null, null, "video.mp4")]
+    [InlineData("", "/a/b/noextension", "video.mp4")]
+    public void OpenNameKeepsTheClipsOwnExtension(string? alt, string? path, string expected)
+    {
+        Assert.Equal(expected, OpenClawVideo.OpenName(alt, path));
+    }
+
+    [Fact]
+    public void TheExtensionsAreExactlyTheFourTheTicketNames()
+    {
+        Assert.Equal(new[] { ".mp4", ".mov", ".webm", ".m4v" }, OpenClawVideo.Extensions);
     }
 }
