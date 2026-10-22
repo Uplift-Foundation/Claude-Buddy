@@ -352,6 +352,49 @@
                                            Cursor="Hand"
                                            PointerPressed="Image_PointerPressed"
                                            HorizontalAlignment="Left"/>
+                                    <!-- CB-272: a video the agent posted, as a
+                                         tile rather than inline playback. Shown
+                                         only once the gateway's meta answer says
+                                         the clip is servable, sized to the
+                                         clip's own aspect ratio; a click fetches
+                                         the bytes and opens the system player.
+                                         A refused or unreachable clip draws the
+                                         note below instead, like a picture. -->
+                                    <Border Classes="videoTile"
+                                            IsVisible="{Binding HasVideo}"
+                                            Width="{Binding VideoWidth}"
+                                            Height="{Binding VideoHeight}"
+                                            CornerRadius="8"
+                                            Background="#CC1B1F27"
+                                            ClipToBounds="True"
+                                            Cursor="Hand"
+                                            ToolTip.Tip="{Binding ImageAlt}"
+                                            PointerPressed="Video_PointerPressed"
+                                            HorizontalAlignment="Left">
+                                        <Panel>
+                                            <Ellipse Width="44" Height="44"
+                                                     Fill="#99000000"
+                                                     Stroke="#E6FFFFFF" StrokeThickness="2"
+                                                     HorizontalAlignment="Center"
+                                                     VerticalAlignment="Center"/>
+                                            <Path Data="M 0,0 L 0,20 L 17,10 Z"
+                                                  Fill="#F2FFFFFF"
+                                                  Margin="4,0,0,0"
+                                                  HorizontalAlignment="Center"
+                                                  VerticalAlignment="Center"/>
+                                            <Border IsVisible="{Binding HasVideoDuration}"
+                                                    Background="#B3000000"
+                                                    CornerRadius="4"
+                                                    Padding="5,1"
+                                                    Margin="0,0,6,6"
+                                                    HorizontalAlignment="Right"
+                                                    VerticalAlignment="Bottom">
+                                                <TextBlock Text="{Binding VideoDuration}"
+                                                           FontSize="{Binding TimeSize}"
+                                                           Foreground="#F2FFFFFF"/>
+                                            </Border>
+                                        </Panel>
+                                    </Border>
                                     <!-- CB-93: why a picture that should have
                                          shown didn't, in the slot the picture
                                          would have occupied. The tooltip

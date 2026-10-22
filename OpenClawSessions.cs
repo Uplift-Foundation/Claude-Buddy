@@ -2742,13 +2742,13 @@ namespace Orbweaver
                 if (!line.StartsWith(LocalMediaMarker, StringComparison.Ordinal)) continue;
 
                 var path = line[LocalMediaMarker.Length..].Trim();
-                return LooksLikeAnImagePath(path)
+                return LooksLikeAMediaPath(path)
                     ? new LocalMediaCandidate(path, Explicit: true)
                     : null;
             }
 
             var trimmed = text.Trim();
-            if (LooksLikeAnImagePath(trimmed)) return new LocalMediaCandidate(trimmed, Explicit: false);
+            if (LooksLikeAMediaPath(trimmed)) return new LocalMediaCandidate(trimmed, Explicit: false);
 
             // CB-107: an agent's caption can pair descriptive prose with the
             // file rather than sending it alone — a caption line followed by
@@ -2767,7 +2767,7 @@ namespace Orbweaver
             if (tokens.Length == 0) return null;
 
             var last = tokens[^1];
-            if (LooksLikeAnImagePath(last)) return new LocalMediaCandidate(last, Explicit: false);
+            if (LooksLikeAMediaPath(last)) return new LocalMediaCandidate(last, Explicit: false);
 
             // A bare filename alone, with nothing else in the message, already
             // failed the whole-message check above and stays plain text — an
@@ -2779,7 +2779,7 @@ namespace Orbweaver
             // unresolved; ResolveLocalMediaPath is what turns this into
             // something fetchable, the same way the delivery-mirror branch
             // already does for its own bare filenames.
-            return tokens.Length > 1 && LooksLikeABareImageFilename(last)
+            return tokens.Length > 1 && LooksLikeABareMediaFilename(last)
                 ? new LocalMediaCandidate(last, Explicit: false)
                 : null;
         }
@@ -2789,11 +2789,17 @@ namespace Orbweaver
         // with a space in it would already have failed the whitespace-token
         // split above, so the checks here are about the extension and
         // nothing else being present.
-        private static bool LooksLikeABareImageFilename(string text) =>
+        //
+        // CB-272: a video's bare filename counts too, as its own kind — see
+        // OpenClawVideo. Whether a candidate is a picture or a clip is read
+        // back off its extension by whoever needs to know
+        // (OpenClawVideo.IsVideoPath), not carried on the candidate.
+        private static bool LooksLikeABareMediaFilename(string text) =>
             text.Length > 0
             && !text.Contains('/')
             && !text.Contains('\\')
-            && Array.Exists(ImageExtensions, ext => text.EndsWith(ext, StringComparison.OrdinalIgnoreCase));
+            && (Array.Exists(ImageExtensions, ext => text.EndsWith(ext, StringComparison.OrdinalIgnoreCase))
+                || OpenClawVideo.HasVideoExtension(text));
 
         // Turns whatever LocalMediaPathFrom found into something actually
         // fetchable. A rooted path is already that; a bare filename is the
@@ -2855,11 +2861,27 @@ namespace Orbweaver
         // file's header for why only the bare-filename half needed a new
         // predicate.
         internal static bool LooksLikeAnImagePath(string text) =>
+            IsSafeRootedPath(text)
+            && Array.Exists(ImageExtensions, ext => text.EndsWith(ext, StringComparison.OrdinalIgnoreCase));
+
+        // CB-272: the same structural guard, with a video extension. Kept as a
+        // sibling of LooksLikeAnImagePath rather than a widening of it: the
+        // image predicate is also OpenClawCronRecovery's trigger for "is this
+        // trailing token a picture", and a clip must not start counting as one
+        // there. Both share IsSafeRootedPath, so the traversal refusal that
+        // the comment above calls the only structural guard left cannot be
+        // loosened for one kind and forgotten on the other.
+        internal static bool LooksLikeAVideoPath(string text) =>
+            IsSafeRootedPath(text) && OpenClawVideo.HasVideoExtension(text);
+
+        internal static bool LooksLikeAMediaPath(string text) =>
+            LooksLikeAnImagePath(text) || LooksLikeAVideoPath(text);
+
+        private static bool IsSafeRootedPath(string text) =>
             (text.StartsWith('/') || text.StartsWith("~/", StringComparison.Ordinal))
             && !text.StartsWith("//", StringComparison.Ordinal)
             && !text.Contains("..", StringComparison.Ordinal)
-            && !text.Contains(' ') && !text.Contains('\n')
-            && Array.Exists(ImageExtensions, ext => text.EndsWith(ext, StringComparison.OrdinalIgnoreCase));
+            && !text.Contains(' ') && !text.Contains('\n');
 
         // The gateway writes one of these whenever it actually delivers a
         // message somewhere, and for a picture it is the only trace a client

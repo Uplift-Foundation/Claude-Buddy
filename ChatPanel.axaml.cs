@@ -1695,6 +1695,16 @@ namespace Orbweaver
             if ((sender as Control)?.DataContext is TurnView turn) turn.OpenFullSize();
         }
 
+        // CB-272: the same click, for a video tile — handled for the same two
+        // reasons, and it fetches the clip only now rather than when the row
+        // was drawn.
+        private void Video_PointerPressed(object? sender, PointerPressedEventArgs e)
+        {
+            e.Handled = true;
+
+            if ((sender as Control)?.DataContext is TurnView turn) turn.OpenVideo();
+        }
+
         // Avalonia.Native's macOS cursor factory (libAvaloniaNative.dylib)
         // only ever asks AppKit for arrow, crosshair, hand, I-beam, and the
         // two straight resize cursors (up/down, left/right) — nothing in it
@@ -3517,6 +3527,15 @@ namespace Orbweaver
             {
                 if (string.IsNullOrEmpty(_turn.ImageUrl)) return;
 
+                // CB-272: a clip never goes down the picture path below, which
+                // would decode its bytes as a bitmap. It asks the gateway
+                // about the clip instead and draws a tile from the answer.
+                if (_turn.IsVideo)
+                {
+                    await LoadVideoAsync();
+                    return;
+                }
+
                 // Fetched verbatim. Since CB-109 the url is a fully-formed
                 // request — path, session and agent — built where the turn was
                 // built, by whoever knew which session it belonged to. This
@@ -3572,6 +3591,95 @@ namespace Orbweaver
                 _turn.ImageNoteDetail = OpenClawMediaRefusal.Detail(json, path);
                 _turn.ImageNote = OpenClawMediaRefusal.Explain(json);
             }
+
+            private OpenClawVideo.Meta? _video;
+            private bool _videoRequested;
+            private bool _videoOpening;
+
+            public bool HasVideo => _video is not null;
+
+            public double VideoWidth => OpenClawVideo.TileWidth;
+
+            public double VideoHeight => OpenClawVideo.TileHeight(_video?.Width, _video?.Height);
+
+            public string? VideoDuration => OpenClawVideo.FormatDuration(_video?.DurationMs);
+
+            public bool HasVideoDuration => VideoDuration is not null;
+
+            // The tile is drawn from the gateway's `&meta=1` answer alone —
+            // the clip's bytes are not downloaded to draw it, which for a
+            // video can be megabytes per clip per scroll. Asked once per row:
+            // the ImageUrl change handler can fire again for the same turn.
+            //
+            // A clip the gateway will not serve follows the picture's CB-93
+            // and CB-116 rules exactly: a High-confidence turn gets a note
+            // saying why, in the slot the tile would have taken, and a Low one
+            // (prose that merely ends in "something.mp4") stays silent and
+            // keeps its text, since nothing says a clip was ever meant.
+            private async Task LoadVideoAsync()
+            {
+                if (_videoRequested) return;
+                _videoRequested = true;
+
+                var json = await OpenClawVideo.FetchMeta(_turn.ImageUrl!, CancellationToken.None);
+                var meta = OpenClawVideo.ParseMeta(json);
+
+                if (meta is { Available: true })
+                {
+                    _video = meta;
+                    foreach (var name in new[]
+                    {
+                        nameof(HasVideo), nameof(VideoHeight),
+                        nameof(VideoDuration), nameof(HasVideoDuration)
+                    })
+                    {
+                        PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
+                    }
+
+                    return;
+                }
+
+                if (_turn.Confidence != MediaConfidence.High) return;
+
+                // Same refusal to caption with a guess as LoadImage's: no path,
+                // no note. Every producer sets the path with the url, and
+                // IsVideo is read off it, so this cannot be null for a video.
+                var path = _turn.ImageSourcePath!;
+
+                _turn.ImageNoteDetail = OpenClawMediaRefusal.Detail(json, path);
+                _turn.ImageNote = OpenClawMediaRefusal.Explain(json, video: true);
+            }
+
+            // The click: fetch the clip now, then hand it to the system
+            // player. Guarded against a second click while the first is still
+            // downloading — a clip is large enough that two fetches would be
+            // noticed, and two players opened for one click would be worse.
+            // A clip that will not come down says so in the same note slot,
+            // rather than the click doing nothing at all.
+            public async void OpenVideo()
+            {
+                if (_videoOpening || string.IsNullOrEmpty(_turn.ImageUrl)) return;
+                _videoOpening = true;
+
+                try
+                {
+                    var bytes = await OpenClawVideo.FetchBytes(_turn.ImageUrl!, CancellationToken.None);
+                    if (bytes is not { Length: > 0 })
+                    {
+                        _turn.ImageNoteDetail = _turn.ImageSourcePath;
+                        _turn.ImageNote = "Video not opened — the gateway didn't send the clip.";
+                        return;
+                    }
+
+                    OpenClawVideo.Open(bytes, string.IsNullOrEmpty(_turn.ImageAlt) ? "video.mp4" : _turn.ImageAlt);
+                }
+                finally
+                {
+                    _videoOpening = false;
+                }
+            }
+
+            public string ImageAlt => _turn.ImageAlt;
 
             // The bytes are already in hand — decoded from a local CLI's own
             // transcript (ChatTranscript's image handling), or read straight

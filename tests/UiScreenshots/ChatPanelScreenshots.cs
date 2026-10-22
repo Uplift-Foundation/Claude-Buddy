@@ -500,6 +500,82 @@ public class ChatPanelScreenshots : IDisposable
             ChatPanelTestAccess.Instance!, "chat-panel-picture-refused.png");
     }
 
+    // CB-272: a video the agent posted, as a tile. The meta answer is the
+    // shape the gateway really sends for a portrait clip, so the tile is the
+    // real proportions (clamped at 320 tall) with its play glyph and m:ss
+    // label. One ordinary turn above it for contrast; the judgement worth
+    // reviewing is whether the tile reads as "a clip, press to play" beside
+    // the caption, and whether the label stays legible over the dark fill.
+    [AvaloniaFact]
+    public void AVideoTheAgentPostedDrawsATile()
+    {
+        var realMeta = OpenClawVideo.FetchMeta;
+        OpenClawVideo.FetchMeta = (_, _) => Task.FromResult<string?>(
+            "{\"available\":true,\"mimeType\":\"video/mp4\",\"sizeBytes\":1042813,\"playback\":\"native\","
+            + "\"durationMs\":12750,\"width\":544,\"height\":800,\"mediaTicket\":\"v1.sample\"}");
+
+        try
+        {
+            var fake = NewFake(new[]
+            {
+                new ChatTurn { Role = ChatRole.User, Text = "send me something nice" },
+                VideoTurn(),
+            });
+
+            ChatPanel.OpenFor(NewOrb(), fake);
+            ScreenshotHelper.Flush();
+            ScreenshotHelper.CaptureAlreadyShown(
+                ChatPanelTestAccess.Instance!, "chat-panel-video-tile.png");
+        }
+        finally
+        {
+            OpenClawVideo.FetchMeta = realMeta;
+        }
+    }
+
+    // CB-272: the same turn when the gateway will not serve the clip — the
+    // note in the slot the tile would have taken, the caption still above it.
+    [AvaloniaFact]
+    public void AVideoTheGatewayRefusedShowsWhy()
+    {
+        var realMeta = OpenClawVideo.FetchMeta;
+        OpenClawVideo.FetchMeta = (_, _) => Task.FromResult<string?>(
+            "{\"available\":false,\"code\":\"unsupported-media-type\",\"reason\":\"Not an image\"}");
+
+        try
+        {
+            var fake = NewFake(new[]
+            {
+                new ChatTurn { Role = ChatRole.User, Text = "send me something nice" },
+                VideoTurn(),
+            });
+
+            ChatPanel.OpenFor(NewOrb(), fake);
+            ScreenshotHelper.Flush();
+            ScreenshotHelper.CaptureAlreadyShown(
+                ChatPanelTestAccess.Instance!, "chat-panel-video-refused.png");
+        }
+        finally
+        {
+            OpenClawVideo.FetchMeta = realMeta;
+        }
+    }
+
+    private static ChatTurn VideoTurn()
+    {
+        const string path = "/Users/user/.openclaw/workspace-sample/outputs/sample_afternoon_video.mp4";
+
+        return new ChatTurn
+        {
+            Role = ChatRole.Assistant,
+            Text = "Pink fairy lights and a little message just for you 🌸\nMEDIA:" + path,
+            IsComplete = true,
+            ImageSourcePath = path,
+            ImageAlt = "sample_afternoon_video.mp4",
+            ImageUrl = "/__openclaw__/assistant-media?source=sample",
+        };
+    }
+
     // A room with everyone in it drawn as themselves — the whole of CB-27 in one
     // picture, and the reason it is a capture rather than only an assertion.
     //
