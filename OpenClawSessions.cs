@@ -2184,7 +2184,8 @@ namespace Orbweaver
                         // bytes sitting beside it. One spelling of "no url"
                         // for both this parser and everything downstream.
                         var url = Str(block, "url");
-                        if (string.IsNullOrWhiteSpace(url)) url = null;
+                        if (string.IsNullOrWhiteSpace(url) || OpenClawSocket.HasControlCharacter(url))
+                            url = null;
 
                         var bytes = url is null ? InlineImageBytes(block) : null;
                         if (url is null && bytes is null) continue;
@@ -2627,9 +2628,9 @@ namespace Orbweaver
                 switch (Str(block, "type"))
                 {
                     case "video":
-                        return MediaBlock(block, AttachmentKind.Video, "video");
+                        return MediaBlock(block, AttachmentKind.Video);
                     case "audio":
-                        return MediaBlock(block, AttachmentKind.Audio, "audio");
+                        return MediaBlock(block, AttachmentKind.Audio);
                     case "attachment":
                         if (block.TryGetProperty("attachment", out var wrapped)
                             && wrapped.ValueKind == JsonValueKind.Object)
@@ -2653,17 +2654,19 @@ namespace Orbweaver
         }
 
         // A top-level video/audio block: url, fileName / alt, optional meta.
-        private static ChatAttachment MediaBlock(JsonElement block, AttachmentKind kind, string fallbackLabel)
+        private static ChatAttachment MediaBlock(JsonElement block, AttachmentKind kind)
         {
-            var url = Str(block, "url");
-            if (string.IsNullOrWhiteSpace(url)) url = null;
+            var url = CleanUrl(Str(block, "url"));
 
+            // No invented name: a block that names nothing at all keeps an
+            // empty label, which the panel shows as a generic word but which
+            // never becomes a guessed path (a made-up "video" would send the
+            // gateway looking for a file called video).
             var label = Str(block, "fileName");
             if (string.IsNullOrWhiteSpace(label)) label = Str(block, "alt");
             if (string.IsNullOrWhiteSpace(label)) label = LastSegmentOf(url);
-            if (string.IsNullOrWhiteSpace(label)) label = fallbackLabel;
 
-            return new ChatAttachment(kind, url, label!, Str(block, "mimeType"),
+            return new ChatAttachment(kind, url, label ?? "", Str(block, "mimeType"),
                 OpenClawVideo.LongOrNull(block, "sizeBytes"),
                 OpenClawVideo.LongOrNull(block, "durationMs"),
                 OpenClawVideo.IntOrNull(block, "width"),
@@ -2674,19 +2677,30 @@ namespace Orbweaver
                 url is null ? "omitted" : null);
         }
 
+        // A url is spliced into the request line of a token-bearing request, so
+        // anything that could end that line early is no url at all: a control
+        // character (CR/LF would inject a header) or a space. The block then
+        // draws as omitted.
+        internal static string? CleanUrl(string? url)
+        {
+            if (string.IsNullOrWhiteSpace(url)) return null;
+
+            // Control characters are the injection; the space is only malformed.
+            return OpenClawSocket.HasControlCharacter(url) || url!.Contains(' ') ? null : url;
+        }
+
         // The `attachment` and `attachment_error` blocks both carry their
         // fields on an inner `attachment` object.
         private static ChatAttachment WrappedBlock(JsonElement inner, bool failed)
         {
-            var url = failed ? null : Str(inner, "url");
-            if (string.IsNullOrWhiteSpace(url)) url = null;
+            var url = failed ? null : CleanUrl(Str(inner, "url"));
 
             var label = Str(inner, "label");
             if (string.IsNullOrWhiteSpace(label)) label = LastSegmentOf(url);
-            if (string.IsNullOrWhiteSpace(label)) label = "file";
+            label ??= "";
 
             var mime = Str(inner, "mimeType");
-            var kind = KindFrom(Str(inner, "kind"), mime, label!);
+            var kind = KindFrom(Str(inner, "kind"), mime, label);
 
             string? code = null;
             if (failed)
@@ -2699,7 +2713,7 @@ namespace Orbweaver
                 code = "omitted";
             }
 
-            return new ChatAttachment(kind, url, label!, mime,
+            return new ChatAttachment(kind, url, label, mime,
                 OpenClawVideo.LongOrNull(inner, "sizeBytes"),
                 OpenClawVideo.LongOrNull(inner, "durationMs"),
                 OpenClawVideo.IntOrNull(inner, "width"),
@@ -3743,6 +3757,10 @@ namespace Orbweaver
         [ExcludeFromCodeCoverage]
         public static async Task<byte[]?> FetchMediaAsync(string url, CancellationToken ct)
         {
+            // Before the cache and before the socket: a url that could end the
+            // request line is never fetched and never remembered.
+            if (OpenClawSocket.HasControlCharacter(url)) return null;
+
             lock (Gate)
             {
                 if (Media.TryGetValue(url, out var cached)) return cached;
@@ -3834,6 +3852,8 @@ namespace Orbweaver
         public static async Task<string?> FetchLocalMediaMetaAsync(
             string requestUrl, CancellationToken ct)
         {
+            if (OpenClawSocket.HasControlCharacter(requestUrl)) return null;
+
             var route = OpenClawMediaSource.MetaOf(requestUrl);
 
             lock (Gate)

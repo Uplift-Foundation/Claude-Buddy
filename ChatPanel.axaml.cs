@@ -3239,7 +3239,7 @@ namespace Orbweaver
                          && turn.Confidence == MediaConfidence.High
                          && turn.ImageNote is null)
                 {
-                    turn.ImageNoteDetail = lost.Label;
+                    turn.ImageNoteDetail = string.IsNullOrWhiteSpace(lost.Label) ? null : lost.Label;
                     turn.ImageNote = OpenClawMediaRefusal.ExplainDelivery(lost, null);
                 }
             }
@@ -3773,15 +3773,20 @@ namespace Orbweaver
 
             public bool HasAudio => _audio is not null;
             public double AudioWidth => OpenClawVideo.TileWidth;
-            public string AudioLabel => _audio?.Label ?? "";
+            public string AudioLabel => LabelOrWord(_audio, "audio");
             public string? AudioDuration => _audio?.Duration;
             public bool HasAudioDuration => AudioDuration is not null;
 
             public bool HasDocument => _document is not null;
-            public string DocumentLabel => _document?.Label ?? "";
+            public string DocumentLabel => LabelOrWord(_document, "file");
             public string? DocumentSize => OpenClawAttachment.FormatSize(_document?.SizeBytes);
             public bool HasDocumentSize => DocumentSize is not null;
             public string? DocumentTip => _document?.MimeType;
+
+            // A block that named nothing shows a generic word, never a made-up
+            // filename that something might go looking for.
+            private static string LabelOrWord(ChatAttachment? a, string word) =>
+                a is null ? "" : string.IsNullOrWhiteSpace(a.Value.Label) ? word : a.Value.Label;
 
             private void Raise(params string[] names)
             {

@@ -17,8 +17,15 @@ namespace Orbweaver
 
             var n = sizeBytes.Value;
             if (n < 1024) return $"{n} B";
-            if (n < 1_048_576) return $"{Math.Round(n / 1024.0, MidpointRounding.AwayFromZero):0} KB";
-            if (n < 1_073_741_824) return $"{n / 1_048_576.0:0.0} MB";
+
+            // Each unit is promoted when its *rounded* figure would reach the
+            // next one, so 1,048,575 bytes is "1.0 MB" and never "1024 KB".
+            var kb = Math.Round(n / 1024.0, MidpointRounding.AwayFromZero);
+            if (kb < 1024) return $"{kb:0} KB";
+
+            var mb = Math.Round(n / 1_048_576.0, 1, MidpointRounding.AwayFromZero);
+            if (mb < 1024.0) return $"{mb:0.0} MB";
+
             return $"{n / 1_073_741_824.0:0.0} GB";
         }
 

@@ -98,9 +98,10 @@ public class OpenClawAttachmentOfTests
         Assert.Equal("a.mp4", Label("""{"type":"video","url":"/u/full","fileName":"a.mp4","alt":"b.mp4"}"""));
         Assert.Equal("b.mp4", Label("""{"type":"video","url":"/u/full","alt":"b.mp4"}"""));
         Assert.Equal("my clip.mp4", Label("""{"type":"video","url":"/u/my%20clip.mp4?x=1#y"}"""));
-        Assert.Equal("video", Label("""{"type":"video"}"""));
-        Assert.Equal("video", Label("""{"type":"video","url":"/u/"}"""));
-        Assert.Equal("audio", Label("""{"type":"audio"}"""));
+        // No invented name: a block naming nothing keeps an empty label.
+        Assert.Equal("", Label("""{"type":"video"}"""));
+        Assert.Equal("", Label("""{"type":"video","url":"/u/"}"""));
+        Assert.Equal("", Label("""{"type":"audio"}"""));
     }
 
     [Fact]
@@ -153,7 +154,7 @@ public class OpenClawAttachmentOfTests
         var a = OpenClawSessions.AttachmentOf(
             Wrapped("""[{"type":"attachment","attachment":{"kind":"document"}}]"""))!.Value;
 
-        Assert.Equal("file", a.Label);
+        Assert.Equal("", a.Label);
         Assert.Equal("omitted", a.FailureCode);
     }
 
@@ -393,5 +394,52 @@ public class OpenClawAttachmentOfTests
 
         Assert.EndsWith("my..clip.mp4", turn.ImageSourcePath);
         Assert.NotNull(turn.ImageUrl);
+    }
+
+    // A block that names nothing must not get a guessed filename: the gateway
+    // would be asked about a file called "file".
+    [Theory]
+    [InlineData("""{"type":"attachment_error","attachment":{"code":"delivery-failed","kind":"document"}}""")]
+    [InlineData("""{"type":"attachment_error","attachment":{"code":"delivery-failed","kind":"video"}}""")]
+    [InlineData("""{"type":"video"}""")]
+    public void ANamelessFailedBlockGetsNoGuessedPathAndNoRoute(string block)
+    {
+        var turn = Assert.Single(Turns(
+            "{\"role\":\"assistant\",\"openclawAutomation\":{\"kind\":\"cron\",\"jobId\":\"j\"},"
+            + "\"content\":[{\"type\":\"text\",\"text\":\"hi\"}," + block + "]}"));
+
+        Assert.Null(turn.ImageUrl);
+        Assert.Null(turn.ImageSourcePath);
+        Assert.Equal("", turn.Attachment!.Value.Label);
+        Assert.Null(OpenClawSessions.RecoveryBasenameFor(turn));
+    }
+
+    // A url is spliced into a token-bearing request line; CR/LF or a space in
+    // it would inject a header, so such a block draws as omitted.
+    [Theory]
+    [InlineData("/x\\r\\nX-Evil: 1")]
+    [InlineData("/x y")]
+    [InlineData("/x\\u0000")]
+    [InlineData("/x\\u007f")]
+    [InlineData("/x\\t")]
+    public void AUrlThatCouldEndTheRequestLineIsNoUrl(string url)
+    {
+        var video = OpenClawSessions.AttachmentOf(
+            Wrapped("[{\"type\":\"video\",\"url\":\"" + url + "\",\"fileName\":\"a.mp4\"}]"))!.Value;
+        Assert.Null(video.Url);
+        Assert.Equal("omitted", video.FailureCode);
+
+        var doc = OpenClawSessions.AttachmentOf(Wrapped(
+            "[{\"type\":\"attachment\",\"attachment\":{\"kind\":\"document\",\"label\":\"a.pdf\",\"url\":\"" + url + "\"}}]"))!.Value;
+        Assert.Null(doc.Url);
+        Assert.Equal("omitted", doc.FailureCode);
+    }
+
+    [Fact]
+    public void AnOrdinaryEncodedUrlIsKept()
+    {
+        Assert.Equal("/api/chat/media/outgoing/k%3Aa/id/full?x=1", OpenClawSessions.CleanUrl("/api/chat/media/outgoing/k%3Aa/id/full?x=1"));
+        Assert.Null(OpenClawSessions.CleanUrl(null));
+        Assert.Null(OpenClawSessions.CleanUrl("  "));
     }
 }

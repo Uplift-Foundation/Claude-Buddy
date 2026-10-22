@@ -193,4 +193,11 @@ public class OpenClawAttachmentCarryTests
         Assert.Contains(new string('x', 200) + ")", note);
         Assert.DoesNotContain(new string('x', 201), note);
     }
+
+    [Theory]
+    [InlineData("delivery-failed", "File not delivered — the gateway couldn't prepare the file for this chat.")]
+    [InlineData("omitted", "File not delivered — the gateway left the file out of this transcript.")]
+    public void ANamelessAttachmentSaysTheFileRatherThanAnInventedName(string code, string expected) =>
+        Assert.Equal(expected,
+            OpenClawMediaRefusal.ExplainDelivery(Failed(AttachmentKind.Document, code, ""), null));
 }

@@ -188,13 +188,17 @@ namespace Orbweaver
                 _ => "File"
             };
 
+            // A block that named nothing says "the file" rather than an
+            // invented filename.
+            var name = string.IsNullOrWhiteSpace(attachment.Label) ? "the file" : attachment.Label;
+
             var clause = attachment.FailureCode switch
             {
                 "file-not-found" => "the file wasn't there when the gateway looked",
                 "unsupported-format" => "the gateway's attachment allowlist rejects that type",
                 "invalid-reference" => "the agent gave the gateway a reference it can't open",
-                "omitted" => $"the gateway left {attachment.Label} out of this transcript",
-                _ => $"the gateway couldn't prepare {attachment.Label} for this chat"
+                "omitted" => $"the gateway left {name} out of this transcript",
+                _ => $"the gateway couldn't prepare {name} for this chat"
             };
 
             return $"{noun} not delivered — {clause}." + AlsoRefused(gatewayJson);

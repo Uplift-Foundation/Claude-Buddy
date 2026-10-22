@@ -487,4 +487,37 @@ public class ChatPanelAttachmentTests : IDisposable
         Assert.Equal("Picture not delivered — the file wasn't there when the gateway looked.", turn.ImageNote);
         Assert.Equal(path, turn.ImageNoteDetail);
     }
+
+    // A block that names nothing shows a generic word, never an invented
+    // filename, and a failed one with no name has no route to ask about.
+    [AvaloniaFact]
+    public void ANamelessDeliveredBlockShowsAGenericWordAndOpensUnderIt()
+    {
+        var audio = Open(NewFake(new[] { BlockTurn(AudioBlock(label: "")) }));
+        Assert.Contains("audio", TextsIn(Find(audio, "audioTile")));
+        Click(audio, Find(audio, "audioTile"));
+        Assert.Equal("audio.m4a", Assert.Single(_opened).Name);
+
+        var file = Open(NewFake(new[] { BlockTurn(DocBlock(label: "")) }));
+        Assert.Contains("file", TextsIn(Find(file, "fileChip")));
+    }
+
+    [AvaloniaFact]
+    public void ANamelessFailedFileSaysSoWithNoGuessedPathOrGatewayQuestion()
+    {
+        var turn = new ChatTurn
+        {
+            Role = ChatRole.Assistant, Text = "a caption", IsComplete = true,
+            Attachment = new ChatAttachment(AttachmentKind.Document, null, "", "application/pdf",
+                null, null, null, null, "delivery-failed"),
+        };
+
+        var panel = Open(NewFake(new[] { turn }));
+
+        Assert.Equal("File not delivered — the gateway couldn't prepare the file for this chat.",
+            NoteBlock(panel).Text);
+        Assert.Null(ToolTip.GetTip(NoteBlock(panel)));
+        Assert.Empty(_metaAsked);
+        Assert.False(Find(panel, "fileChip").IsVisible);
+    }
 }
