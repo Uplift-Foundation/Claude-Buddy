@@ -689,6 +689,24 @@ namespace Orbweaver
             // to judge it against, and got a default agent's answer.
             var media = new OpenClawMediaSource(path, GatewayKey);
 
+            // CB-272: a clip is never fetched here. The panel draws a tile
+            // from the gateway's meta answer and fetches the bytes only when
+            // it is clicked, so all this does is hand the row what it needs
+            // to ask — the path and the finished route — and let TurnView
+            // take it from there. ImageUrl last, since its setter is what
+            // wakes the row (see TryResolveLiveImage's note on that order).
+            // The bytes must never land in ImageBytes: that is the picture
+            // path, which decodes whatever it is handed.
+            if (OpenClawVideo.IsVideoPath(path))
+            {
+                turn.ImageSourcePath = media.Path;
+                turn.ImageAlt = path[(path.LastIndexOf('/') + 1)..];
+                turn.ImageUrl = media.Route;
+
+                TurnUpdated?.Invoke(turn);
+                return;
+            }
+
             var bytes = await OpenClawSessions.FetchLocalMediaAsync(media, CancellationToken.None);
             if (bytes is { Length: > 0 })
             {

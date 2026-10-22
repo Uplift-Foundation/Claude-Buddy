@@ -2614,6 +2614,15 @@ namespace Orbweaver
         // the inline turn is the richer bubble (it already has its picture,
         // with no fetch that can fail) and the mirror's whole content is a
         // bare filename that bubble already implies.
+        // Whether a mirror turn is worth fetching just to be compared against
+        // inline picture bytes. A clip never is: it can never be a duplicate of
+        // an inline *picture*, and fetching it to find that out would download
+        // the whole clip on every page that carries an inline block (CB-272).
+        internal static bool WorthFetchingForCrossArmCompare(HistoryTurn turn) =>
+            turn.Arm == MediaSourceArm.Mirror
+            && !string.IsNullOrEmpty(turn.ImageUrl)
+            && !OpenClawVideo.IsVideoPath(turn.ImageSourcePath);
+
         internal static IReadOnlyList<int> CrossArmDuplicateMirrorIndices(
             IReadOnlyList<HistoryTurn> turns, IReadOnlyDictionary<int, byte[]> mirrorBytesByIndex)
         {
@@ -2742,13 +2751,13 @@ namespace Orbweaver
                 if (!line.StartsWith(LocalMediaMarker, StringComparison.Ordinal)) continue;
 
                 var path = line[LocalMediaMarker.Length..].Trim();
-                return LooksLikeAnImagePath(path)
+                return LooksLikeAMediaPath(path)
                     ? new LocalMediaCandidate(path, Explicit: true)
                     : null;
             }
 
             var trimmed = text.Trim();
-            if (LooksLikeAnImagePath(trimmed)) return new LocalMediaCandidate(trimmed, Explicit: false);
+            if (LooksLikeAMediaPath(trimmed)) return new LocalMediaCandidate(trimmed, Explicit: false);
 
             // CB-107: an agent's caption can pair descriptive prose with the
             // file rather than sending it alone — a caption line followed by
@@ -2767,7 +2776,7 @@ namespace Orbweaver
             if (tokens.Length == 0) return null;
 
             var last = tokens[^1];
-            if (LooksLikeAnImagePath(last)) return new LocalMediaCandidate(last, Explicit: false);
+            if (LooksLikeAMediaPath(last)) return new LocalMediaCandidate(last, Explicit: false);
 
             // A bare filename alone, with nothing else in the message, already
             // failed the whole-message check above and stays plain text — an
@@ -2779,7 +2788,7 @@ namespace Orbweaver
             // unresolved; ResolveLocalMediaPath is what turns this into
             // something fetchable, the same way the delivery-mirror branch
             // already does for its own bare filenames.
-            return tokens.Length > 1 && LooksLikeABareImageFilename(last)
+            return tokens.Length > 1 && LooksLikeABareMediaFilename(last)
                 ? new LocalMediaCandidate(last, Explicit: false)
                 : null;
         }
@@ -2789,11 +2798,23 @@ namespace Orbweaver
         // with a space in it would already have failed the whitespace-token
         // split above, so the checks here are about the extension and
         // nothing else being present.
-        private static bool LooksLikeABareImageFilename(string text) =>
+        //
+        // CB-272: a video's bare filename counts too, as its own kind — see
+        // OpenClawVideo. This is widened while LooksLikeAnImagePath is not
+        // because the two answer different questions: that one is the cron
+        // recovery's rooted trigger and must keep refusing a clip, whereas
+        // this one only nominates a candidate, and a nominated clip still has
+        // to be confirmed by the gateway's meta before anything is drawn.
+        //
+        // OpenClawVideo. Whether a candidate is a picture or a clip is read
+        // back off its extension by whoever needs to know
+        // (OpenClawVideo.IsVideoPath), not carried on the candidate.
+        private static bool LooksLikeABareMediaFilename(string text) =>
             text.Length > 0
             && !text.Contains('/')
             && !text.Contains('\\')
-            && Array.Exists(ImageExtensions, ext => text.EndsWith(ext, StringComparison.OrdinalIgnoreCase));
+            && (Array.Exists(ImageExtensions, ext => text.EndsWith(ext, StringComparison.OrdinalIgnoreCase))
+                || OpenClawVideo.HasVideoExtension(text));
 
         // Turns whatever LocalMediaPathFrom found into something actually
         // fetchable. A rooted path is already that; a bare filename is the
@@ -2855,11 +2876,27 @@ namespace Orbweaver
         // file's header for why only the bare-filename half needed a new
         // predicate.
         internal static bool LooksLikeAnImagePath(string text) =>
+            IsSafeRootedPath(text)
+            && Array.Exists(ImageExtensions, ext => text.EndsWith(ext, StringComparison.OrdinalIgnoreCase));
+
+        // CB-272: the same structural guard, with a video extension. Kept as a
+        // sibling of LooksLikeAnImagePath rather than a widening of it: the
+        // image predicate is also OpenClawCronRecovery's trigger for "is this
+        // trailing token a picture", and a clip must not start counting as one
+        // there. Both share IsSafeRootedPath, so the traversal refusal that
+        // the comment above calls the only structural guard left cannot be
+        // loosened for one kind and forgotten on the other.
+        internal static bool LooksLikeAVideoPath(string text) =>
+            IsSafeRootedPath(text) && OpenClawVideo.HasVideoExtension(text);
+
+        internal static bool LooksLikeAMediaPath(string text) =>
+            LooksLikeAnImagePath(text) || LooksLikeAVideoPath(text);
+
+        private static bool IsSafeRootedPath(string text) =>
             (text.StartsWith('/') || text.StartsWith("~/", StringComparison.Ordinal))
             && !text.StartsWith("//", StringComparison.Ordinal)
             && !text.Contains("..", StringComparison.Ordinal)
-            && !text.Contains(' ') && !text.Contains('\n')
-            && Array.Exists(ImageExtensions, ext => text.EndsWith(ext, StringComparison.OrdinalIgnoreCase));
+            && !text.Contains(' ') && !text.Contains('\n');
 
         // The gateway writes one of these whenever it actually delivers a
         // message somewhere, and for a picture it is the only trace a client
@@ -3044,7 +3081,12 @@ namespace Orbweaver
 
             if (path.Contains("..", StringComparison.Ordinal)) return null;
 
+            // CB-272: a clip's path is harvested the same way a picture's is,
+            // so a mirror naming a bare `clip.mp4` can resolve to its real
+            // directory. The name says "image" because that is all it was for
+            // until then; the guards above are the point and they are shared.
             return Array.Exists(ImageExtensions, ext => path.EndsWith(ext, StringComparison.OrdinalIgnoreCase))
+                   || OpenClawVideo.HasVideoExtension(path)
                 ? path
                 : null;
         }
@@ -3079,7 +3121,12 @@ namespace Orbweaver
             if (name.Contains('/') || name.Contains('\\')) return null;
             if (name.Contains(' ') || name.Contains('\n') || name.Contains('\r') || name.Contains('\t')) return null;
 
+            // CB-272: a delivery mirror can name a clip as well as a picture,
+            // so the extension test is image-or-video. The method keeps its
+            // name; the kind is read back off the extension by whoever needs
+            // it (OpenClawVideo.IsVideoPath).
             return Array.Exists(ImageExtensions, ext => name.EndsWith(ext, StringComparison.OrdinalIgnoreCase))
+                   || OpenClawVideo.HasVideoExtension(name)
                 ? name
                 : null;
         }
@@ -3994,11 +4041,7 @@ namespace Orbweaver
                     var mirrorBytesByIndex = new Dictionary<int, byte[]>();
                     for (var i = 0; i < turns.Count; i++)
                     {
-                        if (turns[i].Arm != MediaSourceArm.Mirror
-                            || string.IsNullOrEmpty(turns[i].ImageUrl))
-                        {
-                            continue;
-                        }
+                        if (!WorthFetchingForCrossArmCompare(turns[i])) continue;
 
                         var fetched = await FetchMediaAsync(turns[i].ImageUrl!, ct);
                         if (fetched is { Length: > 0 }) mirrorBytesByIndex[i] = fetched;

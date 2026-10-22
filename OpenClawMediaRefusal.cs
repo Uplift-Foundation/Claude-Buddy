@@ -47,6 +47,14 @@ namespace Orbweaver
 
         private const string Prefix = "Picture not shown — ";
 
+        // CB-272: the same note for a video tile. The sentences below are
+        // the gateway's codes put into words and are the same for both kinds
+        // except where the word "picture" is itself the claim — see
+        // unsupported-media-type — so a clip's note is built from this
+        // prefix and a code table with that one row swapped, not from a second
+        // parallel Explain.
+        private const string VideoPrefix = "Video not shown — ";
+
         // Cap on a gateway-supplied reason, so a verbose message from the
         // other end doesn't blow out the bubble's width. 200 is generous for
         // a sentence and short of anything that would wrap more than a line
@@ -83,12 +91,14 @@ namespace Orbweaver
         // know" line rather than a fabricated cause; this project already
         // keeps that distinction between confirmed and assumed everywhere
         // else, and inventing a reason here would break it.
-        internal static string Explain(string? json)
+        internal static string Explain(string? json, bool video = false)
         {
-            if (!TryParse(json, out var root)) return Prefix + "couldn't ask the gateway why.";
+            var prefix = video ? VideoPrefix : Prefix;
+
+            if (!TryParse(json, out var root)) return prefix + "couldn't ask the gateway why.";
 
             if (root.TryGetProperty("available", out var a) && a.ValueKind == JsonValueKind.True)
-                return Prefix + "the gateway has the file but the fetch didn't finish.";
+                return prefix + "the gateway has the file but the fetch didn't finish.";
 
             var code = StringOrNull(root, "code");
             var reason = StringOrNull(root, "reason")?.Trim();
@@ -115,12 +125,24 @@ namespace Orbweaver
             // shipped. Do not tidy this away as unreachable.
             if (string.Equals(code, "outside-allowed-folders", StringComparison.Ordinal))
             {
-                return Prefix + "the gateway won't serve files from that folder. Ask the agent to "
+                return prefix + "the gateway won't serve files from that folder. Ask the agent to "
                     + "write it to ~/.openclaw/media/, which is allowed for every agent.";
             }
 
+            // CB-272: "isn't a picture this app can show" is wrong for a
+            // clip, and the gateway's own reason for it ("Not an image", seen
+            // on a video outside the session's allowed folders) reads as a
+            // contradiction beside a tile that says video. The gateway did
+            // refuse it, so say that and keep its reason.
+            if (video && string.Equals(code, "unsupported-media-type", StringComparison.Ordinal))
+            {
+                return prefix + (string.IsNullOrEmpty(reason)
+                    ? "the gateway wouldn't serve that file as a video."
+                    : "the gateway wouldn't serve that file as a video (it said: " + Truncate(reason!) + ").");
+            }
+
             if (code is not null && CodeSentences.TryGetValue(code, out var sentence))
-                return Prefix + sentence;
+                return prefix + sentence;
 
             // Below here the code (if any) isn't one this app has a specific
             // sentence for. "Refused" used to be the word for all of these,
@@ -131,14 +153,16 @@ namespace Orbweaver
             // word this app can't back up for an unknown code should be.
             if (!string.IsNullOrEmpty(reason))
             {
-                var trimmed = reason!.Length > MaxReasonLength ? reason[..MaxReasonLength] : reason;
-                return Prefix + "the gateway wouldn't serve it: " + trimmed;
+                return prefix + "the gateway wouldn't serve it: " + Truncate(reason!);
             }
 
             return string.IsNullOrEmpty(code)
-                ? Prefix + "the gateway wouldn't serve it."
-                : Prefix + $"the gateway wouldn't serve it ({code}).";
+                ? prefix + "the gateway wouldn't serve it."
+                : prefix + $"the gateway wouldn't serve it ({code}).";
         }
+
+        private static string Truncate(string reason) =>
+            reason.Length > MaxReasonLength ? reason[..MaxReasonLength] : reason;
 
         // The tooltip on that line: the path the agent named, plus the
         // gateway's own code when the meta answer had one. Never the reason —

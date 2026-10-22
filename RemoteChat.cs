@@ -175,6 +175,14 @@ namespace Orbweaver
         // what tells the row to look again.
         public string? ImageSourcePath { get; set; }
 
+        // CB-272: whether ImageUrl names a video clip rather than a picture,
+        // read off the extension of ImageSourcePath. Derived rather than
+        // stored so it cannot disagree with the path, and so the several
+        // sites that copy a history turn into a live one (all of which already
+        // copy the path) need no new field to forget. A turn with no source
+        // path — a local CLI's inline picture, a pasted one — is never one.
+        public bool IsVideo => OpenClawVideo.IsVideoPath(ImageSourcePath);
+
         // CB-116: whether a *failed* fetch for ImageUrl is worth explaining
         // with the note below, rather than staying silent — see
         // MediaConfidence's own header for the full reasoning. Set by

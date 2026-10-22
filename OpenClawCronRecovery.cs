@@ -101,6 +101,11 @@ namespace Orbweaver
     // corpus today (a picture-delivery job's every turn already ends in a
     // filename), but it is not free to skip for a job that looks different.
     //
+    // CB-272: both predicates now accept a clip as well (a picture-delivery
+    // job's cron run can end on `clip.mp4` just as readily); the rooted case
+    // goes through LooksLikeAMediaPath for that reason, which still refuses
+    // anything that LooksLikeAnImagePath refuses on structure.
+    //
     // The rooted case reuses OpenClawSessions.LooksLikeAnImagePath, already
     // present for LocalMediaPathFrom's own bare-path arm. The bare-filename
     // case has no existing predicate to reuse — 290d086 (this ticket's base)
@@ -177,8 +182,8 @@ namespace Orbweaver
             var token = TrailingTokenOf(text);
             if (token is null) return null;
 
-            if (LooksLikeABareImageFilename(token)) return token;
-            if (OpenClawSessions.LooksLikeAnImagePath(token)) return BasenameOf(token);
+            if (LooksLikeABareImageFilename(token) || LooksLikeABareVideoFilename(token)) return token;
+            if (OpenClawSessions.LooksLikeAMediaPath(token)) return BasenameOf(token);
 
             return null;
         }
@@ -192,7 +197,10 @@ namespace Orbweaver
         // Mirrors OpenClawSessions' own ImageExtensions list rather than
         // sharing it — the same small, deliberate duplication this file
         // already accepts for StringOrNull: one file to a concern, rather
-        // than a shared utility neither file would then fully own.
+        // than a shared utility neither file would then fully own. That
+        // reasoning is about the *image* list only. The video half is not
+        // duplicated: CB-272 reads it from OpenClawVideo.Extensions, so there
+        // is exactly one list of clip extensions in the app.
         private static readonly string[] ImageExtensions =
             { ".png", ".jpg", ".jpeg", ".gif", ".webp" };
 
@@ -206,6 +214,13 @@ namespace Orbweaver
             && !token.Contains('\\')
             && !token.Contains(' ')
             && Array.Exists(ImageExtensions, ext => token.EndsWith(ext, StringComparison.OrdinalIgnoreCase));
+
+        private static bool LooksLikeABareVideoFilename(string token) =>
+            token.Length > 0
+            && !token.Contains('/')
+            && !token.Contains('\\')
+            && !token.Contains(' ')
+            && OpenClawVideo.HasVideoExtension(token);
 
         internal static string BasenameOf(string path)
         {
