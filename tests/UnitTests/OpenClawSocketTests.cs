@@ -285,6 +285,18 @@ public class OpenClawSocketTests
         Assert.Equal(-1, OpenClawSocket.ContentLength("HTTP/1.1 200 OK\r\n\r\n"));
     }
 
+    // CB-272: a stream that ends short of its declared length is a dropped
+    // connection. Returning the partial body would let a half-downloaded clip
+    // be cached and opened.
+    [Fact]
+    public async Task AStreamThatEndsShortOfItsDeclaredLengthIsNull()
+    {
+        var stream = new ScriptedStream(_ => Ascii(
+            "HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n0123456789"));
+
+        Assert.Null(await OpenClawSocket.ReadResponseAsync(stream, CancellationToken.None));
+    }
+
     // A non-200 is a null, not an exception: a picture that won't load is a
     // picture that won't load, and the message it belongs to still reads.
     [Theory]

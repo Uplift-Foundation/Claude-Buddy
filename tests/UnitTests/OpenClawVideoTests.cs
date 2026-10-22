@@ -278,6 +278,17 @@ public class OpenClawVideoTests
         Assert.Equal(new OpenClawVideo.Meta(true, null, null, null, null), meta);
     }
 
+    // An unchecked int cast wrapped 4294967297 to 1 and drew a wrong tile.
+    [Fact]
+    public void ADimensionPastIntRangeIsNullNotWrapped()
+    {
+        var meta = OpenClawVideo.ParseMeta(
+            "{\"available\":true,\"width\":4294967297,\"height\":800}");
+
+        Assert.Equal(new OpenClawVideo.Meta(true, null, null, 800, null), meta);
+        Assert.Equal(OpenClawVideo.TileWidth * 9 / 16, OpenClawVideo.TileHeight(meta!.Value.Width, meta.Value.Height));
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("")]

@@ -161,6 +161,13 @@ namespace Orbweaver
                 if (body.Length > MaxBodyBytes) break;
             }
 
+            // A stream that ended before the declared length is a dropped
+            // connection, not a short answer: returning the partial body would
+            // let FetchMediaAsync cache it and, for a clip, hand half a file to
+            // the player. The ceiling case is exempt on purpose — it stops
+            // early by design and is what OpenClawVideo.IsTruncated catches.
+            if (length >= 0 && body.Length < length && body.Length <= MaxBodyBytes) return null;
+
             return body.ToArray();
         }
 

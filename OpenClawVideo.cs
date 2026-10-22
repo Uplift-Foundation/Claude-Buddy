@@ -73,8 +73,8 @@ namespace Orbweaver
                 return new Meta(
                     available,
                     LongOrNull(root, "durationMs"),
-                    (int?)LongOrNull(root, "width"),
-                    (int?)LongOrNull(root, "height"),
+                    IntOrNull(root, "width"),
+                    IntOrNull(root, "height"),
                     LongOrNull(root, "sizeBytes"));
             }
             catch (JsonException)
@@ -82,6 +82,12 @@ namespace Orbweaver
                 return null;
             }
         }
+
+        // A dimension past int.MaxValue is a malformed answer, not a clip that
+        // wide; an unchecked cast would wrap it to a small positive number and
+        // draw a wrong-shaped tile instead of the 16:9 default.
+        private static int? IntOrNull(JsonElement obj, string name) =>
+            LongOrNull(obj, name) is { } n && n <= int.MaxValue ? (int)n : null;
 
         private static long? LongOrNull(JsonElement obj, string name) =>
             obj.TryGetProperty(name, out var v)
