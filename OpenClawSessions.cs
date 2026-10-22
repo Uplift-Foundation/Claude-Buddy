@@ -2800,6 +2800,12 @@ namespace Orbweaver
         // nothing else being present.
         //
         // CB-272: a video's bare filename counts too, as its own kind — see
+        // OpenClawVideo. This is widened while LooksLikeAnImagePath is not
+        // because the two answer different questions: that one is the cron
+        // recovery's rooted trigger and must keep refusing a clip, whereas
+        // this one only nominates a candidate, and a nominated clip still has
+        // to be confirmed by the gateway's meta before anything is drawn.
+        //
         // OpenClawVideo. Whether a candidate is a picture or a clip is read
         // back off its extension by whoever needs to know
         // (OpenClawVideo.IsVideoPath), not carried on the candidate.

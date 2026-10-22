@@ -26,6 +26,50 @@ namespace Orbweaver.Tests;
 [Collection("Settings")]
 public class OpenClawGatewayPayloadTests
 {
+    // CB-272: a whole chat.history record for a cron-delivered clip — role,
+    // provider, the automation carrier, timestamp and content blocks — walked
+    // into one video turn. Invented values on the real structure.
+    [Fact]
+    public void AHistoryPageWithAClipMediaLineWalksIntoAVideoTurn()
+    {
+        const string path = "/home/agent/outputs/astra/clip_123.mp4";
+        var messages = JsonDocument.Parse("""
+        [{"role":"assistant","provider":"claude-cli-example","timestamp":1700000900000,
+          "openclawAutomation":{"kind":"cron","jobId":"job-clip0001"},
+          "content":[{"type":"text","text":"a short one for you\nMEDIA:/home/agent/outputs/astra/clip_123.mp4"}]}]
+        """).RootElement;
+
+        var turn = Assert.Single(OpenClawSessions.TurnsFromHistory(messages, "agent:main:cron:job-clip0001"));
+
+        Assert.Equal(new OpenClawMediaSource(path, "agent:main:cron:job-clip0001").Route, turn.ImageUrl);
+        Assert.Equal(path, turn.ImageSourcePath);
+        Assert.Equal(MediaConfidence.High, turn.Confidence);
+        Assert.Null(turn.ImageBytes);
+        Assert.True(OpenClawVideo.IsVideoPath(turn.ImageSourcePath));
+        Assert.NotNull(turn.Automation);
+    }
+
+    // Both kinds on one page: each carries a route, and only the clip is a
+    // video, so the picture still goes to the bitmap path and the clip to the
+    // tile.
+    [Fact]
+    public void AHistoryPageWithAPictureAndAClipKeepsTheKindsApart()
+    {
+        var messages = JsonDocument.Parse("""
+        [{"role":"assistant","content":[{"type":"text","text":"one\nMEDIA:/home/agent/outputs/pic_1.png"}]},
+         {"role":"assistant","content":[{"type":"text","text":"two\nMEDIA:/home/agent/outputs/clip_2.mp4"}]}]
+        """).RootElement;
+
+        var turns = OpenClawSessions.TurnsFromHistory(messages, "agent:main:main");
+
+        var picture = turns.Single(t => t.Text.StartsWith("one"));
+        var clip = turns.Single(t => t.Text.StartsWith("two"));
+        Assert.False(OpenClawVideo.IsVideoPath(picture.ImageSourcePath));
+        Assert.True(OpenClawVideo.IsVideoPath(clip.ImageSourcePath));
+        Assert.NotNull(picture.ImageUrl);
+        Assert.NotNull(clip.ImageUrl);
+    }
+
     // CB-99: history is an external payload, so prove the full record carries
     // the two provenance fields into the delivery predicate. A missing field
     // preserves compatibility, while a present mismatch must not initiate a
