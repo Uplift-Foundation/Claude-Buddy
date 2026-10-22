@@ -2184,7 +2184,8 @@ namespace Orbweaver
                         // bytes sitting beside it. One spelling of "no url"
                         // for both this parser and everything downstream.
                         var url = Str(block, "url");
-                        if (string.IsNullOrWhiteSpace(url)) url = null;
+                        if (string.IsNullOrWhiteSpace(url) || OpenClawSocket.HasControlCharacter(url))
+                            url = null;
 
                         var bytes = url is null ? InlineImageBytes(block) : null;
                         if (url is null && bytes is null) continue;
@@ -2219,10 +2220,16 @@ namespace Orbweaver
 
                 var text = TextOf(content);
 
-                if (string.IsNullOrWhiteSpace(text)) continue;
+                // CB-274 / CB-275: read before the empty-text guard, because a
+                // media-only message (the gateway's runtime media supplement
+                // strips its text blocks) must still draw its attachment.
+                var attachment = AttachmentOf(content);
 
-                text = Readable(text, out var speakerId);
-                if (string.IsNullOrWhiteSpace(text)) continue;
+                if (string.IsNullOrWhiteSpace(text) && attachment is null) continue;
+
+                string? speakerId = null;
+                if (!string.IsNullOrWhiteSpace(text)) text = Readable(text, out speakerId);
+                if (string.IsNullOrWhiteSpace(text) && attachment is null) continue;
 
                 var ms = Num(message, "timestamp");
                 var at = ms > 0
@@ -2279,7 +2286,70 @@ namespace Orbweaver
                     }
                 }
 
-                if (string.IsNullOrWhiteSpace(text)) continue;
+                if (string.IsNullOrWhiteSpace(text) && attachment is null) continue;
+
+                // CB-115: the first conjunct of the cron-recovery trigger,
+                // computed before the attachment, delivery-mirror and
+                // named-path arms rather than after them — see the note above
+                // the named-path arm for why tagging must not depend on an arm
+                // having resolved anything.
+                var automation = OpenClawCronRecovery.AutomationOf(message);
+                var cronAutomation = automation is { Kind: OpenClawCronRecovery.CronKind }
+                    ? automation
+                    : (OpenClawAutomation?)null;
+
+                // CB-274 / CB-275: a message the gateway projected an
+                // attachment block into. One arm for every kind; it `continue`s,
+                // so the delivery-mirror and named-path arms never run on the
+                // same message and one attachment is one bubble.
+                //
+                // **Text is not touched.** AppendNewTail anchors the live tail
+                // on (Role, Text) equality with the last turn already on
+                // screen; a parser that appended the filename to the caption
+                // would stop matching a turn it produced a page earlier.
+                if (attachment is { } a)
+                {
+                    var caption = text.Trim();
+
+                    if (a.Fetchable)
+                    {
+                        // Delivered: the gateway's own outgoing route, fetched
+                        // verbatim like the url-form picture branch. No local
+                        // path exists (the projection strips it).
+                        turns.Add(new HistoryTurn(role, caption, a.Url, a.Label, at, speaker, colour,
+                            mine, null, ImageSourcePath: null, Automation: cronAutomation,
+                            Confidence: MediaConfidence.High, Attachment: a));
+                        continue;
+                    }
+
+                    // Not delivered: the gateway moved the filename out of the
+                    // text and into the block, so rebuild the CB-107 shape — a
+                    // bare filename resolved against this page's harvested
+                    // paths, falling back to the shared-media guess — and let
+                    // the recovery pass in FetchHistoryPageAsync do for it what
+                    // it does for every cron turn. The label is untrusted
+                    // text: reduced to a bare name before it is joined to a
+                    // directory.
+                    var bare = BareNameOf(a.Label);
+                    if (bare is null)
+                    {
+                        turns.Add(new HistoryTurn(role, caption, null, a.Label, at, speaker, colour,
+                            mine, null, Automation: cronAutomation,
+                            Confidence: MediaConfidence.High, Attachment: a));
+                        continue;
+                    }
+
+                    var named0 = ResolveLocalMediaPath(bare, mediaPaths);
+                    var media0 = new OpenClawMediaSource(named0, sessionKey);
+                    turns.Add(new HistoryTurn(role, caption, media0.Route, bare, at, speaker, colour,
+                        mine, null, media0.Path, Automation: cronAutomation,
+                        Confidence: MediaConfidence.High, Attachment: a));
+
+                    if (!namedIndices.TryGetValue(named0, out var indices0))
+                        namedIndices[named0] = indices0 = new List<int>();
+                    indices0.Add(turns.Count - 1);
+                    continue;
+                }
 
                 // A picture the gateway actually delivered somewhere. Its own
                 // record of having done so is all a client ever sees of it —
@@ -2388,11 +2458,6 @@ namespace Orbweaver
                 // rule that retired PathFromUrl and client-side agentId:
                 // never prefer a downstream re-derivation to what the
                 // producer already knows.
-                var automation = OpenClawCronRecovery.AutomationOf(message);
-                var cronAutomation = automation is { Kind: OpenClawCronRecovery.CronKind }
-                    ? automation
-                    : (OpenClawAutomation?)null;
-
                 // CB-116: whether this turn's own origin is reason enough to
                 // trust a *failed* fetch's explanation, decided here — the one
                 // place that has both the candidate's provenance (Explicit,
@@ -2536,6 +2601,218 @@ namespace Orbweaver
             return turns;
         }
 
+        // CB-274 / CB-275: the attachment a display-projected message carries
+        // beside its text, if any. The gateway's chat.history serves a
+        // projection of the transcript, not the raw text: a video, audio file
+        // or document the agent posted arrives as a `video` / `audio` /
+        // `attachment` block, and one the gateway could not deliver as an
+        // `attachment_error` block, with the filename *moved out of the text*.
+        // TextOf keeps only text parts, so before this a clip's turn reached
+        // the parser as a bare caption and the recovery pass had no filename
+        // to look up (CB-274).
+        //
+        // `image` blocks are deliberately not read here: the url-form image
+        // branch in TurnsFromHistory is the one producer of picture turns (the
+        // live shape for every delivered cron picture), and a second reading
+        // would draw two bubbles. A failed picture is an `attachment_error` of
+        // kind image and does come through here.
+        //
+        // First attachment block wins: one post is one prepare, so two in one
+        // message is not a shape the gateway emits.
+        internal static ChatAttachment? AttachmentOf(JsonElement content)
+        {
+            if (content.ValueKind != JsonValueKind.Array) return null;
+
+            foreach (var block in content.EnumerateArray())
+            {
+                switch (Str(block, "type"))
+                {
+                    case "video":
+                        return MediaBlock(block, AttachmentKind.Video);
+                    case "audio":
+                        return MediaBlock(block, AttachmentKind.Audio);
+                    case "attachment":
+                        if (block.TryGetProperty("attachment", out var wrapped)
+                            && wrapped.ValueKind == JsonValueKind.Object)
+                        {
+                            return WrappedBlock(wrapped, failed: false);
+                        }
+
+                        break;
+                    case "attachment_error":
+                        if (block.TryGetProperty("attachment", out var failed)
+                            && failed.ValueKind == JsonValueKind.Object)
+                        {
+                            return WrappedBlock(failed, failed: true);
+                        }
+
+                        break;
+                }
+            }
+
+            return null;
+        }
+
+        // A top-level video/audio block: url, fileName / alt, optional meta.
+        private static ChatAttachment MediaBlock(JsonElement block, AttachmentKind kind)
+        {
+            var url = CleanUrl(Str(block, "url"));
+
+            // No invented name: a block that names nothing at all keeps an
+            // empty label, which the panel shows as a generic word but which
+            // never becomes a guessed path (a made-up "video" would send the
+            // gateway looking for a file called video).
+            var label = Str(block, "fileName");
+            if (string.IsNullOrWhiteSpace(label)) label = Str(block, "alt");
+            if (string.IsNullOrWhiteSpace(label)) label = LastSegmentOf(url);
+
+            return new ChatAttachment(kind, url, label ?? "", Str(block, "mimeType"),
+                OpenClawVideo.LongOrNull(block, "sizeBytes"),
+                OpenClawVideo.LongOrNull(block, "durationMs"),
+                OpenClawVideo.IntOrNull(block, "width"),
+                OpenClawVideo.IntOrNull(block, "height"),
+
+                // A block the projection stripped of its url is still a clip
+                // the agent posted: drawn with a note, never silently dropped.
+                url is null ? "omitted" : null);
+        }
+
+        // A url is spliced into the request line of a token-bearing request, so
+        // anything that could end that line early is no url at all: a control
+        // character (CR/LF would inject a header) or a space. The block then
+        // draws as omitted.
+        internal static string? CleanUrl(string? url)
+        {
+            if (string.IsNullOrWhiteSpace(url)) return null;
+
+            // Control characters are the injection; the space is only malformed.
+            return OpenClawSocket.HasControlCharacter(url) || url!.Contains(' ') ? null : url;
+        }
+
+        // The `attachment` and `attachment_error` blocks both carry their
+        // fields on an inner `attachment` object.
+        private static ChatAttachment WrappedBlock(JsonElement inner, bool failed)
+        {
+            var url = failed ? null : CleanUrl(Str(inner, "url"));
+
+            var label = Str(inner, "label");
+            if (string.IsNullOrWhiteSpace(label)) label = LastSegmentOf(url);
+            label ??= "";
+
+            var mime = Str(inner, "mimeType");
+            var kind = KindFrom(Str(inner, "kind"), mime, label);
+
+            string? code = null;
+            if (failed)
+            {
+                code = Str(inner, "code");
+                if (string.IsNullOrWhiteSpace(code)) code = "delivery-failed";
+            }
+            else if (url is null)
+            {
+                code = "omitted";
+            }
+
+            return new ChatAttachment(kind, url, label, mime,
+                OpenClawVideo.LongOrNull(inner, "sizeBytes"),
+                OpenClawVideo.LongOrNull(inner, "durationMs"),
+                OpenClawVideo.IntOrNull(inner, "width"),
+                OpenClawVideo.IntOrNull(inner, "height"),
+                code);
+        }
+
+        // The gateway's `kind` vocabulary is image / audio / video / document,
+        // with the prepare-time hint "media" rewritten to document. Anything
+        // else falls back to the mime type's family, then the label's
+        // extension, then Document — a chip is the honest default for a file
+        // nobody can classify.
+        internal static AttachmentKind KindFrom(string? kind, string? mimeType, string label)
+        {
+            switch (kind?.ToLowerInvariant())
+            {
+                case "image": return AttachmentKind.Image;
+                case "video": return AttachmentKind.Video;
+                case "audio": return AttachmentKind.Audio;
+                case "document": return AttachmentKind.Document;
+            }
+
+            if (mimeType is not null)
+            {
+                if (mimeType.StartsWith("image/", StringComparison.OrdinalIgnoreCase)) return AttachmentKind.Image;
+                if (mimeType.StartsWith("video/", StringComparison.OrdinalIgnoreCase)) return AttachmentKind.Video;
+                if (mimeType.StartsWith("audio/", StringComparison.OrdinalIgnoreCase)) return AttachmentKind.Audio;
+            }
+
+            if (OpenClawVideo.HasVideoExtension(label)) return AttachmentKind.Video;
+            if (Array.Exists(ImageExtensions, ext => label.EndsWith(ext, StringComparison.OrdinalIgnoreCase)))
+                return AttachmentKind.Image;
+
+            return AttachmentKind.Document;
+        }
+
+        // The last path segment of a url, query and fragment stripped; null
+        // for a null url or one that ends in a slash.
+        private static string? LastSegmentOf(string? url)
+        {
+            if (url is null) return null;
+
+            var end = url.IndexOfAny(new[] { '?', '#' });
+            var path = end >= 0 ? url[..end] : url;
+            var name = path[(path.LastIndexOf('/') + 1)..];
+            return name.Length == 0 ? null : Uri.UnescapeDataString(name);
+        }
+
+        // A label is untrusted text that is about to be joined to a directory
+        // as a guessed path. Reduced to its last segment; a name that is only
+        // dots, or empty, is refused.
+        internal static string? BareNameOf(string label)
+        {
+            var name = label[(label.LastIndexOfAny(new[] { '/', '\\' }) + 1)..].Trim();
+
+            // Only a segment that *is* a traversal is refused: "my..clip.mp4"
+            // is a legal filename and a clip the user must still be told about.
+            // After reduction to the last segment no separator remains, so
+            // "." and ".." are the only names that could climb a directory.
+            return name.Length == 0 || name == "." || name == ".." ? null : name;
+        }
+
+        // CB-275: the path on a `MEDIA:` line, whatever its extension, for the
+        // cron recovery lookup of a failed *document*. LocalMediaPathFrom only
+        // nominates pictures, clips and voice notes, so a run summary ending
+        // `MEDIA:/…/report.pdf` would never reach the map. The structural
+        // guard is the same (rooted, no traversal, no whitespace); the
+        // extension test is dropped because the lookup key is the failed
+        // block's own label, and the basename equality is the real match.
+        internal static string? MediaMarkerPathFrom(string text)
+        {
+            foreach (var rawLine in text.Split('\n'))
+            {
+                var line = rawLine.Trim();
+                if (!line.StartsWith(LocalMediaMarker, StringComparison.Ordinal)) continue;
+
+                var path = line[LocalMediaMarker.Length..].Trim();
+                return IsSafeRootedPath(path) ? path : null;
+            }
+
+            return null;
+        }
+
+        // CB-274: which filename the cron recovery pass should look up for a
+        // turn, or null for none. A delivered attachment has its real url
+        // already and nothing to recover. A failed one has no filename in its
+        // text at all — the gateway moved it into the block — so the block's
+        // label is the name to look up, ahead of whatever the caption happens
+        // to end in. Every other turn is the CB-115 trigger unchanged.
+        internal static string? RecoveryBasenameFor(HistoryTurn turn)
+        {
+            if (turn.Attachment is { Fetchable: true }) return null;
+
+            return turn.Attachment is { } failed
+                ? OpenClawCronRecovery.BareMediaBasename(failed.Label)
+                  ?? OpenClawCronRecovery.CandidateBasenameFrom(turn.Text)
+                : OpenClawCronRecovery.CandidateBasenameFrom(turn.Text);
+        }
+
         // The picture out of an image block that carried it inline. Real
         // blocks from this gateway put the whole thing in `data` as base64
         // with a `mimeType` beside it (CB-91).
@@ -2621,7 +2898,8 @@ namespace Orbweaver
         internal static bool WorthFetchingForCrossArmCompare(HistoryTurn turn) =>
             turn.Arm == MediaSourceArm.Mirror
             && !string.IsNullOrEmpty(turn.ImageUrl)
-            && !OpenClawVideo.IsVideoPath(turn.ImageSourcePath);
+            && !OpenClawVideo.IsVideoPath(turn.ImageSourcePath)
+            && !OpenClawAudio.IsAudioPath(turn.ImageSourcePath);
 
         internal static IReadOnlyList<int> CrossArmDuplicateMirrorIndices(
             IReadOnlyList<HistoryTurn> turns, IReadOnlyDictionary<int, byte[]> mirrorBytesByIndex)
@@ -2814,7 +3092,8 @@ namespace Orbweaver
             && !text.Contains('/')
             && !text.Contains('\\')
             && (Array.Exists(ImageExtensions, ext => text.EndsWith(ext, StringComparison.OrdinalIgnoreCase))
-                || OpenClawVideo.HasVideoExtension(text));
+                || OpenClawVideo.HasVideoExtension(text)
+                || OpenClawAudio.HasAudioExtension(text));
 
         // Turns whatever LocalMediaPathFrom found into something actually
         // fetchable. A rooted path is already that; a bare filename is the
@@ -2889,8 +3168,13 @@ namespace Orbweaver
         internal static bool LooksLikeAVideoPath(string text) =>
             IsSafeRootedPath(text) && OpenClawVideo.HasVideoExtension(text);
 
+        // CB-275: and a voice note, for the same reason — a sibling, never a
+        // widening of the image predicate.
+        internal static bool LooksLikeAnAudioPath(string text) =>
+            IsSafeRootedPath(text) && OpenClawAudio.HasAudioExtension(text);
+
         internal static bool LooksLikeAMediaPath(string text) =>
-            LooksLikeAnImagePath(text) || LooksLikeAVideoPath(text);
+            LooksLikeAnImagePath(text) || LooksLikeAVideoPath(text) || LooksLikeAnAudioPath(text);
 
         private static bool IsSafeRootedPath(string text) =>
             (text.StartsWith('/') || text.StartsWith("~/", StringComparison.Ordinal))
@@ -3087,6 +3371,7 @@ namespace Orbweaver
             // until then; the guards above are the point and they are shared.
             return Array.Exists(ImageExtensions, ext => path.EndsWith(ext, StringComparison.OrdinalIgnoreCase))
                    || OpenClawVideo.HasVideoExtension(path)
+                   || OpenClawAudio.HasAudioExtension(path)
                 ? path
                 : null;
         }
@@ -3127,6 +3412,7 @@ namespace Orbweaver
             // it (OpenClawVideo.IsVideoPath).
             return Array.Exists(ImageExtensions, ext => name.EndsWith(ext, StringComparison.OrdinalIgnoreCase))
                    || OpenClawVideo.HasVideoExtension(name)
+                   || OpenClawAudio.HasAudioExtension(name)
                 ? name
                 : null;
         }
@@ -3471,6 +3757,10 @@ namespace Orbweaver
         [ExcludeFromCodeCoverage]
         public static async Task<byte[]?> FetchMediaAsync(string url, CancellationToken ct)
         {
+            // Before the cache and before the socket: a url that could end the
+            // request line is never fetched and never remembered.
+            if (OpenClawSocket.HasControlCharacter(url)) return null;
+
             lock (Gate)
             {
                 if (Media.TryGetValue(url, out var cached)) return cached;
@@ -3562,6 +3852,8 @@ namespace Orbweaver
         public static async Task<string?> FetchLocalMediaMetaAsync(
             string requestUrl, CancellationToken ct)
         {
+            if (OpenClawSocket.HasControlCharacter(requestUrl)) return null;
+
             var route = OpenClawMediaSource.MetaOf(requestUrl);
 
             lock (Gate)
@@ -3987,7 +4279,7 @@ namespace Orbweaver
                 {
                     if (turns[i].Automation is not { } automation) continue;
 
-                    var basename = OpenClawCronRecovery.CandidateBasenameFrom(turns[i].Text);
+                    var basename = RecoveryBasenameFor(turns[i]);
                     if (basename is null) continue;
 
                     var recovered = await RecoverCronMediaPathAsync(automation.JobId, basename, ct);

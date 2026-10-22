@@ -579,6 +579,104 @@ public class ChatPanelScreenshots : IDisposable
         }
     }
 
+    // CB-274: a clip the gateway could not deliver (the five cron posts on
+    // the requester's Discord session). The gateway moved the filename out of
+    // the caption into an attachment_error block, and refuses to serve the
+    // file from the agent's folder when asked — measured, "Not an image". The
+    // shape reviewed here is the caption, then the two-sentence note in the
+    // slot a tile would have taken, with the user's turn above for framing.
+    [AvaloniaFact]
+    public void AClipTheGatewayCouldNotDeliverSaysSo()
+    {
+        var realMeta = OpenClawVideo.FetchMeta;
+        OpenClawVideo.FetchMeta = (_, _) => Task.FromResult<string?>(
+            "{\"available\":false,\"code\":\"unsupported-media-type\",\"reason\":\"Not an image\"}");
+
+        try
+        {
+            var failed = VideoTurn();
+            failed.Text = "Pink fairy lights and a little message just for you 🌸";
+            failed.ImageAlt = "sample_afternoon_video.mp4";
+            failed.Attachment = new ChatAttachment(AttachmentKind.Video, null,
+                "sample_afternoon_video.mp4", "video/mp4", null, null, null, null, "delivery-failed");
+
+            var fake = NewFake(new[]
+            {
+                new ChatTurn { Role = ChatRole.User, Text = "send me something nice" },
+                failed,
+            });
+
+            ChatPanel.OpenFor(NewOrb(), fake);
+            ScreenshotHelper.Flush();
+            ScreenshotHelper.CaptureAlreadyShown(
+                ChatPanelTestAccess.Instance!, "chat-panel-clip-not-delivered.png");
+        }
+        finally
+        {
+            OpenClawVideo.FetchMeta = realMeta;
+        }
+    }
+
+    // CB-275: an audio note, a file, and a file the gateway could not deliver.
+    // Block shapes are read off the gateway's source (no real rows exist), so
+    // these captures are of the app's drawing, not of a live gateway.
+    private void CaptureAttachments(string file, params ChatTurn[] turns)
+    {
+        var realMeta = OpenClawVideo.FetchMeta;
+        OpenClawVideo.FetchMeta = (_, _) => Task.FromResult<string?>(
+            "{\"available\":false,\"code\":\"unsupported-media-type\",\"reason\":\"Not an image\"}");
+
+        try
+        {
+            ChatPanel.OpenFor(NewOrb(), NewFake(turns));
+            ScreenshotHelper.Flush();
+            ScreenshotHelper.CaptureAlreadyShown(ChatPanelTestAccess.Instance!, file);
+        }
+        finally
+        {
+            OpenClawVideo.FetchMeta = realMeta;
+        }
+    }
+
+    private static ChatTurn AttachmentTurn(ChatAttachment a, string text) => new()
+    {
+        Role = ChatRole.Assistant, Text = text, IsComplete = true,
+        ImageAlt = a.Label, Attachment = a, ImageUrl = a.Url,
+    };
+
+    [AvaloniaFact]
+    public void AnAudioNoteTheAgentPostedDrawsAClickToOpenTile() =>
+        CaptureAttachments("chat-panel-audio-tile.png",
+            new ChatTurn { Role = ChatRole.User, Text = "say something nice" },
+            AttachmentTurn(new ChatAttachment(AttachmentKind.Audio, "/api/chat/media/outgoing/k/a/full",
+                "good_morning_voice_note.m4a", "audio/mp4", 240000, 42000, null, null, null),
+                "A little voice note for you"));
+
+    [AvaloniaFact]
+    public void AFileTheAgentPostedDrawsAChipWithItsNameAndSize() =>
+        CaptureAttachments("chat-panel-file-chip.png",
+            new ChatTurn { Role = ChatRole.User, Text = "send me the numbers" },
+            AttachmentTurn(new ChatAttachment(AttachmentKind.Document, "/api/chat/media/outgoing/k/b/full",
+                "quarterly-report.pdf", "application/pdf", 1_258_291, null, null, null, null),
+                "Here is the report"));
+
+    [AvaloniaFact]
+    public void AFileTheGatewayCouldNotDeliverDrawsTheChipWithANote()
+    {
+        const string path = "/Users/user/.openclaw/media/quarterly-report.pdf";
+
+        CaptureAttachments("chat-panel-file-not-delivered.png",
+            new ChatTurn { Role = ChatRole.User, Text = "send me the numbers" },
+            new ChatTurn
+            {
+                Role = ChatRole.Assistant, Text = "Here is the report", IsComplete = true,
+                ImageSourcePath = path, ImageAlt = "quarterly-report.pdf",
+                ImageUrl = "/__openclaw__/assistant-media?source=report",
+                Attachment = new ChatAttachment(AttachmentKind.Document, null, "quarterly-report.pdf",
+                    "application/pdf", null, null, null, null, "unsupported-format"),
+            });
+    }
+
     private static ChatTurn VideoTurn()
     {
         const string path = "/Users/user/.openclaw/workspace-sample/outputs/sample_afternoon_video.mp4";

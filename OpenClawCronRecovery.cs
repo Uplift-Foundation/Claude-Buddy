@@ -220,7 +220,21 @@ namespace Orbweaver
             && !token.Contains('/')
             && !token.Contains('\\')
             && !token.Contains(' ')
-            && OpenClawVideo.HasVideoExtension(token);
+            && (OpenClawVideo.HasVideoExtension(token) || OpenClawAudio.HasAudioExtension(token));
+
+        // CB-274: the filename a failed attachment block names, as a lookup
+        // key for the cron run's summary. Any extension: the block already
+        // says what kind of file it is, so the extension tests above (which
+        // exist to nominate a candidate out of prose) have no job here, and
+        // the basename equality in MediaPathsByBasenameForJob is the real
+        // match. A label with a separator or whitespace is not a bare name.
+        internal static string? BareMediaBasename(string? label) =>
+            !string.IsNullOrWhiteSpace(label)
+            && !label!.Contains('/')
+            && !label.Contains('\\')
+            && !label.Any(char.IsWhiteSpace)
+                ? label
+                : null;
 
         internal static string BasenameOf(string path)
         {
@@ -292,9 +306,12 @@ namespace Orbweaver
                 if (run.Summary is null) continue;
 
                 var candidate = OpenClawSessions.LocalMediaPathFrom(run.Summary);
-                if (candidate is null) continue;
 
-                var path = candidate.Value.Path;
+                // CB-275: a document's `MEDIA:` path has no picture, clip or
+                // voice-note extension, so fall back to the marker alone.
+                var path = candidate?.Path ?? OpenClawSessions.MediaMarkerPathFrom(run.Summary);
+                if (path is null) continue;
+
                 var basename = BasenameOf(path);
                 if (!byBasename.TryGetValue(basename, out var paths))
                 {

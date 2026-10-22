@@ -91,9 +91,12 @@ namespace Orbweaver
         // know" line rather than a fabricated cause; this project already
         // keeps that distinction between confirmed and assumed everywhere
         // else, and inventing a reason here would break it.
-        internal static string Explain(string? json, bool video = false)
+        //
+        // CB-275: `noun` names a kind that is neither a picture nor a clip
+        // ("Audio"), so its note neither claims "picture" nor "video".
+        internal static string Explain(string? json, bool video = false, string? noun = null)
         {
-            var prefix = video ? VideoPrefix : Prefix;
+            var prefix = noun is not null ? $"{noun} not shown — " : video ? VideoPrefix : Prefix;
 
             if (!TryParse(json, out var root)) return prefix + "couldn't ask the gateway why.";
 
@@ -134,11 +137,13 @@ namespace Orbweaver
             // on a video outside the session's allowed folders) reads as a
             // contradiction beside a tile that says video. The gateway did
             // refuse it, so say that and keep its reason.
-            if (video && string.Equals(code, "unsupported-media-type", StringComparison.Ordinal))
+            if ((video || noun is not null)
+                && string.Equals(code, "unsupported-media-type", StringComparison.Ordinal))
             {
+                var what = video ? "as a video" : "that way";
                 return prefix + (string.IsNullOrEmpty(reason)
-                    ? "the gateway wouldn't serve that file as a video."
-                    : "the gateway wouldn't serve that file as a video (it said: " + Truncate(reason!) + ").");
+                    ? $"the gateway wouldn't serve that file {what}."
+                    : $"the gateway wouldn't serve that file {what} (it said: " + Truncate(reason!) + ").");
             }
 
             if (code is not null && CodeSentences.TryGetValue(code, out var sentence))
@@ -159,6 +164,66 @@ namespace Orbweaver
             return string.IsNullOrEmpty(code)
                 ? prefix + "the gateway wouldn't serve it."
                 : prefix + $"the gateway wouldn't serve it ({code}).";
+        }
+
+        // CB-274 / CB-275: the note for an attachment the gateway told us it
+        // could not deliver (an attachment_error block, or a block the
+        // projection left without a url). Says what happened first, in words
+        // by kind and failure code; then, when the fetch of the file by the
+        // path recovered for it was also refused, why — so "the gateway never
+        // delivered it" and "and it won't serve it from there either" are two
+        // separate, both-true sentences rather than one invented cause.
+        //
+        // The code table is the gateway's own four (reply-media-paths,
+        // 2026.10.5) plus this app's "omitted". They were read off the
+        // gateway's source, not seen live except delivery-failed: the wording
+        // below states only what each code means, never why it happened.
+        internal static string ExplainDelivery(ChatAttachment attachment, string? gatewayJson)
+        {
+            var noun = attachment.Kind switch
+            {
+                AttachmentKind.Image => "Picture",
+                AttachmentKind.Video => "Video",
+                AttachmentKind.Audio => "Audio",
+                _ => "File"
+            };
+
+            // A block that named nothing says "the file" rather than an
+            // invented filename.
+            var name = string.IsNullOrWhiteSpace(attachment.Label) ? "the file" : attachment.Label;
+
+            var clause = attachment.FailureCode switch
+            {
+                "file-not-found" => "the file wasn't there when the gateway looked",
+                "unsupported-format" => "the gateway's attachment allowlist rejects that type",
+                "invalid-reference" => "the agent gave the gateway a reference it can't open",
+                "omitted" => $"the gateway left {name} out of this transcript",
+                _ => $"the gateway couldn't prepare {name} for this chat"
+            };
+
+            return $"{noun} not delivered — {clause}." + AlsoRefused(gatewayJson);
+        }
+
+        // The second sentence of ExplainDelivery: only when the meta answer is
+        // a real refusal. No answer at all adds nothing (not knowing is not a
+        // reason), and `available:true` adds nothing either — the file is
+        // reachable and the panel will have drawn it.
+        private static string AlsoRefused(string? json)
+        {
+            if (!TryParse(json, out var root)) return "";
+
+            if (root.TryGetProperty("available", out var a) && a.ValueKind == JsonValueKind.True) return "";
+
+            var code = StringOrNull(root, "code");
+            var reason = StringOrNull(root, "reason")?.Trim();
+            var said = string.IsNullOrEmpty(reason) ? "" : " (it said: " + Truncate(reason!) + ")";
+
+            return code switch
+            {
+                "file-not-found" => " It also couldn't find the file in the agent's folder.",
+                "outside-allowed-folders" => " It also won't serve the file from that folder.",
+                _ => " It also won't serve the file from the agent's folder" + said + "."
+            };
         }
 
         private static string Truncate(string reason) =>

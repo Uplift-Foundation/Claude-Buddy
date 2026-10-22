@@ -114,6 +114,25 @@ namespace Orbweaver
             return await ReadResponseAsync(stream, ct);
         }
 
+        // The request line is written by hand, with the bearer token already in
+        // the headers, so a CR or LF in the path ends the line early and
+        // injects a header into a token-bearing request. Every url this app
+        // fetches reaches here (pictures, clips, files and their meta), and
+        // several arrive from the gateway's own transcript, so the refusal
+        // lives at the one place that splices a path into the request rather
+        // than at each producer that might forget it.
+        internal static bool HasControlCharacter(string? text)
+        {
+            if (text is null) return false;
+
+            foreach (var c in text)
+            {
+                if (c < ' ' || c == '\u007f') return true;
+            }
+
+            return false;
+        }
+
         // `Connection: close` rather than keep-alive, because one connection per
         // fetch is the whole shape here — see GetAsync's header. Split out from
         // GetAsync so the exact bytes are assertable without a gateway: the
@@ -121,6 +140,11 @@ namespace Orbweaver
         // serves a picture or a 401, and it is not otherwise visible from
         // anywhere.
         internal static string GetRequest(string host, int port, string path, string bearer) =>
+            HasControlCharacter(path)
+                ? throw new ArgumentException("A request path may not contain control characters.", nameof(path))
+                : BuildRequest(host, port, path, bearer);
+
+        private static string BuildRequest(string host, int port, string path, string bearer) =>
             $"GET {path} HTTP/1.1\r\n" +
             $"Host: {host}:{port}\r\n" +
             $"Authorization: Bearer {bearer}\r\n" +

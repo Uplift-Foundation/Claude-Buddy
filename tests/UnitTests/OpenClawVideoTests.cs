@@ -481,7 +481,15 @@ public class OpenClawVideoTests
         Assert.True(OpenClawVideo.TooLargeToOpen(MetaOfSize(OpenClawVideo.MaxOpenBytes + 1)));
         Assert.False(OpenClawVideo.TooLargeToOpen(MetaOfSize(OpenClawVideo.MaxOpenBytes)));
         Assert.False(OpenClawVideo.TooLargeToOpen(MetaOfSize(null)));
-        Assert.False(OpenClawVideo.TooLargeToOpen(null));
+        Assert.False(OpenClawVideo.TooLargeToOpen((OpenClawVideo.Meta?)null));
+
+        // CB-274: the same guard for a gateway block, and for none.
+        ChatAttachment? Block(long? size) =>
+            new ChatAttachment(AttachmentKind.Video, "/u", "c.mp4", null, size, null, null, null, null);
+        Assert.True(OpenClawVideo.TooLargeToOpen(Block(OpenClawVideo.MaxOpenBytes + 1)));
+        Assert.False(OpenClawVideo.TooLargeToOpen(Block(OpenClawVideo.MaxOpenBytes)));
+        Assert.False(OpenClawVideo.TooLargeToOpen(Block(null)));
+        Assert.False(OpenClawVideo.TooLargeToOpen((ChatAttachment?)null));
     }
 
     [Fact]
@@ -532,5 +540,24 @@ public class OpenClawVideoTests
     public void TheExtensionsAreExactlyTheFourTheTicketNames()
     {
         Assert.Equal(new[] { ".mp4", ".mov", ".webm", ".m4v" }, OpenClawVideo.Extensions);
+    }
+
+    // CB-274: the assistant-media meta answer becomes the one shape a tile is
+    // drawn from.
+    [Fact]
+    public void AMetaAnswerConvertsToAUrlessVideoAttachment()
+    {
+        var meta = OpenClawVideo.ParseMeta(
+            "{\"available\":true,\"sizeBytes\":1042813,\"durationMs\":12750,\"width\":544,\"height\":800}")!.Value;
+
+        var a = OpenClawVideo.FromMeta(meta, "sample_clip.mp4");
+
+        Assert.Equal(AttachmentKind.Video, a.Kind);
+        Assert.Null(a.Url);
+        Assert.Equal("sample_clip.mp4", a.Label);
+        Assert.Equal(1042813, a.SizeBytes);
+        Assert.Equal("0:13", a.Duration);
+        Assert.Equal(320, OpenClawVideo.TileHeight(a.Width, a.Height));
+        Assert.Equal("0:13", OpenClawVideo.FormatDuration(a.DurationMs));
     }
 }

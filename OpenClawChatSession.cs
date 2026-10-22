@@ -109,7 +109,15 @@ namespace Orbweaver
         // later by OpenClawSessions.CrossArmDuplicateMirrorIndices, once the
         // mirror side's bytes exist to compare -- see that method's header
         // for why the comparison cannot happen inside this pure parser.
-        MediaSourceArm Arm = MediaSourceArm.None);
+        MediaSourceArm Arm = MediaSourceArm.None,
+
+        // CB-274 / CB-275: the attachment block this turn was drawn from, when
+        // the gateway's display projection moved the file out of the text and
+        // into a video / audio / attachment / attachment_error block. Carried
+        // by every site that copies a history turn into a live one, because a
+        // copy that dropped it would send a clip or a pdf to the bitmap
+        // decoder, which does not throw on rubbish.
+        ChatAttachment? Attachment = null);
 
     // See HistoryTurn.Arm. Internal and small on purpose: this exists only to
     // let the post-parse dedup pass in OpenClawSessions tell an inline image
@@ -454,6 +462,7 @@ namespace Orbweaver
                     Role = turn.Role,
                     Text = turn.Text,
                     ImageSourcePath = turn.ImageSourcePath,
+                    Attachment = turn.Attachment,
                     Confidence = turn.Confidence,
                     ImageUrl = turn.ImageUrl,
                     ImageBytes = turn.ImageBytes,
@@ -645,6 +654,7 @@ namespace Orbweaver
                 // silently promote whatever tier the matched turn actually
                 // carries to High.
                 turn.ImageSourcePath = match.Value.ImageSourcePath;
+                turn.Attachment = match.Value.Attachment;
                 turn.Confidence = match.Value.Confidence;
                 turn.ImageUrl = match.Value.ImageUrl;
             }
@@ -837,6 +847,7 @@ namespace Orbweaver
                 // that kept one without the other could no longer say why a
                 // picture did not load (CB-109).
                 ImageSourcePath = t.ImageSourcePath,
+                Attachment = t.Attachment,
 
                 // CB-116: carried the same way — the tier TurnsFromHistory
                 // already worked out for this turn, not re-guessed here from
@@ -877,6 +888,7 @@ namespace Orbweaver
                     // See PrependHistory's twin above for why this travels
                     // with ImageUrl rather than being recovered from it.
                     ImageSourcePath = turn.ImageSourcePath,
+                    Attachment = turn.Attachment,
                     Confidence = turn.Confidence,
                     ImageUrl = turn.ImageUrl,
                     ImageBytes = turn.ImageBytes,

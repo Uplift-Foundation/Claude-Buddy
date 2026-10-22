@@ -1698,6 +1698,20 @@ namespace Orbweaver
         // CB-272: the same click, for a video tile — handled for the same two
         // reasons, and it fetches the clip only now rather than when the row
         // was drawn.
+        private void Audio_PointerPressed(object? sender, PointerPressedEventArgs e)
+        {
+            e.Handled = true;
+
+            if ((sender as Control)?.DataContext is TurnView turn) turn.OpenAudio();
+        }
+
+        private void Document_PointerPressed(object? sender, PointerPressedEventArgs e)
+        {
+            e.Handled = true;
+
+            if ((sender as Control)?.DataContext is TurnView turn) turn.OpenDocument();
+        }
+
         private void Video_PointerPressed(object? sender, PointerPressedEventArgs e)
         {
             e.Handled = true;
@@ -3214,6 +3228,20 @@ namespace Orbweaver
 
                 if (!string.IsNullOrEmpty(turn.ImageUrl)) LoadImage();
                 else if (turn.ImageBytes is { Length: > 0 } bytes) LoadImageBytes(bytes);
+
+                // CB-274: a failed attachment whose label could not be turned
+                // into a route (an empty one, or one that is only dots) has
+                // nothing to fetch or ask about, but the user must still be
+                // told the gateway never delivered it — a bare caption is the
+                // exact symptom this ticket exists to remove. No path, so no
+                // gateway question and no "also" sentence.
+                else if (turn.Attachment is { Failed: true } lost
+                         && turn.Confidence == MediaConfidence.High
+                         && turn.ImageNote is null)
+                {
+                    turn.ImageNoteDetail = string.IsNullOrWhiteSpace(lost.Label) ? null : lost.Label;
+                    turn.ImageNote = OpenClawMediaRefusal.ExplainDelivery(lost, null);
+                }
             }
 
             // The turn this row was built from, so the panel can find a row
@@ -3536,6 +3564,21 @@ namespace Orbweaver
                     return;
                 }
 
+                // CB-275: an audio note and a file take the same detour for the
+                // same reason — their bytes are not pictures. (A picture
+                // attachment is the url-form image path below.)
+                if (_turn.IsAudio)
+                {
+                    await LoadAudioAsync();
+                    return;
+                }
+
+                if (_turn.IsDocument)
+                {
+                    await LoadDocumentChipAsync();
+                    return;
+                }
+
                 // Fetched verbatim. Since CB-109 the url is a fully-formed
                 // request — path, session and agent — built where the turn was
                 // built, by whoever knew which session it belonged to. This
@@ -3589,10 +3632,12 @@ namespace Orbweaver
                 // fetch didn't either.
                 var json = await OpenClawSessions.FetchLocalMediaMetaAsync(url, CancellationToken.None);
                 _turn.ImageNoteDetail = OpenClawMediaRefusal.Detail(json, path);
-                _turn.ImageNote = OpenClawMediaRefusal.Explain(json);
+                _turn.ImageNote = _turn.Attachment is { Failed: true } failed
+                    ? OpenClawMediaRefusal.ExplainDelivery(failed, json)
+                    : OpenClawMediaRefusal.Explain(json);
             }
 
-            private OpenClawVideo.Meta? _video;
+            private ChatAttachment? _video;
             private bool _videoRequested;
             private bool _videoOpening;
 
@@ -3621,34 +3666,54 @@ namespace Orbweaver
                 if (_videoRequested) return;
                 _videoRequested = true;
 
+                // CB-274: a clip the gateway delivered as a block already
+                // carries its own meta (duration, size, shape), and its url is
+                // the outgoing route, which has no `&meta=1` — asking would
+                // build `…/full&meta=1`, get a 404 and caption a working clip
+                // with "couldn't ask the gateway why".
+                if (_turn.Attachment is { Kind: AttachmentKind.Video, Fetchable: true } block)
+                {
+                    ShowVideo(block);
+                    return;
+                }
+
                 var json = await OpenClawVideo.FetchMeta(_turn.ImageUrl!, CancellationToken.None);
                 var meta = OpenClawVideo.ParseMeta(json);
 
                 if (meta is { Available: true })
                 {
-                    _video = meta;
-                    foreach (var name in new[]
-                    {
-                        nameof(HasVideo), nameof(VideoHeight),
-                        nameof(VideoDuration), nameof(HasVideoDuration),
-                        nameof(Pad)
-                    })
-                    {
-                        PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
-                    }
-
+                    ShowVideo(OpenClawVideo.FromMeta(meta.Value, _turn.ImageAlt));
                     return;
                 }
 
                 if (_turn.Confidence != MediaConfidence.High) return;
 
                 // Same refusal to caption with a guess as LoadImage's: no path,
-                // no note. Every producer sets the path with the url, and
-                // IsVideo is read off it, so this cannot be null for a video.
+                // no note. Every producer that sets a route sets the path with
+                // it, so this cannot be null here.
                 var path = _turn.ImageSourcePath!;
 
                 _turn.ImageNoteDetail = OpenClawMediaRefusal.Detail(json, path);
-                _turn.ImageNote = OpenClawMediaRefusal.Explain(json, video: true);
+
+                // CB-274: a clip the gateway failed to deliver says so first,
+                // and then why the fetch of the recovered path also failed.
+                _turn.ImageNote = _turn.Attachment is { Failed: true } failed
+                    ? OpenClawMediaRefusal.ExplainDelivery(failed, json)
+                    : OpenClawMediaRefusal.Explain(json, video: true);
+            }
+
+            private void ShowVideo(ChatAttachment attachment)
+            {
+                _video = attachment;
+                foreach (var name in new[]
+                {
+                    nameof(HasVideo), nameof(VideoHeight),
+                    nameof(VideoDuration), nameof(HasVideoDuration),
+                    nameof(Pad)
+                })
+                {
+                    PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
+                }
             }
 
             // The click: fetch the clip now, then hand it to the system
@@ -3683,11 +3748,167 @@ namespace Orbweaver
                         return;
                     }
 
-                    OpenClawVideo.Open(bytes, OpenClawVideo.OpenName(_turn.ImageAlt, _turn.ImageSourcePath));
+                    // A delivered block's label is untrusted text, so its name
+                    // takes its extension from the mime type. A recovered
+                    // path's name was already filtered to a clip extension.
+                    var name = _turn.Attachment is { Kind: AttachmentKind.Video, Fetchable: true } delivered
+                        ? OpenClawAttachment.VideoOpenName(delivered)
+                        : OpenClawVideo.OpenName(_turn.ImageAlt, _turn.ImageSourcePath);
+
+                    OpenClawVideo.Open(bytes, name);
                 }
                 finally
                 {
                     _videoOpening = false;
+                }
+            }
+
+            // ---- CB-275: audio tile and file chip --------------------------
+
+            private ChatAttachment? _audio;
+            private ChatAttachment? _document;
+            private bool _audioRequested;
+            private bool _documentRequested;
+            private bool _attachmentOpening;
+
+            public bool HasAudio => _audio is not null;
+            public double AudioWidth => OpenClawVideo.TileWidth;
+            public string AudioLabel => LabelOrWord(_audio, "audio");
+            public string? AudioDuration => _audio?.Duration;
+            public bool HasAudioDuration => AudioDuration is not null;
+
+            public bool HasDocument => _document is not null;
+            public string DocumentLabel => LabelOrWord(_document, "file");
+            public string? DocumentSize => OpenClawAttachment.FormatSize(_document?.SizeBytes);
+            public bool HasDocumentSize => DocumentSize is not null;
+            public string? DocumentTip => _document?.MimeType;
+
+            // A block that named nothing shows a generic word, never a made-up
+            // filename that something might go looking for.
+            private static string LabelOrWord(ChatAttachment? a, string word) =>
+                a is null ? "" : string.IsNullOrWhiteSpace(a.Value.Label) ? word : a.Value.Label;
+
+            private void Raise(params string[] names)
+            {
+                foreach (var name in names)
+                    PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
+            }
+
+            // Mirrors LoadVideoAsync, without the video's shape: a block the
+            // gateway delivered carries its own meta and is never asked about;
+            // a recovered path (a streamed `MEDIA:/…/note.m4a`, or a failed
+            // block whose path was recovered) asks the assistant-media route.
+            // A failed block still draws its tile when the route will serve it,
+            // and a refused one draws the note instead, as a clip does — except
+            // that a failed audio note keeps its tile, so there is something
+            // to click for the honest "the gateway didn't send it".
+            private async Task LoadAudioAsync()
+            {
+                if (_audioRequested) return;
+                _audioRequested = true;
+
+                if (_turn.Attachment is { Kind: AttachmentKind.Audio, Fetchable: true } block)
+                {
+                    ShowAudio(block);
+                    return;
+                }
+
+                var json = await OpenClawVideo.FetchMeta(_turn.ImageUrl!, CancellationToken.None);
+                var meta = OpenClawVideo.ParseMeta(json);
+                var failed = _turn.Attachment is { Failed: true, Kind: AttachmentKind.Audio } f ? f : (ChatAttachment?)null;
+
+                if (meta is { Available: true })
+                {
+                    ShowAudio(failed ?? OpenClawVideo.FromMeta(meta.Value, AudioNameOf()) with { Kind = AttachmentKind.Audio });
+                    return;
+                }
+
+                if (failed is { } shown) ShowAudio(shown);
+
+                if (_turn.Confidence != MediaConfidence.High) return;
+
+                _turn.ImageNoteDetail = OpenClawMediaRefusal.Detail(json, _turn.ImageSourcePath!);
+                _turn.ImageNote = failed is { } why
+                    ? OpenClawMediaRefusal.ExplainDelivery(why, json)
+                    : OpenClawMediaRefusal.Explain(json, noun: "Audio");
+            }
+
+            private string AudioNameOf() =>
+                !string.IsNullOrEmpty(_turn.ImageAlt) ? _turn.ImageAlt : System.IO.Path.GetFileName(_turn.ImageSourcePath ?? "");
+
+            private void ShowAudio(ChatAttachment attachment)
+            {
+                _audio = attachment;
+                Raise(nameof(HasAudio), nameof(AudioLabel), nameof(AudioDuration),
+                      nameof(HasAudioDuration), nameof(Pad));
+            }
+
+            // A file chip is drawn from the block alone — nothing is asked and
+            // nothing is downloaded to draw it. A *failed* one is drawn too,
+            // then the gateway is asked about the recovered path once; the
+            // note appears only if that is refused as well.
+            private async Task LoadDocumentChipAsync()
+            {
+                if (_documentRequested) return;
+                _documentRequested = true;
+
+                var attachment = _turn.Attachment!.Value;
+                ShowDocument(attachment);
+
+                if (!attachment.Failed || _turn.Confidence != MediaConfidence.High) return;
+
+                var json = await OpenClawVideo.FetchMeta(_turn.ImageUrl!, CancellationToken.None);
+                if (OpenClawVideo.ParseMeta(json) is { Available: true }) return;
+
+                _turn.ImageNoteDetail = OpenClawMediaRefusal.Detail(json, _turn.ImageSourcePath!);
+                _turn.ImageNote = OpenClawMediaRefusal.ExplainDelivery(attachment, json);
+            }
+
+            private void ShowDocument(ChatAttachment attachment)
+            {
+                _document = attachment;
+                Raise(nameof(HasDocument), nameof(DocumentLabel), nameof(DocumentSize),
+                      nameof(HasDocumentSize), nameof(DocumentTip), nameof(Pad));
+            }
+
+            public async void OpenAudio() => await OpenFetched(_audio, OpenClawAttachment.AudioOpenName);
+
+            public async void OpenDocument() => await OpenFetched(_document, OpenClawAttachment.OpenName);
+
+            // The click, for either kind: the same three guards the clip has —
+            // the size the block (or meta) declared, the empty body, the body
+            // the socket cut at its ceiling — then the system's own app.
+            private async Task OpenFetched(ChatAttachment? attachment, Func<ChatAttachment, string> nameFor)
+            {
+                if (_attachmentOpening || attachment is not { } a || string.IsNullOrEmpty(_turn.ImageUrl)) return;
+                _attachmentOpening = true;
+
+                try
+                {
+                    if (OpenClawAttachment.TooLargeToOpen(a))
+                    {
+                        VideoNote(OpenClawAttachment.TooLargeNote(a.Kind, a.SizeBytes!.Value));
+                        return;
+                    }
+
+                    var bytes = await OpenClawVideo.FetchBytes(_turn.ImageUrl!, CancellationToken.None);
+                    if (bytes is not { Length: > 0 })
+                    {
+                        VideoNote(OpenClawAttachment.NotSentNote(a.Kind));
+                        return;
+                    }
+
+                    if (OpenClawVideo.IsTruncated(bytes.Length))
+                    {
+                        VideoNote(OpenClawAttachment.TruncatedNote(a.Kind));
+                        return;
+                    }
+
+                    OpenClawVideo.Open(bytes, nameFor(a));
+                }
+                finally
+                {
+                    _attachmentOpening = false;
                 }
             }
 
@@ -3884,7 +4105,7 @@ namespace Orbweaver
 
             public Thickness Pad => IsSystem
                 ? new Thickness(0, 1)
-                : (HasImage || HasVideo) && !HasText ? new Thickness(5) : new Thickness(9, 6);
+                : (HasImage || HasVideo || HasAudio || HasDocument) && !HasText ? new Thickness(5) : new Thickness(9, 6);
 
             // Bubbles sit closer to their own side's previous bubble than to the
             // other side's, which is what gives a conversation its rhythm.

@@ -73,10 +73,10 @@ namespace Orbweaver
         // A dimension past int.MaxValue is a malformed answer, not a clip that
         // wide; an unchecked cast would wrap it to a small positive number and
         // draw a wrong-shaped tile instead of the 16:9 default.
-        private static int? IntOrNull(JsonElement obj, string name) =>
+        internal static int? IntOrNull(JsonElement obj, string name) =>
             LongOrNull(obj, name) is { } n && n <= int.MaxValue ? (int)n : null;
 
-        private static long? LongOrNull(JsonElement obj, string name) =>
+        internal static long? LongOrNull(JsonElement obj, string name) =>
             obj.TryGetProperty(name, out var v)
             && v.ValueKind == JsonValueKind.Number
             && v.TryGetInt64(out var n)
@@ -92,13 +92,8 @@ namespace Orbweaver
         //
         // Null for an unknown or zero duration, which draws no label at all
         // rather than "0:00" claiming a clip with nothing in it.
-        internal static string? FormatDuration(long? durationMs)
-        {
-            if (durationMs is not > 0) return null;
-
-            var seconds = (long)Math.Round(durationMs.Value / 1000.0, MidpointRounding.AwayFromZero);
-            return $"{seconds / 60}:{seconds % 60:00}";
-        }
+        internal static string? FormatDuration(long? durationMs) =>
+            ChatAttachment.FormatDuration(durationMs);
 
         // The tile's width, matching the 228 a picture is drawn at so a clip
         // and a picture in the same conversation line up.
@@ -137,6 +132,17 @@ namespace Orbweaver
 
         internal static bool TooLargeToOpen(Meta? meta) => meta?.SizeBytes is > OpenClawSocket.MaxBodyBytes;
 
+        // CB-274: the same guard for whatever the tile was drawn from, a
+        // gateway block or a converted meta answer.
+        internal static bool TooLargeToOpen(ChatAttachment? attachment) =>
+            attachment?.SizeBytes is > OpenClawSocket.MaxBodyBytes;
+
+        // The assistant-media `&meta=1` answer as the one shape the panel
+        // draws a clip from. No url: the clip's route is the turn's ImageUrl.
+        internal static ChatAttachment FromMeta(Meta meta, string label) =>
+            new(AttachmentKind.Video, null, label, null, meta.SizeBytes, meta.DurationMs,
+                meta.Width, meta.Height, null);
+
         internal static bool IsTruncated(int length) => length > MaxOpenBytes;
 
         internal static string TooLargeNote(long sizeBytes)
@@ -158,10 +164,16 @@ namespace Orbweaver
         // does for pictures.
         internal static string OpenName(string? alt, string? sourcePath)
         {
-            if (!string.IsNullOrEmpty(alt)) return alt;
-
             var ext = string.IsNullOrEmpty(sourcePath) ? "" : Path.GetExtension(sourcePath);
-            return "video" + (string.IsNullOrEmpty(ext) ? ".mp4" : ext);
+
+            // A name that already ends in a clip extension is what a recovered
+            // path's basename is, and is kept. Anything else (a label that
+            // reached here some other way) is not trusted to choose how the
+            // OS opens the file: ShellExecute runs an .exe.
+            if (!string.IsNullOrEmpty(alt) && HasVideoExtension(alt)) return alt;
+            if (!string.IsNullOrEmpty(alt)) return Path.GetFileNameWithoutExtension(alt) + ".mp4";
+
+            return "video" + (HasVideoExtension(ext) ? ext : ".mp4");
         }
 
         // ---- seams with the outside world ----
