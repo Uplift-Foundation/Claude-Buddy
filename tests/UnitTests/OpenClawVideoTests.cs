@@ -423,6 +423,43 @@ public class OpenClawVideoTests
         Assert.Equal(expected, OpenClawMediaRefusal.Explain(json, video: true));
     }
 
+    // ---- the cross-arm dedup never fetches a clip ------------------------
+
+    private static HistoryTurn Hist(MediaSourceArm arm, string? url, string? path) =>
+        new(ChatRole.Assistant, "", url, "", DateTimeOffset.UnixEpoch, null, null,
+            ImageSourcePath: path, Arm: arm);
+
+    [Fact]
+    public void WorthFetchingForCrossArmCompareSkipsAClipMirror()
+    {
+        Assert.True(OpenClawSessions.WorthFetchingForCrossArmCompare(
+            Hist(MediaSourceArm.Mirror, "/r?x=1", "/a/pic.png")));
+        Assert.False(OpenClawSessions.WorthFetchingForCrossArmCompare(
+            Hist(MediaSourceArm.Mirror, "/r?x=1", "/a/clip.mp4")));
+        Assert.False(OpenClawSessions.WorthFetchingForCrossArmCompare(
+            Hist(MediaSourceArm.Inline, "/r?x=1", "/a/pic.png")));
+        Assert.False(OpenClawSessions.WorthFetchingForCrossArmCompare(
+            Hist(MediaSourceArm.Mirror, "", "/a/pic.png")));
+        Assert.False(OpenClawSessions.WorthFetchingForCrossArmCompare(
+            Hist(MediaSourceArm.Mirror, null, "/a/pic.png")));
+    }
+
+    [Fact]
+    public void AMirrorRecordNamingAClipDrawsAVideoTurnWithMirrorArm()
+    {
+        var turns = OpenClawSessions.TurnsFromHistory(JsonDocument.Parse(
+            "[{\"role\":\"assistant\",\"provider\":\"openclaw\",\"model\":\"delivery-mirror\","
+            + "\"content\":[{\"type\":\"text\",\"text\":\"clip_123.mp4\"}]}]").RootElement,
+            "agent:main:cron:sample");
+
+        var turn = Assert.Single(turns);
+        Assert.Equal(MediaSourceArm.Mirror, turn.Arm);
+        Assert.Equal(OpenClawSessions.SharedMediaDir + "clip_123.mp4", turn.ImageSourcePath);
+        Assert.True(OpenClawVideo.IsVideoPath(turn.ImageSourcePath));
+        Assert.NotNull(turn.ImageUrl);
+        Assert.Null(turn.ImageBytes);
+    }
+
     // ---- the socket's body ceiling ---------------------------------------
 
     private static OpenClawVideo.Meta MetaOfSize(long? size) => new(true, null, null, null, size);

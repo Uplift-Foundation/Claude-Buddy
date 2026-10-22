@@ -2614,6 +2614,15 @@ namespace Orbweaver
         // the inline turn is the richer bubble (it already has its picture,
         // with no fetch that can fail) and the mirror's whole content is a
         // bare filename that bubble already implies.
+        // Whether a mirror turn is worth fetching just to be compared against
+        // inline picture bytes. A clip never is: it can never be a duplicate of
+        // an inline *picture*, and fetching it to find that out would download
+        // the whole clip on every page that carries an inline block (CB-272).
+        internal static bool WorthFetchingForCrossArmCompare(HistoryTurn turn) =>
+            turn.Arm == MediaSourceArm.Mirror
+            && !string.IsNullOrEmpty(turn.ImageUrl)
+            && !OpenClawVideo.IsVideoPath(turn.ImageSourcePath);
+
         internal static IReadOnlyList<int> CrossArmDuplicateMirrorIndices(
             IReadOnlyList<HistoryTurn> turns, IReadOnlyDictionary<int, byte[]> mirrorBytesByIndex)
         {
@@ -3066,7 +3075,12 @@ namespace Orbweaver
 
             if (path.Contains("..", StringComparison.Ordinal)) return null;
 
+            // CB-272: a clip's path is harvested the same way a picture's is,
+            // so a mirror naming a bare `clip.mp4` can resolve to its real
+            // directory. The name says "image" because that is all it was for
+            // until then; the guards above are the point and they are shared.
             return Array.Exists(ImageExtensions, ext => path.EndsWith(ext, StringComparison.OrdinalIgnoreCase))
+                   || OpenClawVideo.HasVideoExtension(path)
                 ? path
                 : null;
         }
@@ -3101,7 +3115,12 @@ namespace Orbweaver
             if (name.Contains('/') || name.Contains('\\')) return null;
             if (name.Contains(' ') || name.Contains('\n') || name.Contains('\r') || name.Contains('\t')) return null;
 
+            // CB-272: a delivery mirror can name a clip as well as a picture,
+            // so the extension test is image-or-video. The method keeps its
+            // name; the kind is read back off the extension by whoever needs
+            // it (OpenClawVideo.IsVideoPath).
             return Array.Exists(ImageExtensions, ext => name.EndsWith(ext, StringComparison.OrdinalIgnoreCase))
+                   || OpenClawVideo.HasVideoExtension(name)
                 ? name
                 : null;
         }
@@ -4016,11 +4035,7 @@ namespace Orbweaver
                     var mirrorBytesByIndex = new Dictionary<int, byte[]>();
                     for (var i = 0; i < turns.Count; i++)
                     {
-                        if (turns[i].Arm != MediaSourceArm.Mirror
-                            || string.IsNullOrEmpty(turns[i].ImageUrl))
-                        {
-                            continue;
-                        }
+                        if (!WorthFetchingForCrossArmCompare(turns[i])) continue;
 
                         var fetched = await FetchMediaAsync(turns[i].ImageUrl!, ct);
                         if (fetched is { Length: > 0 }) mirrorBytesByIndex[i] = fetched;
