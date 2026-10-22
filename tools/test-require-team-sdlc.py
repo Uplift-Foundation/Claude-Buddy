@@ -31,11 +31,32 @@ FULL_BODY = (
 )
 
 
+def find_bash():
+    # Git Bash, not whatever "bash" is on PATH: on the Windows runner that is
+    # WSL's System32\bash.exe, which cannot open a D:\ path and failed every
+    # case with exit 1 before the hook ran. Claude Code itself runs hooks
+    # through Git Bash on Windows, so that is the shell worth testing. Same
+    # lookup as tools/test-build-macos-app.py.
+    if os.name == "nt":
+        for candidate in (r"C:\Program Files\Git\bin\bash.exe",
+                          r"C:\Program Files\Git\usr\bin\bash.exe"):
+            if os.path.exists(candidate):
+                return candidate
+        return None
+    return shutil.which("bash")
+
+
+BASH = find_bash()
+
+
 def decide(payload):
     """Runs the hook on one payload; returns the deny reason, or None for allow."""
-    out = subprocess.run(
-        ["bash", HOOK], input=json.dumps(payload), capture_output=True,
-        text=True, check=True).stdout.strip()
+    run = subprocess.run(
+        [BASH, HOOK.replace("\\", "/")], input=json.dumps(payload),
+        capture_output=True, text=True)
+    if run.returncode != 0:
+        raise AssertionError(f"hook exited {run.returncode}: {run.stderr.strip()}")
+    out = run.stdout.strip()
     if not out:
         return None
     decision = json.loads(out)["hookSpecificOutput"]
@@ -51,7 +72,7 @@ def bash(command):
     return {"tool_name": "Bash", "tool_input": {"command": command}}
 
 
-@unittest.skipUnless(shutil.which("bash") and shutil.which("jq"),
+@unittest.skipUnless(BASH and shutil.which("jq"),
                      "needs bash and jq; the hook fails open without them")
 class AgentSpawns(unittest.TestCase):
 
@@ -78,7 +99,7 @@ class AgentSpawns(unittest.TestCase):
         self.assertIsNone(decide(agent(subagent_type="Explore", run_in_background=True)))
 
 
-@unittest.skipUnless(shutil.which("bash") and shutil.which("jq"),
+@unittest.skipUnless(BASH and shutil.which("jq"),
                      "needs bash and jq; the hook fails open without them")
 class PullRequests(unittest.TestCase):
 
