@@ -274,14 +274,19 @@ public class ChatPanelVideoTileTests : IDisposable
         Assert.False(NoteBlock(panel).IsVisible);
     }
 
+    // macOS `open` and Windows ShellExecute pick the player by extension, so a
+    // clip with no name of its own keeps its source path's extension rather
+    // than being called .mp4.
     [AvaloniaFact]
-    public void ANamelessClipIsOpenedAsVideoMp4()
+    public void ANamelessClipIsOpenedWithItsOwnExtension()
     {
-        var panel = Open(NewFake(new[] { ClipTurn(alt: "") }));
+        var turn = ClipTurn(alt: "");
+        turn.ImageSourcePath = "/Users/sample/outputs/sample_clip.mov";
+        var panel = Open(NewFake(new[] { turn }));
 
         Click(panel, Tile(panel));
 
-        Assert.Equal("video.mp4", Assert.Single(_opened).Name);
+        Assert.Equal("video.mov", Assert.Single(_opened).Name);
     }
 
     [AvaloniaFact]
@@ -350,5 +355,74 @@ public class ChatPanelVideoTileTests : IDisposable
 
         Assert.Empty(_bytesAsked);
         Assert.Empty(_opened);
+    }
+
+    // ---- the 32 MiB socket ceiling ----------------------------------------
+
+    [AvaloniaFact]
+    public void AClipTheMetaSaysIsTooLargeIsNotFetchedAndSaysSo()
+    {
+        _metaAnswer = ServableMeta.Replace("\"sizeBytes\":1042813",
+            "\"sizeBytes\":" + (OpenClawVideo.MaxOpenBytes + 1));
+        var panel = Open(NewFake(new[] { ClipTurn() }));
+
+        Click(panel, Tile(panel));
+
+        Assert.Empty(_bytesAsked);
+        Assert.Empty(_opened);
+        var note = NoteBlock(panel);
+        Assert.StartsWith("Video not opened — the clip is", note.Text);
+        Assert.Equal(ClipPath, ToolTip.GetTip(note));
+    }
+
+    // A gateway whose meta left sizeBytes out: the post-fetch check is what
+    // stops a body the socket cut at its ceiling from reaching the player.
+    [AvaloniaFact]
+    public void ATruncatedDownloadIsNotOpened()
+    {
+        var panel = Open(NewFake(new[] { ClipTurn() }));
+        _bytesAnswer = Task.FromResult<byte[]?>(new byte[OpenClawVideo.MaxOpenBytes + 1]);
+
+        Click(panel, Tile(panel));
+
+        Assert.Single(_bytesAsked);
+        Assert.Empty(_opened);
+        Assert.Equal(OpenClawVideo.TruncatedNote, NoteBlock(panel).Text);
+    }
+
+    // A body exactly at the ceiling is complete and opens: the boundary is
+    // "exceeded", not "reached".
+    [AvaloniaFact]
+    public void ADownloadExactlyAtTheCeilingIsOpened()
+    {
+        var panel = Open(NewFake(new[] { ClipTurn() }));
+        _bytesAnswer = Task.FromResult<byte[]?>(new byte[OpenClawVideo.MaxOpenBytes]);
+
+        Click(panel, Tile(panel));
+
+        Assert.Single(_opened);
+    }
+
+    // ---- the bubble -------------------------------------------------------
+
+    private static Border BubbleOf(Control tile) =>
+        tile.GetVisualAncestors().OfType<Border>().First(b => b.CornerRadius.TopLeft == 11);
+
+    [AvaloniaFact]
+    public void ATileOnlyBubbleUsesTheTightPadding()
+    {
+        var turn = ClipTurn();
+        turn.Text = "";
+        var panel = Open(NewFake(new[] { turn }));
+
+        Assert.Equal(new Thickness(5), BubbleOf(Tile(panel)).Padding);
+    }
+
+    [AvaloniaFact]
+    public void ATileWithACaptionKeepsTheOrdinaryPadding()
+    {
+        var panel = Open(NewFake(new[] { ClipTurn() }));
+
+        Assert.Equal(new Thickness(9, 6), BubbleOf(Tile(panel)).Padding);
     }
 }
