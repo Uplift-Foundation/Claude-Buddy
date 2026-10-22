@@ -22,6 +22,8 @@ Features are built by an **agent team**, not one session doing everything — th
 - **Architect** / **engineer** — build a refined ticket. As many of each as the work genuinely splits into, one per independent surface.
 - **QA** — tests what they build and hands failures back. A loop, not a final gate: build a piece, test a piece, send it back, until nothing comes back.
 
+**Claude Code sessions get this enforced by a hook (CB-273).** `tools/require-team-sdlc.sh`, registered in `.claude/settings.json`, refuses team members spawned as in-process subagents (a named spawn with `isolation` or `run_in_background`), PRs whose body lacks a CB key, `## Verified`, `## Not verified` and an "Installed on" line, and approvals that do not name both rids. Codex does not run Claude Code hooks, so the same rules are yours to keep by hand; `tools/test-require-team-sdlc.py` shows exactly what they are.
+
 ### Product manager: requirement first, then plan
 
 The PM agent creates the requirement in CB as a **`Feature`** and leaves it in **Refinement**, which is where CB's workflow puts a new issue anyway. CB's issue types are `Epic`, `Feature`, `Story`, `Task`, `Bug`, `Subtask` (one word); `Feature` is level with `Story`, not above it, so an `Epic` still groups a multi-ticket effort.
