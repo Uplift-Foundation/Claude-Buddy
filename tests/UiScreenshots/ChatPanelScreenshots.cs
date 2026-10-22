@@ -524,8 +524,26 @@ public class ChatPanelScreenshots : IDisposable
 
             ChatPanel.OpenFor(NewOrb(), fake);
             ScreenshotHelper.Flush();
-            ScreenshotHelper.CaptureAlreadyShown(
-                ChatPanelTestAccess.Instance!, "chat-panel-video-tile.png");
+
+            // A portrait clip's tile is clamped to 320, which fills the
+            // default 340-high panel on its own and scrolls the caption and
+            // the user's turn out of the frame — the very thing the review
+            // question is about ("does it read as a clip beside its
+            // caption"). The panel is a process-wide singleton, so the extra
+            // height is put back afterwards rather than left for the next
+            // capture to inherit.
+            var panel = ChatPanelTestAccess.Instance!;
+            var realHeight = panel.Height;
+            try
+            {
+                panel.Height = 620;
+                ScreenshotHelper.Flush();
+                ScreenshotHelper.CaptureAlreadyShown(panel, "chat-panel-video-tile.png");
+            }
+            finally
+            {
+                panel.Height = realHeight;
+            }
         }
         finally
         {
