@@ -425,4 +425,163 @@ public class ChatPanelVideoTileTests : IDisposable
 
         Assert.Equal(new Thickness(9, 6), BubbleOf(Tile(panel)).Padding);
     }
+
+    // ---- CB-274: a clip the gateway delivered as a block ------------------
+
+    private const string Outgoing = "/api/chat/media/outgoing/agent%3Amain%3Adiscord%3Adirect%3A1/abc/full";
+
+    private static ChatAttachment BlockClip(long size = 1042813) =>
+        new(AttachmentKind.Video, Outgoing, "sample_clip.mp4", "video/mp4", size, 12750, 544, 800, null);
+
+    // A delivered block carries no local path (the gateway strips it) and its
+    // url is not an assistant-media route.
+    private static ChatTurn BlockTurn(ChatAttachment clip) => new()
+    {
+        Role = ChatRole.Assistant,
+        Text = "a clip for you",
+        IsComplete = true,
+        ImageSourcePath = null,
+        ImageAlt = clip.Label,
+        Attachment = clip,
+        ImageUrl = clip.Url,
+    };
+
+    // The seq-977 shape: a clip the gateway failed to deliver, resolved to a
+    // path for the assistant-media route to be asked about.
+    private static ChatTurn FailedClipTurn(MediaConfidence confidence = MediaConfidence.High) => new()
+    {
+        Role = ChatRole.Assistant,
+        Text = "a little message just for you",
+        IsComplete = true,
+        ImageSourcePath = ClipPath,
+        Confidence = confidence,
+        ImageAlt = "sample_clip.mp4",
+        ImageUrl = Route,
+        Attachment = new ChatAttachment(AttachmentKind.Video, null, "sample_clip.mp4", "video/mp4",
+            null, null, null, null, "delivery-failed"),
+    };
+
+    [AvaloniaFact]
+    public void AClipWithBlockCarriedMetaDrawsATileWithoutAskingTheGateway()
+    {
+        // `&meta=1` on the outgoing route would be `…/full&meta=1`: a 404 that
+        // captions a working clip with "couldn't ask the gateway why".
+        OpenClawVideo.FetchMeta = (_, _) => throw new InvalidOperationException("must not ask");
+
+        var panel = Open(NewFake(new[] { BlockTurn(BlockClip()) }));
+
+        var tile = Tile(panel);
+        Assert.True(tile.IsVisible);
+        Assert.Equal(228, tile.Width);
+        Assert.Equal(320, tile.Height);
+        Assert.Contains("0:13", TextsIn(tile));
+        Assert.False(NoteBlock(panel).IsVisible);
+    }
+
+    [AvaloniaFact]
+    public void ClickingABlockCarriedClipFetchesItsOutgoingUrlAndOpensItUnderItsFileName()
+    {
+        var panel = Open(NewFake(new[] { BlockTurn(BlockClip()) }));
+
+        Click(panel, Tile(panel));
+
+        Assert.Equal(new[] { Outgoing }, _bytesAsked);
+        Assert.Empty(_metaAsked);
+        Assert.Equal("sample_clip.mp4", Assert.Single(_opened).Name);
+    }
+
+    [AvaloniaFact]
+    public void ABlockCarriedClipTheBlockSaysIsTooLargeIsNotFetched()
+    {
+        var panel = Open(NewFake(new[] { BlockTurn(BlockClip(OpenClawVideo.MaxOpenBytes + 1)) }));
+
+        Click(panel, Tile(panel));
+
+        Assert.Empty(_bytesAsked);
+        Assert.Empty(_opened);
+        Assert.StartsWith("Video not opened — the clip is", NoteBlock(panel).Text);
+    }
+
+    [AvaloniaFact]
+    public void AClipTheGatewayCouldNotDeliverSaysSoAndThenWhyTheFetchFailed()
+    {
+        _metaAnswer = "{\"available\":false,\"code\":\"unsupported-media-type\",\"reason\":\"Not an image\"}";
+
+        var panel = Open(NewFake(new[] { FailedClipTurn() }));
+
+        Assert.False(Tile(panel).IsVisible);
+        var note = NoteBlock(panel);
+        Assert.Equal(
+            "Video not delivered — the gateway couldn't prepare sample_clip.mp4 for this chat. "
+            + "It also won't serve the file from the agent's folder (it said: Not an image).",
+            note.Text);
+        Assert.Equal(ClipPath + " — unsupported-media-type", ToolTip.GetTip(note));
+        Assert.Contains(TextsIn(panel), t => t.Contains("a little message just for you"));
+    }
+
+    // A failed delivery whose recovered path the gateway *will* serve is a
+    // working clip: the tile draws and nothing complains.
+    [AvaloniaFact]
+    public void AFailedDeliveryWhoseRecoveredPathServesStillDrawsTheTile()
+    {
+        var panel = Open(NewFake(new[] { FailedClipTurn() }));
+
+        Assert.True(Tile(panel).IsVisible);
+        Assert.False(NoteBlock(panel).IsVisible);
+    }
+
+    [AvaloniaFact]
+    public void AFailedDeliveryOnALowConfidenceTurnStaysSilent()
+    {
+        _metaAnswer = "{\"available\":false,\"code\":\"file-not-found\"}";
+
+        var panel = Open(NewFake(new[] { FailedClipTurn(MediaConfidence.Low) }));
+
+        Assert.False(Tile(panel).IsVisible);
+        Assert.False(NoteBlock(panel).IsVisible);
+    }
+
+    [AvaloniaFact]
+    public void ABlockCarriedClipAddedLiveDrawsItsTile()
+    {
+        var fake = NewFake(new[] { ClipTurn() });
+        var panel = Open(fake);
+
+        fake.RaiseTurnAdded(BlockTurn(BlockClip()));
+        Flush();
+
+        Assert.Equal(2, panel.GetVisualDescendants().OfType<Border>()
+            .Count(b => b.Classes.Contains("videoTile") && b.IsVisible));
+    }
+
+    [AvaloniaFact]
+    public void ADeliveredClipLabelledLikeAProgramIsOpenedAsAClip()
+    {
+        var clip = BlockClip();
+        var panel = Open(NewFake(new[] { BlockTurn(clip with { Label = "evil.exe" }) }));
+
+        Click(panel, Tile(panel));
+
+        Assert.Equal("evil.mp4", Assert.Single(_opened).Name);
+    }
+
+    // A failed attachment whose label cannot become a route still tells the
+    // user the gateway never delivered it.
+    [AvaloniaFact]
+    public void AFailedClipWithAnUnusableLabelStillShowsTheNote()
+    {
+        var turn = new ChatTurn
+        {
+            Role = ChatRole.Assistant, Text = "a caption", IsComplete = true, ImageAlt = "..",
+            Attachment = new ChatAttachment(AttachmentKind.Video, null, "..", "video/mp4",
+                null, null, null, null, "delivery-failed"),
+        };
+
+        var panel = Open(NewFake(new[] { turn }));
+
+        Assert.Equal("Video not delivered — the gateway couldn't prepare .. for this chat.", NoteBlock(panel).Text);
+        Assert.Equal("..", ToolTip.GetTip(NoteBlock(panel)));
+        Assert.Empty(_metaAsked);
+        Assert.False(Tile(panel).IsVisible);
+    }
 }

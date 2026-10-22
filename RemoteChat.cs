@@ -181,7 +181,26 @@ namespace Orbweaver
         // sites that copy a history turn into a live one (all of which already
         // copy the path) need no new field to forget. A turn with no source
         // path — a local CLI's inline picture, a pasted one — is never one.
-        public bool IsVideo => OpenClawVideo.IsVideoPath(ImageSourcePath);
+        //
+        // CB-274: a gateway block that says it is a clip counts too. A success
+        // block has no local path at all (the projection strips it) and its url
+        // is not an assistant-media route, so the extension rule alone could
+        // not keep it from the bitmap decoder.
+        public bool IsVideo => Attachment is { Kind: AttachmentKind.Video }
+                               || OpenClawVideo.IsVideoPath(ImageSourcePath);
+
+        // CB-274 / CB-275: the attachment block behind this turn, if any.
+        // Plain rather than notifying, like ImageSourcePath: set before
+        // ImageUrl, whose Raise() is what tells the row to look again.
+        public ChatAttachment? Attachment { get; set; }
+
+        // CB-275: the other kinds, read the same way IsVideo is — off the
+        // gateway's block, or (audio only) off the extension of a recovered
+        // assistant-media path, so a streamed `MEDIA:/…/note.m4a` works too.
+        public bool IsAudio => Attachment is { Kind: AttachmentKind.Audio }
+                               || OpenClawAudio.IsAudioPath(ImageSourcePath);
+
+        public bool IsDocument => Attachment is { Kind: AttachmentKind.Document };
 
         // CB-116: whether a *failed* fetch for ImageUrl is worth explaining
         // with the note below, rather than staying silent — see

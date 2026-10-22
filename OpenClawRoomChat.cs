@@ -327,6 +327,7 @@ namespace Orbweaver
                         // the view where several agents' pictures sit side by
                         // side.
                         ImageSourcePath = turn.ImageSourcePath,
+                        Attachment = turn.Attachment,
                         ImageUrl = turn.ImageUrl,
                         ImageAlt = turn.ImageAlt,
                         At = turn.At,
@@ -416,6 +417,7 @@ namespace Orbweaver
                             Role = ChatRole.User,
                             Text = turn.Text,
                             ImageSourcePath = turn.ImageSourcePath,
+                            Attachment = turn.Attachment,
                             ImageUrl = turn.ImageUrl,
                             ImageAlt = turn.ImageAlt,
                             At = turn.At,
@@ -445,6 +447,7 @@ namespace Orbweaver
                             Role = ChatRole.Assistant,
                             Text = turn.Text,
                             ImageSourcePath = turn.ImageSourcePath,
+                            Attachment = turn.Attachment,
                             ImageUrl = turn.ImageUrl,
                             ImageAlt = turn.ImageAlt,
                             At = turn.At,
@@ -476,6 +479,7 @@ namespace Orbweaver
                         Role = ChatRole.Assistant,
                         Text = turn.Text,
                         ImageSourcePath = turn.ImageSourcePath,
+                        Attachment = turn.Attachment,
                         ImageUrl = turn.ImageUrl,
                         ImageAlt = turn.ImageAlt,
                         At = turn.At,

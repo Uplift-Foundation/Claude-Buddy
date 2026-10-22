@@ -996,4 +996,62 @@ public class OpenClawGatewayPayloadTests
         Assert.StartsWith("Couldn't post to #lobby:", note.Text);
         Assert.Contains("Nothing was sent", note.Text);
     }
+
+    // CB-274 / CB-275: a whole chat.history page in the gateway's envelope —
+    // display-projected content beside the automation carrier and the other
+    // keys the gateway really sends — walked into turns. Real structure,
+    // invented values; the success shapes are from the gateway's source.
+    [Fact]
+    public void AHistoryPageOfEveryAttachmentKindWalksIntoOneTurnEach()
+    {
+        var page = JsonDocument.Parse("""
+        {"messages":[
+         {"role":"assistant","provider":"openclaw","model":"automation-result","api":"openclaw-transcript",
+          "timestamp":1700000000001,"idempotencyKey":"cron-current-completion:cron:job-att0001:1",
+          "openclawAutomation":{"kind":"cron","jobId":"job-att0001","runId":"cron:job-att0001:1"},
+          "content":[{"type":"text","text":"soft light"},
+                     {"type":"attachment_error","attachment":{"code":"delivery-failed","kind":"video","label":"sample_clip.mp4","mimeType":"video/mp4"}}]},
+         {"role":"assistant","provider":"openclaw","model":"automation-result","timestamp":1700000000002,
+          "content":[{"type":"text","text":"a picture"},
+                     {"type":"image","url":"/api/chat/media/outgoing/agent%3Amain%3Adiscord%3Adirect%3A1/p1/full","alt":"pic.png","mimeType":"image/png","width":832,"height":1216,"sizeBytes":1021973}]},
+         {"role":"assistant","timestamp":1700000000003,
+          "content":[{"type":"video","url":"/api/chat/media/outgoing/agent%3Amain%3Adiscord%3Adirect%3A1/v1/full","fileName":"v.mp4","mimeType":"video/mp4","sizeBytes":1042813,"durationMs":12750,"width":544,"height":800}]},
+         {"role":"assistant","timestamp":1700000000004,
+          "content":[{"type":"audio","url":"/api/chat/media/outgoing/agent%3Amain%3Adiscord%3Adirect%3A1/a1/full","fileName":"a.m4a","mimeType":"audio/mp4","sizeBytes":240000,"durationMs":42000}]},
+         {"role":"assistant","timestamp":1700000000005,
+          "content":[{"type":"attachment","attachment":{"url":"/api/chat/media/outgoing/agent%3Amain%3Adiscord%3Adirect%3A1/d1/full","kind":"document","label":"r.pdf","mimeType":"application/pdf","sizeBytes":1258291}}]},
+         {"role":"assistant","timestamp":1700000000006,
+          "content":[{"type":"attachment_error","attachment":{"code":"unsupported-format","kind":"document","label":"x.pdf","mimeType":"application/pdf"}}]}]}
+        """).RootElement.GetProperty("messages");
+
+        var turns = OpenClawSessions.TurnsFromHistory(page, "agent:main:discord:direct:1");
+
+        // The picture message is two turns (the picture, then its caption —
+        // image blocks are read first), as it is today; every other message
+        // is exactly one.
+        Assert.Equal(7, turns.Count);
+        Assert.Equal(
+            new AttachmentKind?[]
+            {
+                AttachmentKind.Video, null, null, AttachmentKind.Video,
+                AttachmentKind.Audio, AttachmentKind.Document, AttachmentKind.Document
+            },
+            turns.Select(t => t.Attachment?.Kind).ToArray());
+
+        Assert.Equal("soft light", turns[0].Text);
+        Assert.True(turns[0].Attachment!.Value.Failed);
+        Assert.Equal("job-att0001", turns[0].Automation!.Value.JobId);
+
+        var picture = turns[1];
+        Assert.Equal("a picture", turns[2].Text);
+        Assert.Equal("/api/chat/media/outgoing/agent%3Amain%3Adiscord%3Adirect%3A1/p1/full", picture.ImageUrl);
+        Assert.Null(picture.Attachment);
+
+        Assert.All(turns.Skip(3).Take(3), t => Assert.Null(t.ImageSourcePath));
+        Assert.StartsWith("/api/chat/media/outgoing/", turns[3].ImageUrl);
+        Assert.StartsWith("/api/chat/media/outgoing/", turns[4].ImageUrl);
+        Assert.StartsWith("/api/chat/media/outgoing/", turns[5].ImageUrl);
+        Assert.True(turns[6].Attachment!.Value.Failed);
+        Assert.Equal("unsupported-format", turns[6].Attachment!.Value.FailureCode);
+    }
 }
