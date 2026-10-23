@@ -31,5 +31,17 @@ namespace Orbweaver
             !string.IsNullOrWhiteSpace(deviceToken) ? (deviceToken, Kind.Device) :
             !string.IsNullOrWhiteSpace(gatewayToken) ? (gatewayToken, Kind.Shared) :
             (null, Kind.None);
+
+        // What both fetchers call: the two lookups and the pick, in one place
+        // outside their coverage exclusion. This is the line CB-278 changes,
+        // and while it sat inside the excluded fetchers, swapping its two
+        // arguments or reverting it to GatewayTokenFor alone (straight back to
+        // admin over HTTP) left every test green. A blank host has no
+        // credential, which is the same early return the fetchers made
+        // themselves.
+        internal static (string? Token, Kind Kind) For(string? host) =>
+            string.IsNullOrWhiteSpace(host)
+                ? (null, Kind.None)
+                : Pick(OpenClawIdentity.TokenFor(host), OpenClawIdentity.GatewayTokenFor(host));
     }
 }

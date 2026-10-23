@@ -3844,9 +3844,9 @@ namespace Orbweaver
             // CB-278: this device's own token over the shared secret, falling
             // back to the shared secret only while no device token is held —
             // see OpenClawMediaCredential for why, and what the fallback costs.
-            var (token, _) = OpenClawMediaCredential.Pick(
-                OpenClawIdentity.TokenFor(host), OpenClawIdentity.GatewayTokenFor(host));
-            if (string.IsNullOrWhiteSpace(host) || token is null) return null;
+            // Nothing else here chooses a credential; a source test pins that.
+            var (token, _) = OpenClawMediaCredential.For(host);
+            if (token is null) return null;
 
             byte[]? bytes = null;
 
@@ -3944,9 +3944,9 @@ namespace Orbweaver
             // CB-278: this device's own token over the shared secret, falling
             // back to the shared secret only while no device token is held —
             // see OpenClawMediaCredential for why, and what the fallback costs.
-            var (token, _) = OpenClawMediaCredential.Pick(
-                OpenClawIdentity.TokenFor(host), OpenClawIdentity.GatewayTokenFor(host));
-            if (string.IsNullOrWhiteSpace(host) || token is null) return null;
+            // Nothing else here chooses a credential; a source test pins that.
+            var (token, _) = OpenClawMediaCredential.For(host);
+            if (token is null) return null;
 
             string? json = null;
 

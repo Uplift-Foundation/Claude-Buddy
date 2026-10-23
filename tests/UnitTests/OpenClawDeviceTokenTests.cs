@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
@@ -193,4 +194,96 @@ public class OpenClawDeviceTokenTests
     [InlineData(" ", "\t")]
     public void NothingUsableMeansNoFetch(string? device, string? shared) =>
         Assert.Equal(((string?)null, OpenClawMediaCredential.Kind.None), OpenClawMediaCredential.Pick(device, shared));
+
+    // --- what both fetchers call: the lookups and the pick together ---
+
+    // Seeded through the real store, so a swapped pair of lookups inside For
+    // shows up as the wrong *value* coming back, not only the wrong kind.
+    private static Task Seeded(string? device, string? shared, Action body) => InIsolation(_ =>
+    {
+        if (device is not null) OpenClawIdentity.SetTokenFor(Host, device);
+        if (shared is not null) OpenClawIdentity.SetGatewayTokenFor(Host, shared);
+        body();
+        return Task.CompletedTask;
+    });
+
+    [Fact]
+    public Task WithBothHeldTheFetchPresentsTheDeviceToken() => Seeded("dev-held", "shared-held", () =>
+        Assert.Equal(("dev-held", OpenClawMediaCredential.Kind.Device), OpenClawMediaCredential.For(Host)));
+
+    [Fact]
+    public Task WithOnlyTheDeviceTokenTheFetchPresentsIt() => Seeded("dev-held", null, () =>
+        Assert.Equal(("dev-held", OpenClawMediaCredential.Kind.Device), OpenClawMediaCredential.For(Host)));
+
+    [Fact]
+    public Task WithOnlyTheSharedSecretTheFetchFallsBackToIt() => Seeded(null, "shared-held", () =>
+        Assert.Equal(("shared-held", OpenClawMediaCredential.Kind.Shared), OpenClawMediaCredential.For(Host)));
+
+    [Fact]
+    public Task WithNeitherHeldThereIsNoFetch() => Seeded(null, null, () =>
+        Assert.Equal(((string?)null, OpenClawMediaCredential.Kind.None), OpenClawMediaCredential.For(Host)));
+
+    // Looked up under the host it is asked about, not any host that has one.
+    [Fact]
+    public Task AnotherGatewaysTokensAreNotPresented() => Seeded("dev-held", "shared-held", () =>
+        Assert.Equal(((string?)null, OpenClawMediaCredential.Kind.None), OpenClawMediaCredential.For("other.local")));
+
+    // No gateway address set: nothing to authenticate to, whatever is held.
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public Task ABlankHostHasNoCredential(string? host) => Seeded("dev-held", "shared-held", () =>
+        Assert.Equal(((string?)null, OpenClawMediaCredential.Kind.None), OpenClawMediaCredential.For(host)));
+
+    // Both fetchers take their bearer from For and from nothing else. Asserted
+    // about the source rather than about behaviour, because the fetchers are a
+    // real HTTP GET and excluded from coverage: a fetcher that went back to
+    // GatewayTokenFor alone would fetch every picture perfectly well, over
+    // the admin-scored credential, and no behavioural test here could see it.
+    //
+    // Each body carries a positive control, that it really is the fetcher
+    // (it calls OpenClawSocket.GetAsync), so a renamed method fails here
+    // rather than leaving the scan matching nothing and passing whatever the
+    // code does.
+    [Theory]
+    [InlineData("FetchMediaAsync")]
+    [InlineData("FetchLocalMediaMetaAsync")]
+    public void TheFetcherTakesItsBearerFromForAndNothingElse(string method)
+    {
+        var body = MethodBody(File.ReadAllText(SourceOf("OpenClawSessions.cs")), method);
+
+        Assert.Contains("OpenClawSocket.GetAsync(", body);
+        Assert.Contains("OpenClawMediaCredential.For(host)", body);
+        Assert.DoesNotContain("TokenFor(", body);
+        Assert.DoesNotContain("OpenClawMediaCredential.Pick(", body);
+    }
+
+    // From the method's signature to the next member at the same indentation.
+    private static string MethodBody(string source, string method)
+    {
+        var start = Regex.Match(source, @"^ {8}public static async Task<[^>]+> " + method + @"\(", RegexOptions.Multiline);
+        Assert.True(start.Success, $"{method} not found in OpenClawSessions.cs");
+
+        var rest = source[(start.Index + start.Length)..];
+        var end = Regex.Match(rest, @"^ {8}(\[|//|(public|private|internal) )", RegexOptions.Multiline);
+        return end.Success ? rest[..end.Index] : rest;
+    }
+
+    private static string SourceOf(string file)
+    {
+        // Up from the test binary to the repository root, the same walk
+        // PanelAsksTheRightClientTests makes.
+        var dir = AppContext.BaseDirectory;
+
+        for (var i = 0; i < 8 && dir is not null; i++)
+        {
+            var candidate = Path.Combine(dir, file);
+            if (File.Exists(candidate)) return candidate;
+
+            dir = Path.GetDirectoryName(dir.TrimEnd(Path.DirectorySeparatorChar));
+        }
+
+        throw new FileNotFoundException($"could not find {file} above {AppContext.BaseDirectory}");
+    }
 }
