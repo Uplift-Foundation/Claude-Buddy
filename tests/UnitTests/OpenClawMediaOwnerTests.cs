@@ -154,6 +154,37 @@ public class OpenClawMediaOwnerTests
         Assert.Null(OpenClawMediaOwner.SiblingKeyFor("comfyui", "weird-key", new[] { "agent:other:main" }));
     }
 
+    // AgentIdOf accepts the app's own "openclaw:"-prefixed session id as well
+    // as a bare gateway key, so an asking key can reach these rules with the
+    // prefix on. The same-conversation mapping must not slice such a key as if
+    // it began "agent:<id>:" — that would build a key from the wrong half of
+    // the string. It falls back to the owner's main session instead (or to no
+    // sibling at all), which are both keys the gateway named. Production
+    // passes the bare GatewayKey today; this pins the guard for the day it
+    // does not.
+    [Fact]
+    public void APrefixedAskingKeyIsNeverSlicedIntoASiblingKey()
+    {
+        const string prefixed = "openclaw:" + AskKey;
+
+        // The same-conversation sibling exists, but is not derived from a
+        // prefixed key: the owner's main session answers instead.
+        Assert.Equal(ZaraMain, OpenClawMediaOwner.SiblingKeyFor("comfyui", prefixed, new[] { ZaraDm, ZaraMain }));
+
+        // With no main session either, there is no sibling — never a made-up key.
+        Assert.Null(OpenClawMediaOwner.SiblingKeyFor("comfyui", prefixed, new[] { ZaraDm }));
+
+        // And the whole-key rule agrees: the asking key is kept as given.
+        var index = new OwnerIndex(Spaces, new[] { ZaraDm });
+        Assert.Same(prefixed, OpenClawMediaOwner.SessionKeyFor(Clip, prefixed, index));
+    }
+
+    [Fact]
+    public void APrefixedAskingKeyHasNoSiblingConversationKeys()
+    {
+        Assert.Empty(OpenClawMediaOwner.SiblingConversationKeys("openclaw:" + AskKey, new[] { AskKey, ZaraDm }));
+    }
+
     // ---- agents.list -> workspaces ---------------------------------------
 
     [Fact]
