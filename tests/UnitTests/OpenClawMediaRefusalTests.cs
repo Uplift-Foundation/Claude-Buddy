@@ -274,13 +274,30 @@ public class OpenClawMediaRefusalTests
 
         Assert.Equal(
             "/a/b.mp4 — unsupported-media-type — asked under agent:comfyui:discord:direct:1",
-            OpenClawMediaRefusal.Detail("{\"available\":false,\"code\":\"unsupported-media-type\"}", "/a/b.mp4", url));
+            OpenClawMediaRefusal.Detail("{\"available\":false,\"code\":\"unsupported-media-type\"}", "/a/b.mp4", url, "agent:main:discord:direct:1"));
         Assert.Equal(
             "/a/b.mp4 — asked under agent:comfyui:discord:direct:1",
-            OpenClawMediaRefusal.Detail("{\"available\":false}", "/a/b.mp4", url));
+            OpenClawMediaRefusal.Detail("{\"available\":false}", "/a/b.mp4", url, "agent:main:discord:direct:1"));
         Assert.Equal(
             "/a/b.mp4 — asked under agent:comfyui:discord:direct:1",
-            OpenClawMediaRefusal.Detail(null, "/a/b.mp4", url));
+            OpenClawMediaRefusal.Detail(null, "/a/b.mp4", url, "agent:main:discord:direct:1"));
+    }
+
+    [Fact]
+    public void DetailAddsNothingWhenTheRouteIsTheConversationsOwnKey()
+    {
+        const string own = "agent:comfyui:discord:direct:1";
+        var url = new OpenClawMediaSource("/a/b.mp4", own).Route;
+
+        Assert.Equal("/a/b.mp4 — x", OpenClawMediaRefusal.Detail("{\"code\":\"x\"}", "/a/b.mp4", url, own));
+    }
+
+    [Fact]
+    public void DetailAddsNothingWhenTheAskingKeyIsNotKnown()
+    {
+        var url = new OpenClawMediaSource("/a/b.mp4", "agent:comfyui:discord:direct:1").Route;
+
+        Assert.Equal("/a/b.mp4", OpenClawMediaRefusal.Detail(null, "/a/b.mp4", url, null));
     }
 
     [Fact]

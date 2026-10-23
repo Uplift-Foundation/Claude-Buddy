@@ -137,7 +137,7 @@ namespace Orbweaver
     // which a person has to approve on the gateway — and it is not something
     // opening a window should do on their behalf. Until then this is a reader
     // with an input box that explains itself.
-    internal sealed class OpenClawChatSession : IRemoteChatSession, IRemoteChatBacklog, IRemoteChatComposer
+    internal sealed class OpenClawChatSession : IRemoteChatSession, IRemoteChatBacklog, IRemoteChatComposer, IRemoteChatGatewayKey
     {
         private readonly List<ChatTurn> _history = new();
 

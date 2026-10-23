@@ -16,10 +16,13 @@ namespace Orbweaver.Tests;
 internal sealed class FakeChatSession :
     IRemoteChatSession, IRemoteChatImages, IRemoteChatSlashCommands,
     IRemoteChatComposer, IRemoteChatElsewhere, IRemoteChatFetchWait, IRemoteChatRoom,
-    IRemoteChatReadOnly, IRemoteChatInterrupt, IRemoteChatPeerInbound
+    IRemoteChatReadOnly, IRemoteChatInterrupt, IRemoteChatPeerInbound, IRemoteChatGatewayKey
 {
     public string SessionId { get; init; } = "fake-session";
     public string DisplayName { get; init; } = "Fake Session";
+
+    // CB-277: the conversation's own gateway key; null makes no claim.
+    public string? GatewayKey { get; init; }
     public RemoteChatState State { get; set; } = RemoteChatState.Connected;
 
     // False by default, the same as any ordinary one-to-one session that

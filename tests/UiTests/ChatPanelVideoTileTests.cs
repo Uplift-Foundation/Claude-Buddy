@@ -558,12 +558,24 @@ public class ChatPanelVideoTileTests : IDisposable
         Assert.EndsWith(".mp4", Assert.Single(_opened).Name);
     }
 
-    [AvaloniaFact]
-    public void AClipTheOwnersSessionStillRefusesSaysWhichSessionItAskedUnder()
+    private FakeChatSession NewFakeWithKey(IEnumerable<ChatTurn> history, string? gatewayKey)
     {
-        _metaAnswer = "{\"available\":false,\"code\":\"unsupported-media-type\",\"reason\":\"Not an image\"}";
+        var id = "video-" + Guid.NewGuid();
+        _sessionIdsToClean.Add(id);
+        return new FakeChatSession(history) { SessionId = id, DisplayName = "Fake Session", GatewayKey = gatewayKey };
+    }
 
-        var panel = Open(NewFake(new[] { OwnerKeyClipTurn() }));
+    private const string Refusal =
+        "{\"available\":false,\"code\":\"unsupported-media-type\",\"reason\":\"Not an image\"}";
+
+    // The owner lookup re-keyed this clip away from the conversation's own
+    // session, and the gateway still refused: the tooltip says which key.
+    [AvaloniaFact]
+    public void ARekeyedClipTheGatewayStillRefusesSaysWhichSessionItAskedUnder()
+    {
+        _metaAnswer = Refusal;
+
+        var panel = Open(NewFakeWithKey(new[] { OwnerKeyClipTurn() }, "agent:main:discord:direct:1"));
 
         Assert.False(Tile(panel).IsVisible);
         var note = NoteBlock(panel);
@@ -571,6 +583,29 @@ public class ChatPanelVideoTileTests : IDisposable
         Assert.Equal(
             ClipPath + " — unsupported-media-type — asked under agent:comfyui:discord:direct:1",
             ToolTip.GetTip(note));
+    }
+
+    // The control: the same refusal under the conversation's own key is the
+    // ordinary one, and its tooltip is exactly what it was before CB-277.
+    [AvaloniaFact]
+    public void ARefusalUnderTheConversationsOwnKeyHasNoAskedUnderSuffix()
+    {
+        _metaAnswer = Refusal;
+
+        var panel = Open(NewFakeWithKey(new[] { OwnerKeyClipTurn() }, "agent:comfyui:discord:direct:1"));
+
+        Assert.Equal(ClipPath + " — unsupported-media-type", ToolTip.GetTip(NoteBlock(panel)));
+    }
+
+    // And with no known conversation key (a room, a fake) no claim is made.
+    [AvaloniaFact]
+    public void ARefusalWithNoKnownConversationKeyHasNoAskedUnderSuffix()
+    {
+        _metaAnswer = Refusal;
+
+        var panel = Open(NewFake(new[] { OwnerKeyClipTurn() }));
+
+        Assert.Equal(ClipPath + " — unsupported-media-type", ToolTip.GetTip(NoteBlock(panel)));
     }
 
     // A failed delivery whose recovered path the gateway *will* serve is a

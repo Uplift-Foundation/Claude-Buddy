@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Text.Json;
 
@@ -240,10 +241,15 @@ namespace Orbweaver
         // "refused under the owner's session" are different findings and the
         // reviewer should be able to tell them apart without a debugger. The
         // visible sentence is unchanged.
-        internal static string? Detail(string? json, string path, string? url = null)
+        internal static string? Detail(string? json, string path, string? url = null, string? askingKey = null)
         {
+            // Only when the route's key is not the conversation's own: that is
+            // "the owner lookup re-keyed this", the one case worth naming. No
+            // asking key known (a room) says nothing rather than guessing.
             var asked = OpenClawMediaSource.SessionKeyOf(url);
-            var suffix = asked is null ? "" : " — asked under " + asked;
+            var rekeyed = asked is not null && askingKey is not null
+                && !string.Equals(asked, askingKey, StringComparison.Ordinal);
+            var suffix = rekeyed ? " — asked under " + asked : "";
 
             if (!TryParse(json, out var root)) return path + suffix;
 
