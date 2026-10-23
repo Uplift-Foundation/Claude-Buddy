@@ -52,7 +52,8 @@ namespace Orbweaver
             return SiblingKeyFor(owner, askingKey, index.SessionKeys) ?? askingKey;
         }
 
-        // The agent whose workspace is the longest directory-prefix of path.
+        // The agent whose workspace is the longest directory-prefix of path,
+        // or null when none matches or two agents tie for it.
         // Absolute POSIX paths only: a "~/…" path is the shared media folder,
         // which every agent's default roots already include, so it has no owner.
         internal static string? OwningAgent(string path, IReadOnlyDictionary<string, string> workspaces)
@@ -61,6 +62,7 @@ namespace Orbweaver
 
             string? best = null;
             var bestLength = -1;
+            var tied = false;
 
             foreach (var (agent, workspace) in workspaces)
             {
@@ -78,10 +80,21 @@ namespace Orbweaver
                 {
                     best = agent;
                     bestLength = dir.Length;
+                    tied = false;
+                }
+                else if (dir.Length == bestLength)
+                {
+                    // Two agents whose longest-matching workspace is the same
+                    // folder (an identical workspace) have no single owner.
+                    // Answering the first one would make the result depend on
+                    // the order agents.list happened to arrive in, and could
+                    // re-key a file the asker itself owns. No owner means the
+                    // asking key stays, which is what works today.
+                    tied = true;
                 }
             }
 
-            return best;
+            return tied ? null : best;
         }
 
         // The owner's session in the same conversation if there is one

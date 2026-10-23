@@ -194,6 +194,23 @@ public class OpenClawSiblingRecoveryEndToEndTests : IDisposable
         Assert.Equal(new[] { Ask }, rig.HistoryKeys());
     }
 
+    // A page opened before the sessions poll landed has no siblings to ask.
+    // That is not "never delivered": once the owner's conversation is in the
+    // snapshot the same read must find the path.
+    [Fact]
+    public async Task AReadBeforeTheSiblingsAreKnownDoesNotHideThePathFromTheNextRead()
+    {
+        var rig = await ConnectedAsync(Histories, CronRunsPage(CaptionOnlyRun), Ask);
+
+        var first = await OpenClawSessions.FetchPageAsync(rig.Session, 0, CancellationToken.None);
+        Assert.Equal(OpenClawSessions.SharedMediaDir + Clip, Assert.Single(first!.Value.Turns).ImageSourcePath);
+
+        OpenClawSessions.SetSnapshotForTests(new[] { Ask, Zara, Other }.Select(Session).ToList());
+
+        var second = await OpenClawSessions.FetchPageAsync(rig.Session, 0, CancellationToken.None);
+        Assert.Equal($"{Dir}/{Clip}", Assert.Single(second!.Value.Turns).ImageSourcePath);
+    }
+
     [Fact]
     public async Task AClipTheCronRunRecordNamesIsNotLookedForInSiblings()
     {

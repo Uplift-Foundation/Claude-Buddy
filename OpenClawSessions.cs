@@ -4180,7 +4180,10 @@ namespace Orbweaver
 
             var path = OpenClawMediaOwner.AgreedPath(answers);
 
-            if (complete)
+            // Nothing to ask is not an answer either: the snapshot may simply
+            // not have been polled yet, or the owner's conversation not exist
+            // yet, and a remembered miss would hide the path once it does.
+            if (complete && siblings.Count > 0)
             {
                 lock (Gate)
                 {

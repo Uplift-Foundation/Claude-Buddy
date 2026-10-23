@@ -101,6 +101,35 @@ public class OpenClawMediaOwnerTests
         Assert.Null(OpenClawMediaOwner.OwningAgent("/x/ws", nested));
     }
 
+    // Two agents sharing one workspace: neither owns the file, so the asking
+    // key stays, whichever order agents.list listed them in.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void AnIdenticalWorkspaceHasNoSingleOwnerInEitherListOrder(bool askerFirst)
+    {
+        var shared = askerFirst
+            ? new Dictionary<string, string> { ["main"] = "/h/ws-a", ["comfyui"] = "/h/ws-a" }
+            : new Dictionary<string, string> { ["comfyui"] = "/h/ws-a", ["main"] = "/h/ws-a" };
+
+        Assert.Null(OpenClawMediaOwner.OwningAgent("/h/ws-a/x.mp4", shared));
+
+        var index = new OwnerIndex(shared, new[] { AskKey, ZaraDm, ZaraMain });
+        Assert.Same(AskKey, OpenClawMediaOwner.SessionKeyFor("/h/ws-a/x.mp4", AskKey, index));
+    }
+
+    // A tie at a shorter prefix does not matter when a longer one is unique.
+    [Fact]
+    public void ATieOnAShorterPrefixIsBeatenByALongerUniqueWorkspace()
+    {
+        var spaces = new Dictionary<string, string>
+        {
+            ["a"] = "/h/ws", ["b"] = "/h/ws", ["inner"] = "/h/ws/inner",
+        };
+
+        Assert.Equal("inner", OpenClawMediaOwner.OwningAgent("/h/ws/inner/x.mp4", spaces));
+    }
+
     [Fact]
     public void ATrailingSlashOnAWorkspaceIsIgnoredAndComparisonIsCaseSensitive()
     {
