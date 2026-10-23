@@ -3631,7 +3631,7 @@ namespace Orbweaver
                 // sent no session at all, which was harmless only because the
                 // fetch didn't either.
                 var json = await OpenClawSessions.FetchLocalMediaMetaAsync(url, CancellationToken.None);
-                _turn.ImageNoteDetail = OpenClawMediaRefusal.Detail(json, path, url);
+                _turn.ImageNoteDetail = OpenClawMediaRefusal.Detail(json, path);
                 _turn.ImageNote = _turn.Attachment is { Failed: true } failed
                     ? OpenClawMediaRefusal.ExplainDelivery(failed, json)
                     : OpenClawMediaRefusal.Explain(json);
@@ -3693,6 +3693,9 @@ namespace Orbweaver
                 // it, so this cannot be null here.
                 var path = _turn.ImageSourcePath!;
 
+                // CB-277: only the clip's tooltip names the session. A clip is the
+                // one kind asked for under another agent's key, so it is the one
+                // whose refusal needs to say which key was asked.
                 _turn.ImageNoteDetail = OpenClawMediaRefusal.Detail(json, path, _turn.ImageUrl);
 
                 // CB-274: a clip the gateway failed to deliver says so first,
@@ -3827,7 +3830,7 @@ namespace Orbweaver
 
                 if (_turn.Confidence != MediaConfidence.High) return;
 
-                _turn.ImageNoteDetail = OpenClawMediaRefusal.Detail(json, _turn.ImageSourcePath!, _turn.ImageUrl);
+                _turn.ImageNoteDetail = OpenClawMediaRefusal.Detail(json, _turn.ImageSourcePath!);
                 _turn.ImageNote = failed is { } why
                     ? OpenClawMediaRefusal.ExplainDelivery(why, json)
                     : OpenClawMediaRefusal.Explain(json, noun: "Audio");
@@ -3860,7 +3863,7 @@ namespace Orbweaver
                 var json = await OpenClawVideo.FetchMeta(_turn.ImageUrl!, CancellationToken.None);
                 if (OpenClawVideo.ParseMeta(json) is { Available: true }) return;
 
-                _turn.ImageNoteDetail = OpenClawMediaRefusal.Detail(json, _turn.ImageSourcePath!, _turn.ImageUrl);
+                _turn.ImageNoteDetail = OpenClawMediaRefusal.Detail(json, _turn.ImageSourcePath!);
                 _turn.ImageNote = OpenClawMediaRefusal.ExplainDelivery(attachment, json);
             }
 
