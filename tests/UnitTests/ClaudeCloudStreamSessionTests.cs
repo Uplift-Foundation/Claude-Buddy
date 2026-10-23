@@ -145,12 +145,14 @@ public partial class ClaudeCloudEventsTests
     }
 
     private static (ClaudeCloudChatSession Chat, RoutingApi Api, FakeStream Stream, FakeClock Clock)
-        Streaming(ClaudeCloudSessions.Session? session = null)
+        Streaming(ClaudeCloudSessions.Session? session = null, ICloudCredentialSource? creds = null,
+            CredentialBudget? budget = null)
     {
         var api = new RoutingApi(Answer(200, Receipt));
         var stream = new FakeStream();
         var clock = new FakeClock();
-        return (Sender(api, clock, session: session, stream: stream), api, stream, clock);
+        return (Sender(api, clock, creds: creds, session: session, stream: stream, budget: budget),
+            api, stream, clock);
     }
 
     private static async Task Close(ClaudeCloudChatSession chat)
@@ -687,6 +689,7 @@ public partial class ClaudeCloudEventsTests
         var now = new DateTimeOffset(2026, 9, 29, 10, 0, 0, TimeSpan.Zero);
         var chat = new ClaudeCloudChatSession(Row(), api, new CountingCredentials(), a => a())
         {
+            ReadBudget = TestBudgets.AlwaysAnswers,
             Delay = new FakeClock().Delay,
             Enabled = () => true,
             Stream = stream,
