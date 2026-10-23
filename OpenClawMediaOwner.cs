@@ -105,6 +105,52 @@ namespace Orbweaver
             return Contains(keys, main) ? main : null;
         }
 
+        // The other agents' sessions in the same conversation as askingKey:
+        // agent:<asker>:<rest> -> every agent:<other>:<rest> in the snapshot,
+        // never askingKey itself. Snapshot order, so the requests made (and
+        // the test that counts them) are deterministic.
+        internal static List<string> SiblingConversationKeys(string askingKey, IEnumerable<string> keys)
+        {
+            var result = new List<string>();
+            var asker = OpenClawSessions.AgentIdOf(askingKey);
+            if (asker is null) return result;
+
+            var head = "agent:" + asker + ":";
+            if (!askingKey.StartsWith(head, StringComparison.Ordinal)) return result;
+            var rest = askingKey[head.Length..];
+
+            foreach (var key in keys)
+            {
+                if (string.Equals(key, askingKey, StringComparison.Ordinal)) continue;
+
+                var other = OpenClawSessions.AgentIdOf(key);
+                if (other is null || other == asker) continue;
+                if (!key.EndsWith(":" + rest, StringComparison.Ordinal)) continue;
+                if (!string.Equals(key, "agent:" + other + ":" + rest, StringComparison.Ordinal)) continue;
+
+                result.Add(key);
+            }
+
+            return result;
+        }
+
+        // What several siblings said about one basename: the path they agree
+        // on, or null when none named it or two named different directories.
+        // A basename seen under two directories is refused, as the page
+        // harvest already refuses it, because picking one would be a guess.
+        internal static string? AgreedPath(IEnumerable<string?> answers)
+        {
+            string? agreed = null;
+            foreach (var answer in answers)
+            {
+                if (answer is null) continue;
+                if (agreed is null) agreed = answer;
+                else if (!string.Equals(agreed, answer, StringComparison.Ordinal)) return null;
+            }
+
+            return agreed;
+        }
+
         private static bool Contains(IReadOnlyCollection<string> keys, string key)
         {
             foreach (var k in keys)

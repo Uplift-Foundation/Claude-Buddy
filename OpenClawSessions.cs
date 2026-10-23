@@ -4112,6 +4112,92 @@ namespace Orbweaver
             return map.TryGetValue(basename, out var path) ? path : null;
         }
 
+        // CB-277: the path of a clip whose directory survives nowhere on its
+        // own conversation page or in its cron run record, read from the same
+        // conversation as the *other agents* saw it. The agent that made the
+        // clip usually wrote its absolute path in its own history of that
+        // conversation; the agent that delivered it only ever kept the bare
+        // name. One chat.history page per sibling (the sibling keys come from
+        // the sessions snapshot Orbweaver already lists, never invented),
+        // harvested with the same rule as any page, answers cached per
+        // (conversation, basename) so a render costs nothing after the first.
+        //
+        // Not cached when any sibling failed to answer: a silence is not a
+        // "never delivered", and remembering it would hide the path for good.
+        // Not [ExcludeFromCodeCoverage], unlike the cron pass: it is covered
+        // end to end through FakeGatewaySocket.
+        private static readonly Dictionary<string, string?> SiblingRecoveries = new(StringComparer.Ordinal);
+
+        internal static async Task<string?> RecoverFromSiblingHistoryAsync(
+            string askingKey, string basename, CancellationToken ct)
+        {
+            var cacheKey = askingKey + "\n" + basename;
+
+            lock (Gate)
+            {
+                if (SiblingRecoveries.TryGetValue(cacheKey, out var cached)) return cached;
+            }
+
+            OpenClawGateway? gateway;
+            lock (Gate) gateway = _gateway;
+            if (gateway is null) return null;
+
+            var siblings = OpenClawMediaOwner.SiblingConversationKeys(
+                askingKey, _snapshot.Select(s => s.Key));
+            var answers = new List<string?>();
+            var complete = true;
+
+            foreach (var sibling in siblings)
+            {
+                try
+                {
+                    var res = await gateway.RequestAsync("chat.history", new Dictionary<string, object>
+                    {
+                        ["sessionKey"] = sibling,
+                        ["limit"] = PageSize,
+                        ["offset"] = 0
+                    }, ct);
+
+                    if (!res.TryGetProperty("messages", out var messages)
+                        || messages.ValueKind != JsonValueKind.Array)
+                    {
+                        complete = false;
+                        continue;
+                    }
+
+                    var paths = MediaPathsByFileName(messages.EnumerateArray().Select(m => m.GetRawText()));
+                    answers.Add(paths.TryGetValue(basename, out var found) ? found : null);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    return null;
+                }
+                catch
+                {
+                    complete = false;
+                }
+            }
+
+            var path = OpenClawMediaOwner.AgreedPath(answers);
+
+            if (complete)
+            {
+                lock (Gate)
+                {
+                    const int Keep = 64;
+                    if (SiblingRecoveries.Count >= Keep) SiblingRecoveries.Clear();
+                    SiblingRecoveries[cacheKey] = path;
+                }
+            }
+
+            return path;
+        }
+
+        internal static void ForgetSiblingRecoveriesForTests()
+        {
+            lock (Gate) SiblingRecoveries.Clear();
+        }
+
         internal static List<OpenClawChatSession> OpenChats()
         {
             lock (Gate) return Chats.Values.ToList();
@@ -4356,6 +4442,18 @@ namespace Orbweaver
                     if (basename is null) continue;
 
                     var recovered = await RecoverCronMediaPathAsync(automation.JobId, basename, ct);
+
+                    // CB-277: the run record may be caption-only. Only a turn
+                    // still on the shared-media *guess* (or with no path at
+                    // all) goes on to ask the other agents' histories; one the
+                    // page itself already resolved keeps its path.
+                    if (recovered is null
+                        && (turns[i].ImageSourcePath is not { } have
+                            || have.StartsWith(SharedMediaDir, StringComparison.Ordinal)))
+                    {
+                        recovered = await RecoverFromSiblingHistoryAsync(chat.GatewayKey, basename, ct);
+                    }
+
                     if (recovered is null) continue;
 
                     // Same media value the named-path arm inside
