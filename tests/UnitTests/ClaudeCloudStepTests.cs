@@ -793,9 +793,15 @@ public class ClaudeCloudStepTests
         // removed, this test hung rather than failing, which is precisely the
         // failure shape it was written to rule out. Verified afterwards by
         // removing the budget again and watching it fail in ten seconds.
+        var (budget, expire) = TestBudgets.Manual();
         var step = Task.Run(() => ClaudeCloudSessions.StepAsync(api, credentials,
             ClaudeCloudSessions.ArmState.Initial, Now, CancellationToken.None,
-            readBudget: TestBudgets.ExpiresAtOnce));
+            readBudget: budget));
+
+        // Expired by hand once the read is actually running: an expiry that beat
+        // the pool to it would leave Reads at 0 for the assertion below (CB-269).
+        await credentials.Entered.Task;
+        expire.SetResult();
 
         var finished = await Task.WhenAny(step, Task.Delay(TimeSpan.FromSeconds(10)));
 
@@ -857,17 +863,19 @@ public class ClaudeCloudStepTests
         var api = new FakeApi(_ => throw new InvalidOperationException("must not be called"));
         using var credentials = new HangingCredentials();
 
-        var first = await ClaudeCloudSessions.StepAsync(api, credentials,
+        var (budget, expire) = TestBudgets.Manual();
+        var firstStep = ClaudeCloudSessions.StepAsync(api, credentials,
             ClaudeCloudSessions.ArmState.Initial, Now, CancellationToken.None,
-            readBudget: TestBudgets.ExpiresAtOnce);
+            readBudget: budget);
+
+        // The budget runs out only once the read has started, so "one read" is a
+        // count and not a race with the pool.
+        await credentials.Entered.Task;
+        expire.SetResult();
+        var first = await firstStep;
 
         var second = await ClaudeCloudSessions.StepAsync(api, credentials, first.Next, Now,
             CancellationToken.None, readBudget: TestBudgets.ExpiresAtOnce);
-
-        // The first read was abandoned the instant it was raced, possibly before it
-        // had started; wait for it to have started so "one read" is a count and
-        // not a snapshot. Only waits on the pool, never on a clock.
-        await credentials.Entered.Task;
 
         Assert.Equal(1, credentials.Reads);
         Assert.Equal(2, credentials.Stamps);
