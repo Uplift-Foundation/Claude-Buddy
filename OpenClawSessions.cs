@@ -88,6 +88,14 @@ namespace Orbweaver
         private static readonly Dictionary<string, PeerVoiceCache> PeerVoices =
             new(StringComparer.OrdinalIgnoreCase);
 
+        // CB-277: agent id -> the absolute folder agents.list says is that
+        // agent's workspace. Kept so a clip can be asked for under the session
+        // of the agent whose folder holds it (OpenClawMediaOwner). Ordinal,
+        // unlike the tables above: the gateway's paths are case-sensitive and
+        // so are the ids it builds session keys from.
+        private static readonly Dictionary<string, string> AgentWorkspaces =
+            new(StringComparer.Ordinal);
+
         private sealed record PeerVoiceCache(
             string GatewayPin, Dictionary<string, (string Voice, double? Rate)> Voices);
 
@@ -111,6 +119,62 @@ namespace Orbweaver
         internal static void ForgetRunningForTests()
         {
             lock (Gate) Running.Clear();
+        }
+
+        // CB-277: the same seam for the workspace table, for the same reason —
+        // only LoadAgentNamesAsync fills it and that is a live request.
+        internal static void SetAgentWorkspacesForTests(IReadOnlyDictionary<string, string> workspaces)
+        {
+            lock (Gate)
+            {
+                AgentWorkspaces.Clear();
+                foreach (var (id, dir) in workspaces) AgentWorkspaces[id] = dir;
+            }
+        }
+
+        // What OpenClawMediaOwner needs, taken in one lock so a reconnect that
+        // is rewriting the table cannot hand back half of it. Reads _snapshot
+        // rather than Snapshot(): the latter answers empty when OpenClaw is
+        // switched off in settings, and this must not depend on a setting.
+        internal static OwnerIndex OwnerIndexSnapshot()
+        {
+            Dictionary<string, string> workspaces;
+            lock (Gate) workspaces = new Dictionary<string, string>(AgentWorkspaces, StringComparer.Ordinal);
+
+            return new OwnerIndex(workspaces, _snapshot.Select(s => s.Key).ToList());
+        }
+
+        // The route for a file, under the session of whoever owns it. The one
+        // place that decides the key, so no producer can be left on the asking
+        // key by accident (the CB-109 failure shape). A null askingKey stays
+        // null: the no-session route is the shape fixtures may still use.
+        internal static OpenClawMediaSource MediaSourceFor(string path, string? askingKey, OwnerIndex index) =>
+            new(path, askingKey is null ? null : OpenClawMediaOwner.SessionKeyFor(path, askingKey, index));
+
+        // agents.list -> agent id -> workspace. Pure, so the shape is testable
+        // without a socket. An agent with no workspace field is skipped, and the
+        // value is kept verbatim: the gateway's own string is what a media path
+        // will be compared against.
+        internal static Dictionary<string, string> WorkspacesFrom(JsonElement agentsList)
+        {
+            var map = new Dictionary<string, string>(StringComparer.Ordinal);
+
+            if (agentsList.ValueKind != JsonValueKind.Object
+                || !agentsList.TryGetProperty("agents", out var agents)
+                || agents.ValueKind != JsonValueKind.Array)
+            {
+                return map;
+            }
+
+            foreach (var agent in agents.EnumerateArray())
+            {
+                var id = Str(agent, "id");
+                var workspace = Str(agent, "workspace");
+                if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(workspace)) continue;
+                map[id!] = workspace!;
+            }
+
+            return map;
         }
 
         internal static void SetIdentitiesForTests(
@@ -1042,6 +1106,7 @@ namespace Orbweaver
                 // every scan to read agent names — holding it through that would
                 // stall the orbs for as long as the decode took.
                 var parsed = new List<(string Id, AgentIdentity Identity)>();
+                var workspaces = WorkspacesFrom(res);
 
                 foreach (var agent in agents.EnumerateArray())
                 {
@@ -1055,6 +1120,8 @@ namespace Orbweaver
                     AgentNames.Clear();
                     Identities.Clear();
                     PeerVoices.Clear();
+                    AgentWorkspaces.Clear();
+                    foreach (var (id, dir) in workspaces) AgentWorkspaces[id] = dir;
 
                     foreach (var (id, identity) in parsed)
                     {
@@ -2110,8 +2177,13 @@ namespace Orbweaver
         // (FetchHistoryPageAsync, which has chat.GatewayKey in hand). Nullable
         // so a fixture or a caller with genuinely no session gets exactly the
         // routes this built before.
-        internal static List<HistoryTurn> TurnsFromHistory(JsonElement messages, string? sessionKey)
+        internal static List<HistoryTurn> TurnsFromHistory(
+            JsonElement messages, string? sessionKey, OwnerIndex? owners = null)
         {
+            // CB-277: null keeps every route exactly as it was built before —
+            // the asking key — so a caller or fixture that does not know the
+            // owners gets today's behaviour, not a half-applied one.
+            var ownerIndex = owners ?? OwnerIndex.Empty;
             var turns = new List<HistoryTurn>();
 
             // Read the whole page for paths before building any turn. A
@@ -2340,7 +2412,7 @@ namespace Orbweaver
                     }
 
                     var named0 = ResolveLocalMediaPath(bare, mediaPaths);
-                    var media0 = new OpenClawMediaSource(named0, sessionKey);
+                    var media0 = MediaSourceFor(named0, sessionKey, ownerIndex);
                     turns.Add(new HistoryTurn(role, caption, media0.Route, bare, at, speaker, colour,
                         mine, null, media0.Path, Automation: cronAutomation,
                         Confidence: MediaConfidence.High, Attachment: a));
@@ -2393,7 +2465,7 @@ namespace Orbweaver
                     // building the same string slightly differently. What goes
                     // on the turn is the finished url plus the clean path
                     // beside it; the builder itself is not stored anywhere.
-                    var media = new OpenClawMediaSource(source, sessionKey);
+                    var media = MediaSourceFor(source, sessionKey, ownerIndex);
 
                     mirrorDrawn.Add((turns.Count, source));
                     turns.Add(new HistoryTurn(
@@ -2498,7 +2570,7 @@ namespace Orbweaver
                     // Same media value as the mirror arm above, and for the
                     // same reason: one place builds the route, so one place
                     // decides what identity goes on it.
-                    var namedMedia = new OpenClawMediaSource(named, sessionKey);
+                    var namedMedia = MediaSourceFor(named, sessionKey, ownerIndex);
 
                     turns.Add(new HistoryTurn(role, text.Trim(), namedMedia.Route,
                         named[(named.LastIndexOf('/') + 1)..],
@@ -4040,6 +4112,95 @@ namespace Orbweaver
             return map.TryGetValue(basename, out var path) ? path : null;
         }
 
+        // CB-277: the path of a clip whose directory survives nowhere on its
+        // own conversation page or in its cron run record, read from the same
+        // conversation as the *other agents* saw it. The agent that made the
+        // clip usually wrote its absolute path in its own history of that
+        // conversation; the agent that delivered it only ever kept the bare
+        // name. One chat.history page per sibling (the sibling keys come from
+        // the sessions snapshot Orbweaver already lists, never invented),
+        // harvested with the same rule as any page, answers cached per
+        // (conversation, basename) so a render costs nothing after the first.
+        //
+        // Not cached when any sibling failed to answer: a silence is not a
+        // "never delivered", and remembering it would hide the path for good.
+        // Not [ExcludeFromCodeCoverage], unlike the cron pass: it is covered
+        // end to end through FakeGatewaySocket.
+        private static readonly Dictionary<string, string?> SiblingRecoveries = new(StringComparer.Ordinal);
+
+        internal static async Task<string?> RecoverFromSiblingHistoryAsync(
+            string askingKey, string basename, CancellationToken ct)
+        {
+            var cacheKey = askingKey + "\n" + basename;
+
+            lock (Gate)
+            {
+                if (SiblingRecoveries.TryGetValue(cacheKey, out var cached)) return cached;
+            }
+
+            OpenClawGateway? gateway;
+            lock (Gate) gateway = _gateway;
+            if (gateway is null) return null;
+
+            var siblings = OpenClawMediaOwner.SiblingConversationKeys(
+                askingKey, _snapshot.Select(s => s.Key));
+            var answers = new List<string?>();
+            var complete = true;
+
+            foreach (var sibling in siblings)
+            {
+                try
+                {
+                    var res = await gateway.RequestAsync("chat.history", new Dictionary<string, object>
+                    {
+                        ["sessionKey"] = sibling,
+                        ["limit"] = PageSize,
+                        ["offset"] = 0
+                    }, ct);
+
+                    if (!res.TryGetProperty("messages", out var messages)
+                        || messages.ValueKind != JsonValueKind.Array)
+                    {
+                        complete = false;
+                        continue;
+                    }
+
+                    var paths = MediaPathsByFileName(messages.EnumerateArray().Select(m => m.GetRawText()));
+                    answers.Add(paths.TryGetValue(basename, out var found) ? found : null);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    return null;
+                }
+                catch
+                {
+                    complete = false;
+                }
+            }
+
+            var path = OpenClawMediaOwner.AgreedPath(answers);
+
+            // Nothing to ask is not an answer either: the snapshot may simply
+            // not have been polled yet, or the owner's conversation not exist
+            // yet, and a remembered miss would hide the path once it does.
+            if (complete && siblings.Count > 0)
+            {
+                lock (Gate)
+                {
+                    const int Keep = 64;
+                    if (SiblingRecoveries.Count >= Keep) SiblingRecoveries.Clear();
+                    SiblingRecoveries[cacheKey] = path;
+                }
+            }
+
+            return path;
+        }
+
+        internal static void ForgetSiblingRecoveriesForTests()
+        {
+            lock (Gate) SiblingRecoveries.Clear();
+        }
+
         internal static List<OpenClawChatSession> OpenChats()
         {
             lock (Gate) return Chats.Values.ToList();
@@ -4260,7 +4421,8 @@ namespace Orbweaver
                 // pictures are fetched over a separate HTTP route that has to
                 // be told whose conversation they belong to (CB-109), and
                 // this is the one place that knows.
-                var turns = TurnsFromHistory(messages, chat.GatewayKey);
+                var owners = OwnerIndexSnapshot();
+                var turns = TurnsFromHistory(messages, chat.GatewayKey, owners);
 
                 // CB-115: recover a cron-delivered picture whose transcript
                 // lost its directory. Only turns TurnsFromHistory tagged with
@@ -4283,6 +4445,18 @@ namespace Orbweaver
                     if (basename is null) continue;
 
                     var recovered = await RecoverCronMediaPathAsync(automation.JobId, basename, ct);
+
+                    // CB-277: the run record may be caption-only. Only a turn
+                    // still on the shared-media *guess* (or with no path at
+                    // all) goes on to ask the other agents' histories; one the
+                    // page itself already resolved keeps its path.
+                    if (recovered is null
+                        && (turns[i].ImageSourcePath is not { } have
+                            || have.StartsWith(SharedMediaDir, StringComparison.Ordinal)))
+                    {
+                        recovered = await RecoverFromSiblingHistoryAsync(chat.GatewayKey, basename, ct);
+                    }
+
                     if (recovered is null) continue;
 
                     // Same media value the named-path arm inside
@@ -4291,7 +4465,7 @@ namespace Orbweaver
                     // path look like, whether the MEDIA: line came straight
                     // off the message or, as here, off the run record that
                     // produced it.
-                    var media = new OpenClawMediaSource(recovered, chat.GatewayKey);
+                    var media = MediaSourceFor(recovered, chat.GatewayKey, owners);
                     turns[i] = turns[i] with
                     {
                         ImageUrl = media.Route,

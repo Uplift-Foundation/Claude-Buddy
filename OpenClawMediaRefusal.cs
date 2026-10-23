@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Text.Json;
 
@@ -233,12 +234,27 @@ namespace Orbweaver
         // gateway's own code when the meta answer had one. Never the reason —
         // that is already in the line above, and repeating it in the tooltip
         // says nothing new.
-        internal static string? Detail(string? json, string path)
+        //
+        // CB-277: when the route that was refused names a session, the tooltip
+        // says which. A clip is now asked for under the session of the agent
+        // whose workspace holds it, so "refused under the asking session" and
+        // "refused under the owner's session" are different findings and the
+        // reviewer should be able to tell them apart without a debugger. The
+        // visible sentence is unchanged.
+        internal static string? Detail(string? json, string path, string? url = null, string? askingKey = null)
         {
-            if (!TryParse(json, out var root)) return path;
+            // Only when the route's key is not the conversation's own: that is
+            // "the owner lookup re-keyed this", the one case worth naming. No
+            // asking key known (a room) says nothing rather than guessing.
+            var asked = OpenClawMediaSource.SessionKeyOf(url);
+            var rekeyed = asked is not null && askingKey is not null
+                && !string.Equals(asked, askingKey, StringComparison.Ordinal);
+            var suffix = rekeyed ? " — asked under " + asked : "";
+
+            if (!TryParse(json, out var root)) return path + suffix;
 
             var code = StringOrNull(root, "code");
-            return string.IsNullOrEmpty(code) ? path : $"{path} — {code}";
+            return (string.IsNullOrEmpty(code) ? path : $"{path} — {code}") + suffix;
         }
 
         private static bool TryParse(string? json, out JsonElement root)

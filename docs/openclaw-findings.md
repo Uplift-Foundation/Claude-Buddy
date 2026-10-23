@@ -918,3 +918,28 @@ refusal) without that side effect, so it was preferred instead.
   source for the picker's agent list — `defaultId: "main"` on this gateway,
   eight agents total, names distinct from ids (`main` → Lilibeth, `kubernetes`
   → Amber, etc., same shape already documented above).
+
+## A video another agent made plays under that agent's session (CB-277)
+
+CB-272 and CB-274 stopped at a note for a clip the gateway refused ("Not an image"). The refusal is real but it is a property of *which session the request names*, not of the file.
+
+Measured against openclaw 2026.10.5 on the Mac mini (read-only, `curl -sk` against the gateway's `assistant-media` route with `&meta=1`, one real clip that a cron job delivered to a Discord DM; paths abbreviated to their category):
+
+| Request | Answer | What it shows |
+| --- | --- | --- |
+| the clip, under the **asking** agent's DM session | `available:false, code:unsupported-media-type, reason:"Not an image"` | today's refusal: the file is outside that agent's roots, and only an image gets the outside-roots exception |
+| a PNG from the same folder, same session | `available:true, image/png` | control: the image exception is live, so the refusal above is specific to non-images |
+| the clip, under the session of the agent **whose workspace holds it** | `available:true, video/mp4, playback:native, durationMs:12750, 544x800` (size equal to the file on disk) | the gateway serves it, with the full meta CB-272 already parses |
+| a session key that does not exist | `404` | control: a made-up key is not accepted |
+| a third agent's clip under the wrong agent's session / under its own | refused / `available:true` | control: the rule is "the named session's agent's roots", not "any session works" |
+| a clip inside the gateway's own media folder, asking session | `available:true` | a file in `<state>/media` serves under any session — not discoverable, though (the copy's name carries a random uuid recorded nowhere a client can read) |
+
+So there is no supported way to fetch such a clip under the asking session and a supported one under its owner's. The gateway publishes what is needed to pick the owner: `agents.list` carries each agent's `workspace`, and `sessions.list` carries the keys. Orbweaver picks the agent whose workspace is the longest directory-prefix of the path (on a `/` boundary), prefers that agent's session in the same conversation, then its `main` session, and only ever names a key present in `sessions.list`. Anything else keeps the asking key, so every route that works today is byte-identical.
+
+**This reverses CB-274's decision not to try another agent's session.** That plan called it "guessing an identity", which was right when the only candidate was a probe. With `workspace` read from `agents.list` the identity is read, not guessed, and the measurement above is what that plan did not have. The app asks about exactly one file, under exactly one session, and never iterates sessions looking for one that says yes.
+
+What the HTTP fetch is authorised as: the app's HTTP media fetches send the gateway's shared-secret bearer, which the gateway scores as `authMethod: token` and grants the CLI-default operator scopes (including admin) — the gateway's rule for that credential, not something the app requests. The one admin-only switch on this route is `explicitAllow` (a POST with `allow=1`), which this app never uses. The folder policy that decides a video does not depend on scope.
+
+Risk, stated plainly: this rests on `resolveAssistantMediaPolicy` building roots from the named session's agent. A later gateway release could narrow it; the failure mode is the note CB-274 draws today, not a wrong clip, and the tooltip on that note now says which session was asked. Re-measure before trusting this on a newer release.
+
+A clip whose directory survives nowhere on its own conversation page or in its cron run record is recovered from a sibling conversation's history (one bounded `chat.history` page per sibling, a basename seen under two directories refused) — see `RecoverFromSiblingHistoryAsync`.

@@ -519,6 +519,95 @@ public class ChatPanelVideoTileTests : IDisposable
         Assert.Contains(TextsIn(panel), t => t.Contains("a little message just for you"));
     }
 
+    // CB-277: a clip another agent made, asked for under that agent's session.
+    // The turn carries the owner-key route; the panel must ask meta and fetch
+    // bytes with that exact string, not a prefix of it.
+    private static readonly string OwnerRoute =
+        new OpenClawMediaSource(ClipPath, "agent:comfyui:discord:direct:1").Route;
+
+    private static ChatTurn OwnerKeyClipTurn() => new()
+    {
+        Role = ChatRole.Assistant,
+        Text = "a little message just for you",
+        IsComplete = true,
+        ImageSourcePath = ClipPath,
+        Confidence = MediaConfidence.High,
+        ImageAlt = "sample_clip.mp4",
+        ImageUrl = OwnerRoute,
+        Attachment = new ChatAttachment(AttachmentKind.Video, null, "sample_clip.mp4", "video/mp4",
+            null, null, null, null, "delivery-failed"),
+    };
+
+    [AvaloniaFact]
+    public void AClipAskedUnderTheOwnersSessionDrawsAPlayableTileFromThatExactRoute()
+    {
+        var panel = Open(NewFake(new[] { OwnerKeyClipTurn() }));
+
+        Assert.Equal(OwnerRoute, Assert.Single(_metaAsked));
+
+        var tile = Tile(panel);
+        Assert.True(tile.IsVisible);
+        Assert.Equal(228, tile.Width);
+        Assert.Equal(320, tile.Height);
+        Assert.Contains("0:13", TextsIn(tile));
+        Assert.False(NoteBlock(panel).IsVisible);
+
+        Click(panel, tile);
+
+        Assert.Equal(OwnerRoute, Assert.Single(_bytesAsked));
+        Assert.EndsWith(".mp4", Assert.Single(_opened).Name);
+    }
+
+    private FakeChatSession NewFakeWithKey(IEnumerable<ChatTurn> history, string? gatewayKey)
+    {
+        var id = "video-" + Guid.NewGuid();
+        _sessionIdsToClean.Add(id);
+        return new FakeChatSession(history) { SessionId = id, DisplayName = "Fake Session", GatewayKey = gatewayKey };
+    }
+
+    private const string Refusal =
+        "{\"available\":false,\"code\":\"unsupported-media-type\",\"reason\":\"Not an image\"}";
+
+    // The owner lookup re-keyed this clip away from the conversation's own
+    // session, and the gateway still refused: the tooltip says which key.
+    [AvaloniaFact]
+    public void ARekeyedClipTheGatewayStillRefusesSaysWhichSessionItAskedUnder()
+    {
+        _metaAnswer = Refusal;
+
+        var panel = Open(NewFakeWithKey(new[] { OwnerKeyClipTurn() }, "agent:main:discord:direct:1"));
+
+        Assert.False(Tile(panel).IsVisible);
+        var note = NoteBlock(panel);
+        Assert.StartsWith("Video not delivered", note.Text);
+        Assert.Equal(
+            ClipPath + " — unsupported-media-type — asked under agent:comfyui:discord:direct:1",
+            ToolTip.GetTip(note));
+    }
+
+    // The control: the same refusal under the conversation's own key is the
+    // ordinary one, and its tooltip is exactly what it was before CB-277.
+    [AvaloniaFact]
+    public void ARefusalUnderTheConversationsOwnKeyHasNoAskedUnderSuffix()
+    {
+        _metaAnswer = Refusal;
+
+        var panel = Open(NewFakeWithKey(new[] { OwnerKeyClipTurn() }, "agent:comfyui:discord:direct:1"));
+
+        Assert.Equal(ClipPath + " — unsupported-media-type", ToolTip.GetTip(NoteBlock(panel)));
+    }
+
+    // And with no known conversation key (a room, a fake) no claim is made.
+    [AvaloniaFact]
+    public void ARefusalWithNoKnownConversationKeyHasNoAskedUnderSuffix()
+    {
+        _metaAnswer = Refusal;
+
+        var panel = Open(NewFake(new[] { OwnerKeyClipTurn() }));
+
+        Assert.Equal(ClipPath + " — unsupported-media-type", ToolTip.GetTip(NoteBlock(panel)));
+    }
+
     // A failed delivery whose recovered path the gateway *will* serve is a
     // working clip: the tile draws and nothing complains.
     [AvaloniaFact]

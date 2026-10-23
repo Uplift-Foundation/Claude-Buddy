@@ -617,6 +617,45 @@ public class ChatPanelScreenshots : IDisposable
         }
     }
 
+    // CB-277: the same failed-delivery clip, but its route names the session
+    // of the agent whose workspace holds the file, so the gateway serves it and
+    // the panel draws a playable tile instead of the note above.
+    [AvaloniaFact]
+    public void AClipAnotherAgentMadeDrawsAPlayableTile()
+    {
+        var realMeta = OpenClawVideo.FetchMeta;
+        OpenClawVideo.FetchMeta = (_, _) => Task.FromResult<string?>(
+            "{\"available\":true,\"mimeType\":\"video/mp4\",\"sizeBytes\":1042813,\"playback\":\"native\","
+            + "\"durationMs\":12750,\"width\":544,\"height\":800,\"mediaTicket\":\"v1.sample\"}");
+
+        try
+        {
+            var clip = VideoTurn();
+            clip.Text = "Pink fairy lights and a little message just for you 🌸";
+            clip.ImageAlt = "sample_afternoon_video.mp4";
+            clip.ImageSourcePath = "/Users/sample/.openclaw/workspace-sample-zara/outputs/sample_afternoon_video.mp4";
+            clip.ImageUrl = new OpenClawMediaSource(
+                clip.ImageSourcePath, "agent:comfyui:discord:direct:1").Route;
+            clip.Attachment = new ChatAttachment(AttachmentKind.Video, null,
+                "sample_afternoon_video.mp4", "video/mp4", null, null, null, null, "delivery-failed");
+
+            var fake = NewFake(new[]
+            {
+                new ChatTurn { Role = ChatRole.User, Text = "send me something nice" },
+                clip,
+            });
+
+            ChatPanel.OpenFor(NewOrb(), fake);
+            ScreenshotHelper.Flush();
+            ScreenshotHelper.CaptureAlreadyShown(
+                ChatPanelTestAccess.Instance!, "chat-panel-clip-via-owner-session.png");
+        }
+        finally
+        {
+            OpenClawVideo.FetchMeta = realMeta;
+        }
+    }
+
     // CB-275: an audio note, a file, and a file the gateway could not deliver.
     // Block shapes are read off the gateway's source (no real rows exist), so
     // these captures are of the app's drawing, not of a live gateway.

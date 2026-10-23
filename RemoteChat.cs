@@ -536,6 +536,14 @@ namespace Orbweaver
     // Optional like the rest, and for the same reason: a local session's machine
     // is *this* one, which is not worth a chip, and a gateway conversation has
     // no machine at all.
+    // CB-277: the gateway key of the conversation a panel is showing, for the
+    // one row that needs to say a clip's route was re-keyed away from it. Null
+    // or absent (a room, a local session) means no claim is made.
+    public interface IRemoteChatGatewayKey
+    {
+        string? GatewayKey { get; }
+    }
+
     public interface IRemoteChatMachine
     {
         // Null until the roster has answered, which a panel can open before. The

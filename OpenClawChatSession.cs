@@ -137,7 +137,7 @@ namespace Orbweaver
     // which a person has to approve on the gateway — and it is not something
     // opening a window should do on their behalf. Until then this is a reader
     // with an input box that explains itself.
-    internal sealed class OpenClawChatSession : IRemoteChatSession, IRemoteChatBacklog, IRemoteChatComposer
+    internal sealed class OpenClawChatSession : IRemoteChatSession, IRemoteChatBacklog, IRemoteChatComposer, IRemoteChatGatewayKey
     {
         private readonly List<ChatTurn> _history = new();
 
@@ -697,7 +697,7 @@ namespace Orbweaver
             // was never missing here, only unused: the fetch below asked the
             // gateway about a file without saying which agent's media policy
             // to judge it against, and got a default agent's answer.
-            var media = new OpenClawMediaSource(path, GatewayKey);
+            var media = OpenClawSessions.MediaSourceFor(path, GatewayKey, OpenClawSessions.OwnerIndexSnapshot());
 
             // CB-272: a clip is never fetched here. The panel draws a tile
             // from the gateway's meta answer and fetches the bytes only when

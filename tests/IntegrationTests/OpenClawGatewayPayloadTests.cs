@@ -1054,4 +1054,75 @@ public class OpenClawGatewayPayloadTests
         Assert.True(turns[6].Attachment!.Value.Failed);
         Assert.Equal("unsupported-format", turns[6].Attachment!.Value.FailureCode);
     }
+
+    // CB-277: agents.list as the gateway lays it out — FROM SOURCE for the
+    // `workspace` field (openclaw 2026.10.5 session-utils: workspace is set on
+    // every row), because the probe is behind the Local Network gate on the
+    // machine this was written on. Invented values on that structure; if a
+    // real response names the field differently this is the fixture to fix.
+    [Fact]
+    public void AnAgentsListWalksIntoWorkspacesAndOwnersAChosenSessionForAClip()
+    {
+        var agentsList = JsonDocument.Parse("""
+        {"defaultId":"main","mainKey":"main","scope":"per-sender","agents":[
+          {"id":"main","name":"Sample One","workspace":"/Users/sample/.openclaw/workspace","identity":{"name":"Sample One","emoji":"x"}},
+          {"id":"comfyui","name":"Sample Two","workspace":"/Users/sample/.openclaw/workspace-sample-zara","workspaceGit":{"enabled":false}}]}
+        """).RootElement;
+
+        var workspaces = OpenClawSessions.WorkspacesFrom(agentsList);
+        var index = new OwnerIndex(workspaces, new[]
+        {
+            "agent:main:discord:direct:1", "agent:comfyui:discord:direct:1",
+        });
+
+        const string path = "/Users/sample/.openclaw/workspace-sample-zara/outputs/sample/clip_9.mp4";
+        var history = JsonDocument.Parse("""
+        [{"role":"assistant","provider":"claude-cli-example","timestamp":1700000900000,
+          "content":[{"type":"text","text":"here you go\nMEDIA:/Users/sample/.openclaw/workspace-sample-zara/outputs/sample/clip_9.mp4"}]}]
+        """).RootElement;
+
+        var turn = Assert.Single(OpenClawSessions.TurnsFromHistory(history, "agent:main:discord:direct:1", index));
+
+        Assert.Equal(
+            "/__openclaw__/assistant-media?source="
+            + "%2FUsers%2Fsample%2F.openclaw%2Fworkspace-sample-zara%2Foutputs%2Fsample%2Fclip_9.mp4"
+            + "&sessionKey=agent%3Acomfyui%3Adiscord%3Adirect%3A1",
+            turn.ImageUrl);
+        Assert.Equal(path, turn.ImageSourcePath);
+    }
+
+    // The control, same page: with no index the route is the one the app sent
+    // before CB-277, byte for byte.
+    [Fact]
+    public void TheSameHistoryPageWithoutAnIndexKeepsTheAskingSessionOnTheRoute()
+    {
+        var history = JsonDocument.Parse("""
+        [{"role":"assistant","content":[{"type":"text","text":"here you go\nMEDIA:/Users/sample/.openclaw/workspace-sample-zara/outputs/sample/clip_9.mp4"}]}]
+        """).RootElement;
+
+        var turn = Assert.Single(OpenClawSessions.TurnsFromHistory(history, "agent:main:discord:direct:1"));
+
+        Assert.EndsWith("&sessionKey=agent%3Amain%3Adiscord%3Adirect%3A1", turn.ImageUrl);
+    }
+
+    // The `&meta=1` answer for a video, field names and numbers as measured
+    // against a real gateway for a real clip (values: duration, size and
+    // dimensions only; the ticket is invented).
+    [Fact]
+    public void AVideoMetaAnswerWalksIntoATileSizedClip()
+    {
+        const string meta =
+            "{\"available\":true,\"mimeType\":\"video/mp4\",\"sizeBytes\":1042813,\"playback\":\"native\","
+            + "\"durationMs\":12750,\"width\":544,\"height\":800,\"mediaTicket\":\"v1.sample\"}";
+
+        var parsed = OpenClawVideo.ParseMeta(meta);
+
+        Assert.NotNull(parsed);
+        var clip = OpenClawVideo.FromMeta(parsed!.Value, "clip_9.mp4");
+        Assert.Equal(12750, clip.DurationMs);
+        Assert.Equal(544, clip.Width);
+        Assert.Equal(800, clip.Height);
+        Assert.Equal(1042813, clip.SizeBytes);
+        Assert.Equal("0:13", clip.Duration);
+    }
 }

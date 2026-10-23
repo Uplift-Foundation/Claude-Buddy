@@ -103,6 +103,8 @@ namespace Orbweaver
         private static readonly Dictionary<string, string> Drafts = new(StringComparer.Ordinal);
 
         private IRemoteChatSession? _session;
+
+        private string? AskingKey() => (_session as IRemoteChatGatewayKey)?.GatewayKey;
         private OrbWindow? _owner;
 
         // Whether the header is currently wearing the orb's identity rather
@@ -869,7 +871,7 @@ namespace Orbweaver
             OnStateChanged(session.State);
 
             _turns.Clear();
-            foreach (var turn in session.History) _turns.Add(new TurnView(turn, _defaultBubble, _soleSpeaker, Adopt, _textScale));
+            foreach (var turn in session.History) _turns.Add(new TurnView(turn, _defaultBubble, _soleSpeaker, Adopt, _textScale, AskingKey()));
 
             HideSlashSuggestions();
 
@@ -2642,7 +2644,7 @@ namespace Orbweaver
             // start them downloading again.
             for (var i = 0; i < count && i < _session.History.Count; i++)
             {
-                _turns.Insert(i, new TurnView(_session.History[i], _defaultBubble, _soleSpeaker, Adopt, _textScale));
+                _turns.Insert(i, new TurnView(_session.History[i], _defaultBubble, _soleSpeaker, Adopt, _textScale, AskingKey()));
             }
         }
 
@@ -2651,7 +2653,7 @@ namespace Orbweaver
             if (_session is null) return;
 
             _turns.Clear();
-            foreach (var turn in _session.History) _turns.Add(new TurnView(turn, _defaultBubble, _soleSpeaker, Adopt, _textScale));
+            foreach (var turn in _session.History) _turns.Add(new TurnView(turn, _defaultBubble, _soleSpeaker, Adopt, _textScale, AskingKey()));
 
             // Re-read rather than left at what Bind found.
             //
@@ -2672,7 +2674,7 @@ namespace Orbweaver
 
         private void OnTurnAdded(ChatTurn turn)
         {
-            _turns.Add(new TurnView(turn, _defaultBubble, _soleSpeaker, Adopt, _textScale));
+            _turns.Add(new TurnView(turn, _defaultBubble, _soleSpeaker, Adopt, _textScale, AskingKey()));
 
             // Your own turn always brings the view with it; everything else
             // respects where you were reading.
@@ -3166,9 +3168,16 @@ namespace Orbweaver
             // panel as it is built, for the rules that span more than one
             // bubble. Passed in rather than reached for through the singleton,
             // so a TurnView built by a test is a TurnView and not half a window.
+            // askingKey is the gateway key of the conversation this row is in,
+            // or null when the panel is not one OpenClaw conversation (a room,
+            // another kind of session). Only the clip's refusal tooltip reads
+            // it, to say a route was re-keyed (CB-277).
+            private readonly string? _askingKey;
+
             public TurnView(ChatTurn turn, Color? defaultBubble, Speaker? soleSpeaker,
-                Action<SelectableTextBlock> adopt, TextScale scale)
+                Action<SelectableTextBlock> adopt, TextScale scale, string? askingKey = null)
             {
+                _askingKey = askingKey;
                 _turn = turn;
                 _defaultBubble = defaultBubble;
                 _soleSpeaker = soleSpeaker;
@@ -3693,7 +3702,11 @@ namespace Orbweaver
                 // it, so this cannot be null here.
                 var path = _turn.ImageSourcePath!;
 
-                _turn.ImageNoteDetail = OpenClawMediaRefusal.Detail(json, path);
+                // CB-277: only the clip's tooltip names the session, and only
+                // when it is not the conversation's own — a clip is the one
+                // kind asked for under another agent's key, and a refusal under
+                // the asker's own key is the ordinary one and says nothing new.
+                _turn.ImageNoteDetail = OpenClawMediaRefusal.Detail(json, path, _turn.ImageUrl, _askingKey);
 
                 // CB-274: a clip the gateway failed to deliver says so first,
                 // and then why the fetch of the recovered path also failed.
