@@ -16,6 +16,20 @@ namespace Orbweaver.Tests;
 // zero cannot pass.
 public partial class ClaudeCloudEventsTests
 {
+    // Waits for everything the session started to finish: the interrupt, and the
+    // live loop and stream a delivered interrupt or an open panel start behind it.
+    // Without it the comparison below is taken with a read still in flight, and
+    // the spy (counted when the race starts) and the source (counted when the pool
+    // runs the read) legitimately disagree for a moment. That was a failure here
+    // once in nine soak runs: Expected 1 / Actual 2 (CB-269). Compared after
+    // settling, both counts are final.
+    private static async Task SettleAsync(ClaudeCloudChatSession chat)
+    {
+        if (chat.InterruptTask is { } interrupt) await interrupt;
+        if (chat.LiveTask is { } live) await live;
+        if (chat.StreamTask is { } stream) await stream;
+    }
+
     [Fact]
     public async Task ALoadReadsThroughTheSessionsOwnBudget()
     {
@@ -25,6 +39,7 @@ public partial class ClaudeCloudEventsTests
             Envelope(new[] { UserRow("u1", "hello") }))), creds: creds, budget: budget);
 
         Assert.True(await chat.LoadAsync(CancellationToken.None));
+        await SettleAsync(chat);
 
         Assert.True(creds.Reads > 0);
         Assert.Equal(creds.Reads, calls());
@@ -39,7 +54,7 @@ public partial class ClaudeCloudEventsTests
         var chat = Sender(new RoutingApi(Answer(200, Receipt)), creds: creds, budget: budget);
 
         Assert.Equal(ChatSendOutcome.Sent, await chat.SendAsync("hello"));
-        await chat.LiveTask!;
+        await SettleAsync(chat);
 
         Assert.True(creds.Reads >= 2, "expected the send's read and at least one live read");
         Assert.Equal(creds.Reads, calls());
@@ -54,7 +69,7 @@ public partial class ClaudeCloudEventsTests
             budget: budget);
 
         chat.Cancel();
-        await chat.InterruptTask!;
+        await SettleAsync(chat);
 
         Assert.True(creds.Reads > 0);
         Assert.Equal(creds.Reads, calls());
@@ -70,6 +85,7 @@ public partial class ClaudeCloudEventsTests
         chat.PanelOpened();
         await stream.NextOpenAsync();
         await Close(chat);
+        await SettleAsync(chat);
 
         Assert.True(creds.Reads > 0);
         Assert.Equal(creds.Reads, calls());
